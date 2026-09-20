@@ -43,7 +43,8 @@ pub use rli::{
     RLI_DOMAIN_RECENT_CAP, RLI_ETA_INIT, RLI_FEATURE_SERIES_CAP, RLI_PREDICTION_STEPS,
     RLI_PROG_ZETA, RLI_Q, RLI_SNAPSHOT_SCHEMA, RLI_TAU_R_HALF_PERIODS, RLI_THETA_INIT, RLI_ZETA,
     RliAnchor, RliAnchors, RliChannel, RliChannelSnapshot, RliDomainMachine, RliDomainRow,
-    RliDomainSnapshot, RliShadow, RliShadowSnapshot, rli_zeta_for,
+    RliDomainSegment, RliDomainSnapshot, RliDomainSpike, RliShadow, RliShadowSnapshot,
+    rli_zeta_for,
 };
 pub use temporal::{
     Domain, DomainSpike, Migration, TemporalQuery, TemporalRecord, TemporalSessionSnapshot,

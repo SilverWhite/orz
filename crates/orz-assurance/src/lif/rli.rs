@@ -40,7 +40,15 @@
 //!
 //! 锚点（设计 §3）：a1 `u`；a2 `v`（＋短视预测 û(t+T̂) ≈ u + v·T̂）；a3 解析
 //! 包络 `E = φ·√(A²+B²)`；a4 节律计数 `r`（事件间隔近半周期整数倍时 +1，
-//! 否则仅衰减）。阈值自校准（设计 §4）：`u ≥ θ → θ·e^(+η)`，否则
+//! 否则仅衰减）；**a5／a6 模态对**（0am 模态分离批，2026-09-20 用户裁决）：
+//! 实极点分支上 `c_slow=(u+b)/2`、`c_fast=(u−b)/2`（`b=(v+ζω·u)/μ`），满足
+//! `c_slow+c_fast=u` 且两级各自按自己的时间常数**解耦**衰减——即持久/瞬态
+//! 配比，读数层替代相位提供方向性；复极点分支上无定义（返回 `NAN`，如实
+//! 登记）。**口径注**：实极点分支上 `E ≡ u`（a3 是紧上界），故 `env_prog`
+//! 与 `u_prog` 恒等冗余、**已撤名**（同日裁决；见
+//! `docs/audits/0AM_RLI_MODE_SPLIT_2026-09-20.md`）；锚点序列采样为
+//! **事件级**（决策轮 ＋ 每个工具事件；判决粒度不变，自判域仍只在决策轮）。
+//! 阈值自校准（设计 §4）：`u ≥ θ → θ·e^(+η)`，否则
 //! `θ·e^(−η·(1−q)/q)`——平衡点 `P(u≥θ)=1−q`（q=0.95 时过阈率 5%），零梯度、
 //! 无速率/方差目标项。无复位（设计 §5）：过阈＝纯观测 + θ 更新，u/v 连续。
 //!
@@ -69,7 +77,7 @@ use super::channels::{
     ChannelKind, SLOW_W_MAX, SLOW_WALL_MS_THRESHOLD, STALL_GAP_THRESHOLD_SECS, ToolEvent,
     ToolOutcome,
 };
-use super::temporal::{Domain, DomainSpike};
+use super::temporal::Domain;
 
 /// 影子基座公共参数（设计 §6 初值；语义推导、禁拟合）。
 pub const RLI_ZETA: f64 = 0.5;
@@ -101,12 +109,19 @@ pub const RLI_DOMAIN_ERR_PRESSURE: f64 = 2.0;
 /// a2「正在恶化」）构成 stuck 语义的原生读法。
 pub const RLI_DOMAIN_ERR_ENVELOPE_FLOOR: f64 = 1.0;
 /// 锚点序列面（0am 改造补充项④，2026-09-20 用户令「PULL 面增锚点序列
-/// 面」）：按决策轮采样、cap 20、**live-only**（不随侧车持久化——与
-/// LIF temporal 的 feature 序列同格）。
+/// 面」）：**事件级采样**（决策轮 ＋ 每个工具事件）、cap 20、**live-only**
+/// （不随侧车持久化——与 LIF temporal 的 feature 序列同格）。
 pub const RLI_FEATURE_SERIES_CAP: usize = 20;
 /// 锚点序列名集合（与 [`RLI_ANCHOR_FEATURE_TABLE`] 同序、逐项对齐；测试
-/// 钉住两侧不漂移）。判决通道（err／prog）× 五锚点。
-pub const RLI_ANCHOR_FEATURE_NAMES: [&str; 10] = [
+/// 钉住两侧不漂移）。判决通道（err／prog）锚点 ＋ **模态分离对**
+/// （`slow_prog`／`fast_prog`，2026-09-20 用户裁决「拆模态系数＝做」，见
+/// `docs/audits/0AM_RLI_MODE_SPLIT_2026-09-20.md`）。
+///
+/// 去冗余（2026-09-20 主会话裁决，用户授权「两名的去留和 `env_prog` 的
+/// 去留请你裁决」）：**`env_prog` 撤名**——它在实极点分支上**恒等于**
+/// `u_prog`（a3 是紧的上界，见该报告 §1），保留会让一条副本冒充独立读数轴。
+/// `env_err` **保留**（复极点分支上 `E > |u|` 泛成立，独立）。
+pub const RLI_ANCHOR_FEATURE_NAMES: [&str; 11] = [
     "u_err",
     "v_err",
     "pred_err",
@@ -115,8 +130,9 @@ pub const RLI_ANCHOR_FEATURE_NAMES: [&str; 10] = [
     "u_prog",
     "v_prog",
     "pred_prog",
-    "env_prog",
     "r_prog",
+    "slow_prog",
+    "fast_prog",
 ];
 /// 自判域近期行窗口（镜像 temporal 的 `RECENT_RECORDS_CAP`）。
 pub const RLI_DOMAIN_RECENT_CAP: usize = 20;
@@ -174,6 +190,10 @@ pub enum RliAnchor {
     Env,
     /// a4 节律计数。
     Rhythm,
+    /// a5 慢模态系数（**实极点分支专用**；`c_slow = (u + b)/2`）。
+    ModeSlow,
+    /// a6 快模态系数（**实极点分支专用**；`c_fast = (u − b)/2`）。
+    ModeFast,
 }
 
 impl RliAnchor {
@@ -185,13 +205,15 @@ impl RliAnchor {
             RliAnchor::Pred => ch.prediction(t_hat_secs),
             RliAnchor::Env => ch.envelope(),
             RliAnchor::Rhythm => ch.rhythm(),
+            RliAnchor::ModeSlow => ch.mode_slow(),
+            RliAnchor::ModeFast => ch.mode_fast(),
         }
     }
 }
 
 /// 锚点序列表（名 → 通道 × 锚点；与 [`RLI_ANCHOR_FEATURE_NAMES`] 同序，
 /// 测试钉住两侧不漂移）。
-pub const RLI_ANCHOR_FEATURE_TABLE: [(&str, ChannelKind, RliAnchor); 10] = [
+pub const RLI_ANCHOR_FEATURE_TABLE: [(&str, ChannelKind, RliAnchor); 11] = [
     ("u_err", ChannelKind::Err, RliAnchor::U),
     ("v_err", ChannelKind::Err, RliAnchor::V),
     ("pred_err", ChannelKind::Err, RliAnchor::Pred),
@@ -200,8 +222,9 @@ pub const RLI_ANCHOR_FEATURE_TABLE: [(&str, ChannelKind, RliAnchor); 10] = [
     ("u_prog", ChannelKind::Prog, RliAnchor::U),
     ("v_prog", ChannelKind::Prog, RliAnchor::V),
     ("pred_prog", ChannelKind::Prog, RliAnchor::Pred),
-    ("env_prog", ChannelKind::Prog, RliAnchor::Env),
     ("r_prog", ChannelKind::Prog, RliAnchor::Rhythm),
+    ("slow_prog", ChannelKind::Prog, RliAnchor::ModeSlow),
+    ("fast_prog", ChannelKind::Prog, RliAnchor::ModeFast),
 ];
 
 /// 单通道锚点读数（S3 回放导出面；只读快照）。
@@ -217,6 +240,14 @@ pub struct RliAnchors {
     pub envelope: f64,
     /// a4 节律计数。
     pub rhythm: f64,
+    /// a5 慢模态系数（**实极点分支专用**；复极点分支为 `NAN`）。
+    ///
+    /// `c_slow = (u + b)/2`，`b = (v + ζω·u)/μ`；与 `c_fast` 满足
+    /// `c_slow + c_fast = u`，且两者各自按**自己的**时间常数独立衰减
+    /// （解耦）——即持久/瞬态配比，读数层替代相位提供方向性。
+    pub mode_slow: f64,
+    /// a6 快模态系数（**实极点分支专用**；复极点分支为 `NAN`）。
+    pub mode_fast: f64,
     /// 自校准阈值（当前值）。
     pub theta: f64,
     /// 过阈累计（纯内部观测；无注入面）。
@@ -359,6 +390,8 @@ impl RliChannel {
             prediction: self.prediction(t_hat_secs),
             envelope: self.envelope,
             rhythm: self.rhythm,
+            mode_slow: self.mode_slow(),
+            mode_fast: self.mode_fast(),
             theta: self.theta,
             hits: self.hit_count,
         }
@@ -400,6 +433,40 @@ impl RliChannel {
     /// 是否走实极点分支（配极改：prog 恒实极点；诊断 ζ > 1 时一并成立）。
     pub fn is_overdamped(&self) -> bool {
         self.zeta > 1.0
+    }
+
+    /// 实极点分支的模态偏置 `b = (v + ζω·u)/μ`（复极点分支无此量）。
+    fn mode_skew(&self) -> f64 {
+        (self.v + self.zeta * self.omega * self.u) / self.mu()
+    }
+
+    /// a5 慢模态系数 `c_slow = (u + b)/2`（**实极点分支专用**，2026-09-20
+    /// 用户裁决「拆模态系数＝做」；见 `docs/audits/0AM_RLI_MODE_SPLIT_2026-09-20.md`）。
+    ///
+    /// 语义：把当前水平拆成「会留下来的持久面」与「马上要消失的适应面」，
+    /// 两者满足 `c_slow + c_fast = u`，且各自按**自己的**时间常数独立衰减
+    /// （慢 `1/(ω(ζ−√(ζ²−1)))`／快 `1/(ω(ζ+√(ζ²−1)))`；ζ=2 时比 13.9:1，
+    /// 以决策轮计约 4.75 轮／0.34 轮，与 T̂ 无关）。复极点分支「慢/快」无
+    /// 定义（两模态共轭、衰减率相同），返回 `NAN`——如实登记、不虚构语义。
+    pub fn mode_slow(&self) -> f64 {
+        if self.is_overdamped() {
+            (self.u + self.mode_skew()) / 2.0
+        } else {
+            f64::NAN
+        }
+    }
+
+    /// a6 快模态系数 `c_fast = (u − b)/2`（**实极点分支专用**）。
+    ///
+    /// 注入当刻可为负（ζ=2 时 `b > u`）：负值表示水平最初被该瞬态「扣」掉
+    /// 一部分，随后该分量以约 0.34 个决策轮的时间常数消失——属正常 LIF
+    /// 动力学（检测粒度宽于该进程），**不设修正**（用户 2026-09-20 口径）。
+    pub fn mode_fast(&self) -> f64 {
+        if self.is_overdamped() {
+            (self.u - self.mode_skew()) / 2.0
+        } else {
+            f64::NAN
+        }
     }
 
     /// 节律时间尺（半周期类比）：复极点 = π/ω_d（真实半周期）；实极点 =
@@ -624,8 +691,9 @@ impl RliShadow {
         &self.domain
     }
 
-    /// 锚点序列（0am 改造补充项④，2026-09-20）：最近 k 个决策轮采样
-    /// （旧在前）；未知名 / 无样本 = 空序列。live-only（不随侧车持久化）。
+    /// 锚点序列（0am 改造补充项④，2026-09-20；**采样粒度＝事件级**，同日
+    /// 用户裁决）：最近 k 个采样（决策轮 ＋ 每个工具事件，旧在前）；
+    /// 未知名 / 无样本 = 空序列。live-only（不随侧车持久化）。
     pub fn feature(&self, name: &str, k: u64) -> Vec<f64> {
         let Some(idx) = RLI_ANCHOR_FEATURE_TABLE
             .iter()
@@ -641,6 +709,31 @@ impl RliShadow {
     /// 已知锚点序列名（PULL 面 `feature` 的 name 校验面）。
     pub fn known_feature_names() -> &'static [&'static str] {
         &RLI_ANCHOR_FEATURE_NAMES
+    }
+
+    /// 锚点序列采样（**事件级**，2026-09-20 用户裁决「采样尽可能细」）：
+    /// **决策轮与每个工具事件各采一次**（旧在前、cap [`RLI_FEATURE_SERIES_CAP`]）。
+    ///
+    /// 两条理由：① 对话 run 长度不可控——决策轮粒度在短 run 上样本过少，
+    /// 细粒度才能在短对话里保留分辨力；② 快模态分量在**注入当刻最大**，
+    /// 轮粒度永远取不到它（0am 模态分离批读数：轮粒度下 `|c_slow−u|`
+    /// 均值 0.0043，即第二轴被采样粒度抹平）。
+    ///
+    /// **采样粒度 ≠ 判决粒度**：自判域仍只在决策轮记录（域是决策点语义，
+    /// 不随观测面变细而变密）。`t_hat` 取最近一次决策轮的轮语义估计——
+    /// 事件间沿用上一轮值，如实口径。
+    fn sample_anchor_series(&mut self) {
+        let t_hat = self.t_hat;
+        let values: Vec<f64> = RLI_ANCHOR_FEATURE_TABLE
+            .iter()
+            .map(|(_, kind, anchor)| anchor.of(self.channel(*kind), t_hat))
+            .collect();
+        for (series, value) in self.anchor_series.iter_mut().zip(values) {
+            series.push_back(value);
+            if series.len() > RLI_FEATURE_SERIES_CAP {
+                series.pop_front();
+            }
+        }
     }
 
     /// 决策轮：更新轮语义 ω（prog = 2π/(8·T̂)），全通道自由演化 + 逐一阈值
@@ -666,22 +759,14 @@ impl RliShadow {
         let env_err = self.channel(ChannelKind::Err).envelope();
         let u_prog = self.channel(ChannelKind::Prog).u();
         self.domain.record_round(t, u_err, u_prog, v_err, env_err);
-        // 锚点序列采样（决策轮粒度；先取值再入列，避免借用冲突）。
-        let t_hat = self.t_hat;
-        let values: Vec<f64> = RLI_ANCHOR_FEATURE_TABLE
-            .iter()
-            .map(|(_, kind, anchor)| anchor.of(self.channel(*kind), t_hat))
-            .collect();
-        for (series, value) in self.anchor_series.iter_mut().zip(values) {
-            series.push_back(value);
-            if series.len() > RLI_FEATURE_SERIES_CAP {
-                series.pop_front();
-            }
-        }
+        // 锚点序列采样（**事件级**：决策轮与每个工具事件各一次；见
+        // [`Self::sample_anchor_series`]）。
+        self.sample_anchor_series();
     }
 
-    /// 工具事件：间隔看门狗（stall）→ 注入（err/deny/prog/slow）→ 阈值评估。
-    /// 与 1D 引擎同序：先推进（自由演化），再注入，再检查。
+    /// 工具事件：间隔看门狗（stall）→ 注入（err/deny/prog/slow）→ 阈值评估
+    /// → 锚点采样（事件级，2026-09-20）。与 1D 引擎同序：先推进（自由演化），
+    /// 再注入，再检查。
     pub fn on_tool_event(&mut self, t: f64, event: ToolEvent) {
         let long_gap = matches!(
             self.last_tool_t,
@@ -713,6 +798,9 @@ impl RliShadow {
         for ch in &mut self.channels {
             ch.check(t);
         }
+        // 锚点序列采样（事件级；注入后取——快模态分量在注入当刻最大，
+        // 决策轮粒度取不到，见 [`Self::sample_anchor_series`]）。
+        self.sample_anchor_series();
     }
 
     /// 快照（3 位小数定点化；随会话侧车持久化）。自判域机器状态一并携带
@@ -804,7 +892,39 @@ pub struct RliDomainMachine {
     current: Domain,
     entry_round: u64,
     rows: VecDeque<RliDomainRow>,
-    spikes: Vec<DomainSpike>,
+    spikes: Vec<RliDomainSpike>,
+}
+
+/// RLI 域切换点位（**RLI 自有类型**，不复用 temporal 的 [`DomainSpike`]）。
+///
+/// 除时刻与域之外多带**入域轮次**——这是「外挂时间组件」的定位要素：
+/// 机械层设计 §3 把 temporal 定位为「时间轴上的特征域事实序列」，§4 是
+/// 「LIF 时间外挂计算规格」；模型要拿它做**进度定位与回看**，就必须能把
+/// 域事实对齐到轮次，而不只是墙钟秒。
+///
+/// `round = None` 表示**旧侧车未记录**（FR7 口径：不可得与真值 0 必须可
+/// 分辨，故用 `Option` 而非 `0`）。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RliDomainSpike {
+    pub t: f64,
+    pub domain: Domain,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<u64>,
+}
+
+/// 域段（History／回看面的定位要素；由相邻切换点推导，不单独存储——
+/// 与 temporal §3.1「驻留轮数由相邻 spike 推导，不单独存储」同口径）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RliDomainSegment {
+    /// 前一段的域（首个切换点为 `None`＝run 起点前）。
+    pub from: Option<Domain>,
+    pub to: Domain,
+    pub at_t: f64,
+    pub at_round: Option<u64>,
+    /// 本段驻留轮数（到下一次切换；末段用当前轮）。
+    pub dwell_rounds: Option<u64>,
+    /// 恢复标记（设计 §3.2 Recovery）：Stuck／LowProgress → Normal。
+    pub recovery: bool,
 }
 
 impl Default for RliDomainMachine {
@@ -871,7 +991,11 @@ impl RliDomainMachine {
         self.round = self.round.saturating_add(1);
         let domain = self.label(u_err, u_prog, v_err, env_err);
         if domain != self.current {
-            self.spikes.push(DomainSpike { t, domain });
+            self.spikes.push(RliDomainSpike {
+                t,
+                domain,
+                round: Some(self.round),
+            });
             self.current = domain;
             self.entry_round = self.round;
         }
@@ -921,8 +1045,39 @@ impl RliDomainMachine {
     }
 
     /// 域切换时间线（会话内全量；显示与导出面）。
-    pub fn spikes(&self) -> &[DomainSpike] {
+    pub fn spikes(&self) -> &[RliDomainSpike] {
         &self.spikes
+    }
+
+    /// 域段（History／回看面）：由相邻切换点推导 `from → to`、入域轮次、
+    /// 驻留轮数与恢复标记——**定位要素**（机械层设计 §3「时间轴上的特征域
+    /// 事实序列」／§4「LIF 时间外挂」，模型据此做进度定位与回看）。
+    /// 末段驻留用当前轮号收口。全 run 无窗口（`rows` 的 20 窗只管运行时行）。
+    pub fn segments(&self) -> Vec<RliDomainSegment> {
+        let mut out: Vec<RliDomainSegment> = Vec::with_capacity(self.spikes.len());
+        for (idx, spike) in self.spikes.iter().enumerate() {
+            let from = idx.checked_sub(1).map(|p| self.spikes[p].domain);
+            let next_round = self
+                .spikes
+                .get(idx + 1)
+                .map(|s| s.round)
+                .unwrap_or(Some(self.round));
+            let dwell_rounds = match (spike.round, next_round) {
+                (Some(a), Some(b)) => Some(b.saturating_sub(a)),
+                _ => None,
+            };
+            let recovery = matches!(from, Some(Domain::Stuck | Domain::LowProgress))
+                && spike.domain == Domain::Normal;
+            out.push(RliDomainSegment {
+                from,
+                to: spike.domain,
+                at_t: spike.t,
+                at_round: spike.round,
+                dwell_rounds,
+                recovery,
+            });
+        }
+        out
     }
 
     /// 快照（随 RLI 影子快照入会话侧车）。
@@ -964,7 +1119,7 @@ pub struct RliDomainSnapshot {
     #[serde(default)]
     pub rows: Vec<RliDomainRow>,
     #[serde(default)]
-    pub spikes: Vec<DomainSpike>,
+    pub spikes: Vec<RliDomainSpike>,
 }
 
 /// 单通道快照（3 位小数定点化存储；serde 兼容面随会话侧车）。
@@ -1421,8 +1576,9 @@ mod tests {
         }
     }
 
-    /// 0am 改造补充项④（2026-09-20）：锚点序列 = 决策轮粒度、cap 20、
-    /// live-only（快照恢复后序列为空——序列是观测面而非持久状态）。
+    /// 0am 改造补充项④（2026-09-20）：锚点序列 = **事件级采样**（决策轮 ＋
+    /// 每个工具事件）、cap 20、live-only（快照恢复后序列为空——序列是观测面
+    /// 而非持久状态）。
     #[test]
     fn anchor_series_samples_per_decision_round_and_caps() {
         let mut shadow = RliShadow::new();
@@ -1441,12 +1597,39 @@ mod tests {
             "series values finite"
         );
         assert_eq!(shadow.feature("nope", 5), Vec::<f64>::new());
-        assert_eq!(RliShadow::known_feature_names().len(), 10);
+        assert_eq!(RliShadow::known_feature_names().len(), 11);
         // 序列不随快照持久化（live-only）。
         let snap = shadow.snapshot();
         let mut restored = RliShadow::new();
         assert!(restored.restore(&snap));
         assert!(restored.feature("u_err", 20).is_empty());
+    }
+
+    /// 0am 采样粒度（2026-09-20 用户裁决「采样尽可能细」）：**事件级**——
+    /// 每个工具事件也入列（决策轮 ＋ 事件各一次）；且注入当刻就能取到快模态
+    /// 分量（轮粒度取不到它——0am 模态分离批读数：轮粒度下 `|c_slow−u|`
+    /// 均值 0.0043，第二轴被采样粒度抹平）。同时钉住撤名后 `env_prog`
+    /// 不再属于序列面。
+    #[test]
+    fn anchor_series_is_event_level_and_captures_fast_mode_at_injection() {
+        let mut shadow = RliShadow::new();
+        shadow.on_decision_round(0.0, 8.0);
+        assert_eq!(shadow.feature("slow_prog", 5).len(), 1, "决策轮采样");
+        shadow.on_tool_event(1.0, ToolEvent::success(None));
+        shadow.on_tool_event(2.0, ToolEvent::success(None));
+        assert_eq!(shadow.feature("slow_prog", 10).len(), 3, "每事件各采一次");
+        // 注入当刻：快模态分量可见（|c_slow − u| = |c_fast| > 0）。
+        let ch = shadow.channel(ChannelKind::Prog);
+        assert!(ch.u() > 0.9, "inject_set 置 1：u={}", ch.u());
+        assert!(
+            (ch.mode_slow() - ch.u()).abs() > 0.01,
+            "注入当刻快分量非零: slow={} u={}",
+            ch.mode_slow(),
+            ch.u()
+        );
+        // 撤名（主会话裁决）：`env_prog` 不在序列面 ⇒ 查询返回空序列。
+        assert_eq!(shadow.feature("env_prog", 5), Vec::<f64>::new());
+        assert_eq!(shadow.feature("env_err", 5).len(), 3, "env_err 保留");
     }
 
     /// 0am 改造补充项①（2026-09-20）：配极改——prog 走实极点（ζ = 2.0，
@@ -1522,6 +1705,60 @@ mod tests {
         assert_eq!(ch.zeta(), 0.0);
     }
 
+    /// 0am 模态分离（2026-09-20 用户裁决「拆模态系数＝做」；见
+    /// `docs/audits/0AM_RLI_MODE_SPLIT_2026-09-20.md`）：
+    /// ① 两级和恒等于水平；② 两级各自解耦衰减（比例恒为各自己的
+    /// `exp(−λΔt)`）；③ 实极点分支上包络恒等于水平（a3 是紧上界，
+    /// 本批观察项的钉子）；④ 复极点分支上两级无定义（NAN，如实登记）。
+    #[test]
+    fn mode_split_decomposes_level_and_decouples_decay() {
+        let omega = TAU / (RLI_PROG_PERIOD_ROUNDS * 8.0);
+        let zeta = RLI_PROG_ZETA;
+        let root = (zeta * zeta - 1.0).sqrt();
+        let lambda_slow = omega * (zeta - root);
+        let lambda_fast = omega * (zeta + root);
+
+        let mut ch = RliChannel::new(ChannelKind::Prog, omega);
+        assert!(ch.is_overdamped());
+        ch.inject_set(0.0, 1.0);
+        let (s0, f0) = (ch.mode_slow(), ch.mode_fast());
+        assert!(s0.is_finite() && f0.is_finite());
+        assert!((s0 + f0 - ch.u()).abs() < 1e-12, "c_slow + c_fast = u");
+        // ζ=2 注入当刻 b = ζ/√(ζ²−1) ≈ 1.155 > u ⇒ 快分量为负（正常 LIF
+        // 动力学：水平最初被瞬态扣掉一部分）。
+        assert!(s0 > ch.u() && f0 < 0.0, "s0={s0} f0={f0} u={}", ch.u());
+
+        // 自由演化：两级各自按自己的时间常数衰减（解耦），水平＝两级和。
+        let dt = 30.0_f64;
+        ch.advance(dt);
+        let (s1, f1) = (ch.mode_slow(), ch.mode_fast());
+        assert!((s1 + f1 - ch.u()).abs() < 1e-12, "sum stays u");
+        assert!(
+            (s1 / s0 - (-lambda_slow * dt).exp()).abs() < 1e-9,
+            "slow mode decays at λ_slow"
+        );
+        assert!(
+            (f1 / f0 - (-lambda_fast * dt).exp()).abs() < 1e-9,
+            "fast mode decays at λ_fast"
+        );
+        // 双时间尺度比（ζ=2）：λ_fast/λ_slow = (2+√3)/(2−√3) ≈ 13.93。
+        assert!(
+            (lambda_fast / lambda_slow - 13.93).abs() < 0.01,
+            "two time scales"
+        );
+        // a3 紧上界：实极点分支上 E ≡ u（本批观察项的钉子）。
+        assert!(
+            (ch.envelope() - ch.u()).abs() < 1e-12,
+            "E ≡ u on real poles"
+        );
+
+        // 复极点分支：慢/快无定义（不虚构语义）。
+        let complex = RliChannel::new(ChannelKind::Err, err_omega());
+        assert!(!complex.is_overdamped());
+        assert!(complex.mode_slow().is_nan());
+        assert!(complex.mode_fast().is_nan());
+    }
+
     /// 0am 改造补充项②：逐轮判决记录（v／E 原生覆盖参与判决）+ 域切换
     /// spike；本机器不再有「对照」概念（RLI 不与 LIF 对照）。
     #[test]
@@ -1541,6 +1778,40 @@ mod tests {
         // 包络环降后（E < 1.0）压力轴回落。
         let r3 = m.record_round(3.0, 1.0, 0.9, 0.01, 0.5);
         assert_eq!(r3.domain, Domain::Normal);
+    }
+
+    /// 域级定位面（2026-09-20 用户令「RLI 得配上域级判断部分来方便模型进行
+    /// 进度定位和回看」）：切换点带**入域轮次**（FR7 口径用 `Option`，旧侧车
+    /// 未记录 = `None` 而不是真值 0），段由相邻点推导 `from → to`／驻留轮数／
+    /// 恢复标记（temporal §3.2 Recovery 同口径；末段用当前轮收口）。
+    #[test]
+    fn domain_spikes_carry_rounds_and_segments_derive_localization() {
+        let mut m = RliDomainMachine::new();
+        m.observe_tool_outcome(ToolOutcome::Success);
+        m.record_round(1.0, 1.0, 0.9, 0.0, 0.0); // r1 Normal
+        m.record_round(2.0, 1.0, 0.1, 0.01, 1.2); // r2 Stuck
+        m.record_round(3.0, 1.0, 0.1, 0.01, 1.2); // r3 仍 Stuck（无切换点）
+        m.record_round(4.0, 1.0, 0.9, 0.0, 0.0); // r4 Normal（恢复）
+        let spikes = m.spikes();
+        assert_eq!(spikes.len(), 3, "Normal → Stuck → Normal");
+        assert_eq!(spikes[0].round, Some(1));
+        assert_eq!(spikes[1].round, Some(2));
+        assert_eq!(spikes[2].round, Some(4));
+        let segs = m.segments();
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0].from, None);
+        assert_eq!(segs[0].to, Domain::Normal);
+        assert_eq!(segs[0].at_round, Some(1));
+        assert_eq!(segs[0].dwell_rounds, Some(1), "r1 → r2");
+        assert!(!segs[0].recovery);
+        assert_eq!(segs[1].from, Some(Domain::Normal));
+        assert_eq!(segs[1].to, Domain::Stuck);
+        assert_eq!(segs[1].dwell_rounds, Some(2), "r2 → r4");
+        assert!(!segs[1].recovery);
+        assert_eq!(segs[2].from, Some(Domain::Stuck));
+        assert_eq!(segs[2].to, Domain::Normal);
+        assert_eq!(segs[2].dwell_rounds, Some(0), "末段用当前轮 r4 收口");
+        assert!(segs[2].recovery, "Stuck → Normal = recovery");
     }
 
     /// 0am 改造四项①：自判域机器随影子快照续接（跨 prompt 面）；legacy

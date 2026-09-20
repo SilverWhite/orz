@@ -38,8 +38,8 @@ use std::path::{Path, PathBuf};
 
 use chrono::DateTime;
 use orz_assurance::lif::{
-    ChannelKind, Domain, LifEngine, RLI_CHANNELS, RLI_PREDICTION_STEPS, RliAnchors, ToolEvent,
-    classify_event_outcome,
+    ChannelKind, Domain, LifEngine, RLI_CHANNELS, RLI_DOMAIN_PROG_LOW, RLI_PREDICTION_STEPS,
+    RliAnchors, ToolEvent, classify_event_outcome,
 };
 use serde_json::{Value, json};
 
@@ -223,6 +223,20 @@ impl RoundRow {
         matches!(self.rli_domain, Domain::LowProgress | Domain::Stuck)
     }
 
+    /// **模态分离对照（2026-09-20）**：低进度主张的替代判据——用 prog 的
+    /// **持久分量** `c_slow` 替水平 `u`（「持久推进水平低」而非「瞬时水平
+    /// 低」）。同一阈 `RLI_DOMAIN_PROG_LOW`，只换判据用的量。
+    fn low_progress_claim_slow(&self) -> bool {
+        // 与域机同门：首个成功前（Start）不产生低进度主张（否则两侧判据
+        // 的差异会混进「起始门」这一无关因素）。
+        if matches!(self.rli_domain, Domain::Start) {
+            return false;
+        }
+        self.anchor(ChannelKind::Prog)
+            .map(|a| a.mode_slow < RLI_DOMAIN_PROG_LOW)
+            .unwrap_or(false)
+    }
+
     /// 框架实际动作结果：压力面（窗内含 Error|Deny）。
     fn pressure_actual(&self) -> bool {
         self.window_negative > 0
@@ -238,6 +252,52 @@ impl RoundRow {
 struct RunReplay {
     rows: Vec<RoundRow>,
     rli_migrations: usize,
+    /// 事件级模态间隔（2026-09-20 采样粒度裁决的读数面）：每个工具事件后
+    /// `|c_slow_prog − u_prog|`（＝快分量大小）的分布统计。
+    event_gap: GapStats,
+}
+
+/// 模态间隔分布统计（轮粒度与事件粒度共用）。
+#[derive(Clone, Copy, Default)]
+struct GapStats {
+    n: u64,
+    sum: f64,
+    max: f64,
+    gt_0_01: u64,
+    gt_0_05: u64,
+}
+
+impl GapStats {
+    fn push(&mut self, gap: f64) {
+        if !gap.is_finite() {
+            return;
+        }
+        self.n += 1;
+        self.sum += gap;
+        self.max = self.max.max(gap);
+        if gap > 0.01 {
+            self.gt_0_01 += 1;
+        }
+        if gap > 0.05 {
+            self.gt_0_05 += 1;
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        if self.n > 0 {
+            self.sum / self.n as f64
+        } else {
+            f64::NAN
+        }
+    }
+
+    fn merge(&mut self, other: &GapStats) {
+        self.n += other.n;
+        self.sum += other.sum;
+        self.max = self.max.max(other.max);
+        self.gt_0_01 += other.gt_0_01;
+        self.gt_0_05 += other.gt_0_05;
+    }
 }
 
 /// 按 C3 极点变换配置影子（只作用于**复极点类**通道；prog 的实极点配置是
@@ -289,6 +349,7 @@ fn replay_run(steps: &[Step], transform: PoleTransform) -> RunReplay {
     let mut window_success = 0u64;
     let mut window_outcomes = 0u64;
     let mut window_open = false;
+    let mut event_gap = GapStats::default();
     for step in steps {
         match *step {
             Step::Decision(t) => {
@@ -333,6 +394,11 @@ fn replay_run(steps: &[Step], transform: PoleTransform) -> RunReplay {
                 }
                 window_outcomes += 1;
                 engine.on_tool_event(t, ev);
+                // 事件级模态间隔（采样粒度读数：注入当刻快分量最大）。
+                if let Some(shadow) = engine.rli_shadow() {
+                    let ch = shadow.channel(ChannelKind::Prog);
+                    event_gap.push((ch.mode_slow() - ch.u()).abs());
+                }
             }
         }
     }
@@ -348,6 +414,7 @@ fn replay_run(steps: &[Step], transform: PoleTransform) -> RunReplay {
     RunReplay {
         rows,
         rli_migrations,
+        event_gap,
     }
 }
 
@@ -492,6 +559,20 @@ fn main() {
     let mut no_progress_rounds = 0u64;
     let mut pressure_confusion: BTreeMap<String, u64> = BTreeMap::new();
     let mut progress_confusion: BTreeMap<String, u64> = BTreeMap::new();
+    // 模态分离对照（2026-09-20）：低进度判据「水平 u_prog」vs「持久分量
+    // c_slow_prog」，同批语料、同一实际对照（同轮动作结果窗）。
+    let mut prog_u_agrees = 0u64;
+    let mut prog_slow_agrees = 0u64;
+    let mut prog_u_claims = 0u64;
+    let mut prog_slow_claims = 0u64;
+    let mut prog_actuals = 0u64;
+    let mut prog_u_confusion: BTreeMap<String, u64> = BTreeMap::new();
+    let mut prog_slow_confusion: BTreeMap<String, u64> = BTreeMap::new();
+    // 模态间隔统计（解释两判据是否等价：c_slow 与 u 的差即快分量的大小）；
+    // 分**轮粒度**与**事件粒度**两栏——后者是采样粒度裁决后的真实分辨力。
+    let mut prog_gap_round = GapStats::default();
+    let mut prog_gap_event = GapStats::default();
+    let mut prog_claim_flips = 0u64;
     let mut rli_domain_counts: BTreeMap<String, u64> = BTreeMap::new();
     let mut rli_migrations_total = 0u64;
     let mut channel_hits: BTreeMap<String, u64> = BTreeMap::new();
@@ -518,6 +599,8 @@ fn main() {
         let mut run_pressure_agrees = 0u64;
         let mut run_progress_agrees = 0u64;
         let mut run_joint_agrees = 0u64;
+        let mut run_prog_u_agrees = 0u64;
+        let mut run_prog_slow_agrees = 0u64;
         let mut first_pressure_mismatch: Option<u64> = None;
         let mut first_progress_mismatch: Option<u64> = None;
         for (idx, row) in replay.rows.iter().enumerate() {
@@ -566,11 +649,44 @@ fn main() {
             *progress_confusion
                 .entry(format!("{low_prog_claim}|{no_progress_actual}"))
                 .or_default() += 1;
+            // 模态分离对照（2026-09-20）：同一实际结果下，两个低进度判据
+            // 各自与「框架实际动作结果」的核读。
+            let slow_claim = row.low_progress_claim_slow();
+            if slow_claim {
+                prog_slow_claims += 1;
+            }
+            if low_prog_claim {
+                prog_u_claims += 1;
+            }
+            if no_progress_actual {
+                prog_actuals += 1;
+            }
+            if low_prog_claim == no_progress_actual {
+                run_prog_u_agrees += 1;
+            }
+            if slow_claim == no_progress_actual {
+                run_prog_slow_agrees += 1;
+            }
+            if slow_claim != low_prog_claim {
+                prog_claim_flips += 1;
+            }
+            if let Some(a) = row.anchor(ChannelKind::Prog) {
+                prog_gap_round.push((a.mode_slow - a.u).abs());
+            }
+            *prog_u_confusion
+                .entry(format!("{low_prog_claim}|{no_progress_actual}"))
+                .or_default() += 1;
+            *prog_slow_confusion
+                .entry(format!("{slow_claim}|{no_progress_actual}"))
+                .or_default() += 1;
         }
         windows += run_windows;
         pressure_agrees += run_pressure_agrees;
         progress_agrees += run_progress_agrees;
         joint_agrees += run_joint_agrees;
+        prog_u_agrees += run_prog_u_agrees;
+        prog_slow_agrees += run_prog_slow_agrees;
+        prog_gap_event.merge(&replay.event_gap);
 
         // 通道级读数：末态 hits（逐 run 累加）+ 全窗口锚点均值。
         for &kind in &RLI_CHANNELS {
@@ -739,6 +855,11 @@ fn main() {
                 "first_pressure_mismatch_round": first_pressure_mismatch,
                 "first_progress_mismatch_round": first_progress_mismatch,
             },
+            "prog_predicate_contrast": {
+                "windows": run_windows,
+                "u_prog_agrees": run_prog_u_agrees,
+                "c_slow_prog_agrees": run_prog_slow_agrees,
+            },
             "migrations": replay.rli_migrations,
             "final_domain": last.rli_domain.as_str(),
         }));
@@ -796,6 +917,42 @@ fn main() {
             "runs": run_reports,
         },
         "channels": channel_summary,
+        "prog_predicate_contrast": {
+            "basis": "模态分离对照（2026-09-20 用户裁决）：同一实际对照（同轮动作结果窗内无成功＝进度停滞），只换低进度判据用的量——水平 u_prog（现行）vs 持久分量 c_slow_prog；同阈 RLI_DOMAIN_PROG_LOW；Start 门前两侧同门（不产生主张）。",
+            "threshold": RLI_DOMAIN_PROG_LOW,
+            "windows": windows,
+            "actuals_no_progress": prog_actuals,
+            "u_prog": {
+                "agrees": prog_u_agrees,
+                "rate": rate(prog_u_agrees, windows),
+                "claims": prog_u_claims,
+                "confusion_claim_actual": prog_u_confusion,
+            },
+            "c_slow_prog": {
+                "agrees": prog_slow_agrees,
+                "rate": rate(prog_slow_agrees, windows),
+                "claims": prog_slow_claims,
+                "confusion_claim_actual": prog_slow_confusion,
+            },
+            "delta_rate_slow_minus_u": rate(prog_slow_agrees, windows) - rate(prog_u_agrees, windows),
+            "gap_c_slow_minus_u_prog": {
+                "rounds": prog_gap_round.n,
+                "mean_abs": prog_gap_round.mean(),
+                "max_abs": prog_gap_round.max,
+                "rounds_gap_gt_0_01": prog_gap_round.gt_0_01,
+                "rounds_gap_gt_0_05": prog_gap_round.gt_0_05,
+                "claim_flips_between_predicates": prog_claim_flips,
+                "note": "轮粒度：c_slow − u 即快分量（符号相反）的大小；间隔趋近 0 表示轮粒度宽于快模态消失进程（用户 2026-09-20 判读）。",
+            },
+            "gap_event_level": {
+                "samples": prog_gap_event.n,
+                "mean_abs": prog_gap_event.mean(),
+                "max_abs": prog_gap_event.max,
+                "samples_gap_gt_0_01": prog_gap_event.gt_0_01,
+                "samples_gap_gt_0_05": prog_gap_event.gt_0_05,
+                "note": "事件粒度（每个工具事件后取一次；2026-09-20 用户裁决「采样尽可能细」）：注入当刻快分量最大，本栏才是模态对的真实分辨力。",
+            },
+        },
         "c1": { "permutations": C1_PERMUTATIONS, "runs": c1_readings },
         "c3": {
             "sweep_face": "复极点类通道（err/stall/slow/deny）；prog 的实极点配置是语义分配（补充项①）不在扫描面",

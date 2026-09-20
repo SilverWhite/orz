@@ -2417,10 +2417,13 @@ impl AgentLoopController {
                     let last = spikes[spikes.len() - 1];
                     let prev = spikes[spikes.len() - 2];
                     lines.push(format!(
-                        "上一迁移: {}→{}@{:.0}s",
+                        "上一迁移: {}→{}@{:.0}s ({})",
                         prev.domain.as_str(),
                         last.domain.as_str(),
                         last.t,
+                        last.round
+                            .map(|r| format!("round {r}"))
+                            .unwrap_or_else(|| "round ?".to_string()),
                     ));
                 }
                 for &kind in &orz_assurance::lif::RLI_CHANNELS {
@@ -2473,16 +2476,35 @@ impl AgentLoopController {
                 format!("rli.recent({k}) →\n{}", lines.join("\n"))
             }
             "history" => {
-                let spikes = domain.spikes();
-                if spikes.is_empty() {
+                let segments = domain.segments();
+                if segments.is_empty() {
                     return Ok("rli.history → (无迁移)".to_string());
                 }
-                let mut lines = vec![format!("rli.history → 自判域切换 {} 次", spikes.len())];
-                lines.extend(
-                    spikes
-                        .iter()
-                        .map(|s| format!("{} @ {:.0}s", s.domain.as_str(), s.t)),
-                );
+                // 定位面（2026-09-20 用户令「RLI 得配上域级判断部分来方便模型
+                // 进行进度定位和回看」）：域事实对齐到**轮次**并给驻留与恢复
+                // 标记——与 temporal `history` 同信息形态（语义各自，不比照）。
+                let mut lines = vec![format!(
+                    "rli.history → 自判域切换 {} 次（会话相对；全 run 无窗口）",
+                    segments.len()
+                )];
+                lines.extend(segments.iter().map(|s| {
+                    let from = s.from.map(|d| d.as_str()).unwrap_or("start");
+                    let round = s
+                        .at_round
+                        .map(|r| format!("round {r}"))
+                        .unwrap_or_else(|| "round ?".to_string());
+                    let dwell = s
+                        .dwell_rounds
+                        .map(|d| format!("dwell {d}"))
+                        .unwrap_or_else(|| "dwell ?".to_string());
+                    format!(
+                        "{} → {} @ {:.0}s ({round}, {dwell}){}",
+                        from,
+                        s.to.as_str(),
+                        s.at_t,
+                        if s.recovery { " [recovery]" } else { "" },
+                    )
+                }));
                 lines.join("\n")
             }
             "feature" => {
@@ -2490,13 +2512,13 @@ impl AgentLoopController {
                 // temporal 的 feature 面同格（名 + k≤20 紧凑序列 + 当前值）。
                 let Some(name) = name else {
                     return Err("invalid rli feature query: feature 需要 name 参数 \
-                         （u_err|v_err|pred_err|env_err|r_err|u_prog|v_prog|pred_prog|env_prog|r_prog）"
+                         （u_err|v_err|pred_err|env_err|r_err|u_prog|v_prog|pred_prog|r_prog|slow_prog|fast_prog）"
                         .to_string());
                 };
                 if !orz_assurance::lif::RliShadow::known_feature_names().contains(&name) {
                     return Err(format!(
                         "invalid rli feature name: {name} — 合法值 \
-                         u_err|v_err|pred_err|env_err|r_err|u_prog|v_prog|pred_prog|env_prog|r_prog"
+                         u_err|v_err|pred_err|env_err|r_err|u_prog|v_prog|pred_prog|r_prog|slow_prog|fast_prog"
                     ));
                 }
                 let k = k.unwrap_or(20).clamp(1, 20);
@@ -3375,10 +3397,11 @@ impl AgentLoopController {
                                 "r_err",
                                 "v_prog",
                                 "pred_prog",
-                                "env_prog",
                                 "r_prog",
+                                "slow_prog",
+                                "fast_prog",
                             ],
-                            "description": "P2-10 F2 §3.3 (2026-08-30)：Feature 查询的特征名（selector=feature 时必填）。仅与 section=temporal|rli 组合有效：temporal = u_prog|u_err|u_stuck|t_hat|err10|succ10；rli（0am 补充项④，2026-09-20）= u_err|v_err|pred_err|env_err|r_err|u_prog|v_prog|pred_prog|env_prog|r_prog（锚点序列，cap 20）。",
+                            "description": "P2-10 F2 §3.3 (2026-08-30)：Feature 查询的特征名（selector=feature 时必填）。仅与 section=temporal|rli 组合有效：temporal = u_prog|u_err|u_stuck|t_hat|err10|succ10；rli（0am 补充项④＋模态分离批，2026-09-20）= u_err|v_err|pred_err|env_err|r_err|u_prog|v_prog|pred_prog|r_prog ＋ slow_prog|fast_prog（实极点分支的模态对：慢/快分量；复极点分支无定义）。**锚点序列为事件级采样**（决策轮＋每个工具事件，cap 20）；`env_prog` 因恒等于 `u_prog` 已撤名（`env_err` 保留）。",
                         },
                          "since_timestamp": {"type": "string"},
                          "receipt_id": {
@@ -6313,6 +6336,12 @@ body"
             .render_rli_section(Some("history"), None, None)
             .unwrap();
         assert!(history.contains("rli.history"), "{history}");
+        // 定位面（2026-09-20）：域事实对齐到轮次并给驻留/恢复——模型做
+        // 进度定位与回看的要素（全 run 无窗口）。
+        assert!(
+            history.contains("round ") && history.contains("dwell "),
+            "history 缺定位要素: {history}"
+        );
         // 锚点序列面（补充项④）：feature 面可用；缺名/非法名显式报错。
         let feature = controller
             .render_rli_section(Some("feature"), Some(5), Some("u_err"))
