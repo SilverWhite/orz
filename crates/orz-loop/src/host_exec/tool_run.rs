@@ -1176,7 +1176,77 @@ impl AgentLoopController {
                 self.request_compression_window();
                 crate::context_scale::CompressRequestState::Requested
             };
-            let output = crate::context_scale::context_compress_response(state, &readout);
+            let output_base = crate::context_scale::context_compress_response(state, &readout);
+            // 0am FR4（2026-09-20 用户令「压缩白名单挂在 context_compress
+            // 下」）：可选 `whitelist` 条目——机制本体复用 A6 §8 C.2（内存
+            // 列表 + 16K 累计上限 + `.gsa` best-effort 存档 + 常驻前言区
+            // 消息，机械压缩跳过 ⇒ 跨压缩保留）。fail-soft：空条目/超限条目
+            // 跳过并在响应中如实说明（三态语义与 exit 0 信封不变）。
+            let mut whitelist_note = String::new();
+            if let Some(entries) = tc.arguments.get("whitelist").and_then(|v| v.as_array()) {
+                let mut landed = 0usize;
+                let mut refused_cap = 0usize;
+                let mut skipped_empty = 0usize;
+                for raw in entries {
+                    let Some(text) = raw.as_str() else {
+                        skipped_empty += 1;
+                        continue;
+                    };
+                    let content = text.trim();
+                    if content.is_empty() {
+                        skipped_empty += 1;
+                        continue;
+                    }
+                    let fits = {
+                        let w = self
+                            .whitelist
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let used: usize = w.iter().map(|e| e.chars().count()).sum();
+                        used + content.chars().count() <= self.whitelist_cap
+                    };
+                    if !fits {
+                        refused_cap += 1;
+                        continue;
+                    }
+                    {
+                        let mut w = self
+                            .whitelist
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        w.push(content.to_string());
+                    }
+                    // 先存档（机械 best-effort），再常驻前言区。
+                    self.archive_whitelist_entry(host, content);
+                    landed += 1;
+                }
+                if landed > 0 {
+                    self.upsert_whitelist_message(messages);
+                }
+                let total_chars: usize = self
+                    .whitelist
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .iter()
+                    .map(|e| e.chars().count())
+                    .sum();
+                whitelist_note = format!(
+                    "\n白名单：保存 {landed} 条（累计 {total_chars}/{} 字符；跨压缩保留、\
+                     已 best-effort 存档 .gsa）",
+                    self.whitelist_cap
+                );
+                if refused_cap > 0 {
+                    whitelist_note.push_str(&format!("；{refused_cap} 条超累计上限跳过"));
+                }
+                if skipped_empty > 0 {
+                    whitelist_note.push_str(&format!("；{skipped_empty} 条空条目跳过"));
+                }
+            }
+            let output = if whitelist_note.is_empty() {
+                output_base
+            } else {
+                format!("{output_base}{whitelist_note}")
+            };
             let mut completed = serde_json::json!({
                 "tool": tc.name,
                 "call_id": tc.call_id,
@@ -1471,7 +1541,7 @@ impl AgentLoopController {
                         let content = format!(
                             "invalid blackboard_read section: {raw} — section 必须 \
                              是字符串（plan|edits|tool_actions|exec|actions|session|\
-                             internal_ret|external_ret|entities|deps|processes|env|temporal）"
+                             internal_ret|external_ret|entities|deps|processes|env|temporal|rli）"
                         );
                         let mut completed = serde_json::json!({
                             "tool": tc.name,
@@ -2122,6 +2192,160 @@ impl AgentLoopController {
                         return Ok((result, None));
                     }
                 }
+            } else if section == "rli" {
+                // 0am 改造四项③（2026-09-20）：RLI 影子参考面（零注入 PULL；
+                // 与 temporal 面同格：live-only、≤1 KiB）。epoch / receipt_id
+                // 组合显式报错（同 session / temporal 面纪律）。
+                if epoch.is_some() {
+                    let error = "invalid blackboard_read rli read: rli 面是 live 观测\
+                         参考面（不进 epoch 归档）；省略 epoch 参数读取实时状态"
+                        .to_string();
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 1,
+                        "section": section,
+                        "error": error,
+                    });
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
+                    let result = ToolResult {
+                        output: error,
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    };
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: result.output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    return Ok((result, None));
+                }
+                if receipt_id.is_some() {
+                    let error = "receipt_id 仅与 section=actions 组合有效（点读结果栏 \
+                        单条 receipt）；当前 section=rli 不支持 receipt_id"
+                        .to_string();
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 1,
+                        "section": section,
+                        "error": error,
+                    });
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
+                    let result = ToolResult {
+                        output: error,
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    };
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: result.output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    return Ok((result, None));
+                }
+                // Parse the selector face (fail-loud on bad values).
+                let selector = tc.arguments.get("selector").and_then(|v| v.as_str());
+                let k = match tc.arguments.get("k") {
+                    Some(raw) => match raw.as_u64() {
+                        Some(n) if (1..=20).contains(&n) => Some(n),
+                        _ => {
+                            let error = format!("invalid rli k: {raw} — k 必须是 1..=20 的整数");
+                            let mut completed = serde_json::json!({
+                                "tool": tc.name,
+                                "call_id": tc.call_id,
+                                "exit_code": 1,
+                                "section": section,
+                                "error": error,
+                            });
+                            stamp_direct(&mut completed);
+                            writer.record(EventType::ToolCompleted, completed).await?;
+                            self.push_tool_action_stamped(
+                                ToolDispatcher::action_category(&tc.name).to_string(),
+                                tc.name.clone(),
+                                chrono_utc_now(),
+                            );
+                            let result = ToolResult {
+                                output: error,
+                                exit_code: Some(1),
+                                output_encoding: None,
+                                structured: None,
+                                ..Default::default()
+                            };
+                            messages.push(Message {
+                                role: Role::Tool,
+                                content: result.output.clone(),
+                                tool_call_id: Some(tc.call_id.clone()),
+                                tool_calls: Vec::new(),
+                                reasoning_content: None,
+                                round: None,
+                            });
+                            return Ok((result, None));
+                        }
+                    },
+                    None => None,
+                };
+                // 0am 改造补充项④（2026-09-20）：`name` 透传（feature 锚点
+                // 序列面；与 temporal 面同接线——校验在渲染侧，非法即显式
+                // 报错）。
+                let name = tc.arguments.get("name").and_then(|v| v.as_str());
+                match self.render_rli_section(selector, k, name) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        let mut completed = serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "section": section,
+                            "error": error,
+                        });
+                        stamp_direct(&mut completed);
+                        writer.record(EventType::ToolCompleted, completed).await?;
+                        self.push_tool_action_stamped(
+                            ToolDispatcher::action_category(&tc.name).to_string(),
+                            tc.name.clone(),
+                            chrono_utc_now(),
+                        );
+                        let result = ToolResult {
+                            output: error,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                            ..Default::default()
+                        };
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content: result.output.clone(),
+                            tool_call_id: Some(tc.call_id.clone()),
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                            round: None,
+                        });
+                        return Ok((result, None));
+                    }
+                }
             } else if section == "session" {
                 match self.render_session_section(epoch, receipt_id.as_deref(), tool_rounds) {
                     Ok(text) => text,
@@ -2307,8 +2531,9 @@ impl AgentLoopController {
                 content
             };
             // temporal 整响应（增量头 + 查询体）仍 ≤1 KiB（设计 §4/§5）；
+            // rli 参考面同格 ≤1 KiB（0am 改造四项③）；
             // processes live 分区整响应 ≤8 KiB（TER T1.6，T0.2 §5.1）。
-            let content = if section == "temporal" {
+            let content = if section == "temporal" || section == "rli" {
                 orz_assurance::tool_envelope::enforce_bound(content, 1024)
             } else if section == "processes" || section == "env" {
                 orz_assurance::tool_envelope::enforce_bound(content, 8192)
@@ -2337,7 +2562,11 @@ impl AgentLoopController {
             // slot — partition + bounded entries + total cap (§3.3 temporal
             // board ≤ 1 KiB; other sections ≤ 8 KiB). The human-readable
             // message is unchanged.
-            let board_cap = if section == "temporal" { 1024 } else { 8192 };
+            let board_cap = if section == "temporal" || section == "rli" {
+                1024
+            } else {
+                8192
+            };
             let structured = orz_assurance::tool_envelope::OkEnvelope::new(
                 format!("blackboard_read {section}"),
                 serde_json::json!({ "entries_bytes": board_cap }),

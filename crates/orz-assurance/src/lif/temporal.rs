@@ -90,6 +90,12 @@ pub struct TemporalSessionSnapshot {
     /// migrations / migration_count）。
     #[serde(default)]
     pub spikes: Vec<DomainSpike>,
+    /// 0am S2（2026-09-17）：RLI 影子族状态（u/v/θ/r/hit 计数逐通道）——
+    /// 仅当影子被 env 门控启用（`ORZ_LIF_RLI_SHADOW`）时携带；`None` =
+    /// 影子未启用 / legacy 侧车（零迁移：旧侧车无此字段照常解析）。
+    /// 影子不进任何渲染面（零注入），本字段仅为跨 prompt 精确续接服务。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rli_shadow: Option<super::rli::RliShadowSnapshot>,
 }
 
 /// A domain migration (History query). `recovery` marks a
@@ -371,6 +377,8 @@ impl TemporalState {
             current_domain: self.current_domain,
             entry_round: self.entry_round,
             spikes: self.spikes.clone(),
+            // 影子快照由 LifEngine 侧附加（本模块不持有影子状态）。
+            rli_shadow: None,
         }
     }
 

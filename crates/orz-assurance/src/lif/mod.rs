@@ -19,6 +19,7 @@
 
 pub mod channels;
 pub mod estimator;
+pub mod rli;
 pub mod temporal;
 
 pub use channels::{
@@ -32,6 +33,17 @@ pub use channels::{
 pub use estimator::{
     INTERVAL_BUF_CAP, INTERVAL_CAP_SECS, RoundIntervalEstimator, T_HAT_ENABLE_SAMPLES,
     T_HAT_INIT_SECS, T_HAT_MAX_SECS, T_HAT_MIN_SECS,
+};
+// 0am S2（2026-09-17）：RLI 影子族公开面。
+// 0am 改造四项①②（2026-09-20）＋补充项①②④（2026-09-20）：预测步长常数 +
+// 自判域机器族 + 配极表 + 锚点序列表公开面。
+pub use rli::{
+    RLI_ANCHOR_FEATURE_NAMES, RLI_ANCHOR_FEATURE_TABLE, RLI_CHANNELS,
+    RLI_DOMAIN_ERR_ENVELOPE_FLOOR, RLI_DOMAIN_ERR_PRESSURE, RLI_DOMAIN_PROG_LOW,
+    RLI_DOMAIN_RECENT_CAP, RLI_ETA_INIT, RLI_FEATURE_SERIES_CAP, RLI_PREDICTION_STEPS,
+    RLI_PROG_ZETA, RLI_Q, RLI_SNAPSHOT_SCHEMA, RLI_TAU_R_HALF_PERIODS, RLI_THETA_INIT, RLI_ZETA,
+    RliAnchor, RliAnchors, RliChannel, RliChannelSnapshot, RliDomainMachine, RliDomainRow,
+    RliDomainSnapshot, RliShadow, RliShadowSnapshot, rli_zeta_for,
 };
 pub use temporal::{
     Domain, DomainSpike, Migration, TemporalQuery, TemporalRecord, TemporalSessionSnapshot,
@@ -87,6 +99,11 @@ pub struct LifEngine {
     prog: FirstOrderChannel,
     stuck: StuckChannel,
     temporal: TemporalState,
+    /// 0am S2（2026-09-17）：RLI 影子族（旁路并行）。`None` = 未启用
+    /// （默认；零成本——影子不构造、不喂入、侧车不携带）。启用判定在
+    /// orz-loop（env `ORZ_LIF_RLI_SHADOW`），本层不做 env 读取（保持
+    /// 纯确定性内核纪律）。
+    rli_shadow: Option<RliShadow>,
     err_tau_mode: ErrTauMode,
     t_hat_mode: THatMode,
     run_t0: Option<f64>,
@@ -113,6 +130,7 @@ impl LifEngine {
             prog: FirstOrderChannel::prog(),
             stuck: StuckChannel::new(),
             temporal: TemporalState::new(),
+            rli_shadow: None,
             err_tau_mode: ErrTauMode::default(),
             t_hat_mode: THatMode::default(),
             run_t0: None,
@@ -226,6 +244,12 @@ impl LifEngine {
             self.err.u(),
             self.stuck.u(),
         );
+        // 0am S2：影子旁路喂入（同一事件流、同一 run 相对轴；不影响 1D）。
+        // 0am 改造补充项②（2026-09-20）：**不再携带 LIF 现域**——RLI 不与
+        // LIF 对照（域一致性口径改对「框架实际动作结果」，见离线观测件）。
+        if let Some(shadow) = &mut self.rli_shadow {
+            shadow.on_decision_round(t, t_hat);
+        }
     }
 
     /// A completed tool event at wall time `t`.
@@ -266,6 +290,10 @@ impl LifEngine {
         }
         self.check_fires(t);
         self.temporal.observe_tool_outcome(event.outcome);
+        // 0am S2：影子旁路喂入（同一事件流；不影响 1D 任何输出）。
+        if let Some(shadow) = &mut self.rli_shadow {
+            shadow.on_tool_event(t, event);
+        }
     }
 
     /// Decay every channel over the interval since the last step, with the
@@ -339,16 +367,42 @@ impl LifEngine {
         &mut self.temporal
     }
 
+    /// 0am S2（2026-09-17）：启用 RLI 影子族（幂等）。env 门控判定在
+    /// orz-loop（`ORZ_LIF_RLI_SHADOW`）；未启用时零成本（影子不构造、
+    /// 不喂入、侧车不携带字段）。
+    pub fn enable_rli_shadow(&mut self) {
+        if self.rli_shadow.is_none() {
+            self.rli_shadow = Some(RliShadow::new());
+        }
+    }
+
+    pub fn rli_shadow(&self) -> Option<&RliShadow> {
+        self.rli_shadow.as_ref()
+    }
+
+    pub fn rli_shadow_mut(&mut self) -> Option<&mut RliShadow> {
+        self.rli_shadow.as_mut()
+    }
+
+    pub fn rli_shadow_enabled(&self) -> bool {
+        self.rli_shadow.is_some()
+    }
+
     /// B1 会话化基础（2026-09-03）：跨 prompt 续接快照（round / 域机器
-    /// / spike 时间线）。
+    /// / spike 时间线）。0am S2：影子启用时同时携带 RLI 影子族状态
+    /// （`rli_shadow`；未启用 = `None`，侧车无字段）。
     pub fn temporal_session_snapshot(&self) -> TemporalSessionSnapshot {
-        self.temporal.session_snapshot()
+        let mut snapshot = self.temporal.session_snapshot();
+        snapshot.rli_shadow = self.rli_shadow.as_ref().map(RliShadow::snapshot);
+        snapshot
     }
 
     /// B1 会话化基础（2026-09-03）：从会话侧车快照续接轮号与域机器；
     /// `axis_origin_wall = Some(session_start)` 时同时把 `t` 轴预置为
     /// 会话相对（跨 prompt 单调）。`None` = 无会话轴（legacy 侧车 /
     /// 单 run），沿用 run 起点原点语义。
+    /// 0am S2：快照携带影子状态且本引擎已启用影子时一并续接（未启用 =
+    /// 无影子可续，快照字段静默忽略——门控纪律：关 = 零成本）。
     pub fn restore_temporal_session(
         &mut self,
         snapshot: &TemporalSessionSnapshot,
@@ -357,6 +411,15 @@ impl LifEngine {
         self.temporal.restore_session_snapshot(snapshot);
         if let Some(t0) = axis_origin_wall {
             self.set_axis_origin(t0);
+        }
+        if let Some(shadow_snapshot) = &snapshot.rli_shadow
+            && let Some(shadow) = &mut self.rli_shadow
+            && !shadow.restore(shadow_snapshot)
+        {
+            tracing::warn!(
+                "RLI shadow snapshot rejected (schema or channel-family mismatch) — \
+                 fresh shadow state kept"
+            );
         }
     }
 }
@@ -414,5 +477,147 @@ mod tests {
             "t continues on the same axis (got {})",
             row2.t
         );
+    }
+
+    /// 0am S2 钉子：影子关闭 = 零成本默认；启用影子不改变 1D 生产面
+    /// （同一事件流下 1D 读数逐字段全等——生产 1D 不动的机械证据）。
+    #[test]
+    fn rli_shadow_off_by_default_and_leaves_production_1d_untouched() {
+        let mut events = Vec::new();
+        let mut t = 0.0f64;
+        for i in 0..40u32 {
+            t += 3.0 + f64::from(i % 7);
+            let ev = match i % 5 {
+                0 => ToolEvent::deny(Some(10)),
+                1 => ToolEvent::error(Some(900)),
+                _ => ToolEvent::success(Some(400)),
+            };
+            events.push((t, ev));
+        }
+
+        let mut plain = LifEngine::new();
+        let mut shadowed = LifEngine::new();
+        assert!(!plain.rli_shadow_enabled(), "shadow off by default");
+        shadowed.enable_rli_shadow();
+        assert!(shadowed.rli_shadow_enabled());
+
+        let mut td = 0.0f64;
+        for (tt, ev) in &events {
+            td = td.max(*tt - 1.0);
+            plain.on_decision_round(td);
+            shadowed.on_decision_round(td);
+            plain.on_tool_event(*tt, *ev);
+            shadowed.on_tool_event(*tt, *ev);
+        }
+
+        assert_eq!(plain.err().u().to_bits(), shadowed.err().u().to_bits());
+        assert_eq!(plain.prog().u().to_bits(), shadowed.prog().u().to_bits());
+        assert_eq!(plain.slow().u().to_bits(), shadowed.slow().u().to_bits());
+        assert_eq!(plain.stall().u().to_bits(), shadowed.stall().u().to_bits());
+        assert_eq!(plain.deny().u().to_bits(), shadowed.deny().u().to_bits());
+        assert_eq!(plain.stuck().u().to_bits(), shadowed.stuck().u().to_bits());
+        assert_eq!(
+            plain.current_t_hat().to_bits(),
+            shadowed.current_t_hat().to_bits()
+        );
+        assert_eq!(plain.temporal().round(), shadowed.temporal().round());
+        assert_eq!(
+            plain.temporal().total_tool_events(),
+            shadowed.temporal().total_tool_events()
+        );
+
+        // 旁路非空转：err 影子通道确已注入。
+        let shadow = shadowed.rli_shadow().expect("shadow enabled");
+        assert!(shadow.channel(ChannelKind::Err).u() > 0.0);
+        assert!(shadow.steps() > 0);
+    }
+
+    /// 0am S2：影子随会话快照进入侧车面并可精确续接；未启用引擎的
+    /// 快照无影子字段（零迁移 / 门控纪律）。
+    #[test]
+    fn rli_shadow_rides_session_snapshot_and_restores() {
+        let mut engine = LifEngine::new();
+        engine.enable_rli_shadow();
+        let mut t = 0.0f64;
+        for i in 0..12u32 {
+            t += 10.0;
+            engine.on_decision_round(t);
+            let ev = if i % 3 == 0 {
+                ToolEvent::error(Some(1_200))
+            } else {
+                ToolEvent::success(Some(300))
+            };
+            engine.on_tool_event(t + 1.0, ev);
+        }
+        let snapshot = engine.temporal_session_snapshot();
+        let shadow_snapshot = snapshot.rli_shadow.as_ref().expect("shadow in snapshot");
+        assert_eq!(shadow_snapshot.schema, RLI_SNAPSHOT_SCHEMA);
+        assert_eq!(shadow_snapshot.channels.len(), RLI_CHANNELS.len());
+        let err_u = engine.rli_shadow().unwrap().channel(ChannelKind::Err).u();
+        assert!(err_u > 0.0);
+
+        let mut restored = LifEngine::new();
+        restored.enable_rli_shadow();
+        restored.restore_temporal_session(&snapshot, None);
+        let restored_u = restored.rli_shadow().unwrap().channel(ChannelKind::Err).u();
+        assert!(
+            (restored_u - err_u).abs() < 1e-3,
+            "restored {restored_u} vs {err_u} (3-decimal storage contract)"
+        );
+
+        // 未启用引擎：快照无字段；恢复时静默忽略（门控关 = 零成本）。
+        let mut plain = LifEngine::new();
+        plain.on_decision_round(1.0);
+        assert!(plain.temporal_session_snapshot().rli_shadow.is_none());
+        plain.restore_temporal_session(&snapshot, None);
+        assert!(!plain.rli_shadow_enabled());
+    }
+
+    /// 0am 改造四项①（2026-09-20）＋补充项②④（2026-09-20）：引擎逐决策轮
+    /// 喂入影子；自判域行携带 RLI 原生锚点（u/v/E + u_prog）、两轴同轮对齐
+    /// （自判域行 round / t 与 temporal 行同刻度）；**不再携带 LIF 现域对照**
+    /// （RLI 不与 LIF 对照——域一致性口径改对「框架实际动作结果」）。
+    #[test]
+    fn rli_domain_rows_record_native_anchors_per_decision_round() {
+        let mut engine = LifEngine::new();
+        engine.enable_rli_shadow();
+        let mut t = 0.0f64;
+        for i in 0..12u32 {
+            t += 10.0;
+            engine.on_decision_round(t);
+            let ev = if i % 4 == 3 {
+                ToolEvent::error(Some(500))
+            } else {
+                ToolEvent::success(Some(200))
+            };
+            engine.on_tool_event(t + 0.5, ev);
+        }
+        let shadow = engine.rli_shadow().expect("shadow enabled");
+        let domain = shadow.domain();
+        assert_eq!(
+            domain.round(),
+            engine.temporal().round(),
+            "same-round axes (decision rounds)"
+        );
+        let row = domain.now().expect("domain row");
+        let lif_row = engine.temporal().now().expect("temporal row");
+        assert!((row.t - lif_row.t).abs() < 1e-9, "same t axis");
+        assert!(
+            row.v_err.is_finite() && row.env_err.is_finite(),
+            "native v/E anchors recorded: {row:?}"
+        );
+        assert!(
+            row.env_err >= 0.0,
+            "envelope is a magnitude: {}",
+            row.env_err
+        );
+        assert!(
+            ["start", "normal", "pressure", "low_progress", "stuck"].contains(&row.domain.as_str()),
+            "closed domain vocabulary: {}",
+            row.domain.as_str()
+        );
+        // 补充项④：锚点序列随决策轮采样（与域行同轮刻度）。
+        assert_eq!(shadow.feature("u_err", 5).len(), 5);
+        assert_eq!(shadow.feature("env_err", 5).len(), 5);
     }
 }

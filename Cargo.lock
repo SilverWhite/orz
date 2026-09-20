@@ -5561,6 +5561,7 @@ dependencies = [
  "chrono",
  "dunce",
  "jsonschema",
+ "libm",
  "orz-paths",
  "orz-secrets",
  "regex",

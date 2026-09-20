@@ -145,6 +145,26 @@ pub fn f6_push_enabled_override() -> bool {
     )
 }
 
+/// 0am S2（2026-09-17）：RLI 影子通道族总开关——env `ORZ_LIF_RLI_SHADOW`
+/// （1/on/true/yes）；缺失/其它值 = off（影子不构造、不喂入、侧车无字段
+/// ——默认零成本）。门控放在 loop 层（`LifEngine` 保持纯确定性内核，不做
+/// env 读取）；影子无渲染面、无注入面（零注入纪律同格）。
+pub fn rli_shadow_enabled_override() -> bool {
+    matches!(
+        std::env::var("ORZ_LIF_RLI_SHADOW").ok().as_deref(),
+        Some("1" | "on" | "true" | "yes")
+    )
+}
+
+/// 0am S2：构造 LIF 引擎（影子按 env 门控启用；两处构造点共用）。
+fn new_lif_engine() -> orz_assurance::lif::LifEngine {
+    let mut engine = orz_assurance::lif::LifEngine::new();
+    if rli_shadow_enabled_override() {
+        engine.enable_rli_shadow();
+    }
+    engine
+}
+
 /// Parse rule for the subagent max-tool-rounds env value (tested without
 /// env mutation): trimmed u32; `0` disables (unbounded — only the main
 /// lane cap applies); non-numeric → None (invalid ignored, same convention
@@ -930,7 +950,7 @@ impl AgentLoopController {
             status_line_appended: Mutex::new(None),
             delivery_baseline: Mutex::new(None),
             delivery_pending: Mutex::new((0, false)),
-            lif: Mutex::new(orz_assurance::lif::LifEngine::new()),
+            lif: Mutex::new(new_lif_engine()),
             board_stamp_pin: Mutex::new(None),
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             plan_first_enabled: false,
@@ -1453,6 +1473,10 @@ impl AgentLoopController {
     /// is a pure function of plan state, so it is byte-identical across
     /// rounds while the plan is unchanged (prefix-cache discipline).
     pub(crate) fn render_status_line(&self) -> Option<String> {
+        // 0am S1 Part A（2026-09-17）：轮次预算档搭乘常驻状态行（设计 §2.2
+        // 第二渲染面）。投影行先算（只读 LIF），再取黑板读锁——不在黑板
+        // 锁内取 LIF 锁（锁序纪律见本文件 2026-08-31 B2 复审登记）。
+        let rounds_line = self.wallclock_rounds_line();
         let bb = self.blackboard.read();
         if bb.plan.goal.is_none() && bb.plan.steps.is_empty() {
             return None;
@@ -1460,6 +1484,7 @@ impl AgentLoopController {
         Some(crate::prompt::build_status_line(
             bb.plan.goal.as_deref(),
             &bb.plan.steps,
+            rounds_line.as_deref(),
         ))
     }
 
@@ -1550,7 +1575,7 @@ impl AgentLoopController {
             status_line_appended: Mutex::new(None),
             delivery_baseline: Mutex::new(None),
             delivery_pending: Mutex::new((0, false)),
-            lif: Mutex::new(orz_assurance::lif::LifEngine::new()),
+            lif: Mutex::new(new_lif_engine()),
             board_stamp_pin: Mutex::new(None),
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             plan_first_enabled: false,
@@ -2014,10 +2039,14 @@ impl AgentLoopController {
             self.run_elapsed_wallclock_secs(),
             main_wallclock_limit_secs_override(),
         ));
+        // 0am S1 Part A（2026-09-17）：轮次换算行——墙钟已施加且 T̂ 就绪时
+        // 渲染，否则省略整行（fail-soft）。
+        let rounds_line = self.wallclock_rounds_line();
         Ok(crate::prompt::session_face_block_with_wallclock(
             tool_rounds,
             self.max_tool_rounds,
             wallclock,
+            rounds_line.as_deref(),
             self.render_status_line().as_deref(),
         ))
     }
@@ -2030,6 +2059,20 @@ impl AgentLoopController {
             Some(t0) => (Self::now_epoch_secs() - t0).max(0.0) as u64,
             None => 0,
         }
+    }
+
+    /// 0am S1 Part A (2026-09-17, LIF_DYNAMICS_PROJECTION_AND_ROUND_BUDGET
+    /// §2)：T̂ → 墙钟?轮次换算的投影行（SESSION PULL 面 + resident 状态行
+    /// 共用）。渲染条件：评测墙钟已施加（`ORZ_MAX_WALLCLOCK`）**且** T̂
+    /// 就绪（采样 ≥ 8，`estimate_opt`）。其余情形（无上限 / T̂ 未就绪 /
+    /// 读数异常）返回 `None`——fail-soft，调用方省略整行（不渲染占位符、
+    /// 不报错、不打断）。本面 advisory：不接 `budget_insufficient` 预检、
+    /// 不与硬超时 / 资源门 / orientation 阈值 / 轮预算硬门联动。
+    pub(crate) fn wallclock_rounds_line(&self) -> Option<String> {
+        let limit_secs = main_wallclock_limit_secs_override()?;
+        let remaining_secs = limit_secs.saturating_sub(self.run_elapsed_wallclock_secs());
+        let t_hat_secs = self.lif.lock().unwrap().estimator().estimate_opt()?;
+        crate::prompt::wallclock_rounds_line(remaining_secs, t_hat_secs)
     }
 
     /// TER T1.9 (2026-09-04)：F6 push 档——每轮模型请求前调用；仅当
@@ -2322,6 +2365,176 @@ impl AgentLoopController {
         }
     }
 
+    /// 0am 改造四项③（2026-09-20）＋补充项②④（2026-09-20 用户令）：RLI
+    /// 影子参考面——`blackboard_read section=rli` 的**零注入 PULL** 渲染
+    /// （与 LIF `temporal` 面同格：live-only、≤ 1 KiB、模型自行拉取；可用
+    /// 性由此可观测）。selector = now | recent | history | feature（锚点
+    /// 序列面）。影子由 env 门控（`ORZ_LIF_RLI_SHADOW`）；未启用时返回中性
+    /// 说明（不虚构读数）。渲染内容 = 通道锚点（u/v/10·T̂ 预测/E/节律/θ/
+    /// hits）＋自判动作域。**不再渲染 LIF 对照**（补充项②：RLI 不与 LIF
+    /// 对照——域一致性口径改对「框架实际动作结果」，由离线观测件核读）。
+    pub(crate) fn render_rli_section(
+        &self,
+        selector: Option<&str>,
+        k: Option<u64>,
+        name: Option<&str>,
+    ) -> Result<String, String> {
+        let lif = self.lif.lock().unwrap();
+        let Some(shadow) = lif.rli_shadow() else {
+            return Ok(
+                "rli: RLI 影子未启用（env ORZ_LIF_RLI_SHADOW=1 启用；本 run \
+                 未构造影子——无读数可渲染）"
+                    .to_string(),
+            );
+        };
+        let t_hat = shadow.t_hat();
+        let domain = shadow.domain();
+        let body = match selector.unwrap_or("now") {
+            "now" => {
+                let mut lines = vec![format!(
+                    "rli.now → [影子 on | 步数 {} | T̂={:.1}s | 自判域 {}]",
+                    shadow.steps(),
+                    t_hat,
+                    domain.current_domain().as_str(),
+                )];
+                if let Some(row) = domain.now() {
+                    lines.push(format!(
+                        "自判域行: r{} [{:.0}s | {} | 入域 r{} | 驻留 {} 轮] | \
+                         输入 u_err={:.2} v_err={:+.3} E_err={:.2} u_prog={:.2}",
+                        row.round,
+                        row.t,
+                        row.domain.as_str(),
+                        row.entry_round,
+                        row.dwell_rounds,
+                        row.u_err,
+                        row.v_err,
+                        row.env_err,
+                        row.u_prog,
+                    ));
+                }
+                if domain.spikes().len() >= 2 {
+                    let spikes = domain.spikes();
+                    let last = spikes[spikes.len() - 1];
+                    let prev = spikes[spikes.len() - 2];
+                    lines.push(format!(
+                        "上一迁移: {}→{}@{:.0}s",
+                        prev.domain.as_str(),
+                        last.domain.as_str(),
+                        last.t,
+                    ));
+                }
+                for &kind in &orz_assurance::lif::RLI_CHANNELS {
+                    let ch = shadow.channel(kind);
+                    lines.push(format!(
+                        "  {}: u={:.2} v={:+.3} pred(10T̂)={:.2} E={:.2} r={:.0} \
+                         θ={:.2} hits={}",
+                        format!("{kind:?}").to_lowercase(),
+                        ch.u(),
+                        ch.v(),
+                        ch.prediction(t_hat),
+                        ch.envelope(),
+                        ch.rhythm(),
+                        ch.theta(),
+                        ch.hit_count(),
+                    ));
+                }
+                lines.join("\n")
+            }
+            "recent" => {
+                let k = k.unwrap_or(20).clamp(1, 20);
+                let rows = domain.recent(k);
+                let mut lines: Vec<String> = Vec::new();
+                if let (Some(first), Some(last)) = (rows.first(), rows.last()) {
+                    lines.push(format!(
+                        "近 {} 轮: 自判域={} | u_err {:.2}→{:.2}, u_prog {:.2}→{:.2}",
+                        rows.len(),
+                        last.domain.as_str(),
+                        first.u_err,
+                        last.u_err,
+                        first.u_prog,
+                        last.u_prog,
+                    ));
+                }
+                lines.extend(rows.iter().rev().map(|r| {
+                    format!(
+                        "[r{} | {:.0}s | {} | 入域 r{} | 驻留 {}] u_err={:.2} \
+                         v_err={:+.3} E_err={:.2} u_prog={:.2}",
+                        r.round,
+                        r.t,
+                        r.domain.as_str(),
+                        r.entry_round,
+                        r.dwell_rounds,
+                        r.u_err,
+                        r.v_err,
+                        r.env_err,
+                        r.u_prog,
+                    )
+                }));
+                format!("rli.recent({k}) →\n{}", lines.join("\n"))
+            }
+            "history" => {
+                let spikes = domain.spikes();
+                if spikes.is_empty() {
+                    return Ok("rli.history → (无迁移)".to_string());
+                }
+                let mut lines = vec![format!("rli.history → 自判域切换 {} 次", spikes.len())];
+                lines.extend(
+                    spikes
+                        .iter()
+                        .map(|s| format!("{} @ {:.0}s", s.domain.as_str(), s.t)),
+                );
+                lines.join("\n")
+            }
+            "feature" => {
+                // 0am 改造补充项④（2026-09-20 用户令）：锚点序列面——与
+                // temporal 的 feature 面同格（名 + k≤20 紧凑序列 + 当前值）。
+                let Some(name) = name else {
+                    return Err("invalid rli feature query: feature 需要 name 参数 \
+                         （u_err|v_err|pred_err|env_err|r_err|u_prog|v_prog|pred_prog|env_prog|r_prog）"
+                        .to_string());
+                };
+                if !orz_assurance::lif::RliShadow::known_feature_names().contains(&name) {
+                    return Err(format!(
+                        "invalid rli feature name: {name} — 合法值 \
+                         u_err|v_err|pred_err|env_err|r_err|u_prog|v_prog|pred_prog|env_prog|r_prog"
+                    ));
+                }
+                let k = k.unwrap_or(20).clamp(1, 20);
+                let values = shadow.feature(name, k);
+                let compact = values
+                    .iter()
+                    .map(|v| format!("{v:.3}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let mut line = format!("rli.feature({name}, {}) → {compact}", values.len());
+                if let Some(latest) = values.last() {
+                    line.push_str(&format!(
+                        "; 当前 {name}={latest:.3} (自判域={})",
+                        domain.now().map(|r| r.domain.as_str()).unwrap_or("—")
+                    ));
+                }
+                line
+            }
+            other => {
+                return Err(format!(
+                    "invalid rli selector: {other} — 合法值 now|recent|history|feature"
+                ));
+            }
+        };
+        // 与 temporal 面同格：≤ 1 KiB 渲染（UTF-8 安全截断 + 显式标记）。
+        const BOARD_CAP: usize = 1024;
+        const TRUNC_MARKER: &str = "\n(truncated)";
+        if body.len() > BOARD_CAP {
+            let mut cut = BOARD_CAP.saturating_sub(TRUNC_MARKER.len());
+            while cut > 0 && !body.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            Ok(format!("{}{}", &body[..cut], TRUNC_MARKER))
+        } else {
+            Ok(body)
+        }
+    }
+
     /// PULL 自描述（2026-08-31，P2-11 第 1 项 / 设计 §3-§4）：为一次成功的
     /// live `blackboard_read` 响应附加「自上次读取以来」增量头，并推进本次
     /// 读取分区的游标（其余分区保持未读徽章）。
@@ -2431,13 +2644,23 @@ impl AgentLoopController {
         // （既有 10MiB 疲劳提醒机制不变；固化写入为 KB 量级，水位无虞）。
         let watermark = self.blackboard_watermark_label();
         let mut items = self.blackboard.read().partition_revisions();
-        let (temporal_round, migration_count, last_migration) = {
+        let (temporal_round, migration_count, last_migration, rli_steps) = {
             let lif = self.lif.lock().unwrap();
             let t = lif.temporal();
-            (t.round(), t.migration_count(), t.history().last().copied())
+            (
+                t.round(),
+                t.migration_count(),
+                t.history().last().copied(),
+                lif.rli_shadow().map(|s| s.steps()),
+            )
         };
         items.push(("session", tool_rounds as u64));
         items.push(("temporal", temporal_round));
+        // 0am 改造四项③（2026-09-20）：rli 参考面增量徽章——影子未启用时
+        // 无游标语义（不挂徽章，保持零成本）。
+        if let Some(steps) = rli_steps {
+            items.push(("rli", steps));
+        }
 
         let mut cursors = self.blackboard_read_cursors.lock().unwrap();
         // 双基线（审查处理 M1）：temporal 徽章用 round 游标；域迁移段用
@@ -3063,7 +3286,11 @@ impl AgentLoopController {
                      (TER T1.12 W-F11 live code-tool environment snapshot — \
                      tool/language/package/version presence, key input presence, \
                      connectivity verdicts; ≤5s recompute, PULL whitelist face, \
-                     nothing archived). \
+                     nothing archived), rli (0am 改造四项③ (2026-09-20): RLI 影子\
+                     参考面 — 谐振二阶通道锚点 (u/v/10·T̂ 闭式预测/E/r/θ/hits) + \
+                     自判动作域 + 同轮域一致性读数; selector now|recent|history \
+                     (k≤20); env 门控 (ORZ_LIF_RLI_SHADOW), live-only ≤1 KiB, \
+                     零注入, nothing archived). \
                      Optional `since_timestamp` (RFC 3339, e.g. the timestamp \
                      this tool returned earlier) filters the edits / tool_actions \
                      entries to those at or after that time. Optional \
@@ -3118,13 +3345,14 @@ impl AgentLoopController {
                                 "processes",
                                 "env",
                                 "temporal",
+                                "rli",
                             ],
                             "description": "P2-10 F2 §3.3 (2026-08-30): temporal 分区是 LIF 时间观测面——每决策轮域标签/特征行（Now/Recent(k≤20)/History/Feature(name,k≤20)，渲染 ≤1 KiB、fires 不渲染、零注入 PULL 面）。selector 默认 now；recent/feature 可带 k（≤20）；feature 另需 name（u_prog|u_err|u_stuck|t_hat|err10|succ10）。",
                         },
                         "selector": {
                             "type": "string",
                             "enum": ["now", "recent", "history", "feature"],
-                            "description": "P2-10 F2 §3.3 (2026-08-30): temporal 查询面选择器——now（当前决策轮行，默认）/ recent（最近 k 行）/ history（域迁移日志 ≤20）/ feature（name 特征序列，k≤20）。仅与 section=temporal 组合有效；其余分区忽略（审查处理 R4 / F7）。",
+                            "description": "P2-10 F2 §3.3 (2026-08-30): temporal 查询面选择器——now（当前决策轮行，默认）/ recent（最近 k 行）/ history（域迁移日志 ≤20）/ feature（name 特征序列，k≤20）。仅与 section=temporal 组合有效（rli 参考面支持 now|recent|history|feature）；其余分区忽略（审查处理 R4 / F7）。",
                         },
                         "k": {
                             "type": "integer",
@@ -3134,8 +3362,23 @@ impl AgentLoopController {
                         },
                         "name": {
                             "type": "string",
-                            "enum": ["u_prog", "u_err", "u_stuck", "t_hat", "err10", "succ10"],
-                            "description": "P2-10 F2 §3.3 (2026-08-30): temporal Feature 查询的特征名（selector=feature 时必填）。仅与 section=temporal 组合有效（审查处理 R4 / F7）。",
+                            "enum": [
+                                "u_prog",
+                                "u_err",
+                                "u_stuck",
+                                "t_hat",
+                                "err10",
+                                "succ10",
+                                "v_err",
+                                "pred_err",
+                                "env_err",
+                                "r_err",
+                                "v_prog",
+                                "pred_prog",
+                                "env_prog",
+                                "r_prog",
+                            ],
+                            "description": "P2-10 F2 §3.3 (2026-08-30)：Feature 查询的特征名（selector=feature 时必填）。仅与 section=temporal|rli 组合有效：temporal = u_prog|u_err|u_stuck|t_hat|err10|succ10；rli（0am 补充项④，2026-09-20）= u_err|v_err|pred_err|env_err|r_err|u_prog|v_prog|pred_prog|env_prog|r_prog（锚点序列，cap 20）。",
                         },
                          "since_timestamp": {"type": "string"},
                          "receipt_id": {
@@ -3215,6 +3458,11 @@ impl AgentLoopController {
         // （沿 blackboard_write 注册形态）；描述**自包含教学**并控常驻长度
         // （~140 字符，设计 §4-1「≤120 字符目标」的贴近值——多出部分为
         // [SEMANTIC_SUMMARY] 摘要协议必要教学；常驻成本读数 S3 照收）。
+        // 0am FR4（2026-09-20 用户令「压缩白名单挂在 context_compress 下，
+        // 不做独立工具、保 10 工具面」）：新增**可选 `whitelist` 参数**——
+        // 模型处理压缩时可额外保存白名单条目（机制本体＝A6 §8 C.2 白名单
+        // 块／16K 上限／常驻前言区／best-effort 存档，全部复用；旧的独立
+        // 工具 `compaction_whitelist_add` 维持封存不动）。
         if !tool_defs
             .iter()
             .any(|t| t.name == orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME)
@@ -3223,11 +3471,22 @@ impl AgentLoopController {
                 name: orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME.to_string(),
                 description: "Open a compression window (≤3 rounds), then write a \
                      [SEMANTIC_SUMMARY] block to fold blocks beyond the slider. \
+                     Optional `whitelist` entries are saved (survive compaction). \
                      Returns the slider readout."
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "whitelist": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "maxItems": 16,
+                            "description": "0am FR4（2026-09-20）：可选——处理压缩\
+                             时额外保存的白名单条目（跨压缩保留的任务事实：常驻\
+                             前言区、机械压缩跳过、best-effort 存档 .gsa）。累计\
+                             上限 16K 字符；超限/空条目跳过并在响应中如实说明。",
+                        },
+                    },
                 }),
             });
         }
@@ -6009,6 +6268,99 @@ body"
         assert!(bounded.is_char_boundary(bounded.len()));
     }
 
+    /// 0am 改造四项③（2026-09-20）＋补充项②④（2026-09-20）：RLI 参考面
+    /// ——影子未启用 = 中性说明（不虚构读数）；启用后 now/recent/history/
+    /// feature 渲染通道锚点 + 自判动作域（补充项②起**不渲染 LIF 对照**）；
+    /// 未知 selector / 缺名 / 非法名显式报错；面 ≤1 KiB（同 temporal 格）。
+    #[test]
+    fn rli_reference_face_renders_shadow_signal() {
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        let off = controller.render_rli_section(None, None, None).unwrap();
+        assert!(off.contains("RLI 影子未启用"), "{off}");
+
+        {
+            let mut guard = controller.lif.lock().unwrap();
+            guard.enable_rli_shadow();
+            let mut t = 0.0f64;
+            for i in 0..6u32 {
+                t += 10.0;
+                guard.on_decision_round(t);
+                let ev = if i % 3 == 0 {
+                    orz_assurance::lif::ToolEvent::error(Some(900))
+                } else {
+                    orz_assurance::lif::ToolEvent::success(Some(200))
+                };
+                guard.on_tool_event(t + 1.0, ev);
+            }
+        }
+        let now = controller
+            .render_rli_section(Some("now"), None, None)
+            .unwrap();
+        for needle in ["rli.now", "自判域", "v_err=", "pred(10T̂)", "err:", "prog:"] {
+            assert!(now.contains(needle), "now render missing {needle}: {now}");
+        }
+        assert!(
+            !now.contains("LIF"),
+            "补充项②: rli 面不再渲染 LIF 对照: {now}"
+        );
+        let recent = controller
+            .render_rli_section(Some("recent"), Some(5), None)
+            .unwrap();
+        assert!(recent.contains("rli.recent(5)"), "{recent}");
+        assert!(recent.contains("u_err="), "{recent}");
+        let history = controller
+            .render_rli_section(Some("history"), None, None)
+            .unwrap();
+        assert!(history.contains("rli.history"), "{history}");
+        // 锚点序列面（补充项④）：feature 面可用；缺名/非法名显式报错。
+        let feature = controller
+            .render_rli_section(Some("feature"), Some(5), Some("u_err"))
+            .unwrap();
+        assert!(feature.contains("rli.feature(u_err, 5)"), "{feature}");
+        assert!(feature.contains("当前 u_err="), "{feature}");
+        let bad_name = controller
+            .render_rli_section(Some("feature"), None, Some("nope"))
+            .unwrap_err();
+        assert!(bad_name.contains("invalid rli feature name"), "{bad_name}");
+        let missing_name = controller
+            .render_rli_section(Some("feature"), None, None)
+            .unwrap_err();
+        assert!(missing_name.contains("feature 需要 name"), "{missing_name}");
+        let err = controller
+            .render_rli_section(Some("bogus"), None, None)
+            .unwrap_err();
+        assert!(err.contains("invalid rli selector"), "{err}");
+        assert!(
+            now.len() <= 1024 && recent.len() <= 1024,
+            "rli board bounded (now {} / recent {})",
+            now.len(),
+            recent.len()
+        );
+    }
+
+    /// 0am 改造四项③：影子启用时增量头携带 rli 徽章；读取 rli 分区推进其
+    /// 游标（未读徽章模型——首次读仍显示，读后清零）；未启用 = 不挂徽章。
+    #[test]
+    fn pull_delta_badges_rli_when_shadow_enabled() {
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        let out = controller.attach_pull_delta("plan", "body".to_string(), 0, None);
+        assert!(!out.contains("rli+"), "shadow off ⇒ no rli badge: {out}");
+        {
+            let mut guard = controller.lif.lock().unwrap();
+            guard.enable_rli_shadow();
+            guard.on_tool_event(1.0, orz_assurance::lif::ToolEvent::success(Some(10)));
+            guard.on_decision_round(2.0);
+        }
+        let out = controller.attach_pull_delta("plan", "body".to_string(), 0, None);
+        assert!(out.contains("rli+2"), "{out}");
+        let out2 = controller.attach_pull_delta("rli", "body".to_string(), 0, None);
+        assert!(out2.contains("rli+2"), "read still shows the badge: {out2}");
+        let out3 = controller.attach_pull_delta("rli", "body".to_string(), 0, None);
+        assert!(!out3.contains("rli+"), "cursor cleared after read: {out3}");
+    }
+
     /// PULL 自描述 §3/§4（2026-08-31 审查处理 M1 回归）：temporal 双基线——
     /// round 徽章游标与迁移计数基线分开推进；读 temporal 后发生的新迁移
     /// 仍以准确的「域迁移+n」出现在其它分区读取头上（不再被 round 刻度吞掉）。
@@ -6195,6 +6547,7 @@ body",
                 current_domain: Domain::Pressure,
                 entry_round: 13,
                 spikes: Vec::new(),
+                rli_shadow: None,
             },
             Some(AgentLoopController::now_epoch_secs()),
         );

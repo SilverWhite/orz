@@ -597,6 +597,11 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
         // 网络/黑板外部副作用——与 `blackboard_write` 同族。沿 0aj 教训
         // 两表同批：controller `risk_class`（READ_ONLY_EXEMPT_TOOLS）与本
         // 桥 arm 必须同时登记，遍历式护栏（本文件测试）看护漏网。
+        // 0am FR4（2026-09-20）：可选 `whitelist` 条目并入驻同一调用——写的
+        // 仍是**内存白名单 + .gsa 侧的机械 best-effort 存档 append**（与
+        // A6 §8 C.2 封存的 `compaction_whitelist_add` 同类，run 目录内、A5
+        // 保留期覆盖），**不新增任何访问类型**：本 arm 的 ReadOnly 判定与
+        // 两表登记纪律不变。
         || tool == CONTEXT_COMPRESS_TOOL_NAME
     {
         // Controller-owned in-memory tools (A3 blackboard_read / A6 §8 C.2

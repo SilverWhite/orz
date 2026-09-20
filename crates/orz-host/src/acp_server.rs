@@ -3350,6 +3350,7 @@ mod tests {
                 current_domain: orz_assurance::lif::Domain::Normal,
                 entry_round: 1,
                 spikes: Vec::new(),
+                rli_shadow: None,
             },
             Some(1_700_000_000.0),
             &Blackboard::default(),
@@ -3463,6 +3464,7 @@ mod tests {
             current_domain: orz_assurance::lif::Domain::Pressure,
             entry_round: 3,
             spikes: Vec::new(),
+            rli_shadow: None,
         };
         let conversation = |chars: usize| {
             StoredConversation::full(
@@ -3590,6 +3592,7 @@ mod tests {
                 current_domain: orz_assurance::lif::Domain::Normal,
                 entry_round: 1,
                 spikes: Vec::new(),
+                rli_shadow: None,
             },
             Some(1_700_000_000.0),
             &Blackboard::default(),
@@ -3693,6 +3696,7 @@ mod tests {
                 current_domain: orz_assurance::lif::Domain::Normal,
                 entry_round: 1,
                 spikes: Vec::new(),
+                rli_shadow: None,
             },
             Some(1_700_000_000.0),
             &Blackboard::default(),
@@ -3739,6 +3743,7 @@ mod tests {
                     current_domain: orz_assurance::lif::Domain::Normal,
                     entry_round: 1,
                     spikes: Vec::new(),
+                    rli_shadow: None,
                 },
             )
         };
@@ -3800,6 +3805,7 @@ mod tests {
                 current_domain: orz_assurance::lif::Domain::Normal,
                 entry_round: 1,
                 spikes: Vec::new(),
+                rli_shadow: None,
             },
             Some(1_700_000_000.0),
             &Blackboard::default(),
@@ -5250,6 +5256,7 @@ mod tests {
             current_domain: orz_assurance::lif::Domain::Stuck,
             entry_round: 33,
             spikes: spikes.clone(),
+            rli_shadow: None,
         };
         let blackboard = Blackboard::default();
         let full = StoredConversation::full(

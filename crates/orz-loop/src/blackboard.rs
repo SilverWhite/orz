@@ -1760,6 +1760,11 @@ mod tests {
             sections.iter().any(|v| v.as_str() == Some("temporal")),
             "temporal must be declared in the section enum: {sections:?}"
         );
+        // 0am 改造四项③（2026-09-20）：rli 参考面同格（零注入 PULL；env 门控）。
+        assert!(
+            sections.iter().any(|v| v.as_str() == Some("rli")),
+            "rli must be declared in the section enum: {sections:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3046,6 +3051,7 @@ mod tests {
                 current_domain: orz_assurance::lif::Domain::Pressure,
                 entry_round: 301,
                 spikes: Vec::new(),
+                rli_shadow: None,
             },
             Some(AgentLoopController::now_epoch_secs()),
         );

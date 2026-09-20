@@ -683,6 +683,77 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 0am FR4（2026-09-20 用户令）：压缩白名单并入 `context_compress`——
+    /// 可选 `whitelist` 条目在**处理压缩的同一调用**里落盘：内存列表 +
+    /// `{journal_dir}/whitelist.jsonl` best-effort 存档 + 常驻前言区
+    /// `[压缩白名单` 消息（跨压缩保留、机械压缩跳过）；空条目/超累计上限
+    /// 条目跳过并在响应中如实说明；全链 fail-soft（exit 0 信封、三态不变）。
+    #[tokio::test]
+    async fn context_compress_whitelist_entries_land_and_respect_cap() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "context_compress".to_string(),
+                arguments: serde_json::json!({
+                    "whitelist": ["任务背景：甲", "关键路径：src/x.rs", "   "],
+                }),
+                call_id: "call-cc-w1".to_string(),
+            }]),
+            ScriptedResponse::text("候选答案"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // cap 取 12：首条（6 字符）落地；次条（13 字符）超累计上限被跳过。
+        let controller = AgentLoopController::with_gateway(gateway).with_whitelist_cap(12);
+        controller
+            .run_turn(&host, "任务", "RUN-CC-WL", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        // ① 工具仍 exit 0（fail-soft 信封）。
+        let cc: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_compress"
+            })
+            .collect();
+        assert_eq!(cc.len(), 1, "{cc:?}");
+        assert_eq!(cc[0].payload["exit_code"], 0);
+        // ② 内存白名单 = 仅首条（空/超限条目未落地）。
+        let w = controller.whitelist.lock().unwrap().clone();
+        assert_eq!(w, vec!["任务背景：甲".to_string()], "{w:?}");
+        // ③ 存档：whitelist.jsonl 恰一行（best-effort JSONL append）。
+        let archive = dir.join("whitelist.jsonl");
+        let text = std::fs::read_to_string(&archive).expect("whitelist archive");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("任务背景：甲"), "{lines:?}");
+        // ④ 常驻前言区消息 + 响应回执（含跳过说明）。
+        let received = fake.received_requests();
+        let round2 = &received[1].messages;
+        assert!(
+            round2
+                .iter()
+                .any(|m| m.content.starts_with("[压缩白名单") && m.content.contains("任务背景：甲")),
+            "resident whitelist message: {round2:?}"
+        );
+        assert!(
+            round2.iter().filter(|m| m.role == Role::Tool).any(|m| m
+                .content
+                .contains("白名单：保存 1 条")
+                && m.content.contains("超累计上限跳过")
+                && m.content.contains("空条目跳过")),
+            "whitelist receipt with skip notes: {round2:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// v8 实现批（2026-09-16，审查 R-3）：**本地面全量零覆盖**——主车道 run
     /// 收尾不再有任何机械压缩：会话侧车（进而归档包）逐字保留全部轮次，且
     /// **不得**出现 `context_compressed{reason=session_end}`（该路径已退役；

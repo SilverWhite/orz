@@ -18,6 +18,8 @@
 //! right-endpoint discretization is forbidden (7–21× artifacts, proven on
 //! 102 runs).
 
+use serde::{Deserialize, Serialize};
+
 /// --- design constants (§4.3) ---
 pub const ERR_TAU_SECS: f64 = 180.0;
 pub const ERR_THETA: f64 = 4.0;
@@ -55,7 +57,11 @@ pub fn expm1_ratio(y: f64) -> f64 {
 }
 
 /// Which channel a first-order instance implements.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// 0am S2 (2026-09-17): serde derives for the RLI shadow snapshot (sidecar
+/// persistence) — snake_case wire form matches the domain enum convention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChannelKind {
     Err,
     Stall,
