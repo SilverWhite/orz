@@ -102,9 +102,151 @@ fn py_int_value(value: Option<&Value>) -> Option<i64> {
 
 // ── S2c-1 retrieval families ────────────────────────────────────────────
 
+/// 0ay S1 (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY):
+/// mechanically recomputed batch counts over a committed retrieval result's
+/// ledger ALONE (mirror of the Python `recompute_retrieval_batch_counts`).
+///
+/// Rule (single source with the producer's `is_synthetic_answer`): an entry
+/// is a URL-less synthesized answer iff `source_type == "web_search_result"`
+/// AND its RAW citation pool is empty — and the raw pool is empty exactly
+/// when `citation_url_count` is ABSENT (the field is emitted only for a
+/// non-empty raw pool). Scope and DEDUP ORDER mirror the producer: only
+/// text-level evidence, with the two classes deduplicated **independently**
+/// (`content_sha256` with the `identity:<source_url_or_ref>` fallback) — the
+/// producer excludes synthetic entries first and dedups the rest, and
+/// excludes usable entries first and dedups the pool-less ones, so one dedup
+/// key may legitimately appear once in EACH class (0az ①, 2026-09-20: the
+/// judge used to dedup first and classify by first sight — a second ruler
+/// that dropped one of the two counts for a shared key).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RetrievalBatchCounts {
+    pub synthetic_answer_count: u64,
+    pub usable_source_count: u64,
+    pub citation_entries: u64,
+    pub citation_url_total: u64,
+}
+
+/// The dedup key the producer uses for usable/synthetic counting
+/// (`content_sha256`, falling back to `identity:<source_url_or_ref>`).
+fn evidence_dedup_key(entry: &Value) -> String {
+    match str_of(entry.get("content_sha256")) {
+        Some(digest) => digest.to_string(),
+        None => format!(
+            "identity:{}",
+            str_of(entry.get("source_url_or_ref")).unwrap_or_default()
+        ),
+    }
+}
+
+pub fn recompute_retrieval_batch_counts(payload: &Value) -> RetrievalBatchCounts {
+    let mut counts = RetrievalBatchCounts::default();
+    let Some(ledger) = payload.get("source_ledger").and_then(Value::as_array) else {
+        return counts;
+    };
+    // One dedup set per class (producer parity — see the doc comment).
+    let mut seen_synthetic: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen_usable: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for entry in ledger {
+        let visibility = str_of(entry.get("visibility")).unwrap_or_default();
+        if !matches!(visibility, "full_text_observed" | "partial_text_observed") {
+            continue;
+        }
+        let is_web_search = str_of(entry.get("source_type")) == Some("web_search_result");
+        let citation_count = entry.get("citation_url_count");
+        let is_synthetic = is_web_search && py_none(citation_count).is_none();
+        let seen = if is_synthetic {
+            &mut seen_synthetic
+        } else {
+            &mut seen_usable
+        };
+        if !seen.insert(evidence_dedup_key(entry)) {
+            continue;
+        }
+        if is_web_search {
+            counts.citation_entries += 1;
+            if let Some(count) = py_int(citation_count) {
+                counts.citation_url_total += count.max(0) as u64;
+            }
+        }
+        if is_synthetic {
+            counts.synthetic_answer_count += 1;
+        } else {
+            counts.usable_source_count += 1;
+        }
+    }
+    counts
+}
+
+/// 0az ① (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDIT-CLOSURE):
+/// cross-check the DECLARED narrowed-usable faces against the same ledger-only
+/// recompute (0ay criterion ① second half — before this rule the narrowed
+/// `usable_source_count` was computed by both judges and then never compared
+/// with any declared value). Mirror of `_declared_usable_count_errors`:
+///
+/// - single-query activations: `query_summary[0].usable_source_count` IS the
+///   batch count (`batch_close::per_query_usable_counts` returns the batch
+///   count for one query) ⇒ compare per value;
+/// - multi-query activations: `unattributed_usable_count` is defined as the
+///   saturating difference `batch − Σ per-query` ⇒ the declared triple must
+///   reproduce it. (The published identity `Σ per-query + unattributed =
+///   batch` holds only for digest-disjoint per-query buckets; cross-query
+///   overlap saturates the gap to 0 — a property of the producer's
+///   attribution, not of this cross-check.)
+///
+/// Only emitted fields are read, so pre-0ar payloads (no per-query counts)
+/// stay untouched; the caller keeps this inside the 0ay generation gate (a
+/// pre-0ay payload declares the WIDE count, which must not be compared with
+/// the narrowed recompute).
+fn declared_usable_count_errors(
+    index: usize,
+    payload: &Value,
+    recomputed: &RetrievalBatchCounts,
+) -> Vec<String> {
+    let declared: Vec<Option<i64>> = payload
+        .get("query_summary")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|entry| py_int_value(entry.get("usable_source_count")))
+                .collect()
+        })
+        .unwrap_or_default();
+    let batch = recomputed.usable_source_count as i64;
+    match declared.as_slice() {
+        [Some(declared_single)] => {
+            if *declared_single != batch {
+                return vec![format!(
+                    "event {index}: query_summary usable_source_count \
+                     {declared_single} != mechanical recompute {batch} over the \
+                     ledger (single-query activations carry the batch count)"
+                )];
+            }
+            return Vec::new();
+        }
+        [] | [None] => return Vec::new(),
+        _ => {}
+    }
+    if declared.len() > 1 && declared.iter().all(Option::is_some) {
+        let total: i64 = declared.iter().flatten().sum();
+        let unattributed = py_int_value(payload.get("unattributed_usable_count")).unwrap_or(0);
+        let expected = (batch - total).max(0);
+        if unattributed != expected {
+            return vec![format!(
+                "event {index}: unattributed_usable_count {unattributed} != \
+                 mechanical recompute {expected} (batch usable {batch} − \
+                 declared Σ per-query {total}, saturated at 0)"
+            )];
+        }
+    }
+    Vec::new()
+}
+
 /// Python `_verify_v02_result_consistency` (ADR-0010 §3.3.3/§3.7.5): source
 /// counts = mechanical ledger distribution, `visibility_degraded` == "no
-/// text-level evidence", digest/`result_id`/assessment binding facts.
+/// text-level evidence", digest/`result_id`/assessment binding facts, plus
+/// (0ay S1 / 0az ①, 2026-09-20) the generation-gated declared-vs-recompute
+/// cross-checks of `synthetic_answer_count` and of the narrowed usable faces.
 pub fn verify_result_consistency(events: &[Value]) -> Vec<String> {
     const VISIBILITIES: &[&str] = &[
         "full_text_observed",
@@ -210,6 +352,109 @@ pub fn verify_result_consistency(events: &[Value]) -> Vec<String> {
 
         // 方向 C (2026-08-30): organized_response retired; visibility_degraded
         // must equal "no text-level evidence".
+        // 0ay S1 (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY):
+        // the synthetic-answer judgement INPUT must be on the ledger —
+        // `citation_url_count` (RAW citation-pool size) travels on
+        // web_search_result entries when the raw pool is non-empty, and the
+        // retained pool plus that source's prefilter removals must add up to
+        // it; the declared `synthetic_answer_count` must equal the ledger-only
+        // recompute (self-report is no longer the only face).
+        let mut removals_by_source: std::collections::BTreeMap<&str, i64> =
+            std::collections::BTreeMap::new();
+        if let Some(log) = payload.get("prefilter_log").and_then(Value::as_array) {
+            for item in log {
+                if let Some(sid) = str_of(item.get("source_id")) {
+                    *removals_by_source.entry(sid).or_insert(0) += 1;
+                }
+            }
+        }
+        for entry in ledger {
+            let declared = entry.get("citation_url_count");
+            if py_none(declared).is_none() {
+                continue;
+            }
+            let sid = str_of(entry.get("source_id")).unwrap_or("<missing>");
+            if str_of(entry.get("source_type")) != Some("web_search_result") {
+                errors.push(format!(
+                    "event {index}: source {sid} carries citation_url_count but \
+                     source_type is {:?} (only web_search_result may carry a \
+                     citation pool)",
+                    str_of(entry.get("source_type")).unwrap_or_default()
+                ));
+            }
+            let Some(count) = py_int(declared) else {
+                errors.push(format!(
+                    "event {index}: source {sid} citation_url_count {declared:?} \
+                     must be a positive integer (the field is emitted only for \
+                     a non-empty raw citation pool; absence is the pool-less form)"
+                ));
+                continue;
+            };
+            if count < 1 {
+                errors.push(format!(
+                    "event {index}: source {sid} citation_url_count {count} \
+                     must be a positive integer (the field is emitted only for \
+                     a non-empty raw citation pool; absence is the pool-less form)"
+                ));
+                continue;
+            }
+            let candidates = entry.get("candidate_urls").and_then(Value::as_array);
+            let Some(candidates) = candidates else {
+                errors.push(format!(
+                    "event {index}: source {sid} carries citation_url_count \
+                     without candidate_urls (the prefiltered pool travels with it)"
+                ));
+                continue;
+            };
+            let retained = candidates.len() as i64;
+            if count < retained {
+                errors.push(format!(
+                    "event {index}: source {sid} citation_url_count {count} < \
+                     retained candidate_urls {retained} (the retained pool is a \
+                     subset of the raw pool)"
+                ));
+            }
+            let removals = removals_by_source.get(sid).copied().unwrap_or(0);
+            if count != retained + removals {
+                errors.push(format!(
+                    "event {index}: source {sid} citation_url_count {count} != \
+                     retained {retained} + prefilter removals {removals} (the raw \
+                     pool partitions into retained + removed)"
+                ));
+            }
+        }
+        // Generation marker (0ay replay compatibility, criterion 3): the
+        // declared-vs-recompute cross-checks run only for payloads the 0ay
+        // producer could have written. 0az ① (2026-09-20, F-1): the marker is
+        // `citation_url_count` on ANY ledger entry — the one thing only the
+        // 0ay producer writes and the 0ax producer cannot. Declaring
+        // `synthetic_answer_count` is NOT a marker: the 0ax producer writes it
+        // whenever a batch carries a pool-less entry, so a 0ax-era batch that
+        // mixes a pooled entry with a pool-less one has no field anywhere (its
+        // pooled entries predate `citation_url_count`) and used to be misread
+        // as two synthesized answers. A pre-0ay journal legally carries
+        // pool-less entries with neither field and replays without new
+        // errors; a batch with no field anywhere is deliberately left
+        // unchecked — every web_search entry in it is pool-less by
+        // construction, so the declared count carries no information the
+        // recompute does not already have.
+        let generation_marker = ledger
+            .iter()
+            .any(|entry| py_none(entry.get("citation_url_count")).is_some());
+        if generation_marker {
+            let recomputed = recompute_retrieval_batch_counts(payload);
+            let declared_synthetic =
+                py_int_value(payload.get("synthetic_answer_count")).unwrap_or(0);
+            if declared_synthetic != recomputed.synthetic_answer_count as i64 {
+                errors.push(format!(
+                    "event {index}: synthetic_answer_count {declared_synthetic} != \
+                     mechanical recompute {} over the ledger (web_search_result \
+                     entries without citation_url_count, deduplicated)",
+                    recomputed.synthetic_answer_count
+                ));
+            }
+            errors.extend(declared_usable_count_errors(index, payload, &recomputed));
+        }
         if payload.get("organized_response").is_some() {
             errors.push(format!(
                 "event {index}: organized_response is retired \

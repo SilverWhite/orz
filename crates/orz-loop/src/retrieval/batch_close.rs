@@ -151,8 +151,22 @@ pub(crate) fn usable_source_count(evidence: &[EvidenceRecord]) -> u64 {
 /// 且引用池为空（机械形态：宿主结构化 seam 未带来任何 citation URL）。
 /// 其余证据（web_page/pdf_document/local_file/project_doc/web_search 带
 /// 引用池）不在此列。
+///
+/// 0ay S1（2026-09-20，GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY）：
+/// 判定输入（原引用池大小）与落盘面共用 [`citation_url_count`] 这一把尺
+/// ——`None` ⇔ 原池为空 ⇔ 合成答案；`Some(n)` ⇒ 该条目按 `n` 落
+/// `citation_url_count`（装配点 `evidence.rs` 同一 helper 调用）。
 pub(crate) fn is_synthetic_answer(ev: &EvidenceRecord) -> bool {
-    ev.source_type == "web_search_result" && ev.candidate_urls.is_empty()
+    ev.source_type == "web_search_result" && citation_url_count(ev).is_none()
+}
+
+/// 0ay S1：条目**原**（前置过滤前）web_search 引用池大小——判定输入的唯一
+/// 单源。原池为空时返回 `None`（缺席即空池，落盘面据此判合成）；非空时
+/// 返回原池条数（`candidate_urls` 字段是**前置过滤后**的保留池，故
+/// `citation_url_count ≥ candidate_urls.len()`，且
+/// `citation_url_count == 保留池 ＋ prefilter_log 移除数`）。
+pub(crate) fn citation_url_count(ev: &EvidenceRecord) -> Option<usize> {
+    (!ev.candidate_urls.is_empty()).then_some(ev.candidate_urls.len())
 }
 
 /// 0ax S1：本批「无 URL 合成答案」条数（宽口径可见性内、按去重键去重）。

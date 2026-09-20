@@ -432,6 +432,15 @@ pub(crate) fn build_structured_result(
                 weight_config,
                 prefilter_config,
             );
+            // 0ay S1（2026-09-20，GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY）：
+            // **原**引用池大小落盘——与 `is_synthetic_answer` 判定同源
+            // （`batch_close::citation_url_count` 单源 helper，禁二把尺）。
+            // 下方 candidate_urls/candidate_pool 是前置过滤后的**保留**池，
+            // 故恒有 `citation_url_count == 保留池 ＋ prefilter_log 移除数`；
+            // 原池为空时该字段缺席（合成形态，payload 逐字节不变）。
+            if let Some(raw_pool_len) = crate::retrieval::batch_close::citation_url_count(ev) {
+                entry["citation_url_count"] = serde_json::json!(raw_pool_len);
+            }
             entry["candidate_urls"] = serde_json::Value::Array(
                 report
                     .retained
@@ -1432,8 +1441,128 @@ mod tests {
         let refs = committed.payload["raw_source_refs"].as_array().unwrap();
         assert_eq!(refs[0]["candidate_urls"], entry["candidate_urls"]);
         assert_eq!(refs[0]["candidate_pool"], entry["candidate_pool"]);
+        // 0ay S1: the RAW pool size lands on the ledger entry, and the
+        // partition identity holds — raw = retained + removals (7 = 4 + 3).
+        // The field is NOT mirrored into raw_source_refs (that projection
+        // carries the prefiltered pool only).
+        assert_eq!(entry["citation_url_count"], serde_json::json!(7));
+        assert_eq!(
+            entry["citation_url_count"].as_u64().unwrap(),
+            entry["candidate_urls"].as_array().unwrap().len() as u64
+                + committed.payload["prefilter_log"].as_array().unwrap().len() as u64
+        );
+        assert!(refs[0].get("citation_url_count").is_none());
         // Candidates are not observed sources — counts unchanged.
         assert_eq!(committed.payload["source_counts"]["total"], 1);
+    }
+
+    /// 0ay S1 (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY)
+    /// mixed-batch positive control: one pooled web_search entry + one
+    /// pool-less (synthetic) entry in the same batch — the ledger carries
+    /// `citation_url_count` for the pooled entry ONLY, and the judge-side
+    /// ledger-only recompute (orz-assurance, the same rule the Rust and
+    /// Python judges enforce) reproduces the producer's own synthetic /
+    /// usable counts. This is the "禁二把尺" proof: the judgement input
+    /// (`batch_close::citation_url_count`) is the field that lands on disk.
+    #[test]
+    fn citation_url_count_and_judges_agree_on_mixed_batch() {
+        let call = |query: &str, id: &str| ToolCall {
+            name: "web_search".to_string(),
+            arguments: serde_json::json!({ "query": query }),
+            call_id: id.to_string(),
+        };
+        let pooled = ToolResult {
+            output: "snippet".to_string(),
+            exit_code: Some(0),
+            output_encoding: None,
+            structured: Some(serde_json::json!({
+                "citations": [
+                    "https://docs.rs/tokio/latest/tokio/macro.select.html",
+                    "https://example.com/login?next=/x",
+                    "https://docs.rs/tokio/latest/tokio/macro.select.html?utm_source=x"
+                ]
+            })),
+            ..Default::default()
+        };
+        let pool_less = ToolResult {
+            output: "synthesized snippet without any citation".to_string(),
+            exit_code: Some(0),
+            output_encoding: None,
+            structured: Some(serde_json::json!({ "citations": [] })),
+            ..Default::default()
+        };
+        let evidence = vec![
+            build_evidence_record("web_search", &call("tokio select", "c-a"), &pooled).unwrap(),
+            build_evidence_record("web_search", &call("tokio select", "c-b"), &pool_less).unwrap(),
+        ];
+        assert_eq!(
+            crate::retrieval::batch_close::citation_url_count(&evidence[0]),
+            Some(3)
+        );
+        assert_eq!(
+            crate::retrieval::batch_close::citation_url_count(&evidence[1]),
+            None
+        );
+
+        let mut source_seq = 0;
+        let committed = build_structured_result(
+            &evidence,
+            &SourceWeightConfig::default(),
+            &orz_assurance::candidate_prefilter::CandidatePrefilterConfig::default(),
+            &mut source_seq,
+            &[],
+            &[],
+            "web_page",
+            "sub-session",
+            "act-1",
+            "contract-1",
+            0,
+            "call-mixed",
+            &["tokio select".to_string()],
+        );
+        let ledger = committed.payload["source_ledger"].as_array().unwrap();
+        assert_eq!(ledger.len(), 2);
+        assert_eq!(ledger[0]["citation_url_count"], serde_json::json!(3));
+        assert!(ledger[0]["candidate_urls"].as_array().unwrap().len() < 3);
+        assert!(ledger[1].get("citation_url_count").is_none());
+        assert!(ledger[1].get("candidate_urls").is_none());
+        // Single-query batch keeps the pre-0ay payload shape for the pool-less
+        // entry (judgement criterion 2: no synthetic key on that entry) while
+        // the batch-level disclosure carries the count.
+        assert_eq!(
+            committed.payload["synthetic_answer_count"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            crate::retrieval::batch_close::synthetic_answer_count(&evidence),
+            1
+        );
+        assert_eq!(
+            crate::retrieval::batch_close::usable_source_count(&evidence),
+            1
+        );
+
+        // Judge-side recompute (same rule, independent面) over the payload.
+        let recomputed = orz_assurance::journal::families_s2c::recompute_retrieval_batch_counts(
+            &committed.payload,
+        );
+        assert_eq!(recomputed.synthetic_answer_count, 1);
+        assert_eq!(
+            recomputed.usable_source_count,
+            crate::retrieval::batch_close::usable_source_count(&evidence)
+        );
+        assert_eq!(recomputed.citation_entries, 2);
+        assert_eq!(recomputed.citation_url_total, 3);
+        // Judge family verdict: the mixed payload is contract-clean.
+        let event = serde_json::json!({
+            "schema_version": "0.2.0-draft",
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "retrieval_result_committed",
+            "run_id": "run-0ay",
+            "payload": committed.payload,
+        });
+        let errors = orz_assurance::journal::families_s2c::verify_result_consistency(&[event]);
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     /// FUS-RETRIEVAL-MECH P0-B step 3 review fix (2026-08-14): a fully

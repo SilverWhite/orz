@@ -2205,6 +2205,180 @@ mod tests {
         json!({"source_id": sid, "source_type": source_type, "visibility": visibility})
     }
 
+    /// 0ay S1 (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY):
+    /// a committed result whose ledger carries the new auditability field —
+    /// one pooled web_search entry (raw 3 = retained 1 + 2 prefilter
+    /// removals, all mirrored) plus one pool-less (synthetic) entry, with
+    /// `declared_synthetic` as its self-report. `declared_synthetic == 1`
+    /// is the contract-clean shape; any other value is a self-report drift.
+    fn citation_audit_commit(declared_synthetic: i64) -> Value {
+        let pooled = "https://a.example/doc";
+        let entry = json!({
+            "source_id": "s1", "source_type": "web_search_result",
+            "visibility": "partial_text_observed",
+            "content_sha256": hex64(1), "source_url_or_ref": "a.example doc",
+            "citation_url_count": 3,
+            "candidate_urls": [pooled],
+            "candidate_pool": [pool_item(pooled)],
+        });
+        let ledger = json!([
+            json!({
+                "source_id": "s0", "source_type": "doc_page",
+                "visibility": "full_text_observed",
+                "content_sha256": hex64(2), "source_url_or_ref": "doc://s0",
+            }),
+            entry.clone(),
+            json!({
+                "source_id": "s2", "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "content_sha256": hex64(3), "source_url_or_ref": "pool-less query",
+            }),
+        ]);
+        let mut commit = finish_commit("act-1", 1, ledger, pool_refs(&[entry]));
+        // prefilter_log sits outside the digest segments (see finish_commit).
+        commit["payload"]["prefilter_log"] = json!([
+            {
+                "source_id": "s1", "url": "https://t.example/redirect",
+                "reason": "redirect_chain", "action": "removed",
+            },
+            {
+                "source_id": "s1", "url": "https://a.example/doc?utm_source=x",
+                "canonical_url": pooled, "reason": "duplicate_canonical",
+                "action": "removed",
+            },
+        ]);
+        commit["payload"]["synthetic_answer_count"] = json!(declared_synthetic);
+        commit
+    }
+
+    /// 0az ④ (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDIT-CLOSURE):
+    /// the 0ax-era mixed form — a pooled web_search_result entry written
+    /// BEFORE `citation_url_count` existed (only candidate_urls/candidate_pool
+    /// travel) plus a pool-less one, declaring `synthetic_answer_count = 1`.
+    /// The generation gate must stay CLOSED here (no `citation_url_count`
+    /// anywhere): keying it on the declaration made the judge read the pooled
+    /// entry as synthesized and report a false `1 != 2` drift (F-1).
+    fn citation_audit_0ax_era_commit() -> Value {
+        let pooled = "https://a.example/doc";
+        let entry = json!({
+            "source_id": "s1", "source_type": "web_search_result",
+            "visibility": "partial_text_observed",
+            "content_sha256": hex64(1), "source_url_or_ref": "a.example doc",
+            "candidate_urls": [pooled],
+            "candidate_pool": [pool_item(pooled)],
+        });
+        let ledger = json!([
+            json!({
+                "source_id": "s0", "source_type": "doc_page",
+                "visibility": "full_text_observed",
+                "content_sha256": hex64(2), "source_url_or_ref": "doc://s0",
+            }),
+            entry.clone(),
+            json!({
+                "source_id": "s2", "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "content_sha256": hex64(3), "source_url_or_ref": "pool-less query",
+            }),
+        ]);
+        let mut commit = finish_commit("act-1", 1, ledger, pool_refs(&[entry]));
+        commit["payload"]["prefilter_log"] = json!([]);
+        commit["payload"]["synthetic_answer_count"] = json!(1);
+        commit
+    }
+
+    /// 0az ④ (F-2): one dedup key in BOTH classes — the pooled entry comes
+    /// FIRST and the pool-less one reuses its `content_sha256`. The producer
+    /// classifies first and dedups inside each class, so the declared
+    /// synthetic 1 matches the recompute; a judge that dedups first and
+    /// classifies by first sight recomputed 0 and reported a false drift.
+    fn citation_audit_cross_class_digest_commit() -> Value {
+        let pooled = "https://a.example/doc";
+        let entry = json!({
+            "source_id": "s1", "source_type": "web_search_result",
+            "visibility": "partial_text_observed",
+            "content_sha256": hex64(1), "source_url_or_ref": "a.example doc",
+            "citation_url_count": 3,
+            "candidate_urls": [pooled],
+            "candidate_pool": [pool_item(pooled)],
+        });
+        let ledger = json!([
+            entry.clone(),
+            json!({
+                "source_id": "s2", "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "content_sha256": hex64(1), "source_url_or_ref": "same text, no pool",
+            }),
+        ]);
+        let mut commit = finish_commit("act-1", 1, ledger, pool_refs(&[entry]));
+        commit["payload"]["prefilter_log"] = json!([
+            {
+                "source_id": "s1", "url": "https://t.example/redirect",
+                "reason": "redirect_chain", "action": "removed",
+            },
+            {
+                "source_id": "s1", "url": "https://a.example/doc?utm_source=x",
+                "canonical_url": pooled, "reason": "duplicate_canonical",
+                "action": "removed",
+            },
+        ]);
+        commit["payload"]["synthetic_answer_count"] = json!(1);
+        commit
+    }
+
+    /// 0az ④ (审查 §5 收口): the declared narrowed-usable face is now
+    /// cross-checked against the ledger-only recompute. A single-query
+    /// activation declares the batch count by construction, so declaring 9
+    /// over a ledger holding 2 usable entries must be a violation (the
+    /// four-segment digest is repaired after the mutation to isolate it).
+    fn usable_declared_drift_commit() -> Value {
+        let pooled = "https://a.example/doc";
+        let entry = json!({
+            "source_id": "s1", "source_type": "web_search_result",
+            "visibility": "partial_text_observed",
+            "content_sha256": hex64(1), "source_url_or_ref": "a.example doc",
+            "citation_url_count": 3,
+            "candidate_urls": [pooled],
+            "candidate_pool": [pool_item(pooled)],
+        });
+        let ledger = json!([
+            json!({
+                "source_id": "s0", "source_type": "doc_page",
+                "visibility": "full_text_observed",
+                "content_sha256": hex64(2), "source_url_or_ref": "doc://s0",
+            }),
+            entry.clone(),
+        ]);
+        let mut commit = finish_commit("act-1", 1, ledger, pool_refs(&[entry]));
+        commit["payload"]["prefilter_log"] = json!([
+            {
+                "source_id": "s1", "url": "https://t.example/redirect",
+                "reason": "redirect_chain", "action": "removed",
+            },
+            {
+                "source_id": "s1", "url": "https://a.example/doc?utm_source=x",
+                "canonical_url": pooled, "reason": "duplicate_canonical",
+                "action": "removed",
+            },
+        ]);
+        commit["payload"]["query_summary"] = json!([{
+            "query_id": "QRY-1", "query_text": "a.example doc",
+            "source_category": "web", "result_count": 2,
+            "action_taken": "searched", "tool_used": "web_search",
+            "usable_source_count": 9,
+        }]);
+        let payload = commit["payload"].clone();
+        let digest = payload_digest(&json!({
+            "query_summary": payload["query_summary"],
+            "source_ledger": payload["source_ledger"],
+            "filtering_log": payload["filtering_log"],
+            "raw_source_refs": payload["raw_source_refs"],
+        }));
+        commit["payload"]["ledger_digest"] = json!(payload_digest(&payload["source_ledger"]));
+        commit["payload"]["result_digest"] = json!(digest);
+        commit["payload"]["result_id"] = json!(format!("RET-RES-{}-1", &digest[..16]));
+        commit
+    }
+
     fn pool_entry(sid: &str, candidates: Value, pool: Value) -> Value {
         json!({
             "source_id": sid, "source_type": "web_search_result",
@@ -3682,6 +3856,35 @@ mod tests {
                 );
                 vec![commit, assess]
             }),
+            // 0ay S1 (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY):
+            // pooled (raw 3 = retained 1 + 2 removals) + pool-less entries; the
+            // declared synthetic count must equal the ledger-only recompute.
+            (
+                "result_consistency_citation_audit_ok",
+                vec![citation_audit_commit(1)],
+            ),
+            (
+                "result_consistency_citation_audit_mismatch",
+                vec![citation_audit_commit(2)],
+            ),
+            // 0az ④ (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDIT-CLOSURE):
+            // F-1 — the 0ax-era mixed batch (pooled + pool-less, no
+            // citation_url_count anywhere) replays CLEAN; F-2 — one dedup key
+            // in both classes is counted once per class, so the declared
+            // synthetic 1 still matches the recompute; and the declared
+            // narrowed-usable face now drifts into a violation.
+            (
+                "result_consistency_citation_audit_0ax_era_mixed",
+                vec![citation_audit_0ax_era_commit()],
+            ),
+            (
+                "result_consistency_citation_audit_cross_class_digest",
+                vec![citation_audit_cross_class_digest_commit()],
+            ),
+            (
+                "result_consistency_usable_declared_drift",
+                vec![usable_declared_drift_commit()],
+            ),
             (
                 "reason_codes_ok",
                 vec![ev(
@@ -5604,6 +5807,12 @@ mod tests {
             "result_consistency_bad_digest",
             "result_consistency_retired_organized",
             "result_consistency_assessment_drift",
+            // 0ay S1: the declared synthetic count drifts from the
+            // ledger-only recompute (pool-less entry vs self-report 2).
+            "result_consistency_citation_audit_mismatch",
+            // 0az ④: the declared narrowed-usable face drifts from the
+            // ledger-only recompute (single-query declares 9, ledger holds 2).
+            "result_consistency_usable_declared_drift",
         ] {
             expect(name, "result_consistency");
         }
@@ -6060,8 +6269,12 @@ json.dump(out, sys.stdout)
             ALL_FAMILIES.len() * corpus.len(),
             "crosscheck cell accounting drifted"
         );
+        // 251 → 253 (0ay S1, 2026-09-20): +result_consistency_citation_audit_ok
+        // / _mismatch (the auditability field's clean and drifting forms);
+        // 253 → 256 (0az ④, 2026-09-20): +the 0ax-era mixed replay (F-1), the
+        // cross-class dedup key (F-2) and the declared-usable drift.
         assert_eq!(
-            scenario_count, 251,
+            scenario_count, 256,
             "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(
