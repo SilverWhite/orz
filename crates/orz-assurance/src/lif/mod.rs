@@ -383,6 +383,14 @@ impl LifEngine {
         }
     }
 
+    /// 0bf ①（2026-09-22）：停用 RLI 影子族（kill switch 的引擎侧等效
+    /// 动作）——影子整体丢弃（含未投递提醒与采样锚；下次启用 = fresh，
+    /// 通道面与时间轴不受影响）。loop 层由 env
+    /// `ORZ_LIF_RLI_SHADOW=0/off/false/no` 判定（缺省常开）。
+    pub fn disable_rli_shadow(&mut self) {
+        self.rli_shadow = None;
+    }
+
     pub fn rli_shadow(&self) -> Option<&RliShadow> {
         self.rli_shadow.as_ref()
     }

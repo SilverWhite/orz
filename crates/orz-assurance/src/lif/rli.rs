@@ -146,6 +146,36 @@ pub const RLI_LAMBDA_GAP_MIN_SECS: f64 = 0.5;
 pub const RLI_LAMBDA_GAP_MAX_SECS: f64 = 3_600.0;
 pub const RLI_LAMBDA_MIN_GAPS: u64 = 2;
 
+/// 0bf ④（2026-09-22，S1 预注册口径①）：空档网格补点步长（秒）——相邻
+/// 采样点（决策轮／工具事件）间隔超过本值时，在空档内按 10 s 网格补
+/// **采样点**（仅推进状态＋采样锚点序列＋越线观察；**不**评估阈值、不更
+/// 新 θ／fires 语义、不进入 T̂ 间隔样本）。用户令「空档按 10 s 网格补点，
+/// 不继续细分到亚事件层」（0be 实测空档 > 30 s 共 13 次／最长 183 s，
+/// 重的正是长工具执行段）。
+pub const RLI_GRID_SECS: f64 = 10.0;
+
+/// 0bf ④：单次空档补点的点数上限——超出（> ~85 min，属跨会话空闲而非
+/// 工具执行段）时整体跳过，如实不补。
+pub const RLI_GRID_FILL_MAX: usize = 512;
+
+/// 0bf ③（2026-09-22，S1 预注册口径②）：持续越线判定——通道 `u ≥ θ`
+/// （越线）连续达到本**采样点数**即触发一次模型面提醒；re-arm＝断线归零
+/// 后重新累计。初值 k=5（S1 建议值；读数后可调）。「连续 k 次」替代
+/// 会话长度门（用户令「模型需要获得数据」——不加长度门）。
+pub const RLI_STREAK_K: u64 = 5;
+
+/// 0bf ③：域迁移确认——域切换后新域稳定（无再切换）连续达到本轮数才
+/// 「确认迁移」并提醒一次（等震荡结束；震荡期间只更新候选）。
+pub const RLI_MIGRATION_SETTLE_ROUNDS: u64 = 3;
+
+/// 0bf ③：模型面提醒队列上限（pull-delta 头一次性投递；超上限丢最旧）。
+pub const RLI_NOTICE_CAP: usize = 16;
+
+/// 0bf ③：失配概率窗（各通道最近 ≤N 个 ρ 样本合并——每条通道窗上限即
+/// [`RLI_CPLX_PER_CHANNEL_CAP`]；ρ > 1.0 计一次失配。ρ 定义见
+/// [`RliComplexity`]：预测误差超过「不变化」持久性基线）。
+pub const RLI_MISMATCH_WINDOW: usize = 16;
+
 /// 繁杂度（0be 四项④，2026-09-21 用户二次裁定：机制照抄疲劳度 E9、只需
 /// 一个指标）——指标＝**四条复极点通道**（err／stall／slow／deny；**禁用
 /// `prog`**）前推误差比 ρ = MAE_pred / MAE_persist 的跨通道中位（窗内逐
@@ -378,6 +408,11 @@ pub struct RliChannel {
     last_inject_t: Option<f64>,
     hit_count: u64,
     last_hit_t: Option<f64>,
+    /// 0bf ③（2026-09-22）：持续越线观察计数——采样点上 `u ≥ θ` 的连续
+    /// 次数（**纯观测**：不改 θ/fires 语义；断线归零）。
+    streak: u64,
+    /// 当前连续段的起点采样时刻（断线 = `None`；FR-7 口径不落假 0）。
+    streak_start_t: Option<f64>,
     /// 0be 四项①：成功到达间隔 EMA（`None` ＝尚无间隔样本——退化路径）。
     /// λ̂ 由此派生（[`Self::lambda_hat`]），随快照持久（会话级自适应参数）。
     lambda_gap_ema: Option<f64>,
@@ -403,6 +438,8 @@ impl RliChannel {
             last_inject_t: None,
             hit_count: 0,
             last_hit_t: None,
+            streak: 0,
+            streak_start_t: None,
             lambda_gap_ema: None,
             lambda_gap_samples: 0,
         }
@@ -450,6 +487,16 @@ impl RliChannel {
 
     pub fn last_inject_t(&self) -> Option<f64> {
         self.last_inject_t
+    }
+
+    /// 持续越线当前连续次数（0bf ③；纯观测面）。
+    pub fn streak(&self) -> u64 {
+        self.streak
+    }
+
+    /// 当前连续段起点采样时刻（0bf ③；`None` ＝未在连续段上）。
+    pub fn streak_start_t(&self) -> Option<f64> {
+        self.streak_start_t
     }
 
     /// a2 预期锚点（兼容口径：`Δt = RLI_PREDICTION_STEPS · T̂` 的闭式自由
@@ -772,6 +819,23 @@ impl RliChannel {
         self.observe_value(t, self.u)
     }
 
+    /// 0bf ③（2026-09-22）：**持续越线观察**（纯观测面，不改 θ/fires
+    /// 语义）——采样点上 `u ≥ θ` 则连续计数 +1（段首记起点），否则归零。
+    /// 返回「恰好达到」[`RLI_STREAK_K`] 的触发沿（re-arm＝归零后重新累计）。
+    pub fn observe_streak(&mut self, t: f64) -> bool {
+        if self.u >= self.theta {
+            if self.streak == 0 {
+                self.streak_start_t = Some(t);
+            }
+            self.streak = self.streak.saturating_add(1);
+            self.streak == RLI_STREAK_K
+        } else {
+            self.streak = 0;
+            self.streak_start_t = None;
+            false
+        }
+    }
+
     /// 存储快照（3 位小数定点化）。
     ///
     /// 定点化面＝**动力学状态与时间戳**（u/v/θ/r/E + last_*）。参数面
@@ -792,6 +856,10 @@ impl RliChannel {
             last_inject_t: self.last_inject_t.map(quantize_state),
             hit_count: self.hit_count,
             last_hit_t: self.last_hit_t.map(quantize_state),
+            // 0bf ③（2026-09-22）：持续越线观察（连续计数＋段起点）随侧车
+            // 持久——跨 prompt 连续段不因侧车往返断裂（如实续接）。
+            streak: self.streak,
+            streak_start_t: self.streak_start_t.map(quantize_state),
             // 0be 四项①：λ̂ 估计器状态（间隔 EMA ＋样本计数）随侧车持久
             // ——会话级自适应参数，跨 prompt 精确续接。
             lambda_gap_ema: self.lambda_gap_ema.map(quantize_state),
@@ -821,6 +889,10 @@ impl RliChannel {
         self.last_inject_t = snapshot.last_inject_t;
         self.hit_count = snapshot.hit_count;
         self.last_hit_t = snapshot.last_hit_t;
+        // 0bf ③：持续越线观察续接（legacy 快照缺字段 ⇒ 0/None——与
+        // 「不在连续段上」同义；FR-7 口径不可得与真值 0 不混同）。
+        self.streak = snapshot.streak;
+        self.streak_start_t = snapshot.streak_start_t.filter(|t| t.is_finite());
         // 0be 四项①：λ̂ 估计器状态（sanitize：非有限/非正 EMA 落回 None＝
         // 未激活；legacy 快照无字段 ⇒ None/0，与「尚无成功间隔」同义可分）。
         self.lambda_gap_ema = snapshot
@@ -950,6 +1022,25 @@ impl RliComplexity {
             theta: self.theta,
             latched: self.latched,
         }
+    }
+
+    /// 0bf ③（2026-09-22）：**失配概率读数**——各通道最近 ≤
+    /// [`RLI_MISMATCH_WINDOW`] 个 ρ 样本合并后「ρ > 1（预测误差超过
+    /// 『不变化』持久性基线＝失配）」的占比；无样本 = `None`（未就绪与
+    /// 真值 0 不混同——FR-7）。**只读**：不反馈、不改本结构任何状态
+    /// （用户令「失配只记录不反馈」）。
+    pub fn mismatch_rate(&self) -> Option<f64> {
+        let mut total = 0usize;
+        let mut mismatched = 0usize;
+        for window in &self.channel_windows {
+            for rho in window.iter().rev().take(RLI_MISMATCH_WINDOW) {
+                total += 1;
+                if *rho > 1.0 {
+                    mismatched += 1;
+                }
+            }
+        }
+        (total > 0).then(|| mismatched as f64 / total as f64)
     }
 
     /// 决策轮推进：先消费到期预测（逐通道出窗），再发出新预测；然后更新
@@ -1151,6 +1242,35 @@ fn median_of(values: &mut [f64]) -> f64 {
     }
 }
 
+/// 模型面提醒种类（0bf ③，2026-09-22）——用户令「模型面提醒只留两个触发」：
+/// 域迁移完成（震荡结束后确认一次）与持续性越线（连续 k 采样点）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RliNoticeKind {
+    /// 域迁移确认（等震荡结束后报一次）。
+    MigrationConfirmed,
+    /// 持续越线（通道 `u ≥ θ` 连续 [`RLI_STREAK_K`] 个采样点）。
+    StreakCrossed,
+}
+
+/// 一次模型面提醒（0bf ③；**一次性投递**：pull-delta 头携带一次后置
+/// `delivered`；随 RLI 影子快照入侧车——跨 prompt 不丢、不重发）。
+/// `text` 为机械事实文案（只含读数与特征，**不含动作建议**——0bf ② 纪律）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RliNotice {
+    pub kind: RliNoticeKind,
+    /// 触发时刻（会话相对秒）。
+    pub t: f64,
+    /// 触发时决策轮号（网格/工具触发点 = 当前域轮号；FR-7：不可得用
+    /// `None`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<u64>,
+    /// 机械事实文案（含失配概率；由触发时读数生成，事后不可变）。
+    pub text: String,
+    /// 已投递（pull-delta 头携带过一次）；未投递 = 等下一个读取头。
+    #[serde(default)]
+    pub delivered: bool,
+}
+
 /// RLI 影子通道族引擎——与 [`super::LifEngine`] 同一事件流（影子旁路）。
 #[derive(Debug, Clone)]
 pub struct RliShadow {
@@ -1172,6 +1292,15 @@ pub struct RliShadow {
     /// 0be 四项③（2026-09-21）：自适应参数轨迹（决策轮粒度、cap
     /// [`RLI_ADAPT_TRACE_CAP`]、随侧车持久——复算可核）。
     adapt_trace: VecDeque<RliAdaptTraceRow>,
+    /// 0bf ④（2026-09-22）：上次采样点时刻（决策轮／工具事件／网格补点）
+    /// ——空档网格补点的起点。
+    last_sample_t: Option<f64>,
+    /// 0bf ③：模型面提醒队列（旧在前、cap [`RLI_NOTICE_CAP`]；随侧车持久）。
+    notices: VecDeque<RliNotice>,
+    /// 0bf ④：网格补点计数（开销读数面）。
+    grid_samples: u64,
+    /// 0bf ④：采样点总数（决策轮＋工具事件＋网格补点；开销读数面）。
+    sample_points: u64,
 }
 
 impl Default for RliShadow {
@@ -1201,6 +1330,10 @@ impl RliShadow {
                 .collect(),
             cplx: RliComplexity::new(),
             adapt_trace: VecDeque::with_capacity(RLI_ADAPT_TRACE_CAP),
+            last_sample_t: None,
+            notices: VecDeque::with_capacity(RLI_NOTICE_CAP),
+            grid_samples: 0,
+            sample_points: 0,
         }
     }
 
@@ -1257,6 +1390,51 @@ impl RliShadow {
         self.adapt_trace.iter().copied().collect()
     }
 
+    /// 模型面提醒队列（0bf ③；旧在前、含已投递项——事件追溯面）。
+    pub fn notices(&self) -> Vec<&RliNotice> {
+        self.notices.iter().collect()
+    }
+
+    /// 未投递提醒（pull-delta 头一次性投递的输入；旧在前）。
+    pub fn pending_notices(&self) -> Vec<&RliNotice> {
+        self.notices.iter().filter(|n| !n.delivered).collect()
+    }
+
+    /// 标记前 `n` 条未投递提醒为已投递（头携带即投递；返回实际条数）。
+    pub fn mark_notices_delivered(&mut self, n: usize) -> usize {
+        let mut marked = 0usize;
+        for notice in self.notices.iter_mut() {
+            if marked >= n {
+                break;
+            }
+            if !notice.delivered {
+                notice.delivered = true;
+                marked += 1;
+            }
+        }
+        marked
+    }
+
+    /// 网格补点计数（0bf ④；开销读数面）。
+    pub fn grid_samples(&self) -> u64 {
+        self.grid_samples
+    }
+
+    /// 采样点总数（决策轮＋工具事件＋网格补点；0bf ④ 开销读数面）。
+    pub fn sample_points(&self) -> u64 {
+        self.sample_points
+    }
+
+    /// 失配概率读数（0bf ③；ρ > 1 占比，未就绪 = `None`——只记录不反馈）。
+    pub fn mismatch_rate(&self) -> Option<f64> {
+        self.cplx.mismatch_rate()
+    }
+
+    /// 域转移倾向读数（0bf ②；本会话纯经验统计——由自判域机器推导）。
+    pub fn transition_tendency(&self) -> RliTransitionTendency {
+        self.domain.transition_tendency()
+    }
+
     /// 锚点序列（0am 改造补充项④，2026-09-20；**采样粒度＝事件级**，同日
     /// 用户裁决）：最近 k 个采样（决策轮 ＋ 每个工具事件，旧在前）；
     /// 未知名 / 无样本 = 空序列。live-only（不随侧车持久化）。
@@ -1302,6 +1480,91 @@ impl RliShadow {
         }
     }
 
+    /// 0bf ③④（2026-09-22）：**采样点结算**（决策轮／工具事件／网格补点
+    /// 三源共用）——锚点序列采样 ＋ 持续越线观察 ＋ 采样计数。持续越线只
+    /// 观察**四条压力通道**（err／stall／slow／deny；`prog` 不参与——新鲜
+    /// 度高不是异常）。观察为纯读数：不改 θ、不改 fires、不反馈。
+    fn note_sample_point(&mut self, t: f64) {
+        self.sample_points = self.sample_points.saturating_add(1);
+        self.sample_anchor_series();
+        let mut fired: Vec<(ChannelKind, u64, f64, f64)> = Vec::new();
+        for ch in &mut self.channels {
+            if ch.kind == ChannelKind::Prog {
+                continue;
+            }
+            if ch.observe_streak(t) {
+                fired.push((ch.kind, ch.streak(), ch.u(), ch.theta()));
+            }
+        }
+        if fired.is_empty() {
+            self.last_sample_t = Some(t);
+            return;
+        }
+        let p = self.mismatch_probability_text();
+        let listed = fired
+            .iter()
+            .map(|(kind, streak, _, _)| format!("{}×{}", channel_label(*kind), streak))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let detail = if fired.len() == 1 {
+            let (_, _, u, theta) = fired[0];
+            format!("（u={u:.2}≥θ={theta:.2}；失配概率 {p}）")
+        } else {
+            format!("（失配概率 {p}）")
+        };
+        let round = (self.domain.round() > 0).then(|| self.domain.round());
+        self.push_notice(RliNotice {
+            kind: RliNoticeKind::StreakCrossed,
+            t,
+            round,
+            text: format!("持续越线: {listed}{detail}"),
+            delivered: false,
+        });
+        self.last_sample_t = Some(t);
+    }
+
+    /// 0bf ④：空档网格补点——相邻采样点间隔超过 [`RLI_GRID_SECS`] 时，
+    /// 在空档内按 10 s 网格推进状态并结算采样点（**不**评估阈值、不改
+    /// θ／fires 语义、不进 T̂ 间隔样本）；超长空档（点数 >
+    /// [`RLI_GRID_FILL_MAX`]，属跨会话空闲而非工具执行段）整体跳过。
+    fn fill_grid_gaps(&mut self, t: f64) {
+        let Some(last) = self.last_sample_t else {
+            return;
+        };
+        let gap = t - last;
+        if gap <= RLI_GRID_SECS {
+            return;
+        }
+        if (gap / RLI_GRID_SECS).floor() as usize > RLI_GRID_FILL_MAX {
+            return;
+        }
+        let mut g = last + RLI_GRID_SECS;
+        while g < t - 1e-9 {
+            for ch in &mut self.channels {
+                ch.advance(g);
+            }
+            self.grid_samples = self.grid_samples.saturating_add(1);
+            self.note_sample_point(g);
+            g += RLI_GRID_SECS;
+        }
+    }
+
+    /// 失配概率文案（0bf ③）：最近 ρ 样本中失配（ρ > 1）占比；未就绪 =
+    /// 「—」（FR-7：不可得与真值 0 不混同）。
+    fn mismatch_probability_text(&self) -> String {
+        self.cplx
+            .mismatch_rate()
+            .map_or_else(|| "—".to_string(), |p| format!("{p:.2}"))
+    }
+
+    /// 0bf ③：压入模型面提醒（cap [`RLI_NOTICE_CAP`]，超限丢最旧）。
+    fn push_notice(&mut self, notice: RliNotice) {
+        self.notices.push_back(notice);
+        while self.notices.len() > RLI_NOTICE_CAP {
+            self.notices.pop_front();
+        }
+    }
+
     /// 决策轮：更新轮语义 ω（prog = 2π/(8·T̂)），全通道自由演化 + 逐一阈值
     /// 评估 + 自判域记录（0am 改造四项①）+ 锚点序列采样（补充项④）。
     /// 域判决输入＝RLI 原生锚点（err 的 u/v/E ＋ prog 的 u；见
@@ -1310,6 +1573,9 @@ impl RliShadow {
     pub fn on_decision_round(&mut self, t: f64, t_hat_secs: f64) {
         self.t_hat = t_hat_secs.max(1e-9);
         self.steps = self.steps.saturating_add(1);
+        // 0bf ④（2026-09-22）：空档网格补点——先补上次采样点到本决策轮之间
+        // 的中间采样点（prog 的 ω 仍按上一轮值推进：补点属于上一轮之间）。
+        self.fill_grid_gaps(t);
         let omega_prog = TAU / (RLI_PROG_PERIOD_ROUNDS * self.t_hat);
         for ch in &mut self.channels {
             if ch.kind == ChannelKind::Prog {
@@ -1328,6 +1594,26 @@ impl RliShadow {
         // 0be 四项④：繁杂度推进（消费到期预测 → 发出新预测 → 合成样本／
         // 基线／三条自校准阈值＋锁存）。
         let c = self.cplx.on_decision_round(t, self.t_hat, &self.channels);
+        // 0bf ③（2026-09-22）：域迁移确认（等震荡结束后一次）→ 模型面提醒
+        // （随报失配概率；只报一次由 take 消费语义保证）。
+        if let Some(conf) = self.domain.take_confirmed_migration() {
+            let p = self.mismatch_probability_text();
+            let round = (conf.at_round > 0).then_some(conf.at_round);
+            self.push_notice(RliNotice {
+                kind: RliNoticeKind::MigrationConfirmed,
+                t: conf.at_t,
+                round,
+                text: format!(
+                    "域迁移确认: {}→{}@r{}（稳定 {} 轮；失配概率 {}）",
+                    conf.from.as_str(),
+                    conf.to.as_str(),
+                    conf.at_round,
+                    conf.settle_rounds,
+                    p,
+                ),
+                delivered: false,
+            });
+        }
         // 0be 四项③：自适应参数轨迹（决策轮粒度；复算可核）。λ̂ 取 prog
         // 通道估计（未激活 = None——与真值 0 不混同）。
         let lambda_hat = self.channel(ChannelKind::Prog).lambda_hat();
@@ -1343,9 +1629,8 @@ impl RliShadow {
             },
             RLI_ADAPT_TRACE_CAP,
         );
-        // 锚点序列采样（**事件级**：决策轮与每个工具事件各一次；见
-        // [`Self::sample_anchor_series`]）。
-        self.sample_anchor_series();
+        // 采样点结算（0bf 起含持续越线观察；见 [`Self::note_sample_point`]）。
+        self.note_sample_point(t);
     }
 
     /// 工具事件：间隔看门狗（stall）→ 注入（err/deny/prog/slow）→ 阈值评估
@@ -1358,6 +1643,8 @@ impl RliShadow {
         );
         self.last_tool_t = Some(t);
         self.steps = self.steps.saturating_add(1);
+        // 0bf ④（2026-09-22）：空档网格补点（长工具执行段）；补点先于注入。
+        self.fill_grid_gaps(t);
         for ch in &mut self.channels {
             ch.advance(t);
         }
@@ -1383,8 +1670,9 @@ impl RliShadow {
             ch.check(t);
         }
         // 锚点序列采样（事件级；注入后取——快模态分量在注入当刻最大，
-        // 决策轮粒度取不到，见 [`Self::sample_anchor_series`]）。
-        self.sample_anchor_series();
+        // 决策轮粒度取不到，见 [`Self::sample_anchor_series`]）；0bf 起同点
+        // 结算持续越线观察（[`Self::note_sample_point`]）。
+        self.note_sample_point(t);
     }
 
     /// 快照（3 位小数定点化；随会话侧车持久化）。自判域机器状态一并携带
@@ -1400,6 +1688,12 @@ impl RliShadow {
             complexity: Some(self.cplx.snapshot()),
             // 0be 四项③：自适应参数轨迹（已有行逐字段量化；legacy = 空）。
             adapt_trace: self.adapt_trace.iter().copied().collect(),
+            // 0bf ③④：采样锚（网格补点起点）、提醒队列、两个客观计数
+            // （legacy 缺字段 = None/空/0）。
+            last_sample_t: self.last_sample_t.map(quantize_state),
+            notices: self.notices.iter().cloned().collect(),
+            grid_samples: self.grid_samples,
+            sample_points: self.sample_points,
         }
     }
 
@@ -1445,6 +1739,19 @@ impl RliShadow {
             .rev()
             .copied()
             .collect();
+        // 0bf ③④：采样锚、提醒队列与计数续接（legacy 缺字段 = None/空/0；
+        // 队列 cap 收敛、未投递标志原样保留——跨 prompt 投递不重不漏）。
+        self.last_sample_t = snapshot.last_sample_t.filter(|t| t.is_finite());
+        self.notices = snapshot
+            .notices
+            .iter()
+            .rev()
+            .take(RLI_NOTICE_CAP)
+            .rev()
+            .cloned()
+            .collect();
+        self.grid_samples = snapshot.grid_samples;
+        self.sample_points = snapshot.sample_points;
         true
     }
 }
@@ -1502,6 +1809,57 @@ pub struct RliDomainMachine {
     entry_round: u64,
     rows: VecDeque<RliDomainRow>,
     spikes: Vec<RliDomainSpike>,
+    /// 0bf ③（2026-09-22）：**未确认迁移候选**——域切换后新域稳定不足
+    /// [`RLI_MIGRATION_SETTLE_ROUNDS`] 轮时为 `Some`（震荡期只更新候选，
+    /// 不提醒）；稳定达成转 [`Self::confirmed_migration`]。
+    pending_migration: Option<RliPendingMigration>,
+    /// 0bf ③：已确认待消费的迁移（决策轮产出，由影子取出转模型面提醒；
+    /// `take_confirmed_migration` 消费后清空）。
+    confirmed_migration: Option<RliMigrationConfirmed>,
+}
+
+/// 0bf ③：未确认的域迁移候选（域切换即产生；稳定达成＝确认）。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RliPendingMigration {
+    pub from: Domain,
+    pub to: Domain,
+    pub at_round: u64,
+    pub at_t: f64,
+}
+
+/// 0bf ③：已确认的域迁移（等震荡结束——新域连续稳定
+/// [`RLI_MIGRATION_SETTLE_ROUNDS`] 轮——后的定案事实；只报一次）。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RliMigrationConfirmed {
+    pub from: Domain,
+    pub to: Domain,
+    pub at_round: u64,
+    pub at_t: f64,
+    /// 确认时的稳定轮数（= 自 `at_round` 起新域连续驻留轮数）。
+    pub settle_rounds: u64,
+}
+
+/// 域转移倾向读数（0bf ②，2026-09-22）——**本会话纯经验统计**（零拟合；
+/// 只给特征与域状态、不含动作建议）。由迁移 spike 历史推导：当前域已
+/// 驻留轮数、本会话该域**完成段**的计数与累计驻留（段驻留＝相邻切换点
+/// 轮差；legacy 缺轮号的段不可得、如实跳过），去向分布与逐轮离开率
+/// （＝离开次数／完成段累计轮；样本不足 = `None`——不虚构率）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RliTransitionTendency {
+    /// 当前自判域。
+    pub domain: Domain,
+    /// 当前段已驻留轮数（含入域轮）。
+    pub current_dwell: u64,
+    /// 本会话当前域的完成段数（≥0；样本少时读数即计数本身）。
+    pub completed_episodes: u64,
+    /// 完成段累计驻留轮数。
+    pub completed_rounds: u64,
+    /// 去向分布（次数降序、同数按域名稳定序）。
+    pub directions: Vec<(Domain, u64)>,
+    /// 逐轮离开率（离开次数／完成段累计轮；无完成段 = `None`）。
+    pub per_round_rate: Option<f64>,
+    /// 完成段驻留轮数中位（无 = `None`）。
+    pub median_dwell: Option<u64>,
 }
 
 /// RLI 域切换点位（**RLI 自有类型**，不复用 temporal 的 [`DomainSpike`]）。
@@ -1536,6 +1894,28 @@ pub struct RliDomainSegment {
     pub recovery: bool,
 }
 
+/// 域枚举稳定序（转移倾向的去向分布排序用；同数按此序，保证可复算）。
+fn domain_rank(domain: Domain) -> u8 {
+    match domain {
+        Domain::Start => 0,
+        Domain::Normal => 1,
+        Domain::Pressure => 2,
+        Domain::LowProgress => 3,
+        Domain::Stuck => 4,
+    }
+}
+
+/// 通道短名（0bf ③：模型面提醒与渲染文案用；与 [`ChannelKind`] 一一对应）。
+pub fn channel_label(kind: ChannelKind) -> &'static str {
+    match kind {
+        ChannelKind::Err => "err",
+        ChannelKind::Stall => "stall",
+        ChannelKind::Slow => "slow",
+        ChannelKind::Deny => "deny",
+        ChannelKind::Prog => "prog",
+    }
+}
+
 impl Default for RliDomainMachine {
     fn default() -> Self {
         Self::new()
@@ -1551,6 +1931,8 @@ impl RliDomainMachine {
             entry_round: 0,
             rows: VecDeque::with_capacity(RLI_DOMAIN_RECENT_CAP),
             spikes: Vec::new(),
+            pending_migration: None,
+            confirmed_migration: None,
         }
     }
 
@@ -1605,8 +1987,30 @@ impl RliDomainMachine {
                 domain,
                 round: Some(self.round),
             });
+            // 0bf ③（2026-09-22）：切换即置/替换**未确认候选**——震荡期
+            // （再次切换）只更新候选、不提醒；稳定达成在下方确认。
+            self.pending_migration = Some(RliPendingMigration {
+                from: self.current,
+                to: domain,
+                at_round: self.round,
+                at_t: t,
+            });
             self.current = domain;
             self.entry_round = self.round;
+        } else if let Some(pending) = self.pending_migration
+            && pending.to == domain
+            && self.round.saturating_sub(pending.at_round) + 1 >= RLI_MIGRATION_SETTLE_ROUNDS
+        {
+            // 0bf ③：等震荡结束——新域连续驻留 SETTLE 轮（含切换轮）后
+            // 确认迁移（只产出一次；由影子取出转模型面提醒）。
+            self.confirmed_migration = Some(RliMigrationConfirmed {
+                from: pending.from,
+                to: pending.to,
+                at_round: pending.at_round,
+                at_t: pending.at_t,
+                settle_rounds: self.round.saturating_sub(pending.at_round) + 1,
+            });
+            self.pending_migration = None;
         }
         let row = RliDomainRow {
             round: self.round,
@@ -1690,6 +2094,67 @@ impl RliDomainMachine {
         out
     }
 
+    /// 0bf ③（2026-09-22）：取出已确认的域迁移（决策轮产出一次；消费即
+    /// 清空——模型面「域迁移完成」提醒的只报一次语义由本方法保证）。
+    pub fn take_confirmed_migration(&mut self) -> Option<RliMigrationConfirmed> {
+        self.confirmed_migration.take()
+    }
+
+    /// 未确认迁移候选（读数/回放面；`None` = 无候选）。
+    pub fn pending_migration(&self) -> Option<RliPendingMigration> {
+        self.pending_migration
+    }
+
+    /// 0bf ②（2026-09-22）：**域转移倾向**读数——本会话纯经验统计
+    /// （零拟合；只给特征与域状态，不含动作建议）。口径见
+    /// [`RliTransitionTendency`]。
+    pub fn transition_tendency(&self) -> RliTransitionTendency {
+        let domain = self.current;
+        let current_dwell = self.round.saturating_sub(self.entry_round) + 1;
+        let mut completed_episodes: u64 = 0;
+        let mut completed_rounds: u64 = 0;
+        let mut dwells: Vec<u64> = Vec::new();
+        let mut directions: Vec<(Domain, u64)> = Vec::new();
+        for pair in self.spikes.windows(2) {
+            let (from, to) = (pair[0], pair[1]);
+            if from.domain != domain {
+                continue;
+            }
+            // 段驻留 = 相邻切换点轮差；legacy 缺轮号 = 不可得（如实跳过，
+            // 不落假 0——FR-7 口径）。
+            let (Some(a), Some(b)) = (from.round, to.round) else {
+                continue;
+            };
+            completed_episodes = completed_episodes.saturating_add(1);
+            completed_rounds = completed_rounds.saturating_add(b.saturating_sub(a));
+            dwells.push(b.saturating_sub(a));
+            if let Some(entry) = directions.iter_mut().find(|(d, _)| *d == to.domain) {
+                entry.1 = entry.1.saturating_add(1);
+            } else {
+                directions.push((to.domain, 1));
+            }
+        }
+        // 去向分布：次数降序；同数按域枚举序（稳定、可复算）。
+        directions.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| domain_rank(a.0).cmp(&domain_rank(b.0))));
+        let per_round_rate = (completed_rounds > 0)
+            .then(|| completed_episodes as f64 / completed_rounds as f64);
+        let median_dwell = if dwells.is_empty() {
+            None
+        } else {
+            dwells.sort_unstable();
+            Some(dwells[dwells.len() / 2])
+        };
+        RliTransitionTendency {
+            domain,
+            current_dwell,
+            completed_episodes,
+            completed_rounds,
+            directions,
+            per_round_rate,
+            median_dwell,
+        }
+    }
+
     /// 快照（随 RLI 影子快照入会话侧车）。
     pub fn snapshot(&self) -> RliDomainSnapshot {
         RliDomainSnapshot {
@@ -1699,6 +2164,8 @@ impl RliDomainMachine {
             entry_round: self.entry_round,
             rows: self.rows.iter().copied().collect(),
             spikes: self.spikes.clone(),
+            pending_migration: self.pending_migration,
+            confirmed_migration: self.confirmed_migration,
         }
     }
 
@@ -1713,6 +2180,9 @@ impl RliDomainMachine {
             self.rows.pop_front();
         }
         self.spikes = snapshot.spikes.clone();
+        // 0bf ③：未确认/待消费迁移随快照续接（legacy 缺字段 = 无）。
+        self.pending_migration = snapshot.pending_migration;
+        self.confirmed_migration = snapshot.confirmed_migration;
     }
 }
 
@@ -1730,6 +2200,12 @@ pub struct RliDomainSnapshot {
     pub rows: Vec<RliDomainRow>,
     #[serde(default)]
     pub spikes: Vec<RliDomainSpike>,
+    /// 0bf ③（2026-09-22）：未确认迁移候选（legacy 缺字段 = 无候选）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_migration: Option<RliPendingMigration>,
+    /// 0bf ③：已确认待消费的迁移（同上）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmed_migration: Option<RliMigrationConfirmed>,
 }
 
 /// 单通道快照（3 位小数定点化存储；serde 兼容面随会话侧车）。
@@ -1757,6 +2233,12 @@ pub struct RliChannelSnapshot {
     pub lambda_gap_ema: Option<f64>,
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub lambda_gap_samples: u64,
+    /// 0bf ③（2026-09-22）：持续越线观察（连续计数＋段起点；legacy 缺
+    /// 字段 ⇒ 0/None，与「不在连续段上」同义）。
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub streak: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub streak_start_t: Option<f64>,
 }
 
 fn is_zero_u64(v: &u64) -> bool {
@@ -1820,6 +2302,18 @@ pub struct RliShadowSnapshot {
     /// 0be 四项③（2026-09-21）：自适应参数轨迹（缺字段 = legacy ⇒ 空）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adapt_trace: Vec<RliAdaptTraceRow>,
+    /// 0bf ③④（2026-09-22）：采样锚（空档网格补点起点；legacy = None）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_sample_t: Option<f64>,
+    /// 0bf ③：模型面提醒队列（含已投递标志；legacy = 空）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<RliNotice>,
+    /// 0bf ④：网格补点计数（开销读数面；legacy = 0）。
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub grid_samples: u64,
+    /// 0bf ④：采样点总数（决策轮＋工具事件＋网格补点；legacy = 0）。
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub sample_points: u64,
 }
 
 #[cfg(test)]
@@ -2743,5 +3237,164 @@ mod tests {
             shadow.feature("env_prog", 20).is_empty(),
             "withdrawn name keeps sampling nothing"
         );
+    }
+
+    /// 0bf ④（2026-09-22）：空档网格补点——空档 > [`RLI_GRID_SECS`] 时按
+    /// 10 s 网格推进并**结算采样点**；≤10 s 不补；超长空档（> 512 点、
+    /// 属跨会话空闲而非工具执行段）整体跳过。
+    #[test]
+    fn grid_fill_counts_points_and_skips_oversized_gaps() {
+        let mut shadow = RliShadow::new();
+        shadow.on_decision_round(1.0, 8.0);
+        assert_eq!(shadow.sample_points(), 1);
+        assert_eq!(shadow.grid_samples(), 0);
+        shadow.on_decision_round(9.0, 8.0); // 空档 8 s ≤ 10 s：不补
+        assert_eq!(shadow.grid_samples(), 0);
+        assert_eq!(shadow.sample_points(), 2);
+        shadow.on_decision_round(109.0, 8.0); // 空档 100 s → 补 9 点（19…99）
+        assert_eq!(shadow.grid_samples(), 9);
+        assert_eq!(shadow.sample_points(), 12, "2 采样 + 9 补点 + 本轮");
+        // 超长空档（> RLI_GRID_FILL_MAX 点）：整体跳过（不补、不计数）。
+        let far = 109.0 + (RLI_GRID_FILL_MAX as f64 + 2.0) * RLI_GRID_SECS;
+        shadow.on_decision_round(far, 8.0);
+        assert_eq!(shadow.grid_samples(), 9, "oversized idle gap skipped");
+        assert_eq!(shadow.sample_points(), 13, "only this round's own sample");
+    }
+
+    /// 0bf ③（2026-09-22）：持续越线（压力四通道、k=5、连续计数）→ 恰在
+    /// 第 5 个采样点产**一条**提醒（随报失配概率；未就绪 = "—"）；
+    /// 投递标记可消费（`pending_notices` 排空）。
+    #[test]
+    fn streak_crossing_pushes_single_notice_and_marks_delivered() {
+        let mut shadow = RliShadow::new();
+        // 连续错误工具事件：err 通道每次 +1.0（θ 随命中自适应上抬，故多给
+        // 两个事件余量）——u≥θ 连续 5 个采样点触发**一条**提醒（触发后
+        // 继续计数不再重复触发）。
+        for i in 0..7u32 {
+            shadow.on_tool_event(10.0 + i as f64, ToolEvent::error(Some(900)));
+        }
+        let notices = shadow.notices();
+        assert_eq!(notices.len(), 1, "exactly one notice at k=5");
+        assert_eq!(notices[0].kind, RliNoticeKind::StreakCrossed);
+        assert!(
+            notices[0].text.contains("持续越线: err×5"),
+            "{}",
+            notices[0].text
+        );
+        assert!(
+            notices[0].text.contains("失配概率"),
+            "{}",
+            notices[0].text
+        );
+        assert_eq!(shadow.pending_notices().len(), 1);
+        assert_eq!(shadow.mark_notices_delivered(1), 1);
+        assert!(shadow.pending_notices().is_empty());
+        assert_eq!(shadow.mark_notices_delivered(1), 0, "no double delivery");
+    }
+
+    /// 0bf ②③（2026-09-22）：域迁移**确认**（新域稳定 3 轮后一次）＋转移
+    /// 倾向读数（完成段数／累计轮／去向分布；只给特征）。
+    #[test]
+    fn migration_confirmation_and_transition_tendency() {
+        let mut shadow = RliShadow::new();
+        // 首个成功（离开 start）→ 错误风暴推 err 通道过 2.0（pressure）。
+        shadow.on_tool_event(1.0, ToolEvent::success(Some(120)));
+        let mut t = 2.0;
+        for _ in 0..3u32 {
+            shadow.on_tool_event(t, ToolEvent::error(Some(900)));
+            t += 1.0;
+        }
+        // 3 个决策轮：pressure 连续驻留（含切换轮）→ 确认迁移（一次）。
+        for i in 0..3u32 {
+            shadow.on_decision_round(t + f64::from(i) * 10.0, 8.0);
+        }
+        let confirmed: Vec<&RliNotice> = shadow
+            .notices()
+            .into_iter()
+            .filter(|n| n.kind == RliNoticeKind::MigrationConfirmed)
+            .collect();
+        assert_eq!(confirmed.len(), 1, "one confirmation per migration");
+        assert!(
+            confirmed[0].text.contains("域迁移确认"),
+            "{}",
+            confirmed[0].text
+        );
+        assert!(
+            confirmed[0].text.contains("稳定 3 轮"),
+            "{}",
+            confirmed[0].text
+        );
+        // 第一段 pressure 尚未「完成」（无后继迁移）——倾向统计恰为空
+        // （条件口径：只统计**本域已完段**）。
+        let first = shadow.transition_tendency();
+        assert_eq!(first.domain, Domain::Pressure);
+        assert_eq!(first.completed_episodes, 0, "{first:?}");
+        // 错误退散＋成功保温 → normal 段；再错误风暴 → pressure 第二段。
+        // （成功 = `inject_set` 置 1.0，prog 通道 ζ=2 过阻尼衰减较快——
+        // 决策轮紧跟成功之后采，保证 u_prog ≥ 0.5。）
+        t += 10.0;
+        for _ in 0..3u32 {
+            t += 40.0;
+            t += 1.0;
+            shadow.on_tool_event(t, ToolEvent::success(Some(120)));
+            t += 1.0;
+            shadow.on_decision_round(t, 8.0);
+        }
+        assert_eq!(shadow.domain().current_domain(), Domain::Normal);
+        for _ in 0..3u32 {
+            t += 1.0;
+            shadow.on_tool_event(t, ToolEvent::error(Some(900)));
+        }
+        t += 9.0;
+        shadow.on_decision_round(t, 8.0);
+        assert_eq!(shadow.domain().current_domain(), Domain::Pressure);
+        // 倾向：当前段 pressure 的**已完段**（第一段）统计——去向 normal。
+        let tendency = shadow.transition_tendency();
+        assert_eq!(tendency.domain, Domain::Pressure);
+        assert!(tendency.completed_episodes >= 1, "{tendency:?}");
+        assert!(
+            tendency
+                .directions
+                .iter()
+                .any(|(d, n)| *d == Domain::Normal && *n >= 1),
+            "{tendency:?}"
+        );
+        assert!(tendency.median_dwell.is_some(), "{tendency:?}");
+        assert!(tendency.per_round_rate.is_some(), "{tendency:?}");
+    }
+
+    /// 0bf ③④（2026-09-22）：提醒队列／采样锚／两计数随快照往返（未投递
+    /// 标志原样保留）；legacy 快照（新字段清空）= 空/None/0（FR-7）。
+    #[test]
+    fn notices_grid_and_anchor_ride_the_shadow_snapshot() {
+        let mut shadow = RliShadow::new();
+        for i in 0..5u32 {
+            shadow.on_tool_event(10.0 + i as f64, ToolEvent::error(Some(900)));
+        }
+        shadow.on_decision_round(100.0, 8.0); // 空档 86 s → 补 8 点
+        assert_eq!(shadow.grid_samples(), 8);
+        let snap = shadow.snapshot();
+        assert!(!snap.notices.is_empty());
+        assert!(snap.last_sample_t.is_some());
+        let mut restored = RliShadow::new();
+        assert!(restored.restore(&snap));
+        assert_eq!(restored.grid_samples(), shadow.grid_samples());
+        assert_eq!(restored.sample_points(), shadow.sample_points());
+        assert_eq!(restored.notices().len(), shadow.notices().len());
+        assert_eq!(
+            restored.pending_notices().len(),
+            shadow.pending_notices().len()
+        );
+        // legacy 快照（新字段清空/缺省）= 空/None/0。
+        let mut legacy = snap.clone();
+        legacy.notices.clear();
+        legacy.last_sample_t = None;
+        legacy.grid_samples = 0;
+        legacy.sample_points = 0;
+        let mut target = RliShadow::new();
+        assert!(target.restore(&legacy));
+        assert!(target.notices().is_empty());
+        assert_eq!(target.grid_samples(), 0);
+        assert_eq!(target.sample_points(), 0);
     }
 }

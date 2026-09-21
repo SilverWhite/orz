@@ -145,18 +145,22 @@ pub fn f6_push_enabled_override() -> bool {
     )
 }
 
-/// 0am S2（2026-09-17）：RLI 影子通道族总开关——env `ORZ_LIF_RLI_SHADOW`
-/// （1/on/true/yes）；缺失/其它值 = off（影子不构造、不喂入、侧车无字段
-/// ——默认零成本）。门控放在 loop 层（`LifEngine` 保持纯确定性内核，不做
-/// env 读取）；影子无渲染面、无注入面（零注入纪律同格）。
+/// 0bf ①（2026-09-22，用户令「RLI 常开进生产面、默认启用、影子退役」）：
+/// RLI 通道族总开关——**默认启用**；env `ORZ_LIF_RLI_SHADOW` 语义反转成
+/// **关闭开关**（kill switch）：显式 `0/off/false/no`（大小写/空白不敏感）
+/// 才关；缺失与其它值 = on。关 = 影子不构造、不喂入、侧车无字段，LIF 面
+/// 照常（回退面——退役与否待转正后首轮读数）。门控放在 loop 层
+/// （`LifEngine` 保持纯确定性内核，不做 env 读取）。
 pub fn rli_shadow_enabled_override() -> bool {
-    matches!(
-        std::env::var("ORZ_LIF_RLI_SHADOW").ok().as_deref(),
-        Some("1" | "on" | "true" | "yes")
+    let raw = std::env::var("ORZ_LIF_RLI_SHADOW").unwrap_or_default();
+    !matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "0" | "off" | "false" | "no"
     )
 }
 
-/// 0am S2：构造 LIF 引擎（影子按 env 门控启用；两处构造点共用）。
+/// 0am S2：构造 LIF 引擎（0bf ① 起：默认启用影子；kill switch 见
+/// [`rli_shadow_enabled_override`]。两处构造点共用）。
 fn new_lif_engine() -> orz_assurance::lif::LifEngine {
     let mut engine = orz_assurance::lif::LifEngine::new();
     if rli_shadow_enabled_override() {
@@ -2388,8 +2392,9 @@ impl AgentLoopController {
         let lif = self.lif.lock().unwrap();
         let Some(shadow) = lif.rli_shadow() else {
             return Ok(
-                "rli: RLI 影子未启用（env ORZ_LIF_RLI_SHADOW=1 启用；本 run \
-                 未构造影子——无读数可渲染）"
+                "rli: RLI 未启用（kill switch：env ORZ_LIF_RLI_SHADOW=0/off/\
+                 false/no 显式关闭；缺省常开。本 run 未构造影子——无读数可\
+                 渲染，LIF 时间轴回退面照常）"
                     .to_string(),
             );
         };
@@ -2398,8 +2403,11 @@ impl AgentLoopController {
         let body = match selector.unwrap_or("now") {
             "now" => {
                 let mut lines = vec![format!(
-                    "rli.now → [影子 on | 步数 {} | T̂={:.1}s | 自判域 {}]",
+                    "rli.now → [RLI on | 步数 {} | 采样 {}（网格补点 {}）| T̂={:.1}s \
+                     | 自判域 {}]",
                     shadow.steps(),
+                    shadow.sample_points(),
+                    shadow.grid_samples(),
                     t_hat,
                     domain.current_domain().as_str(),
                 )];
@@ -2434,6 +2442,48 @@ impl AgentLoopController {
                             .map(|r| format!("round {r}"))
                             .unwrap_or_else(|| "round ?".to_string()),
                     ));
+                }
+                // 0bf ②（2026-09-22）：域转移倾向读数——本会话纯经验统计
+                // （完成段数/累计轮/去向分布/逐轮离开率/段驻留中位；只给
+                // 特征与域状态，不含动作建议）。
+                let tendency = shadow.transition_tendency();
+                let directions = if tendency.directions.is_empty() {
+                    "—".to_string()
+                } else {
+                    tendency
+                        .directions
+                        .iter()
+                        .map(|(d, n)| format!("{}×{}", d.as_str(), n))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                };
+                lines.push(format!(
+                    "转移倾向: [{}] 驻留 {} 轮 · 完成段 {}（累计 {} 轮 · 去向 {}）\
+                     · 离开率≈{} · 段驻留中位 {}",
+                    tendency.domain.as_str(),
+                    tendency.current_dwell,
+                    tendency.completed_episodes,
+                    tendency.completed_rounds,
+                    directions,
+                    tendency
+                        .per_round_rate
+                        .map_or_else(|| "—".to_string(), |r| format!("{r:.3}/轮")),
+                    tendency
+                        .median_dwell
+                        .map_or_else(|| "—".to_string(), |d| format!("{d} 轮")),
+                ));
+                // 0bf ③：近提醒（事件追溯面；模型面两触发提醒一次性投递在
+                // pull-delta 头，`rli.now` 只列最近 2 条供回看）。
+                let notices: Vec<String> = shadow
+                    .notices()
+                    .iter()
+                    .rev()
+                    .take(2)
+                    .rev()
+                    .map(|n| n.text.clone())
+                    .collect();
+                if !notices.is_empty() {
+                    lines.push(format!("近提醒: {}", notices.join(" | ")));
                 }
                 // 0be 四项②：分通道 horizon（`pred` 标注实际档位）＋短视锚点
                 // 独立化（`p1(1T̂)`）；`prog` 另有 ① 的 λ̂（未激活 = "—"，
@@ -2731,7 +2781,7 @@ impl AgentLoopController {
         // （既有 10MiB 疲劳提醒机制不变；固化写入为 KB 量级，水位无虞）。
         let watermark = self.blackboard_watermark_label();
         let mut items = self.blackboard.read().partition_revisions();
-        let (temporal_round, migration_count, last_migration, rli_steps) = {
+        let (temporal_round, migration_count, last_migration, rli_steps, rli_pending_notices) = {
             let lif = self.lif.lock().unwrap();
             let t = lif.temporal();
             (
@@ -2739,6 +2789,16 @@ impl AgentLoopController {
                 t.migration_count(),
                 t.history().last().copied(),
                 lif.rli_shadow().map(|s| s.steps()),
+                // 0bf ③（2026-09-22）：未投递 RLI 提醒（两触发；文案触发时
+                // 定格，含失配概率）——一次性投递候选，见下方头段。
+                lif.rli_shadow()
+                    .map(|s| {
+                        s.pending_notices()
+                            .iter()
+                            .map(|n| n.text.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
             )
         };
         items.push(("session", tool_rounds as u64));
@@ -2788,6 +2848,26 @@ impl AgentLoopController {
                 m.at_round
             ));
         }
+        // 0bf ③（2026-09-22，用户令「模型面提醒只留两触发…一次性投递」）：
+        // RLI 提醒段——pull-delta 头一次性携带（仿 域迁移 段形态）。预算内
+        // 最多 2 条、逐条先量后挂（不截断半条）；挂上的即时计入投递集合，
+        // 未挂的留待下次读取（不重不漏）。文案在触发时定格（含失配概率）。
+        let mut attached_notices = 0usize;
+        for text in &rli_pending_notices {
+            if attached_notices >= 2 {
+                break;
+            }
+            let piece = if attached_notices == 0 {
+                format!(" RLI提醒: {text}")
+            } else {
+                format!(" | {text}")
+            };
+            if header.len() + piece.len() > HEADER_CAP {
+                break;
+            }
+            header.push_str(&piece);
+            attached_notices += 1;
+        }
         // 0ae D0：水位状态标恒挂（用户定案「各分区响应头带读数」）；
         // 增量徽章与域迁移段只在有变化时追加（原「零噪音」纪律对徽章
         // 部分继续成立）。
@@ -2800,6 +2880,13 @@ impl AgentLoopController {
             if section == "temporal" {
                 cursors.insert(Self::MIGRATION_CURSOR_KEY.to_string(), migration_count);
             }
+        }
+        drop(cursors);
+        // 0bf ③：携带即投递（在游标锁释放后单独取 lif 锁——不倒锁序）。
+        if attached_notices > 0
+            && let Some(shadow) = self.lif.lock().unwrap().rli_shadow_mut()
+        {
+            shadow.mark_notices_delivered(attached_notices);
         }
         format!("{header}\n{body}")
     }
@@ -6368,16 +6455,23 @@ body"
         assert!(bounded.is_char_boundary(bounded.len()));
     }
 
-    /// 0am 改造四项③（2026-09-20）＋补充项②④（2026-09-20）：RLI 参考面
-    /// ——影子未启用 = 中性说明（不虚构读数）；启用后 now/recent/history/
-    /// feature 渲染通道锚点 + 自判动作域（补充项②起**不渲染 LIF 对照**）；
+    /// 0am 改造四项③（2026-09-20）＋补充项②④（2026-09-20）；0bf ①③②
+    /// （2026-09-22）：RLI 参考面——kill switch 关闭 = 中性说明（不虚构
+    /// 读数；缺省常开）；启用后 now/recent/history/feature 渲染通道锚点 +
+    /// 自判动作域 + 转移倾向 + 近提醒（补充项②起**不渲染 LIF 对照**）；
     /// 未知 selector / 缺名 / 非法名显式报错；面 ≤1 KiB（同 temporal 格）。
     #[test]
     fn rli_reference_face_renders_shadow_signal() {
         let controller =
             AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        // 0bf ①（2026-09-22）：缺省常开——"off" 面由显式 disable 构造
+        // （kill switch 的引擎侧等效动作；env 判定 `0/off/false/no`）。
+        {
+            let mut guard = controller.lif.lock().unwrap();
+            guard.disable_rli_shadow();
+        }
         let off = controller.render_rli_section(None, None, None).unwrap();
-        assert!(off.contains("RLI 影子未启用"), "{off}");
+        assert!(off.contains("RLI 未启用"), "{off}");
 
         {
             let mut guard = controller.lif.lock().unwrap();
@@ -6716,5 +6810,38 @@ body",
             plain.contains("n8.rs"),
             "r8 属 K 窗口外旧行，普通视图全量可见"
         );
+    }
+
+    /// 0bf ③（2026-09-22）：RLI 提醒随 pull-delta 头**一次性投递**——触发后
+    /// 首次读取挂头（≤2 条、预算内）；携带即投递，再读不重发（`rli.now`
+    /// 面仍可回看）；影子被 kill switch 关闭时零投递。
+    #[test]
+    fn rli_notices_ride_pull_delta_header_once() {
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        {
+            let mut guard = controller.lif.lock().unwrap();
+            // 缺省常开（0bf ①）：连续错误工具事件 → err 通道持续越线，
+            // 连续 5 个采样点触发（θ 自适应上抬，给 7 个事件余量）。
+            let mut t = 0.0f64;
+            for _ in 0..7u32 {
+                t += 1.0;
+                guard.on_decision_round(t);
+                guard.on_tool_event(t + 0.5, orz_assurance::lif::ToolEvent::error(Some(900)));
+            }
+        }
+        let body = controller
+            .render_rli_section(Some("now"), None, None)
+            .unwrap();
+        let with_delta = controller.attach_pull_delta("rli", body.clone(), 0, None);
+        assert!(with_delta.contains("RLI提醒:"), "{with_delta}");
+        assert!(with_delta.contains("持续越线"), "{with_delta}");
+        // 已投递：再读不重复（提醒仍可在 `rli.now` 面回看）。
+        let again = controller.attach_pull_delta("rli", body, 0, None);
+        assert!(!again.contains("RLI提醒:"), "{again}");
+        // kill switch：无影子 = 零投递。
+        controller.lif.lock().unwrap().disable_rli_shadow();
+        let off = controller.attach_pull_delta("rli", "rli: x".to_string(), 0, None);
+        assert!(!off.contains("RLI提醒:"), "{off}");
     }
 }

@@ -467,12 +467,13 @@ struct StoredConversation {
     /// 续载而非重建）。`None` = 尚无黑板内容（首 prompt 前/legacy）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     blackboard: Option<Blackboard>,
-    /// P2-13 B3：已向用户投递过的疲劳提醒档位键（50/70/90）——每档越线
-    /// 提醒一次、用户忽略不重复；随侧车持久化（跨 prompt 不重发）。
-    /// （B3 复审裁决：提醒只按黑板 live 字节水位判定，无压缩轮数门槛，
-    /// 故不持久化压缩累计。）
+    /// 0bf ③（2026-09-22，用户令「和疲劳度绑在一起做加权，一起算一个
+    /// 总值」）：**会话级负担档位**——已投递键（`["50", ...]`）。0bf 起
+    /// 单键取代 0be 的 `fatigue_tiers_notified`/`complexity_tiers_notified`
+    /// 两键（同梯档位 50/70/90：总值＝水位＋繁杂度增益）；旧侧车无本键 =
+    /// 空（legacy 过渡面：可能重发一次，如实记录于 0bf 报告）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    fatigue_tiers_notified: Vec<String>,
+    burden_tiers_notified: Vec<String>,
     /// 动态上下文滑块 S1 修订批（v7，2026-09-15，设计 §3.5.1，用户裁定
     /// DP-16）：**会话级提醒水位**——已 fire 的实际上下文刻度键
     /// （`["500k", "900k"]`）。与黑板同族（先例 `fatigue_tiers_notified`）：
@@ -481,12 +482,6 @@ struct StoredConversation {
     /// controller 回写（SUCCESS-ONLY，同疲劳档位语义）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     context_scale_notified: Vec<String>,
-    /// 0be 四项④（2026-09-21）：**会话级繁杂度提醒档位**——已投递键
-    /// （`["q85", ...]`）。与水位档 `50`/`70`/`90` 分开簿记；每档一次、
-    /// 跨 prompt 延续、新会话从零开始、恢复不重发（SUCCESS-ONLY 同
-    /// `fatigue_tiers_notified`）。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    complexity_tiers_notified: Vec<String>,
 }
 
 impl StoredConversation {
@@ -501,9 +496,8 @@ impl StoredConversation {
             session_started_at,
             lif: None,
             blackboard: None,
-            fatigue_tiers_notified: Vec::new(),
+            burden_tiers_notified: Vec::new(),
             context_scale_notified: Vec::new(),
-            complexity_tiers_notified: Vec::new(),
         }
     }
 
@@ -528,12 +522,10 @@ impl StoredConversation {
             session_started_at,
             lif: Some(temporal.clone()),
             blackboard: Some(blackboard.clone()),
-            fatigue_tiers_notified: Vec::new(),
+            // 0bf ③：负担档位在 run 成功后由调用方回写（SUCCESS-ONLY）。
+            burden_tiers_notified: Vec::new(),
             // v7（S1 修订批）：水位在 run 成功后由调用方按 controller 回写。
             context_scale_notified: Vec::new(),
-            // 0be 四项④：繁杂度档位同口径——run 成功后由调用方回写
-            // （SUCCESS-ONLY）。
-            complexity_tiers_notified: Vec::new(),
         }
     }
 }
@@ -1870,14 +1862,10 @@ impl AcpServer {
         let restored_blackboard = continuation.blackboard.take();
         let mut conversation = std::mem::take(&mut continuation.messages);
         let restored_legacy_spikes = continuation.temporal_spikes.clone().unwrap_or_default();
-        // P2-13 B3：会话级疲劳元数据（已投递档位）随续接包跨 prompt 延续
-        // （SUCCESS-ONLY 纪律：失败 run 不更新；提醒只按水位判定，无压缩
-        // 轮数门槛——B3 复审裁决）。
-        let mut fatigue_tiers_notified = continuation.fatigue_tiers_notified.clone();
-        // 0be 四项④（2026-09-21）：会话级繁杂度元数据（已投递档位 q85/q95/
-        // q99）随续接包跨 prompt 延续（SUCCESS-ONLY 纪律同疲劳档位；与水
-        // 位档分开簿记）。
-        let mut complexity_tiers_notified = continuation.complexity_tiers_notified.clone();
+        // 0bf ③（2026-09-22）：会话级负担档位元数据随续接包跨 prompt 延续
+        // （SUCCESS-ONLY 纪律：失败 run 不更新；总值＝水位＋繁杂度增益，
+        // 档位 50/70/90）。单键取代 0be 的两套档位簿记。
+        let mut burden_tiers_notified = continuation.burden_tiers_notified.clone();
         // v7（S1 修订批，设计 §3.5.1，DP-16）：会话级刻度水位随续接包跨
         // prompt 延续（新会话为空；恢复侧车不重发）。
         let restored_context_scale_notified = continuation.context_scale_notified.clone();
@@ -2048,12 +2036,11 @@ impl AcpServer {
         // leaves `session.continuation` at `None`, so the next prompt's
         // take-out falls back to the sidecar (the pre-run state) instead
         // of diverging from it.
-        // P2-13 B3：用户侧疲劳提醒（E9/§11.2）——机械附言、不进模型上下文；
-        // 无新档 = None。会话关闭后的提醒去重随侧车持久化。
-        let mut fatigue_notice_text: Option<String> = None;
-        // 0be 四项④（2026-09-21）：用户侧繁杂度提醒（OBS-RLI-SESSION-FATIGUE）
-        // ——同疲劳形态：机械附言、不进模型上下文；影子未启用/未就绪 = None。
-        let mut complexity_notice_text: Option<String> = None;
+        // 0bf ③（2026-09-22，用户令「和疲劳度绑在一起做加权，一起算一个
+        // 总值」）：用户侧**会话负担**提醒——机械附言、不进模型上下文；
+        // 无新档 = None。总值＝水位（原疲劳分量，语义不变）＋繁杂度增益
+        // （至多 +30）；会话关闭后的提醒去重随侧车持久化（SUCCESS-ONLY）。
+        let mut burden_notice_text: Option<String> = None;
         if run_result.is_ok() {
             let lif = controller.lif_session_snapshot();
             let blackboard = controller.blackboard_conversation_snapshot();
@@ -2064,42 +2051,31 @@ impl AcpServer {
                 session_started_at,
                 &blackboard,
             );
-            // 疲劳提醒只按黑板 live 字节水位判定（无压缩轮数门槛——B3 复审
-            // 裁决）；单次只投最高未提醒档，已越线的低档一并落档。
+            // 水位分量：黑板 live 字节水位（原疲劳判定的输入，无压缩轮数
+            // 门槛——B3 复审裁决）。
             let threshold = orz_loop::fatigue::live_budget_bytes();
             let board_bytes = serde_json::to_vec(&blackboard)
                 .map(|v| v.len())
                 .unwrap_or(0);
-            if let Some(decision) = orz_loop::fatigue::pending_fatigue_notice(
-                board_bytes,
-                threshold,
-                &fatigue_tiers_notified,
+            let fatigue_percent = orz_loop::fatigue::fatigue_percent(board_bytes, threshold);
+            // 繁杂度分量：RLI 影子读数（未启用/未就绪 = `None`——增益记 0，
+            // 机械如实；FR-7 不落假值）。
+            let cplx_reading = controller.rli_complexity_reading();
+            // 复合判定：单次只投最高未投递档，跳过的低档一并落档（不刷屏、
+            // 不补发）。
+            if let Some(decision) = orz_loop::complexity::pending_burden_notice(
+                fatigue_percent,
+                cplx_reading.as_ref(),
+                &burden_tiers_notified,
             ) {
                 for tier in decision.tiers_to_mark {
-                    if !fatigue_tiers_notified.iter().any(|t| t == tier) {
-                        fatigue_tiers_notified.push(tier.to_string());
+                    if !burden_tiers_notified.iter().any(|t| t == tier) {
+                        burden_tiers_notified.push(tier.to_string());
                     }
                 }
-                fatigue_notice_text = Some(decision.notice.text);
+                burden_notice_text = Some(decision.notice.text);
             }
-            // 0be 四项④：繁杂度提醒——读数来自 RLI 影子（未启用/未就绪 =
-            // `None`，机械如实不投递）；单次只投最高未投递档，已锁存未投
-            // 递的低档一并落档（跳跃不刷屏）。
-            if let Some(reading) = controller.rli_complexity_reading()
-                && let Some(decision) = orz_loop::complexity::pending_complexity_notice(
-                    &reading,
-                    &complexity_tiers_notified,
-                )
-            {
-                for tier in decision.tiers_to_mark {
-                    if !complexity_tiers_notified.iter().any(|t| t == tier) {
-                        complexity_tiers_notified.push(tier.to_string());
-                    }
-                }
-                complexity_notice_text = Some(decision.notice.text);
-            }
-            full.complexity_tiers_notified = complexity_tiers_notified.clone();
-            full.fatigue_tiers_notified = fatigue_tiers_notified.clone();
+            full.burden_tiers_notified = burden_tiers_notified.clone();
             // v7（S1 修订批，DP-16）：刻度水位随侧车落盘（跨 prompt 延续；
             // 失败 run 不更新——SUCCESS-ONLY 同疲劳档位）。
             full.context_scale_notified = controller.context_scale_notified_keys();
@@ -2162,15 +2138,9 @@ impl AcpServer {
                 "status": "completed",
                 "run_id": run_id,
                 });
-                // 用户侧机械附言（不进模型上下文）：疲劳与繁杂度各至多一条，
-                // 同 run 同时命中时按疲劳在前拼接（单字符串字段）。
-                let combined_notice = match (fatigue_notice_text, complexity_notice_text) {
-                    (Some(f), Some(c)) => Some(format!("{f}\n\n{c}")),
-                    (Some(f), None) => Some(f),
-                    (None, Some(c)) => Some(c),
-                    (None, None) => None,
-                };
-                if let Some(notice) = combined_notice {
+                // 用户侧机械附言（不进模型上下文）：0bf ③ 起为**单条**负担
+                // 提醒（复合总值口径——水位＋繁杂度增益；至多一条）。
+                if let Some(notice) = burden_notice_text {
                     payload["user_notice"] = serde_json::Value::String(notice);
                 }
                 Ok(payload)
@@ -5308,10 +5278,9 @@ mod tests {
             Some(1_700_000_000.0),
             &blackboard,
         );
-        // P2-13 B3：疲劳元数据随侧车往返（已投递档位去重；无压缩累计——
-        // B3 复审裁决移除压缩轮数门槛）。
+        // 0bf ③：负担档位元数据随侧车往返（已投递档位去重）。
         let mut full = full;
-        full.fatigue_tiers_notified = vec![orz_loop::fatigue::FATIGUE_TIER_50.to_string()];
+        full.burden_tiers_notified = vec![orz_loop::complexity::BURDEN_TIER_ORDER[0].to_string()];
         // v7（S1 修订批，设计 §3.5.1，DP-16）：会话级刻度水位同信封往返
         // （每级每会话一次；跨 prompt 不重发、新会话从零开始）。
         full.context_scale_notified = vec!["500k".to_string(), "900k".to_string()];
@@ -5339,8 +5308,8 @@ mod tests {
         );
         assert_eq!(stored.messages[2].tool_call_id.as_deref(), Some("call-1"));
         assert_eq!(
-            stored.fatigue_tiers_notified,
-            vec![orz_loop::fatigue::FATIGUE_TIER_50.to_string()]
+            stored.burden_tiers_notified,
+            vec![orz_loop::complexity::BURDEN_TIER_ORDER[0].to_string()]
         );
         assert_eq!(
             stored.context_scale_notified,
