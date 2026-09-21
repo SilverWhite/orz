@@ -108,9 +108,9 @@ pub fn is_injected_block_text(content: &str) -> bool {
         // 会累积固定注入文本，且与「固定文本不是模型输出」纪律冲突）。
         || content.starts_with(crate::context_scale::REMINDER_INJECTED_PREFIX)
         // S1 修订批（v7，2026-09-15，设计 §3.4.1）：压缩窗口内的机械提示
-        // （「窗口内仅 blackboard_write 可执行」/「窗口剩余 N 轮」）此前未
-        // 注册 ⇒ 会被写回持久化会话（0AE 遗留缺口，审查 P2 记录）。窗口轮
-        // 提示是机械注入文本，同 `[CONTEXT_SCALE` 纪律。
+        // （「窗口剩余 N 轮」等）此前未注册 ⇒ 会被写回持久化会话（0AE
+        // 遗留缺口，审查 P2 记录）。窗口轮提示是机械注入文本，同
+        // `[CONTEXT_SCALE` 纪律。
         || content.starts_with(crate::context_scale::WINDOW_NOTICE_PREFIX)
         // 滑块上下文 v8（2026-09-16 勘误批，设计 §2）：`[上下文分块表 …]`
         // 是模型面投影层派生的**分块索引**（每轮现算／按 epoch 冻结），

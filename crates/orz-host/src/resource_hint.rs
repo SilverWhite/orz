@@ -58,11 +58,12 @@ pub const HARD_COMMIT_USED_PERCENT: u32 = 95;
 /// 回到 OS 的 `ERROR_DISK_FULL`／`ENOSPC`，由 0z C 的降级链承担）。
 pub const VOLUME_HINT_FREE_BYTES: u64 = 4 * GIB;
 
-/// Hard-limit derivation (design §4.7 / §11 裁决 4): commit = min(80% × limit,
-/// limit − 4 GiB); CPU 80%; concurrency = cores.
+/// 推导常数（design §4.7 / §11 裁决 4；0bc 裁决 ② 重挂）：commit 阈值 =
+/// min(80% × limit, limit − 4 GiB)（再叠加下面的 headroom 规则）——**值不变、
+/// 语义改挂**：从"天花板（硬顶）"改为"临限通知阈值"（越过只记事件＋软提示）。
+/// CPU 面按 0bc 裁决 ① 去顶：无默认档，`ORZ_JOB_CPU_RATE_PERCENT` 可选。
 pub const RUN_COMMIT_LIMIT_PERCENT: u64 = 80;
 pub const RUN_COMMIT_RESERVE_BYTES: u64 = 4 * GIB;
-pub const RUN_CPU_RATE_PERCENT: u32 = 80;
 /// Headroom rule (independent review F-4, 2026-09-12): the ceiling must express
 /// what *this run* may still consume, not a fraction of the host limit a busy
 /// machine cannot hand out. The binding value is the assembly-time commit
@@ -841,6 +842,22 @@ impl ResourceHint {
     }
 }
 
+/// 0bc 裁决 ②（2026-09-20）：commit 临限通知的机械软提示（中文短句＋英文
+/// 读数，0af 混排；每 run 至多一条——去重位在宿主一侧）。通知不叫停动作：
+/// 本 run 照跑，模型读到读数自行改方案（§2 决策者）。读数照实转达内核报文
+/// （投递有延迟，`used_bytes` 是取回时刻的作业 commit——宁缺勿假，不美化）。
+pub fn commit_notification_hint(notification: &xai_tty_utils::JobNotification) -> String {
+    format!(
+        "[资源软提示] 本 run 内存已达 commit 临限通知线（{}），动作照常执行。\
+         commit used {} / notify {} (completion-port notification; limit_flags {:#x}, violation_flags {:#x})",
+        gib(notification.limit_bytes),
+        gib(notification.used_bytes),
+        gib(notification.limit_bytes),
+        notification.limit_flags,
+        notification.violation_flags,
+    )
+}
+
 /// Run-level hard ceilings derived from a reading (design §4.7 / §11 裁决 4).
 ///
 /// `commit = min(cap, headroom − 1 GiB)` where the cap is the historical
@@ -848,11 +865,14 @@ impl ResourceHint {
 /// spawn; CPU 80%; active processes `2 × cores + 8` (≥ 16). Unknown commit
 /// limit → no commit ceiling (recorded rather than silently invented).
 ///
-/// 0aw（裁决点 B）：推导**保留、只作上限**——超限的答复由内核给出
-/// （`JOB_OBJECT_LIMIT_JOB_MEMORY`：进程试图提交超过作业总额的内存时**它**
-/// 分配失败），orz 只如实转达，不再有 orz 侧预检拒绝。
+/// 0bc 裁决 ②（2026-09-20 用户令）：commit 面从**硬顶**改**通知式**——
+/// 同一算式的值改挂 `commit_notification_bytes`（临限警报线）：越过只记
+/// 事件＋软提示（内核完成端口通知），不拒任何分配；硬顶字段留 `None`
+/// （显式覆盖通道仍可给调用级/测试用硬顶）。
+/// 0bc 裁决 ①：CPU 面**默认不设**上限（`ORZ_JOB_CPU_RATE_PERCENT` 可选档）。
+/// 0bc 裁决 ③：活动进程上限保留，`ORZ_JOB_ACTIVE_PROCESS_LIMIT` 可覆盖。
 pub fn default_job_limits(snapshot: &HostCapacitySnapshot) -> JobLimits {
-    let commit_limit_bytes = (snapshot.commit_limit_bytes > 0)
+    let commit_notification_bytes = (snapshot.commit_limit_bytes > 0)
         .then(|| {
             let eighty = snapshot.commit_limit_bytes / 100 * RUN_COMMIT_LIMIT_PERCENT;
             let reserved = snapshot
@@ -873,19 +893,33 @@ pub fn default_job_limits(snapshot: &HostCapacitySnapshot) -> JobLimits {
                 .unwrap_or(cap);
             binding.min(cap)
         })
-        // The reserve rule can floor the ceiling at zero (a machine whose whole
-        // commit limit is the reserve): a zero ceiling would make the job
-        // unable to start anything, so it means "no commit ceiling" instead.
+        // The reserve rule can floor the threshold at zero (a machine whose
+        // whole commit limit is the reserve): a zero threshold would fire on
+        // every commit, so it means "no notification" instead.
         .filter(|value| *value > 0);
     JobLimits {
-        commit_limit_bytes,
+        commit_limit_bytes: None,
+        commit_notification_bytes,
         active_process: Some(run_active_process_limit()),
-        cpu_rate_percent: Some(RUN_CPU_RATE_PERCENT),
+        cpu_rate_percent: cpu_rate_limit_from_env(),
     }
 }
 
-/// The run's active-process ceiling: `2 × cores + 8`, at least 16.
+/// CPU 档（0bc 裁决 ①）：默认**不设**上限；`ORZ_JOB_CPU_RATE_PERCENT`
+/// （1..=100，整数）显式给档。非法值忽略（宁缺勿假；不猜默认档）。
+pub fn cpu_rate_limit_from_env() -> Option<u32> {
+    let raw = std::env::var("ORZ_JOB_CPU_RATE_PERCENT").ok()?;
+    let value: u32 = raw.trim().parse().ok()?;
+    (1..=100).contains(&value).then_some(value)
+}
+
+/// 活动进程上限覆盖（0bc 裁决 ③）：`ORZ_JOB_ACTIVE_PROCESS_LIMIT`（≥1）
+/// 优先；非法/缺省回落到推导值（`2 × cores + 8`，至少 16）。上限本身仍存在
+/// ——它管"跑飞"，不做调度。
 pub fn run_active_process_limit() -> u32 {
+    if let Some(overridden) = active_process_limit_from_env() {
+        return overridden;
+    }
     let cores = std::thread::available_parallelism()
         .map(|n| n.get() as u32)
         .unwrap_or(4);
@@ -893,6 +927,13 @@ pub fn run_active_process_limit() -> u32 {
         .saturating_mul(RUN_ACTIVE_PROCESS_MULTIPLIER)
         .saturating_add(RUN_ACTIVE_PROCESS_BASE)
         .max(RUN_ACTIVE_PROCESS_MIN)
+}
+
+/// `ORZ_JOB_ACTIVE_PROCESS_LIMIT` 环境覆盖解析（≥1 才有效；非法即忽略）。
+pub fn active_process_limit_from_env() -> Option<u32> {
+    let raw = std::env::var("ORZ_JOB_ACTIVE_PROCESS_LIMIT").ok()?;
+    let value: u32 = raw.trim().parse().ok()?;
+    (value >= 1).then_some(value)
 }
 
 /// Render bytes as GiB with two decimals (audit text only).
@@ -1096,56 +1137,129 @@ mod tests {
         assert!(hint.soft_hint(&readings).is_none(), "per-volume dedup");
     }
 
-    // ── hard-limit derivation（保留推导、只作上限——裁决点 B） ────────────
+    // ── run limits（0bc 裁决 ①/②/③：commit 通知式＋CPU 去顶＋进程 env 覆盖） ──
+
+    /// Env-touching tests share one lock: env vars are process-global and the
+    /// suite runs tests in parallel. Guard every test that reads or writes
+    /// `ORZ_JOB_*`.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner())
+    }
 
     #[test]
-    fn job_limits_use_the_eighty_percent_or_reserve_rule() {
+    fn job_limits_use_the_eighty_percent_or_reserve_rule_for_the_notification_threshold() {
+        let _guard = env_lock();
+        // 0bc 裁决 ②：同一推导改挂**临限通知阈值**；硬顶恒 None（通知式——
+        // 越过只记事件＋软提示，不拒分配）。
         // 30 GiB limit with 8 GiB already committed: the cap is 80% = 24 GiB,
         // and the binding value is the assembly-time headroom minus 1 GiB
         // reserve = 21 GiB (review F-4 — a busy host cannot hand out the cap).
         let limits = default_job_limits(&snapshot(40 * GIB, 30 * GIB, 8 * GIB));
+        assert_eq!(limits.commit_limit_bytes, None);
         assert_eq!(
-            limits.commit_limit_bytes,
+            limits.commit_notification_bytes,
             Some(30 * GIB - 8 * GIB - RUN_COMMIT_HEADROOM_RESERVE_BYTES)
         );
-        assert!(limits.commit_limit_bytes.unwrap() < 30 * GIB / 100 * 80);
-        assert_eq!(limits.cpu_rate_percent, Some(RUN_CPU_RATE_PERCENT));
+        assert!(limits.commit_notification_bytes.unwrap() < 30 * GIB / 100 * 80);
+        assert_eq!(limits.cpu_rate_percent, cpu_rate_limit_from_env());
         assert_eq!(limits.active_process, Some(run_active_process_limit()));
 
         // An idle host: the cap is the binding value (headroom − 1 GiB = 91 GiB
         // is above the 80% arm at 80 GiB).
         assert_eq!(
-            default_job_limits(&snapshot(40 * GIB, 100 * GIB, 8 * GIB)).commit_limit_bytes,
+            default_job_limits(&snapshot(40 * GIB, 100 * GIB, 8 * GIB)).commit_notification_bytes,
             Some(80 * GIB)
         );
-        // A host that is nearly out of headroom: the ceiling collapses to the
-        // floor instead of the cap — a tool failure, not a dead machine.
+        // A host that is nearly out of headroom: the threshold collapses to
+        // the floor instead of the cap — the alert fires early, nothing is
+        // refused (0bc 裁决 ②：通知式没有拒绝臂).
         assert_eq!(
-            default_job_limits(&snapshot(40 * GIB, 30 * GIB, 27 * GIB)).commit_limit_bytes,
+            default_job_limits(&snapshot(40 * GIB, 30 * GIB, 27 * GIB)).commit_notification_bytes,
             Some(RUN_COMMIT_FLOOR_BYTES)
         );
-        // Small limit: the reserve arm floors the ceiling at 0, which means
-        // "no commit ceiling" (a zero ceiling would block every spawn).
+        // Small limit: the reserve arm floors the threshold at 0, which means
+        // "no notification" (a zero threshold would fire on every commit).
         assert_eq!(
-            default_job_limits(&snapshot(40 * GIB, 4 * GIB, GIB)).commit_limit_bytes,
+            default_job_limits(&snapshot(40 * GIB, 4 * GIB, GIB)).commit_notification_bytes,
             None
         );
-        // Unknown limit → no commit ceiling, never an invented one.
+        // Unknown limit → no threshold, never an invented one.
         assert_eq!(
-            default_job_limits(&snapshot(40 * GIB, 0, 0)).commit_limit_bytes,
+            default_job_limits(&snapshot(40 * GIB, 0, 0)).commit_notification_bytes,
             None
         );
         // The active-process ceiling leaves room for cargo's own default
-        // parallelism plus its children (review F-3).
+        // parallelism plus its children (review F-3); an env override wins.
         let cores = std::thread::available_parallelism()
             .map(|n| n.get() as u32)
             .unwrap_or(4);
+        let derived = (cores * RUN_ACTIVE_PROCESS_MULTIPLIER + RUN_ACTIVE_PROCESS_BASE)
+            .max(RUN_ACTIVE_PROCESS_MIN);
         assert_eq!(
             run_active_process_limit(),
-            (cores * RUN_ACTIVE_PROCESS_MULTIPLIER + RUN_ACTIVE_PROCESS_BASE)
-                .max(RUN_ACTIVE_PROCESS_MIN)
+            active_process_limit_from_env().unwrap_or(derived)
         );
-        assert!(run_active_process_limit() > cores);
+        assert!(derived > cores);
+    }
+
+    #[test]
+    fn cpu_rate_env_override_is_optional_and_validated() {
+        let _guard = env_lock();
+        let previous = std::env::var_os("ORZ_JOB_CPU_RATE_PERCENT");
+        // SAFETY: single-threaded under ENV_LOCK — every reader of this var in
+        // this crate (the default-limits test included) takes the same lock.
+        unsafe { std::env::set_var("ORZ_JOB_CPU_RATE_PERCENT", "75") };
+        assert_eq!(cpu_rate_limit_from_env(), Some(75));
+        unsafe { std::env::set_var("ORZ_JOB_CPU_RATE_PERCENT", "100") };
+        assert_eq!(cpu_rate_limit_from_env(), Some(100));
+        for bad in ["0", "101", "abc", ""] {
+            unsafe { std::env::set_var("ORZ_JOB_CPU_RATE_PERCENT", bad) };
+            assert_eq!(
+                cpu_rate_limit_from_env(),
+                None,
+                "{bad:?} is out of the documented band and must be ignored"
+            );
+        }
+        unsafe { std::env::remove_var("ORZ_JOB_CPU_RATE_PERCENT") };
+        assert_eq!(cpu_rate_limit_from_env(), None, "default is no CPU ceiling");
+        restore_env("ORZ_JOB_CPU_RATE_PERCENT", previous);
+    }
+
+    #[test]
+    fn active_process_env_override_wins_over_the_derivation() {
+        let _guard = env_lock();
+        let previous = std::env::var_os("ORZ_JOB_ACTIVE_PROCESS_LIMIT");
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(4);
+        let derived = (cores * RUN_ACTIVE_PROCESS_MULTIPLIER + RUN_ACTIVE_PROCESS_BASE)
+            .max(RUN_ACTIVE_PROCESS_MIN);
+        // SAFETY: single-threaded under ENV_LOCK (see above).
+        unsafe { std::env::set_var("ORZ_JOB_ACTIVE_PROCESS_LIMIT", "7") };
+        assert_eq!(run_active_process_limit(), 7);
+        for neutral in ["0", "nonsense"] {
+            unsafe { std::env::set_var("ORZ_JOB_ACTIVE_PROCESS_LIMIT", neutral) };
+            assert_eq!(
+                run_active_process_limit(),
+                derived,
+                "{neutral:?} is not a valid override; the derivation stands"
+            );
+        }
+        unsafe { std::env::remove_var("ORZ_JOB_ACTIVE_PROCESS_LIMIT") };
+        assert_eq!(run_active_process_limit(), derived);
+        restore_env("ORZ_JOB_ACTIVE_PROCESS_LIMIT", previous);
+    }
+
+    /// Restore an env var exactly as the test found it (env vars are global;
+    /// the suite runs in-process).
+    fn restore_env(key: &str, previous: Option<std::ffi::OsString>) {
+        match previous {
+            // SAFETY: callers hold ENV_LOCK; this runs before the guard drops.
+            Some(value) => unsafe { std::env::set_var(key, value) },
+            None => unsafe { std::env::remove_var(key) },
+        }
     }
 
     #[cfg(windows)]

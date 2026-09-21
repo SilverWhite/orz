@@ -99,6 +99,70 @@ fn is_storage_full_error(e: &std::io::Error) -> bool {
     )
 }
 
+/// 0bc ④（2026-09-21，设计 §11-4）：分配失败——可失败分配路径上
+/// `try_reserve` 失败统一映射为 `ErrorKind::OutOfMemory`。它和 ENOSPC
+/// **同形**进入降级链（不 abort、留终态），但**不走退避梯**（内存不会因
+/// 等待而回来）。
+fn is_alloc_failure(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::OutOfMemory
+}
+
+/// 可失败分配序列化缓冲（0bc ④）。`Vec` 的 `io::Write` 增长路径在 OOM 时
+/// 走 `handle_alloc_error`（abort）；journal 装配是 S1 清单里的巨量分配
+/// 路径之一，这里把每次增长改走 `try_reserve`，失败以
+/// `ErrorKind::OutOfMemory` 浮出，由写者任务映射进降级链。
+struct FallibleBuf {
+    bytes: Vec<u8>,
+}
+
+impl FallibleBuf {
+    fn new() -> Self {
+        Self { bytes: Vec::new() }
+    }
+
+    /// Fallible capacity growth used by both `write` and `push`.
+    fn grow(&mut self, additional: usize) -> Result<(), std::io::Error> {
+        self.bytes.try_reserve(additional).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::OutOfMemory,
+                "journal assembly allocation failed (0bc fallible-allocation path)",
+            )
+        })
+    }
+
+    fn try_push(&mut self, byte: u8) -> Result<(), std::io::Error> {
+        self.grow(1)?;
+        self.bytes.push(byte);
+        Ok(())
+    }
+}
+
+impl std::io::Write for FallibleBuf {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        self.grow(data.len())?;
+        self.bytes.extend_from_slice(data);
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl std::ops::Deref for FallibleBuf {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.bytes
+    }
+}
+
+impl FallibleBuf {
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
 /// Degraded-mode state — recorded once when the backoff ladder is exhausted.
 #[derive(Debug, Clone)]
 struct DegradedState {
@@ -204,6 +268,7 @@ impl JournalRecorder {
         writer_task.fault = Some(WriteFaultScript {
             failures_remaining: fault_attempts,
             partial_bytes: 0,
+            alloc_failures_remaining: 0,
         });
         tokio::spawn(writer_task.run());
 
@@ -226,6 +291,28 @@ impl JournalRecorder {
         writer_task.fault = Some(WriteFaultScript {
             failures_remaining: fault_attempts,
             partial_bytes,
+            alloc_failures_remaining: 0,
+        });
+        tokio::spawn(writer_task.run());
+
+        JournalRecorder { tx, journal_dir }
+    }
+
+    /// Test seam (0bc ④, design §11 item 4, 2026-09-21): allocation failures
+    /// on the journal assembly path — the first `fault_attempts` appends fail
+    /// with `ErrorKind::OutOfMemory`. **No backoff ladder**: memory does not
+    /// come back by waiting, so the failure routes straight into the degraded
+    /// chain, the same shape as an exhausted ENOSPC ladder. Hidden from the
+    /// documented surface; never used by production code.
+    #[doc(hidden)]
+    pub fn new_with_alloc_faults_for_tests(journal_dir: PathBuf, fault_attempts: u32) -> Self {
+        let (tx, rx) = mpsc::channel::<JournalCmd>(256);
+
+        let mut writer_task = JournalWriterTask::new(journal_dir.join("events.jsonl"), rx);
+        writer_task.fault = Some(WriteFaultScript {
+            failures_remaining: 0,
+            partial_bytes: 0,
+            alloc_failures_remaining: fault_attempts,
         });
         tokio::spawn(writer_task.run());
 
@@ -399,9 +486,13 @@ struct JournalWriterTask {
 /// with a storage-full error, later attempts succeed. `partial_bytes > 0`
 /// additionally writes a torn prefix of the failing line to the file before
 /// the error — the partial-write shape real ENOSPC produces (review F-C-1b).
+/// `alloc_failures_remaining` (0bc ④, 2026-09-21) injects allocation failures
+/// instead — the constructive injection the fallible-allocation degradation
+/// contract is verified against.
 struct WriteFaultScript {
     failures_remaining: u32,
     partial_bytes: usize,
+    alloc_failures_remaining: u32,
 }
 
 impl WriteFaultScript {
@@ -409,6 +500,21 @@ impl WriteFaultScript {
         if self.failures_remaining > 0 {
             self.failures_remaining -= 1;
             Some(std::io::Error::from_raw_os_error(112)) // ERROR_DISK_FULL
+        } else {
+            None
+        }
+    }
+
+    /// 0bc ④: allocation failure — no backoff ladder on purpose (memory does
+    /// not come back by waiting); the writer task maps it straight into the
+    /// degraded chain, same shape as ENOSPC.
+    fn take_alloc_fault(&mut self) -> Option<std::io::Error> {
+        if self.alloc_failures_remaining > 0 {
+            self.alloc_failures_remaining -= 1;
+            Some(std::io::Error::new(
+                std::io::ErrorKind::OutOfMemory,
+                "simulated allocation failure (0bc S2 ④ test seam)",
+            ))
         } else {
             None
         }
@@ -452,10 +558,23 @@ impl JournalWriterTask {
         event: &RunEvent,
     ) -> Result<usize, JournalRecorderError> {
         // Serialize to compact JSON (matching Python: sort_keys + compact separators)
-        let mut buf = Vec::new();
+        //
+        // 0bc ④（2026-09-21，设计 §11-4）：journal 装配是 S1 清单里的巨量
+        // 分配路径之一——序列化缓冲改**可失败增长**（try_reserve），分配
+        // 失败返回 `ErrorKind::OutOfMemory` 而不 abort；写者任务把它映射进
+        // 降级链（与 ENOSPC 同形：不 abort、留终态）。
+        let mut buf = FallibleBuf::new();
         let mut ser = serde_json::Serializer::new(&mut buf);
-        event.serialize(&mut ser)?;
-        buf.push(b'\n');
+        if let Err(err) = event.serialize(&mut ser) {
+            return Err(match err.io_error_kind() {
+                // ByteWriter allocation failures must surface as io errors with
+                // the kind preserved so the writer task can route them into the
+                // degraded chain exactly like a storage-full error.
+                Some(kind) => JournalRecorderError::Io(std::io::Error::new(kind, err.to_string())),
+                None => JournalRecorderError::Serde(err),
+            });
+        }
+        buf.try_push(b'\n')?;
         file.write_all(&buf)?;
         file.flush()?;
         file.get_ref().sync_all()?;
@@ -528,6 +647,15 @@ impl JournalWriterTask {
     async fn append_with_backoff(&mut self, event: &RunEvent) -> Result<usize, std::io::Error> {
         let mut attempt = 0;
         loop {
+            // 0bc ④ (design §11 item 4): an allocation failure is returned
+            // immediately — no retry ladder (memory does not come back by
+            // waiting); the run() match arm routes it into the degraded chain,
+            // the same shape as an exhausted ENOSPC ladder.
+            if let Some(script) = self.fault.as_mut()
+                && let Some(e) = script.take_alloc_fault()
+            {
+                return Err(e);
+            }
             if let Some(script) = self.fault.as_mut()
                 && let Some(e) = script.take_fault()
             {
@@ -628,7 +756,8 @@ impl JournalWriterTask {
         // serialized event fits. Mechanical, shape-preserving — the row stays
         // schema-valid and the chain stays replayable.
         for _ in 0..16 {
-            let mut buf = Vec::new();
+            // 0bc ④: same fallible-growth buffer as the main assembly path.
+            let mut buf = FallibleBuf::new();
             let mut ser = serde_json::Serializer::new(&mut buf);
             if event.serialize(&mut ser).is_err() {
                 break;
@@ -698,11 +827,13 @@ impl JournalWriterTask {
                             // the returned hash is still the on-disk seal.
                             let _ = ack.send(Ok(event.event_sha256.clone()));
                         }
-                        Err(e) if is_storage_full_error(&e) => {
-                            // The ladder is exhausted: enter degraded mode and
-                            // refuse THIS event (the caller keeps its chain
-                            // bookkeeping). The journal stays open — space may
-                            // return, and the terminal shape is still owed.
+                        Err(e) if is_storage_full_error(&e) || is_alloc_failure(&e) => {
+                            // The ladder is exhausted (ENOSPC) or the journal
+                            // assembly hit an allocation failure (0bc ④): enter
+                            // degraded mode and refuse THIS event (the caller
+                            // keeps its chain bookkeeping). The journal stays
+                            // open — space may return, and the terminal shape
+                            // is still owed.
                             let seq = event.sequence;
                             let was_terminal = event.is_terminal();
                             let event_type = event.event_type.to_string();
@@ -1207,6 +1338,89 @@ mod tests {
             "run_started + model_output were dropped while degraded"
         );
         assert_eq!(degraded["first_dropped_sequence"], serde_json::json!(0));
+
+        // The skeleton replays: contiguous sequences, unbroken hash chain,
+        // exactly one terminal.
+        let replay =
+            super::super::verifier::replay_journal(&events_path, Some("RUN-DEGRADED"), None, true);
+        assert!(
+            replay.valid,
+            "degraded skeleton must replay: {:?}",
+            replay.errors
+        );
+
+        // No sidecar — the terminal landed on the chain.
+        assert!(!dir.join("TERMINAL.json").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0bc ④ (design §11 item 4, 2026-09-21): a **constructive allocation
+    /// failure** on the journal assembly path enters the same degraded chain
+    /// as an exhausted ENOSPC ladder — no retry ladder, no abort; the failed
+    /// event is refused without consuming a sequence number, the terminal
+    /// still lands with the degraded summary marker, and the chain replays
+    /// valid. 判据 4's constructive-injection leg.
+    #[tokio::test]
+    async fn alloc_failure_enters_degraded_and_chain_stays_replayable() {
+        let dir = temp_dir();
+        // The first append attempt fails with OutOfMemory — nothing absorbs
+        // it (memory does not come back by waiting).
+        let recorder = JournalRecorder::new_with_alloc_faults_for_tests(dir.clone(), 1);
+
+        let mut chain = ChainBookkeeping::new();
+        chain
+            .record(
+                &recorder,
+                EventType::RunStarted,
+                serde_json::json!({"i": 0}),
+            )
+            .await
+            .expect("degraded drop is not an error at the writer level");
+        chain
+            .record(
+                &recorder,
+                EventType::ModelOutput,
+                serde_json::json!({"i": 1, "big": "regenerable face"}),
+            )
+            .await
+            .expect("dropped regenerable event");
+        chain
+            .record(
+                &recorder,
+                EventType::RunFinished,
+                serde_json::json!({"status": "completed"}),
+            )
+            .await
+            .expect("terminal lands in degraded mode");
+        recorder.shutdown_async().await.unwrap();
+
+        let events_path = dir.join("events.jsonl");
+        let content = std::fs::read_to_string(&events_path).unwrap();
+        let rows: Vec<serde_json::Value> = content
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 1, "only the terminal landed: {content}");
+        assert_eq!(rows[0]["sequence"], serde_json::json!(0));
+        assert_eq!(rows[0]["event_type"], serde_json::json!("run_finished"));
+        let degraded = rows[0]["payload"]["degraded"]
+            .as_object()
+            .expect("degraded summary marker injected by the writer");
+        assert_eq!(
+            degraded["dropped_events"],
+            serde_json::json!(2),
+            "run_started + model_output were dropped while degraded"
+        );
+        assert_eq!(degraded["first_dropped_sequence"], serde_json::json!(0));
+        assert!(
+            degraded["cause"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("allocation failure"),
+            "the cause names the allocation failure: {}",
+            degraded["cause"]
+        );
 
         // The skeleton replays: contiguous sequences, unbroken hash chain,
         // exactly one terminal.

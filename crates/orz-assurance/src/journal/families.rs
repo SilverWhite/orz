@@ -1652,7 +1652,10 @@ fn is_non_empty_string(value: &Value) -> bool {
 }
 
 /// `host_resource_snapshot`: readings face — one row per tier transition
-/// (design §4.5 低频，跨档才落). Tier + trigger machine keys; readings object.
+/// (design §4.5 低频，跨档才落) **或**一条 commit 临限通知（0bc 裁决 ②，
+/// 2026-09-20：`trigger=commit_notification`——内核完成端口到件才落，同族
+/// 同 schema，不新增事件族；镜像判官同步见 assurance 侧）。Tier + trigger
+/// machine keys; readings object.
 pub fn verify_host_resource_snapshot(events: &[Value]) -> Vec<String> {
     let mut errors = Vec::new();
     for event in events
@@ -1664,9 +1667,11 @@ pub fn verify_host_resource_snapshot(events: &[Value]) -> Vec<String> {
             errors.push("host_resource_snapshot: tier is not a machine key".to_string());
         }
         let trigger = payload["trigger"].as_str().unwrap_or_default();
-        if !matches!(trigger, "tier_change" | "run_start") {
-            errors
-                .push("host_resource_snapshot: trigger must be tier_change|run_start".to_string());
+        if !matches!(trigger, "tier_change" | "run_start" | "commit_notification") {
+            errors.push(
+                "host_resource_snapshot: trigger must be tier_change|run_start|commit_notification"
+                    .to_string(),
+            );
         }
         if !payload["readings"].is_object() {
             errors.push("host_resource_snapshot: readings must be an object".to_string());

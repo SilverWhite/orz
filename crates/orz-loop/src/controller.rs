@@ -339,6 +339,12 @@ pub enum AgentLoopError {
     Journal(#[from] JournalRecorderError),
     #[error("model error: {0}")]
     Model(String),
+    /// 0bc S2④（2026-09-21）：orz 自身巨量分配路径的可失败分配失败——
+    /// 装配级分配失败（如模型面投影克隆 `try_reserve` 失败）以本变体上抛，
+    /// run 走终态收口（`run_failed`）、进程不 abort；与 journal 装配路径的
+    /// ENOSPC→Degraded 同形（链有效、留终态）。
+    #[error("allocation failure: {0}")]
+    AllocFailure(String),
     #[error("session error: {0}")]
     Session(String),
     #[error("assurance invariant: {0}")]
@@ -2400,15 +2406,18 @@ impl AgentLoopController {
                 if let Some(row) = domain.now() {
                     lines.push(format!(
                         "自判域行: r{} [{:.0}s | {} | 入域 r{} | 驻留 {} 轮] | \
-                         输入 u_err={:.2} v_err={:+.3} E_err={:.2} u_prog={:.2}",
+                         输入 u_err={:.2} v_err={} E_err={} u_prog={:.2}",
                         row.round,
                         row.t,
                         row.domain.as_str(),
                         row.entry_round,
                         row.dwell_rounds,
                         row.u_err,
-                        row.v_err,
-                        row.env_err,
+                        // 0bc FR-7：legacy 行未记录（None）→ "—"，与真值 0 可分。
+                        row.v_err
+                            .map_or_else(|| "—".to_string(), |v| format!("{v:+.3}")),
+                        row.env_err
+                            .map_or_else(|| "—".to_string(), |v| format!("{v:.2}")),
                         row.u_prog,
                     ));
                 }
@@ -2461,15 +2470,18 @@ impl AgentLoopController {
                 lines.extend(rows.iter().rev().map(|r| {
                     format!(
                         "[r{} | {:.0}s | {} | 入域 r{} | 驻留 {}] u_err={:.2} \
-                         v_err={:+.3} E_err={:.2} u_prog={:.2}",
+                         v_err={} E_err={} u_prog={:.2}",
                         r.round,
                         r.t,
                         r.domain.as_str(),
                         r.entry_round,
                         r.dwell_rounds,
                         r.u_err,
-                        r.v_err,
-                        r.env_err,
+                        // 0bc FR-7：legacy 行未记录（None）→ "—"，与真值 0 可分。
+                        r.v_err
+                            .map_or_else(|| "—".to_string(), |v| format!("{v:+.3}")),
+                        r.env_err
+                            .map_or_else(|| "—".to_string(), |v| format!("{v:.2}")),
                         r.u_prog,
                     )
                 }));
@@ -3273,6 +3285,20 @@ impl AgentLoopController {
         // `run_host_tool_with_timeout` 的 sealed-tool 窄门结构化拒绝
         // （代码与写盘链路保留为独立模块，A/B 观察后可经配置恢复）。
         if !tool_defs.iter().any(|t| t.name == "blackboard_read") {
+            // FR-5（2026-09-21，0bc 长杂轮）：`name` enum 单源化——schema
+            // enum 由 lif 侧运行时常量表动态拼接（temporal 全列＋rli 差集、
+            // 去重保序），与两处校验面（`TemporalState`／`RliShadow` 的
+            // `known_feature_names()`）同源；此后增删特征名只需改 lif 常量表。
+            let mut feature_enum: Vec<String> = Vec::new();
+            for n in orz_assurance::lif::TemporalState::known_feature_names()
+                .iter()
+                .chain(orz_assurance::lif::RliShadow::known_feature_names().iter())
+            {
+                let name = n.to_string();
+                if !feature_enum.contains(&name) {
+                    feature_enum.push(name);
+                }
+            }
             tool_defs.push(ToolDef {
                 name: "blackboard_read".to_string(),
                 description: "Read a blackboard partition. `section` is one \
@@ -3384,23 +3410,7 @@ impl AgentLoopController {
                         },
                         "name": {
                             "type": "string",
-                            "enum": [
-                                "u_prog",
-                                "u_err",
-                                "u_stuck",
-                                "t_hat",
-                                "err10",
-                                "succ10",
-                                "v_err",
-                                "pred_err",
-                                "env_err",
-                                "r_err",
-                                "v_prog",
-                                "pred_prog",
-                                "r_prog",
-                                "slow_prog",
-                                "fast_prog",
-                            ],
+                            "enum": feature_enum,
                             "description": "P2-10 F2 §3.3 (2026-08-30)：Feature 查询的特征名（selector=feature 时必填）。仅与 section=temporal|rli 组合有效：temporal = u_prog|u_err|u_stuck|t_hat|err10|succ10；rli（0am 补充项④＋模态分离批，2026-09-20）= u_err|v_err|pred_err|env_err|r_err|u_prog|v_prog|pred_prog|r_prog ＋ slow_prog|fast_prog（实极点分支的模态对：慢/快分量；复极点分支无定义）。**锚点序列为事件级采样**（决策轮＋每个工具事件，cap 20）；`env_prog` 因恒等于 `u_prog` 已撤名（`env_err` 保留）。",
                         },
                          "since_timestamp": {"type": "string"},

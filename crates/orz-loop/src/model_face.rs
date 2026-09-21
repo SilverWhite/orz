@@ -43,7 +43,7 @@
 //! 又是 restore-retained），故它**会**随侧车留存（恢复后分块状态由此重建、
 //! 无需新的侧车字段）。
 
-use crate::gateway::model::Message;
+use crate::gateway::model::{Message, ToolCall};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -475,17 +475,33 @@ fn hidden_message_ranges(
 
 /// **模型面装配**（设计 §1 §2）。无分块时（整段会话即主滑块）原样返回
 /// `messages`——早期会话的字节形态与不含滑块机制时完全一致。
-pub fn build_model_face(messages: &[Message], params: &ModelFaceParams) -> Vec<Message> {
+///
+/// **0bc S2④（2026-09-21）：可失败分配**。本函数是 S1 清单的「模型缓冲」
+/// 巨量分配路径——逐条克隆改 `try_reserve(_exact)` 族；失败以
+/// `ErrorKind::OutOfMemory` 上抛，由调用方进终态收口（不 abort、不 panic）。
+/// 残余登记：`ToolCall::arguments`（`serde_json::Value`）深克隆无对应物，
+/// 保留普通克隆。
+pub fn build_model_face(
+    messages: &[Message],
+    params: &ModelFaceParams,
+) -> Result<Vec<Message>, std::io::Error> {
     let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
     if blocks.is_empty() {
-        return messages.to_vec();
+        return try_clone_messages(messages);
     }
     let markers = face_markers(messages);
     let ranges = crate::action_ledger::round_ranges(messages);
     let start = slider_start(messages, params.slider_tokens);
     let hidden = hidden_message_ranges(messages, &ranges, &blocks, &markers, start);
     let preamble_end = blocks[0].msg_start;
-    let mut view: Vec<Message> = messages[..preamble_end].to_vec();
+    // 0bc S2④：一次可失败预留（上界＝len＋3：前置＋指针/D4＋尾部消息＋块表），
+    // 此后 push 不再触发不可失败的增长重分配。
+    let mut view: Vec<Message> = Vec::new();
+    view.try_reserve_exact(messages.len() + 3)
+        .map_err(alloc_err_io)?;
+    for m in &messages[..preamble_end] {
+        view.push(try_clone_message(m)?);
+    }
     if let Some(ledger) = params.ledger_path.as_deref() {
         view.push(mechanical_message(
             crate::action_ledger::build_pointer_message(ledger),
@@ -500,19 +516,126 @@ pub fn build_model_face(messages: &[Message], params: &ModelFaceParams) -> Vec<M
         }
         // marker 永不隐藏（它承载压缩后的摘要行）。
         if is_block_marker(&m.content) {
-            view.push(m.clone());
+            view.push(try_clone_message(m)?);
             continue;
         }
         if hidden.iter().any(|&(s, e)| i >= s && i < e) {
             continue;
         }
-        view.push(m.clone());
+        view.push(try_clone_message(m)?);
     }
     // 分块表**落尾部**（前缀纪律；见模块头注）。
     view.push(mechanical_message(render_block_table(
         &blocks, &markers, params,
     )));
-    view
+    Ok(view)
+}
+
+/// **模型面消息计数**（0bc S2④，2026-09-21）：与 [`build_model_face`] 逐条同
+/// 口径（同一过滤、同一追加），但**不克隆任何消息**——只需条数的事件面
+/// （压缩事件 `messages_kept`）用它替代「物化整面再取 `len`」。
+pub fn model_face_message_count(messages: &[Message], params: &ModelFaceParams) -> usize {
+    let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
+    if blocks.is_empty() {
+        return messages.len();
+    }
+    let markers = face_markers(messages);
+    let ranges = crate::action_ledger::round_ranges(messages);
+    let start = slider_start(messages, params.slider_tokens);
+    let hidden = hidden_message_ranges(messages, &ranges, &blocks, &markers, start);
+    let preamble_end = blocks[0].msg_start;
+    let mut count = preamble_end;
+    if params.ledger_path.is_some() {
+        count += 1;
+    }
+    if params.d4_block.is_some() {
+        count += 1;
+    }
+    for (i, m) in messages.iter().enumerate() {
+        if i < preamble_end {
+            continue;
+        }
+        if is_block_marker(&m.content) {
+            count += 1;
+            continue;
+        }
+        if hidden.iter().any(|&(s, e)| i >= s && i < e) {
+            continue;
+        }
+        count += 1;
+    }
+    count + 1
+}
+
+// 0bc S2④ 测试缝（`#[cfg(test)]`，线程本地）：构造性注入「装配路径分配
+// 失败」——线程本地隔离，测试并行下同线程 set→用、互不串扰。
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FORCE_ALLOC_FAILURE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// 分配失败统一映射（0bc S2④）：与 journal 装配路径同一词面约定
+/// （`ErrorKind::OutOfMemory`；调用方以此进终态收口）。
+fn alloc_err_io(_: std::collections::TryReserveError) -> std::io::Error {
+    alloc_error()
+}
+
+fn alloc_error() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::OutOfMemory,
+        "model face assembly allocation failed (0bc S2④ fallible path)",
+    )
+}
+
+fn try_clone_str(s: &str) -> std::io::Result<String> {
+    let mut out = String::new();
+    out.try_reserve_exact(s.len()).map_err(alloc_err_io)?;
+    out.push_str(s);
+    Ok(out)
+}
+
+fn try_clone_message(m: &Message) -> std::io::Result<Message> {
+    #[cfg(test)]
+    {
+        if FORCE_ALLOC_FAILURE.with(|flag| flag.replace(false)) {
+            return Err(alloc_error());
+        }
+    }
+    let mut tool_calls: Vec<ToolCall> = Vec::new();
+    tool_calls
+        .try_reserve_exact(m.tool_calls.len())
+        .map_err(alloc_err_io)?;
+    for tc in &m.tool_calls {
+        tool_calls.push(ToolCall {
+            name: try_clone_str(&tc.name)?,
+            // 残余登记：`Value` 深克隆无 `try_reserve` 对应物（见装配函数注）。
+            arguments: tc.arguments.clone(),
+            call_id: try_clone_str(&tc.call_id)?,
+        });
+    }
+    Ok(Message {
+        role: m.role,
+        content: try_clone_str(&m.content)?,
+        tool_call_id: m.tool_call_id.as_deref().map(try_clone_str).transpose()?,
+        tool_calls,
+        reasoning_content: m
+            .reasoning_content
+            .as_deref()
+            .map(try_clone_str)
+            .transpose()?,
+        round: m.round,
+    })
+}
+
+fn try_clone_messages(messages: &[Message]) -> std::io::Result<Vec<Message>> {
+    let mut out: Vec<Message> = Vec::new();
+    out.try_reserve_exact(messages.len())
+        .map_err(alloc_err_io)?;
+    for m in messages {
+        out.push(try_clone_message(m)?);
+    }
+    Ok(out)
 }
 
 /// 模型面估算（chars/2；**阶梯量尺**，设计 §3.1）。
@@ -1067,7 +1190,10 @@ mod tests {
             static_overhead_tokens: 0,
         };
         // 模型面＝原文（字节级一致）；阶梯量尺＝全量估算。
-        assert_eq!(build_model_face(&messages, &params), messages);
+        assert_eq!(
+            build_model_face(&messages, &params).expect("face"),
+            messages
+        );
         assert_eq!(
             model_face_estimate(&messages, &params),
             crate::controller::estimate_messages_tokens(&messages)
@@ -1109,7 +1235,7 @@ mod tests {
             reasoning_content: None,
             round: None,
         });
-        let face = build_model_face(&with_marker, &params);
+        let face = build_model_face(&with_marker, &params).expect("face");
         // 块 1 的**原文消息**不在模型面里（分块表可能提到目标名，故按消息
         // 身份断言：块 1 首轮的工具回复 `call_id=c0` 与其声明都不在场）。
         assert!(
@@ -1122,6 +1248,34 @@ mod tests {
         assert_eq!(with_marker.len(), messages.len() + 1);
         // 主滑块内容逐字保留（最后一轮原文仍在）。
         assert!(face.iter().any(|m| m.content.contains(&"x".repeat(8_000))));
+    }
+
+    /// **0bc S2④ 构造性注入（2026-09-21）**：装配路径分配失败＝`OutOfMemory`
+    /// 上抛（不 abort、不 panic）；且计数面与物化面逐条同口径（1398 的替代
+    /// 不得漂移）。
+    #[test]
+    fn model_face_alloc_failure_maps_to_out_of_memory_and_count_is_consistent() {
+        let messages = conversation(10, 8_000);
+        let params = ModelFaceParams {
+            slider_tokens: 12_000,
+            block_tokens: 12_000,
+            ledger_path: None,
+            archive_tag: Some("sess0001".to_string()),
+            run_id: "RUN-TEST".to_string(),
+            d4_block: None,
+            static_overhead_tokens: 0,
+        };
+        // 注入一次：装配必须上抛 OutOfMemory（不 abort）。
+        FORCE_ALLOC_FAILURE.with(|flag| flag.set(true));
+        let err = build_model_face(&messages, &params).expect_err("注入的分配失败必须上抛");
+        assert_eq!(err.kind(), std::io::ErrorKind::OutOfMemory);
+        // 注入只消费一次；常规装配恢复，且计数面与物化面一致。
+        let face = build_model_face(&messages, &params).expect("face");
+        assert_eq!(
+            model_face_message_count(&messages, &params),
+            face.len(),
+            "计数必须与物化面一致"
+        );
     }
 
     #[test]
@@ -1198,7 +1352,7 @@ mod tests {
             reasoning_content: None,
             round: None,
         });
-        let face = build_model_face(&poisoned, &params);
+        let face = build_model_face(&poisoned, &params).expect("face");
         let newest = messages.last().expect("末轮消息");
         assert!(
             face.iter().any(|m| m.content == newest.content),

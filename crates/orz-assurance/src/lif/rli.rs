@@ -595,8 +595,17 @@ impl RliChannel {
 
     /// 从快照续接。ζ/q/η/容差为代码拥有的常数（不随侧车恢复——契约随代码
     /// 版本走）；ω 与全部动力学状态按快照恢复。
+    ///
+    /// **0bc FR-6（2026-09-21）**：快照里已带 `zeta`（观测/回放面），续接时
+    /// **采纳**它（sanitize 后）——离线回放与在线续接的极点必须一致，否则
+    /// 「侧车续接＝同一动力学」的读法在 ζ 改动后失真。钳制口径与
+    /// [`Self::set_zeta`] 同（`[0,4]`）；异常/legacy 值（NaN、越界）落回代码
+    /// 默认常数（宁缺勿假：不采信一个不可信极点到动力学里）。
     pub fn restore(&mut self, snapshot: &RliChannelSnapshot) {
         self.omega = snapshot.omega.max(1e-9);
+        if snapshot.zeta.is_finite() {
+            self.zeta = snapshot.zeta.clamp(0.0, 4.0);
+        }
         self.u = snapshot.u;
         self.v = snapshot.v;
         self.theta = snapshot.theta.max(1e-9);
@@ -864,13 +873,19 @@ pub struct RliDomainRow {
     /// 判决输入：RLI prog 通道水平。
     pub u_prog: f64,
     /// 判决输入（0am 改造补充项②）：err 通道变化率 v——压力轴第二项的一半
-    /// （v > 0 ＝ 正在恶化）。legacy 行缺省 0.0。
-    #[serde(default)]
-    pub v_err: f64,
+    /// （v > 0 ＝ 正在恶化）。
+    ///
+    /// **0bc FR-7（2026-09-21）**：`Option<f64>`——legacy 行（字段诞生前）
+    /// 是 `None`（**未记录**），与真实读数 `Some(0.0)`（恰好为零）必须可
+    /// 分辨（FR7 口径：不可得与真值 0 不混同，同 [`RliDomainSpike::round`]）。
+    /// 序列化面 legacy 行不再落 `0.0` 假读数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v_err: Option<f64>,
     /// 判决输入（0am 改造补充项②）：err 通道解析包络 E——压力轴第二项的
-    /// 另一半（E ≥ 包络阈 ＝ 未见收敛）。legacy 行缺省 0.0。
-    #[serde(default)]
-    pub env_err: f64,
+    /// 另一半（E ≥ 包络阈 ＝ 未见收敛）。0bc FR-7：同 [`Self::v_err`]，
+    /// `Option<f64>`（`None` ＝ legacy 未记录）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_err: Option<f64>,
 }
 
 /// RLI 自判域状态机（0am 改造四项①，2026-09-20；补充项② 2026-09-20
@@ -1007,8 +1022,9 @@ impl RliDomainMachine {
             dwell_rounds: self.round.saturating_sub(self.entry_round) + 1,
             u_err,
             u_prog,
-            v_err,
-            env_err,
+            // 0bc FR-7：在本轮记下的行就是"记录过"的行 → Some。
+            v_err: Some(v_err),
+            env_err: Some(env_err),
         };
         self.rows.push_back(row);
         if self.rows.len() > RLI_DOMAIN_RECENT_CAP {
@@ -1770,8 +1786,8 @@ mod tests {
         // v > 0 ∧ E ≥ 1.0 ⇒ 压力轴由原生覆盖项支撑（水平阈以下同样成立）。
         let r2 = m.record_round(2.0, 1.0, 0.1, 0.01, 1.2);
         assert_eq!(r2.domain, Domain::Stuck);
-        assert_eq!(r2.v_err, 0.01);
-        assert_eq!(r2.env_err, 1.2);
+        assert_eq!(r2.v_err, Some(0.01));
+        assert_eq!(r2.env_err, Some(1.2));
         // 域切换 spike：Start→Normal→Stuck（两次）。
         assert_eq!(m.spikes().len(), 2);
         assert_eq!(m.spikes()[1].domain, Domain::Stuck);

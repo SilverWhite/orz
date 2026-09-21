@@ -542,6 +542,100 @@ fn build_confusable_hint(
         line_summary, read_qualifier, old_string_param, terminal_fallback
     ))
 }
+
+/// 组合记号（combining marks）判定（2026-09-21，0bc FR1）：跨 5 个常用区块
+/// 覆盖组合用变音记号（U+0300–U+036F 等）——NFC/NFD 差异的载体。
+fn is_combining_mark(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F
+    )
+}
+
+/// 产出「去掉组合记号」的字符串＋字节偏移映射（形状同
+/// `unicode_confusables::build_offset_map`：`offset_map[i]` ＝去记号串中
+/// 第 i 个字节在原文中的字节位置，末尾追加一个 `s.len()` 哨兵）。
+fn strip_combining_with_map(s: &str) -> (String, Vec<usize>) {
+    let mut out = String::with_capacity(s.len());
+    let mut map: Vec<usize> = Vec::with_capacity(s.len() + 1);
+    for (i, c) in s.char_indices() {
+        if !is_combining_mark(c) {
+            for _ in 0..c.len_utf8() {
+                map.push(i);
+            }
+            out.push(c);
+        }
+    }
+    map.push(s.len());
+    (out, map)
+}
+
+/// 渲染一段文本的码点预览（ASCII 可打印字符用 `'c'`，其余 `U+XXXX`；
+/// 至多 `max_chars` 个字符，截断加 `…`）——FR1 让模型看见不可见差异。
+fn codepoints_preview(s: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    let mut count = 0usize;
+    for c in s.chars() {
+        if count == max_chars {
+            out.push('…');
+            break;
+        }
+        if count > 0 {
+            out.push(' ');
+        }
+        if c.is_ascii_graphic() || c == ' ' {
+            out.push('\'');
+            out.push(c);
+            out.push('\'');
+        } else {
+            out.push_str(&format!("U+{:04X}", c as u32));
+        }
+        count += 1;
+    }
+    out
+}
+
+/// 组合记号（NFC/NFD）诊断（2026-09-21，0bc FR1）：精确匹配失败、且搜索串
+/// 或文件含 Unicode 组合记号时，按「忽略组合记号」比较定位最近似区段，回显
+/// 双方**码点**——让模型看见 `T`+U+0302 这类规范化差异，据此修正
+/// `old_string`（或回读输出原文重新复制）。
+///
+/// 返回 `None` 的情形（避免虚假提示）：双方都不含组合记号；去掉组合记号后
+/// 仍找不到匹配；搜索串去掉记号后为空。
+fn build_combining_mark_hint(file: &str, old_string: &str) -> Option<String> {
+    if !old_string.chars().any(is_combining_mark) && !file.chars().any(is_combining_mark) {
+        return None;
+    }
+    let (stripped_old, _) = strip_combining_with_map(old_string);
+    if stripped_old.trim().is_empty() {
+        return None;
+    }
+    let (stripped_file, offset_map) = strip_combining_with_map(file);
+    let norm_start = stripped_file.find(&stripped_old)?;
+    let orig_start = offset_map[norm_start];
+    let orig_end = offset_map[norm_start + stripped_old.len()];
+    let line = file[..orig_start].matches('\n').count() + 1;
+    let region: String = file[orig_start..orig_end]
+        .chars()
+        .take_while(|c| *c != '\n')
+        .take(40)
+        .collect();
+    let search: String = old_string
+        .chars()
+        .take_while(|c| *c != '\n')
+        .take(40)
+        .collect();
+    Some(format!(
+        "\n\nThe string was not found byte-for-byte, but the file contains a region \
+         matching it after ignoring Unicode combining marks (likely an NFC/NFD \
+         normalization difference) near line {line}. \
+         File codepoints: {}. Search codepoints: {}. \
+         Re-copy the exact text from the read output instead of retyping it.",
+        codepoints_preview(&region, 40),
+        codepoints_preview(&search, 40)
+    ))
+}
+
 /// Handle replacement in existing file.
 async fn handle_replacement(
     input: &SearchReplaceInput,
@@ -681,6 +775,11 @@ async fn handle_replacement(
             )
             .unwrap_or_default()
         };
+        let combining_hint = if is_legacy {
+            String::new()
+        } else {
+            build_combining_mark_hint(&match_text, &input.old_string).unwrap_or_default()
+        };
         let user_edit_hint = if include_user_edit_hint {
             " The user may have changed the file since you last read it."
         } else {
@@ -689,8 +788,8 @@ async fn handle_replacement(
         return Ok(SearchReplaceOutput::NoMatchesFound(
             crate::types::output::NoMatchesFoundError {
                 message: format!(
-                    "The string to replace was not found in the file, use the {} tool to see the correct string.{}{}{}",
-                    read_name, user_edit_hint, hint, confusable_hint
+                    "The string to replace was not found in the file, use the {} tool to see the correct string.{}{}{}{}",
+                    read_name, user_edit_hint, hint, confusable_hint, combining_hint
                 ),
                 file_path: path.to_path_buf(),
                 file_snapshot_at_edit: None,
@@ -1998,6 +2097,29 @@ gamma delta";
             hint.contains("oCollCustomRhoMode_set"),
             "should match on longest token, got: {hint}"
         );
+    }
+
+    #[test]
+    fn combining_mark_hint_fires_for_normalization_mismatch() {
+        // 文件＝NFD 组合序列（T + U+0302）；搜索串多一个组合记号（U+0301）。
+        let file = "let x = T\u{0302}est + 1;\n";
+        let old_string = "T\u{0302}\u{0301}est + 1";
+        let hint = build_combining_mark_hint(file, old_string).expect("hint");
+        assert!(hint.contains("U+0302"), "{hint}");
+        assert!(hint.contains("line 1"), "{hint}");
+        assert!(hint.contains("NFC/NFD"), "{hint}");
+    }
+
+    #[test]
+    fn combining_mark_hint_silent_without_combining_marks() {
+        assert!(build_combining_mark_hint("plain text\n", "plain").is_none());
+    }
+
+    #[test]
+    fn combining_mark_hint_silent_when_stripped_comparison_fails() {
+        let file = "let x = T\u{0302}est;\n";
+        let old_string = "unrelated z\u{0301}zz";
+        assert!(build_combining_mark_hint(file, old_string).is_none());
     }
     /// Integration: NoMatchesFound message includes the nearest-match hint.
     #[tokio::test]

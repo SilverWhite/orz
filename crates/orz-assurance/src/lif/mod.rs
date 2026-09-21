@@ -604,12 +604,16 @@ mod tests {
         let lif_row = engine.temporal().now().expect("temporal row");
         assert!((row.t - lif_row.t).abs() < 1e-9, "same t axis");
         assert!(
-            row.v_err.is_finite() && row.env_err.is_finite(),
-            "native v/E anchors recorded: {row:?}"
+            matches!(row.v_err, Some(v) if v.is_finite()),
+            "native v anchor recorded (0bc FR-7: Some ＝ 记录过): {row:?}"
         );
         assert!(
-            row.env_err >= 0.0,
-            "envelope is a magnitude: {}",
+            matches!(row.env_err, Some(e) if e.is_finite()),
+            "native E anchor recorded (0bc FR-7: Some ＝ 记录过): {row:?}"
+        );
+        assert!(
+            row.env_err.is_some_and(|e| e >= 0.0),
+            "envelope is a magnitude: {:?}",
             row.env_err
         );
         assert!(

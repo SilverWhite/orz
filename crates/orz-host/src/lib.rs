@@ -223,6 +223,9 @@ pub struct OrzHost {
     /// 上一次读到的档位（u8 编码，见 `tier_rank`）——跨档才落
     /// `host_resource_snapshot`（§4.5 低频，跨档才落；review F-EV-7）。
     last_resource_tier: std::sync::atomic::AtomicU8,
+    /// 0bc 裁决 ②（2026-09-20）：commit 临限软提示**每 run 至多一条**的
+    /// 去重位（内核通知可取多次，模型面提示只首件挂一次）。
+    commit_hint_emitted: std::sync::atomic::AtomicBool,
 }
 
 impl OrzHost {
@@ -341,6 +344,7 @@ impl OrzHost {
             live_call_jobs: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             dispatch_token: std::sync::atomic::AtomicU64::new(0),
             last_resource_tier: std::sync::atomic::AtomicU8::new(0),
+            commit_hint_emitted: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -1081,6 +1085,36 @@ impl OrzHost {
                 );
             }
         }
+        // 0bc 裁决 ②（2026-09-20）：commit 临限通知——非阻塞取件（无 run job
+        // 或未装通知 ⇒ 恒空）。到件＝观测事实：①落 host_resource_snapshot
+        // (trigger=commit_notification，照实落内核读数；tier 轴不属本面，
+        // 如实登记机器键 "unknown")；②首件时把机械软提示挂到本次派发结果头
+        // （每 run 至多一条——通知不叫停任何动作，模型照常决策）。
+        let mut commit_hint: Option<String> = None;
+        for notification in xai_tty_utils::drain_global_run_notifications() {
+            self.resource_facts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(serde_json::json!({
+                    "event": "host_resource_snapshot",
+                    "tier": "unknown",
+                    "trigger": "commit_notification",
+                    "readings": {
+                        "commit_notification_bytes": notification.limit_bytes,
+                        "commit_used_bytes": notification.used_bytes,
+                        "limit_flags": notification.limit_flags,
+                        "violation_flags": notification.violation_flags,
+                    },
+                }));
+            if !self
+                .commit_hint_emitted
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                commit_hint = Some(crate::resource_hint::commit_notification_hint(
+                    &notification,
+                ));
+            }
+        }
         let args = if name == "run_terminal_cmd" {
             crate::tools::inject_terminal_default_timeout(args)
         } else {
@@ -1259,9 +1293,23 @@ impl OrzHost {
         let mut tool_result = ToolResult {
             // 0aw §5 模型面：软提示附在结果头部（动作照跑；每 run 每卷一次
             // ——去重在 hint 面内完成），中文短句 ＋ 英文机械读数（0af 混排）。
-            output: match &volume_hint {
-                Some(line) => format!("{line}\n{}", result.prompt_text),
-                None => result.prompt_text,
+            // 0bc 裁决 ②：commit 临限软提示（每 run 一条）走同一头部槽位。
+            output: {
+                let mut head: Vec<&str> = Vec::new();
+                if let Some(line) = &volume_hint {
+                    head.push(line.as_str());
+                }
+                if let Some(line) = &commit_hint {
+                    head.push(line.as_str());
+                }
+                if head.is_empty() {
+                    result.prompt_text
+                } else {
+                    let mut text = head.join("\n");
+                    text.push('\n');
+                    text.push_str(&result.prompt_text);
+                    text
+                }
             },
             // 2026-08-08 blackboard-partition review closure (conformance
             // agent D1-1): the controller's edit-action gate keys on
@@ -2490,6 +2538,7 @@ mod tests {
         // refusal can only come from the run job.
         .with_host_resource_safety_limits(xai_tty_utils::JobLimits {
             commit_limit_bytes: Some(300 * 1024 * 1024),
+            commit_notification_bytes: None,
             active_process: None,
             cpu_rate_percent: None,
         });

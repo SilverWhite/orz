@@ -39,11 +39,12 @@ pub(crate) enum PendingCheckpoint {
         streak: u32,
         order_ids: Vec<String>,
     },
-    /// 0ae D3（2026-09-15，设计 §6，用户裁决 DP-7）：920K 注意力阶梯
-    /// 触发的**模型参与压缩窗口**——打断全部动作的无工具轮（语义同
-    /// console 询问轮：不投影注册面、不探针）；模型固化必要内容
-    /// （blackboard_write）＋标注可弃范围。≤3 轮（DP-7）；窗口结束 ⇒
-    /// 机械无差别折叠兜底照旧执行，`model_participated` 如实落账。
+    /// 0ae D3（2026-09-15，设计 §6，用户裁决 DP-7）：注意力阶梯 H1 硬提醒
+    /// 档（量尺＝模型面估算）触发的**模型参与压缩窗口**——打断式提醒轮；
+    /// **FR-3（2026-09-21，0bc 长杂轮）：不锁工具面**——工具面/探针按常规
+    /// 轮处理，声明动作照常派发。模型固化必要内容（blackboard_write）＋
+    /// 标注可弃范围。≤3 轮（DP-7）；窗口结束未参与 ⇒
+    /// `model_participated=false` 如实落账（v8：机械层不做压缩兜底）。
     ModelCompression {
         rounds_left: u32,
         /// 窗口开始时的模型写入面计数（notes + plan.model_notes）——

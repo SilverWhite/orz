@@ -45,8 +45,11 @@ pub use process_scope::{ProcessScope, global_process_scope};
 pub mod runtime;
 
 mod resource_job;
+#[cfg(windows)]
+pub use resource_job::COMMIT_NOTIFICATION_MODE;
 pub use resource_job::{
-    JobLimits, JobReadback, RunResourceJob, SpawnObservation, SpawnSinkGuard, attach_failure_count,
+    CommitNotificationMode, JobLimits, JobNotification, JobReadback, RunResourceJob,
+    SpawnObservation, SpawnSinkGuard, attach_failure_count, drain_global_run_notifications,
     global_run_job, image_fingerprint_from_pid, install_global_run_job, record_attach_failure,
     replace_global_run_job_for_tests, set_spawn_sink, terminate_job_handle,
 };

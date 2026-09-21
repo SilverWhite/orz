@@ -636,7 +636,18 @@ pub fn append_ledger_rows_range(
     let mut buf = String::new();
     for row in rows {
         seq += 1;
-        buf.push_str(&external_row_line(seq, row));
+        let line = external_row_line(seq, row);
+        // 0bc ④（2026-09-21，设计 §11-4）：台账装配是 S1 清单的巨量分配
+        // 路径之一——缓冲增长改**可失败分配**（`try_reserve`），失败以
+        // `OutOfMemory` 上报调用方（不 abort）；既有契约＝失败不推折叠
+        // 状态（下次触发重试）。
+        buf.try_reserve(line.len() + 1).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::OutOfMemory,
+                "ledger assembly allocation failed (0bc fallible-allocation path)",
+            )
+        })?;
+        buf.push_str(&line);
         buf.push('\n');
     }
     // 0p S2 B5（2026-09-07，ADR-0010 §14.61 设计 B5）：台账落

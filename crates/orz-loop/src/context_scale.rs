@@ -408,11 +408,11 @@ pub fn first_block_reminder_block() -> String {
     )
 }
 
-/// H1 的压缩窗口任务块（打断全部动作后注入；量尺＝模型面阶梯）。
+/// H1 的压缩窗口任务块（打断式提醒注入——FR-3：不锁工具面；量尺＝模型面阶梯）。
 pub fn compression_window_block(milestone_tokens: u64) -> String {
     let k = milestone_tokens / 1000;
     format!(
-        "{WINDOW_NOTICE_PREFIX} · 窗口 · 模型面 {k}K] 已打断全部动作。请在窗口内完成：\n\
+        "{WINDOW_NOTICE_PREFIX} · 窗口 · 模型面 {k}K] 打断式提醒（不锁工具面、动作照常）。请在窗口内完成：\n\
          1. 产出语义摘要块（见上）——机械层用它替换**工作现场之外**的分块（可按块区间指定）；\n\
          2. 若有关键结论需要跨压缩长期留存，一并固化到黑板\
          （{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes；黑板不受上下文窗口影响）。\n\
@@ -428,13 +428,6 @@ pub fn window_remaining_notice(rounds_left: u32) -> String {
     format!(
         "{WINDOW_NOTICE_PREFIX}] 窗口剩余 {rounds_left} 轮：尚未检测到语义摘要块。\
          请输出 `{MODEL_SUMMARY_PREFIX}] … {MODEL_SUMMARY_END}`（或把必要结论写入黑板）。"
-    )
-}
-
-/// 窗口内非白名单动作被丢弃时的机械提示（只报事实、不带建议）。
-pub fn window_dropped_calls_notice(dropped: usize) -> String {
-    format!(
-        "{WINDOW_NOTICE_PREFIX}] 窗口内仅 {BLACKBOARD_WRITE_TOOL_NAME} / {CONTEXT_COMPRESS_TOOL_NAME} 可执行，本轮其余动作已跳过（{dropped} 个）"
     )
 }
 
