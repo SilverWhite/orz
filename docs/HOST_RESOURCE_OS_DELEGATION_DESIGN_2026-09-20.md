@@ -157,8 +157,14 @@ per-call job 句柄（`KILL_ON_JOB_CLOSE` 的调用级拆树），与分类器�
    评测场景墙钟即分数，白扣无收益。真机狗粮若需保交互，另行以 env 手动降档（0bc 提供覆盖面）。
 2. **① run 级 Job commit 上限：硬上限改「通知式」**——不再由 orz 侧硬顶／硬拒；
    改为临限通知＋事件＋软提示。Windows 对应原语：`JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION(_2)`
-   的 `JOB_OBJECT_LIMIT_JOB_MEMORY_LOW`，经作业完成端口投递。读数面（`host_resource_snapshot`
+   的 `JOB_OBJECT_LIMIT_JOB_MEMORY_HIGH`，经作业完成端口投递。读数面（`host_resource_snapshot`
    与探针）保留。
+   > **2026-09-21 勘误（0bc 真机探针实证，随 0bc 提交批落地）**：本档原写
+   > `JOB_OBJECT_LIMIT_JOB_MEMORY_LOW`。实测**方向语义相反**——`…_MEMORY_HIGH`（0x200）
+   > ＝「**越过上限**」方向：装 HIGH 阈值后 1 GiB 子进程跨 256 MiB 线即投递 1 条
+   > `{limit_bytes,used_bytes,limit_flags,violation_flags=0x200}`，且**不阻断分配**；
+   > LOW 方向在真机上静默（不合「临限」语义）。实现按实证取 HIGH；投递有延迟（取件时
+   > 子进程可能已退出，`used_bytes` 为取回时刻读数）。
 3. **② 活动进程上限：保留，并加 env 覆盖**——默认维持 `2 × cores + 8`（≥16）；覆盖变量随 0bc 落。
 4. **可失败分配＋降级（双平台）**：把 orz 自身可能巨量的分配路径改为**可失败分配**
    （`try_reserve`／`try_reserve_exact` 族），失败即进降级链——与 0z 子项 C 的

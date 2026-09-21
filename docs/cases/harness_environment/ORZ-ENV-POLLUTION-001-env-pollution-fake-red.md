@@ -8,5 +8,8 @@
   - 反例（污染态）：`ORZ_ACAF_FAIL_CLOSED=1 cargo test -p orz-loop --lib` ⇒ 批量 panic 假红；
   - 正例（清洁态）：清 `ORZ_*`/`GROK_HOME`/`GROK_AGENT` 后同一命令 ⇒ 791/0/3。
   - 修复形态（若后续批实施「测试初始化忽略 launcher env」，回归时按此核对）。
+  - **0bc 落点（2026-09-21）**：新增测试入口脚本 `scripts/run_orz_tests.ps1`——自动清除 `ORZ_ACAF_*` 四键＋`ORZ_LIF_RLI_SHADOW`（＋ `RUST_MIN_STACK` 默认值），透传参数给 `cargo test`；经该脚本运行即得清洁态读数（0bc 批 orz-loop 全量测试使用该入口）。
+  - **同族实例（2026-09-21，0bc 现场）**：`controller::tests::rli_reference_face_renders_shadow_signal` 假定 `ORZ_LIF_RLI_SHADOW` 未开（控制面构造处读 env）——dogfood 会话开影子时该测试假红（"RLI 影子 on" 读数混入「未启用」首断言）；清该键后单跑绿。已纳入脚本清理列表（代码级隔离留后续批）。
+  - **同族实例（2026-09-21，0bc 现场）**：`orz-host` `grok_home::tests::*` 四条假定 `GROK_HOME` 未设——dogfood 会话设 `GROK_HOME=D:\tb-eval\orz-windows\grok-home`＋`GROK_AGENT=1` 时 `redirect_grok_home_with` 短路为 `EnvRespected`，四条断言全红；清两键后全绿。已纳入脚本清理列表（清理列表＝上述能力②「清 env 口令」的脚本化落点）。
 - **同族先例**：`ORZ-TOOL-BINARY-COMPAT-001`（归因纪律：环境/机械因素先于代码归因）、`ORZ-VERDICT-EPOCH-001`（数据正确 ≠ 结论当前有效——本条补「读数干净 ≠ 结论可信，先核 env」）。
 - **验证记录**：2026-09-17 run `RUN-CLI-6aac0af5` 内双族对照（orz-loop 清后 791/0/3；orz-host 未清 328/4/5 ⇒ 清后串行 332/0/5，主会话独立复现同读数）。

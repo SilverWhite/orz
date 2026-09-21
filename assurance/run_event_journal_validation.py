@@ -4005,8 +4005,14 @@ def _verify_v02_host_resource_snapshot(events):
         payload = event.get("payload") or {}
         if payload.get("tier") not in _HOST_RESOURCE_TIERS:
             errors.append("host_resource_snapshot: tier is not a machine key")
-        if payload.get("trigger") not in ("tier_change", "run_start"):
-            errors.append("host_resource_snapshot: trigger must be tier_change|run_start")
+        if payload.get("trigger") not in (
+            "tier_change",
+            "run_start",
+            "commit_notification",
+        ):
+            errors.append(
+                "host_resource_snapshot: trigger must be tier_change|run_start|commit_notification"
+            )
         if not isinstance(payload.get("readings"), dict):
             errors.append("host_resource_snapshot: readings must be an object")
     return errors
