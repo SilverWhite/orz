@@ -2435,19 +2435,72 @@ impl AgentLoopController {
                             .unwrap_or_else(|| "round ?".to_string()),
                     ));
                 }
+                // 0be 四项②：分通道 horizon（`pred` 标注实际档位）＋短视锚点
+                // 独立化（`p1(1T̂)`）；`prog` 另有 ① 的 λ̂（未激活 = "—"，
+                // 与真值 0 不混同——FR-7 口径）。
                 for &kind in &orz_assurance::lif::RLI_CHANNELS {
                     let ch = shadow.channel(kind);
+                    let horizon = orz_assurance::lif::rli_horizon_steps(kind);
+                    let lambda = if kind == orz_assurance::lif::ChannelKind::Prog {
+                        format!(
+                            " λ̂={}",
+                            ch.lambda_hat()
+                                .map_or_else(|| "—".to_string(), |l| format!("{l:.3}"))
+                        )
+                    } else {
+                        String::new()
+                    };
                     lines.push(format!(
-                        "  {}: u={:.2} v={:+.3} pred(10T̂)={:.2} E={:.2} r={:.0} \
-                         θ={:.2} hits={}",
+                        "  {}: u={:.2} v={:+.3} pred({:.0}T̂)={:.2} p1(1T̂)={:.2} \
+                         E={:.2} r={:.0} θ={:.2} hits={}{}",
                         format!("{kind:?}").to_lowercase(),
                         ch.u(),
                         ch.v(),
-                        ch.prediction(t_hat),
+                        horizon,
+                        ch.prediction_at_horizon(t_hat),
+                        ch.prediction_short(t_hat),
                         ch.envelope(),
                         ch.rhythm(),
                         ch.theta(),
                         ch.hit_count(),
+                        lambda,
+                    ));
+                }
+                // 0be 四项④：繁杂度读数（未就绪 = 机械如实；越线锁存面供
+                // 宿主投递判定对照——"已投递/未投递"由侧车档键簿记）。
+                let cplx = shadow.complexity();
+                let tier_keys = orz_assurance::lif::RLI_CPLX_TIERS
+                    .iter()
+                    .map(|(k, _)| *k)
+                    .collect::<Vec<_>>()
+                    .join("/");
+                if let Some(c) = cplx.current_c() {
+                    let latched: Vec<&str> = orz_assurance::lif::RLI_CPLX_TIERS
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| cplx.latched(*i))
+                        .map(|(_, (k, _))| *k)
+                        .collect();
+                    lines.push(format!(
+                        "繁杂度: c={c:.2} ρ_base={} θ({tier_keys})={:.2}/{:.2}/{:.2} \
+                         锁存={} 样本={}",
+                        cplx.baseline()
+                            .map_or_else(|| "—".to_string(), |b| format!("{b:.3}")),
+                        cplx.theta(0),
+                        cplx.theta(1),
+                        cplx.theta(2),
+                        if latched.is_empty() {
+                            "—".to_string()
+                        } else {
+                            latched.join(",")
+                        },
+                        cplx.samples(),
+                    ));
+                } else {
+                    lines.push(format!(
+                        "繁杂度: 未就绪（合成样本 {}/{}；就绪后按本会话前段基线自校准）",
+                        cplx.samples(),
+                        orz_assurance::lif::RLI_CPLX_BASELINE_SAMPLES,
                     ));
                 }
                 lines.join("\n")
@@ -2789,6 +2842,16 @@ impl AgentLoopController {
     /// P2-10 F2 §3.5 (I4): the current domain spikes (sidecar persistence).
     pub fn temporal_spikes(&self) -> Vec<orz_assurance::lif::DomainSpike> {
         self.lif.lock().unwrap().temporal().spikes().to_vec()
+    }
+
+    /// 0be 四项④（2026-09-21）：RLI 繁杂度读数（影子未启用 = `None`——
+    /// 退化路径：无读数、不投递）。宿主面投递判定与渲染面共用。
+    pub fn rli_complexity_reading(&self) -> Option<orz_assurance::lif::RliComplexityReading> {
+        self.lif
+            .lock()
+            .unwrap()
+            .rli_shadow()
+            .map(orz_assurance::lif::RliShadow::complexity_reading)
     }
 
     /// B1 会话化基础（2026-09-03，R5 conversation-relative 轴）：run 结束
@@ -3334,10 +3397,14 @@ impl AgentLoopController {
                      (TER T1.12 W-F11 live code-tool environment snapshot — \
                      tool/language/package/version presence, key input presence, \
                      connectivity verdicts; ≤5s recompute, PULL whitelist face, \
-                     nothing archived), rli (0am 改造四项③ (2026-09-20): RLI 影子\
-                     参考面 — 谐振二阶通道锚点 (u/v/10·T̂ 闭式预测/E/r/θ/hits) + \
-                     自判动作域 + 同轮域一致性读数; selector now|recent|history \
-                     (k≤20); env 门控 (ORZ_LIF_RLI_SHADOW), live-only ≤1 KiB, \
+                     nothing archived), rli (0am 改造四项③ (2026-09-20) + 0be \
+                     四项 (2026-09-21): RLI 影子参考面 — 谐振二阶通道锚点 \
+                     (u/v/分通道 pred(H·T̂) 闭式预测/短视锚点 p1(1T̂)/E/r/θ/hits; \
+                     `prog` 另有在线到达率 λ̂ 与期望注入修正) + 自判动作域 + \
+                     同轮域一致性读数 + 繁杂度（会话内预测准确性相对前段基线 \
+                     的放大 c 与自校准阈值 θ85/95/99，未就绪机械如实）; \
+                     selector now|recent|history (k≤20); env 门控 \
+                     (ORZ_LIF_RLI_SHADOW), live-only ≤1 KiB, \
                      零注入, nothing archived). \
                      Optional `since_timestamp` (RFC 3339, e.g. the timestamp \
                      this tool returned earlier) filters the edits / tool_actions \
@@ -3411,7 +3478,7 @@ impl AgentLoopController {
                         "name": {
                             "type": "string",
                             "enum": feature_enum,
-                            "description": "P2-10 F2 §3.3 (2026-08-30)：Feature 查询的特征名（selector=feature 时必填）。仅与 section=temporal|rli 组合有效：temporal = u_prog|u_err|u_stuck|t_hat|err10|succ10；rli（0am 补充项④＋模态分离批，2026-09-20）= u_err|v_err|pred_err|env_err|r_err|u_prog|v_prog|pred_prog|r_prog ＋ slow_prog|fast_prog（实极点分支的模态对：慢/快分量；复极点分支无定义）。**锚点序列为事件级采样**（决策轮＋每个工具事件，cap 20）；`env_prog` 因恒等于 `u_prog` 已撤名（`env_err` 保留）。",
+                            "description": "P2-10 F2 §3.3 (2026-08-30)：Feature 查询的特征名（selector=feature 时必填）。仅与 section=temporal|rli 组合有效：temporal = u_prog|u_err|u_stuck|t_hat|err10|succ10；rli（0am 补充项④＋模态分离批，2026-09-20；0be 四项②，2026-09-21）= u_err|v_err|pred_err|pred1_err|env_err|r_err|u_prog|v_prog|pred_prog|pred1_prog|r_prog ＋ slow_prog|fast_prog（实极点分支的模态对：慢/快分量；复极点分支无定义）。**锚点序列为事件级采样**（决策轮＋每个工具事件，cap 20）；`pred_*`＝分通道 horizon 闭式前推（`pred1_*`＝短视 1·T̂ 独立档；prog 的 pred 含 λ̂ 期望注入修正——0be 四项①②）；`env_prog` 因恒等于 `u_prog` 已撤名（`env_err` 保留）。",
                         },
                          "since_timestamp": {"type": "string"},
                          "receipt_id": {
@@ -6330,9 +6397,25 @@ body"
         let now = controller
             .render_rli_section(Some("now"), None, None)
             .unwrap();
-        for needle in ["rli.now", "自判域", "v_err=", "pred(10T̂)", "err:", "prog:"] {
+        for needle in [
+            "rli.now",
+            "自判域",
+            "v_err=",
+            "pred(10T̂)",
+            "err:",
+            "prog:",
+            // 0be 四项②④（2026-09-21）：分通道 horizon＋短视锚点＋λ̂＋繁杂度
+            // 读数（未就绪时机械如实）。
+            "p1(1T̂)",
+            "λ̂=",
+            "繁杂度:",
+        ] {
             assert!(now.contains(needle), "now render missing {needle}: {now}");
         }
+        assert!(
+            now.contains("pred(2T̂)") && now.contains("pred(1T̂)") && now.contains("pred(30T̂)"),
+            "分通道 horizon 表（Stall=2/Slow=1/Deny=30）应逐通道标注: {now}"
+        );
         assert!(
             !now.contains("LIF"),
             "补充项②: rli 面不再渲染 LIF 对照: {now}"

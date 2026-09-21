@@ -481,6 +481,12 @@ struct StoredConversation {
     /// controller 回写（SUCCESS-ONLY，同疲劳档位语义）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     context_scale_notified: Vec<String>,
+    /// 0be 四项④（2026-09-21）：**会话级繁杂度提醒档位**——已投递键
+    /// （`["q85", ...]`）。与水位档 `50`/`70`/`90` 分开簿记；每档一次、
+    /// 跨 prompt 延续、新会话从零开始、恢复不重发（SUCCESS-ONLY 同
+    /// `fatigue_tiers_notified`）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    complexity_tiers_notified: Vec<String>,
 }
 
 impl StoredConversation {
@@ -497,6 +503,7 @@ impl StoredConversation {
             blackboard: None,
             fatigue_tiers_notified: Vec::new(),
             context_scale_notified: Vec::new(),
+            complexity_tiers_notified: Vec::new(),
         }
     }
 
@@ -524,6 +531,9 @@ impl StoredConversation {
             fatigue_tiers_notified: Vec::new(),
             // v7（S1 修订批）：水位在 run 成功后由调用方按 controller 回写。
             context_scale_notified: Vec::new(),
+            // 0be 四项④：繁杂度档位同口径——run 成功后由调用方回写
+            // （SUCCESS-ONLY）。
+            complexity_tiers_notified: Vec::new(),
         }
     }
 }
@@ -1864,6 +1874,10 @@ impl AcpServer {
         // （SUCCESS-ONLY 纪律：失败 run 不更新；提醒只按水位判定，无压缩
         // 轮数门槛——B3 复审裁决）。
         let mut fatigue_tiers_notified = continuation.fatigue_tiers_notified.clone();
+        // 0be 四项④（2026-09-21）：会话级繁杂度元数据（已投递档位 q85/q95/
+        // q99）随续接包跨 prompt 延续（SUCCESS-ONLY 纪律同疲劳档位；与水
+        // 位档分开簿记）。
+        let mut complexity_tiers_notified = continuation.complexity_tiers_notified.clone();
         // v7（S1 修订批，设计 §3.5.1，DP-16）：会话级刻度水位随续接包跨
         // prompt 延续（新会话为空；恢复侧车不重发）。
         let restored_context_scale_notified = continuation.context_scale_notified.clone();
@@ -2037,6 +2051,9 @@ impl AcpServer {
         // P2-13 B3：用户侧疲劳提醒（E9/§11.2）——机械附言、不进模型上下文；
         // 无新档 = None。会话关闭后的提醒去重随侧车持久化。
         let mut fatigue_notice_text: Option<String> = None;
+        // 0be 四项④（2026-09-21）：用户侧繁杂度提醒（OBS-RLI-SESSION-FATIGUE）
+        // ——同疲劳形态：机械附言、不进模型上下文；影子未启用/未就绪 = None。
+        let mut complexity_notice_text: Option<String> = None;
         if run_result.is_ok() {
             let lif = controller.lif_session_snapshot();
             let blackboard = controller.blackboard_conversation_snapshot();
@@ -2065,6 +2082,23 @@ impl AcpServer {
                 }
                 fatigue_notice_text = Some(decision.notice.text);
             }
+            // 0be 四项④：繁杂度提醒——读数来自 RLI 影子（未启用/未就绪 =
+            // `None`，机械如实不投递）；单次只投最高未投递档，已锁存未投
+            // 递的低档一并落档（跳跃不刷屏）。
+            if let Some(reading) = controller.rli_complexity_reading()
+                && let Some(decision) = orz_loop::complexity::pending_complexity_notice(
+                    &reading,
+                    &complexity_tiers_notified,
+                )
+            {
+                for tier in decision.tiers_to_mark {
+                    if !complexity_tiers_notified.iter().any(|t| t == tier) {
+                        complexity_tiers_notified.push(tier.to_string());
+                    }
+                }
+                complexity_notice_text = Some(decision.notice.text);
+            }
+            full.complexity_tiers_notified = complexity_tiers_notified.clone();
             full.fatigue_tiers_notified = fatigue_tiers_notified.clone();
             // v7（S1 修订批，DP-16）：刻度水位随侧车落盘（跨 prompt 延续；
             // 失败 run 不更新——SUCCESS-ONLY 同疲劳档位）。
@@ -2128,7 +2162,15 @@ impl AcpServer {
                 "status": "completed",
                 "run_id": run_id,
                 });
-                if let Some(notice) = fatigue_notice_text {
+                // 用户侧机械附言（不进模型上下文）：疲劳与繁杂度各至多一条，
+                // 同 run 同时命中时按疲劳在前拼接（单字符串字段）。
+                let combined_notice = match (fatigue_notice_text, complexity_notice_text) {
+                    (Some(f), Some(c)) => Some(format!("{f}\n\n{c}")),
+                    (Some(f), None) => Some(f),
+                    (None, Some(c)) => Some(c),
+                    (None, None) => None,
+                };
+                if let Some(notice) = combined_notice {
                     payload["user_notice"] = serde_json::Value::String(notice);
                 }
                 Ok(payload)

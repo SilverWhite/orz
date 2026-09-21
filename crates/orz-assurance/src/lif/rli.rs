@@ -38,7 +38,11 @@
 //! LIF 现域对照**（LIF 维持现役组件）；域一致性的口径改由离线观测件对
 //! 「框架实际动作结果」核读（见 `rli_shadow_replay.rs` 与 0am 结束文档）。
 //!
-//! 锚点（设计 §3）：a1 `u`；a2 `v`（＋短视预测 û(t+T̂) ≈ u + v·T̂）；a3 解析
+//! 锚点（设计 §3）：a1 `u`；a2 `v`（＋预期锚点——0am 四项②原为
+//! `10·T̂` 闭式前推，**0be 四项②起分通道 horizon** [`rli_horizon_steps`]，
+//! 并把短视档补为**独立锚点** a2s＝`pred1(1·T̂)` 闭式前推
+//! [`RliChannel::prediction_short`]——模块头与字段注释的旧「一阶短视
+//! `u + v·T̂`」口径系文档漂移，本批收口）；a3 解析
 //! 包络 `E = φ·√(A²+B²)`；a4 节律计数 `r`（事件间隔近半周期整数倍时 +1，
 //! 否则仅衰减）；**a5／a6 模态对**（0am 模态分离批，2026-09-20 用户裁决）：
 //! 实极点分支上 `c_slow=(u+b)/2`、`c_fast=(u−b)/2`（`b=(v+ζω·u)/μ`），满足
@@ -66,7 +70,19 @@
 //! `η = 0.05`（对数空间步长；平衡过阈率恰 1−q 与 η 无关）、`θ₀ = 1.0`
 //! （单事件权重单位）、`τ_r = 4×半周期`（节律遗忘窗）。
 //!
-//! [`RLI_RESONANT_CHANNEL_BASE_DESIGN_2026-09-16`]: ../../../../../docs/RLI_RESONANT_CHANNEL_BASE_DESIGN_2026-09-16.md
+//! **0be（2026-09-21 用户令）四项**（来源＝[`RLI_FORECAST_CONTRAST`] §6／§7：
+//! ① **会话内在线到达率估计 λ̂**（成功事件间隔 EMA——估计式、非损失式）
+//! ＋ **`prog` 前推修正**（自由衰减＋期望注入项：`prog` 是冲量重置型通道，
+//! 闭式自由演化只含衰减、不含未来注入 ⇒ 系统性偏低；见
+//! [`RliChannel::prediction_at`]）／② **分通道 horizon**（[`rli_horizon_steps`]：
+//! Slow／Stall 取短视、Err／Deny 取长视）＋**短视锚点独立化**
+//! （[`RliAnchors::prediction_short`]）／③ **自适应参数轨迹进侧车**
+//! （[`RliAdaptTraceRow`]，复算可核；新增持久面）／④ **繁杂度**
+//! （[`RliComplexity`]：四条复极点通道误差比相对**本会话前段基线**的放大
+//! c，三条分位数自校准阈值 θ85/θ95/θ99，**仅用户面机械提醒**——机制照抄
+//! 疲劳度 E9、每档一次；**禁用 `prog`**；不设会话桥接）。
+//!
+//! [`RLI_FORECAST_CONTRAST`]: ../../../../../docs/audits/RLI_FORECAST_CONTRAST_2026-09-21.md
 
 use std::collections::VecDeque;
 use std::f64::consts::{PI, TAU};
@@ -95,10 +111,60 @@ pub const RLI_TAU_R_HALF_PERIODS: f64 = 4.0;
 /// 节律匹配容差（×半周期）：设计 §7 冻结值 `π/(4ω_d)` = 半周期/2。
 /// 诊断切换见 [`RliChannel::set_rhythm_tolerance`]（读数对照用，不作数据选择）。
 pub const RLI_RHYTHM_TOLERANCE_HALF_PERIODS: f64 = 0.5;
-/// 预测步长（0am 改造四项②，2026-09-20 用户令「预测时间步先定 10」）：
-/// a2 预期锚点以**二阶闭式自由演化精确解**对 `Δt = 10·T̂` 前推——不引入
-/// 迭代、不引入噪声（见 [`RliChannel::prediction`]）。
+/// 预测步长默认档（0am 改造四项②，2026-09-20 用户令「预测时间步先定 10」；
+/// **0be 四项②起降格**为默认／legacy 档——a2 预期锚点改按
+/// [`rli_horizon_steps`] 的**分通道 horizon** 前推，本常数保留两义：
+/// ① Err／Prog 通道的分通道值；② [`RliChannel::prediction`] 的兼容口径
+/// （`Δt = 10·T̂`，探针／旧读者同源）。
 pub const RLI_PREDICTION_STEPS: f64 = 10.0;
+
+/// 分通道 horizon 表（0be 四项②，2026-09-21 用户令「分通道 horizon ＋短视
+/// 锚点独立化」；依据＝[`RLI_FORECAST_CONTRAST`] §2／§2.1 逐通道最优档：
+/// Slow／Stall 短视最优（h=1–2）、Err／Deny 长视最优（h=5–30））。
+/// **语义常数、禁拟合**；`prog` 维持默认档（修正项 ① 后另测）。
+///
+/// [`RLI_FORECAST_CONTRAST`]: ../../../../../docs/audits/RLI_FORECAST_CONTRAST_2026-09-21.md
+pub fn rli_horizon_steps(kind: ChannelKind) -> f64 {
+    match kind {
+        ChannelKind::Slow => 1.0,
+        ChannelKind::Stall => 2.0,
+        ChannelKind::Err => RLI_PREDICTION_STEPS,
+        ChannelKind::Deny => 30.0,
+        ChannelKind::Prog => RLI_PREDICTION_STEPS,
+    }
+}
+
+/// 会话内在线到达率估计 λ̂（0be 四项①，2026-09-21）：**成功事件到达间隔
+/// 的 EMA**（估计式——非损失下降；口径见 [`RLI_FORECAST_CONTRAST`] §6）。
+/// 间隔先钳制到 [`RLI_LAMBDA_GAP_MIN_SECS`, `RLI_LAMBDA_GAP_MAX_SECS`]；
+/// 不足 [`RLI_LAMBDA_MIN_GAPS`] 个间隔＝**未激活**（退化路径：`prog` 前推
+/// 回落纯自由衰减，行为与 0am 版一致）。作用域＝本会话，随侧车延续。
+///
+/// [`RLI_FORECAST_CONTRAST`]: ../../../../../docs/audits/RLI_FORECAST_CONTRAST_2026-09-21.md
+pub const RLI_LAMBDA_EMA_ALPHA: f64 = 0.2;
+pub const RLI_LAMBDA_GAP_MIN_SECS: f64 = 0.5;
+pub const RLI_LAMBDA_GAP_MAX_SECS: f64 = 3_600.0;
+pub const RLI_LAMBDA_MIN_GAPS: u64 = 2;
+
+/// 繁杂度（0be 四项④，2026-09-21 用户二次裁定：机制照抄疲劳度 E9、只需
+/// 一个指标）——指标＝**四条复极点通道**（err／stall／slow／deny；**禁用
+/// `prog`**）前推误差比 ρ = MAE_pred / MAE_persist 的跨通道中位（窗内逐
+/// 样本误差比的中位；持久性误差≈0 的样本跳过），相对**本会话前段基线**
+/// ρ_base（前 [`RLI_CPLX_BASELINE_SAMPLES`] 个合成样本中位，冻结）的放大
+/// c = ρ_cur / ρ_base；三条阈值 θ85/θ95/θ99 用 RLI 现成**分位数自校准**
+/// （θ 同法乘性更新，η = [`RLI_ETA_INIT`]）追踪 c 自身 (1−q) 分位；越线
+/// 即**锁存**（含中途尖峰）。**不设跨会话桥接**、不设记忆系统延续。
+pub const RLI_CPLX_PER_CHANNEL_CAP: usize = 16;
+pub const RLI_CPLX_BASELINE_SAMPLES: usize = 16;
+pub const RLI_CPLX_MIN_CHANNEL_SAMPLES: usize = 4;
+pub const RLI_CPLX_RHO_MAX: f64 = 4.0;
+pub const RLI_CPLX_C_MIN: f64 = 0.25;
+pub const RLI_CPLX_C_MAX: f64 = 4.0;
+/// 档位键（与水位疲劳的 `50`/`70`/`90` **分开命名**；每档一次、用户面）。
+pub const RLI_CPLX_TIERS: [(&str, f64); 3] = [("q85", 0.85), ("q95", 0.95), ("q99", 0.99)];
+/// 自适应参数轨迹（0be 四项③）：决策轮粒度、cap 128、随侧车持久
+/// （复算可核——轨迹与在线自适应同源同序）。
+pub const RLI_ADAPT_TRACE_CAP: usize = 128;
 /// RLI 自判域谓词常数（0am 改造四项①，2026-09-20；0am 改造补充项②
 /// 2026-09-20 重推导）——语义常数、禁拟合。压力轴 = err 水平阈 ∨ v／E
 /// 原生覆盖项（`stuck` 语义不补通道，设计 §10.3）；见 [`RliDomainMachine`]。
@@ -121,15 +187,26 @@ pub const RLI_FEATURE_SERIES_CAP: usize = 20;
 /// 去留请你裁决」）：**`env_prog` 撤名**——它在实极点分支上**恒等于**
 /// `u_prog`（a3 是紧的上界，见该报告 §1），保留会让一条副本冒充独立读数轴。
 /// `env_err` **保留**（复极点分支上 `E > |u|` 泛成立，独立）。
-pub const RLI_ANCHOR_FEATURE_NAMES: [&str; 11] = [
+/// 去冗余（2026-09-20 主会话裁决，用户授权「两名的去留和 `env_prog` 的
+/// 去留请你裁决」）：**`env_prog` 撤名**——它在实极点分支上**恒等于**
+/// `u_prog`（a3 是紧的上界，见该报告 §1），保留会让一条副本冒充独立读数轴。
+/// `env_err` **保留**（复极点分支上 `E > |u|` 泛成立，独立）。
+///
+/// 0be 四项②（2026-09-21）：**短视锚点独立化**——新增 `pred1_err`／
+/// `pred1_prog`（a2s＝`1·T̂` 闭式前推），与原 `pred_*`（a2＝决策通道的
+/// 分通道 horizon）分列；旧「一阶短视 `u + v·T̂`」注释口径系文档漂移，
+/// 本批收口。
+pub const RLI_ANCHOR_FEATURE_NAMES: [&str; 13] = [
     "u_err",
     "v_err",
     "pred_err",
+    "pred1_err",
     "env_err",
     "r_err",
     "u_prog",
     "v_prog",
     "pred_prog",
+    "pred1_prog",
     "r_prog",
     "slow_prog",
     "fast_prog",
@@ -176,6 +253,26 @@ pub fn rli_zeta_for(kind: ChannelKind) -> f64 {
     }
 }
 
+/// 实极点分支的两个指数核积分（0be 四项①，闭式解；`prog` 前推修正用）：
+///
+/// ```text
+/// ∫₀^τ e^(−q a)·cosh(μa) da = ½[(1−e^(−(q−μ)τ))/(q−μ) + (1−e^(−(q+μ)τ))/(q+μ)]
+/// ∫₀^τ e^(−q a)·sinh(μa) da = ½[(1−e^(−(q−μ)τ))/(q−μ) − (1−e^(−(q+μ)τ))/(q+μ)]
+/// ```
+///
+/// 返回 `(cosh 积分, sinh 积分)`。调用面保证 `q > μ ≥ 0`
+/// （`q = ζω + λ̂`，`ζω − μ = ω²/(ζω+μ) > 0`），分母下限 1e−9 仅为数值兜底。
+fn overdamped_decay_integrals(q: f64, mu: f64, tau: f64) -> (f64, f64) {
+    let minor = (q - mu).max(1e-9);
+    let major = q + mu;
+    let i_minor = (1.0 - libm::exp(-minor * tau)) / minor;
+    let i_major = (1.0 - libm::exp(-major * tau)) / major;
+    (
+        0.5 * (i_minor + i_major),
+        0.5 * (i_minor - i_major),
+    )
+}
+
 /// 单锚点选取（锚点序列面用；与 [`RliAnchors`] 的 a1–a4 一一对应；θ/hits
 /// 是判定面不属锚点面，不入序列）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,8 +281,10 @@ pub enum RliAnchor {
     U,
     /// a2 变化率。
     V,
-    /// a2 预期锚点（10·T̂ 闭式前推）。
+    /// a2 预期锚点（分通道 horizon 闭式前推；`pred_*`）。
     Pred,
+    /// a2s 短视锚点（0be 四项②：`1·T̂` 闭式前推，独立成档；`pred1_*`）。
+    PredShort,
     /// a3 解析包络。
     Env,
     /// a4 节律计数。
@@ -202,7 +301,8 @@ impl RliAnchor {
         match self {
             RliAnchor::U => ch.u(),
             RliAnchor::V => ch.v(),
-            RliAnchor::Pred => ch.prediction(t_hat_secs),
+            RliAnchor::Pred => ch.prediction_at_horizon(t_hat_secs),
+            RliAnchor::PredShort => ch.prediction_short(t_hat_secs),
             RliAnchor::Env => ch.envelope(),
             RliAnchor::Rhythm => ch.rhythm(),
             RliAnchor::ModeSlow => ch.mode_slow(),
@@ -213,15 +313,17 @@ impl RliAnchor {
 
 /// 锚点序列表（名 → 通道 × 锚点；与 [`RLI_ANCHOR_FEATURE_NAMES`] 同序，
 /// 测试钉住两侧不漂移）。
-pub const RLI_ANCHOR_FEATURE_TABLE: [(&str, ChannelKind, RliAnchor); 11] = [
+pub const RLI_ANCHOR_FEATURE_TABLE: [(&str, ChannelKind, RliAnchor); 13] = [
     ("u_err", ChannelKind::Err, RliAnchor::U),
     ("v_err", ChannelKind::Err, RliAnchor::V),
     ("pred_err", ChannelKind::Err, RliAnchor::Pred),
+    ("pred1_err", ChannelKind::Err, RliAnchor::PredShort),
     ("env_err", ChannelKind::Err, RliAnchor::Env),
     ("r_err", ChannelKind::Err, RliAnchor::Rhythm),
     ("u_prog", ChannelKind::Prog, RliAnchor::U),
     ("v_prog", ChannelKind::Prog, RliAnchor::V),
     ("pred_prog", ChannelKind::Prog, RliAnchor::Pred),
+    ("pred1_prog", ChannelKind::Prog, RliAnchor::PredShort),
     ("r_prog", ChannelKind::Prog, RliAnchor::Rhythm),
     ("slow_prog", ChannelKind::Prog, RliAnchor::ModeSlow),
     ("fast_prog", ChannelKind::Prog, RliAnchor::ModeFast),
@@ -234,8 +336,12 @@ pub struct RliAnchors {
     pub u: f64,
     /// a2 变化率（1/s）。
     pub v: f64,
-    /// a2 短视预测 û(t+T̂) ≈ u + v·T̂。
+    /// a2 预期锚点（0be 四项②：**分通道 horizon** 的闭式自由演化前推，
+    /// `Δt = rli_horizon_steps(kind)·T̂`；`prog` 通道另含 ① 的期望注入项）。
     pub prediction: f64,
+    /// a2s 短视锚点（0be 四项②独立化：`Δt = 1·T̂` 闭式前推；与 `prediction`
+    /// 分列——旧注释的「一阶短视 `u + v·T̂`」口径已退役）。
+    pub prediction_short: f64,
     /// a3 解析包络（自由演化单调衰减；注入处跃升）。
     pub envelope: f64,
     /// a4 节律计数。
@@ -272,6 +378,11 @@ pub struct RliChannel {
     last_inject_t: Option<f64>,
     hit_count: u64,
     last_hit_t: Option<f64>,
+    /// 0be 四项①：成功到达间隔 EMA（`None` ＝尚无间隔样本——退化路径）。
+    /// λ̂ 由此派生（[`Self::lambda_hat`]），随快照持久（会话级自适应参数）。
+    lambda_gap_ema: Option<f64>,
+    /// 已累积的成功间隔样本计数（≥ [`RLI_LAMBDA_MIN_GAPS`] 才激活 λ̂）。
+    lambda_gap_samples: u64,
 }
 
 impl RliChannel {
@@ -292,6 +403,8 @@ impl RliChannel {
             last_inject_t: None,
             hit_count: 0,
             last_hit_t: None,
+            lambda_gap_ema: None,
+            lambda_gap_samples: 0,
         }
     }
 
@@ -339,15 +452,100 @@ impl RliChannel {
         self.last_inject_t
     }
 
-    /// a2 预期锚点（0am 改造四项②，2026-09-20）：以闭式自由演化精确解对
-    /// `Δt = RLI_PREDICTION_STEPS · T̂` 前推（二阶解；退役一阶短视近似
-    /// `u + v·T̂`，不引入迭代、不引入噪声）。T̂ 非法（非有限 / ≤ 0）时返回
-    /// 当前水平 `u`（保守落点，不虚构前推）。
+    /// a2 预期锚点（兼容口径：`Δt = RLI_PREDICTION_STEPS · T̂` 的闭式自由
+    /// 演化前推——探针与旧读者同源）。**0be 四项②起**：通道读数面用
+    /// [`Self::prediction_at_horizon`]（分通道 horizon），本方法保留
+    /// `prediction_at(RLI_PREDICTION_STEPS, ·)` 语义（`prog` 已含 ① 的期望
+    /// 注入项；其余通道＝纯自由演化）。T̂ 非法（非有限 / ≤ 0）时返回当前
+    /// 水平 `u`（保守落点，不虚构前推）。
     pub fn prediction(&self, t_hat_secs: f64) -> f64 {
-        if !t_hat_secs.is_finite() || t_hat_secs <= 0.0 {
+        self.prediction_at(RLI_PREDICTION_STEPS, t_hat_secs)
+    }
+
+    /// 分通道 horizon 前推（0be 四项②）：`Δt = rli_horizon_steps(kind)·T̂`。
+    pub fn prediction_at_horizon(&self, t_hat_secs: f64) -> f64 {
+        self.prediction_at(rli_horizon_steps(self.kind), t_hat_secs)
+    }
+
+    /// a2s 短视锚点（0be 四项②独立化）：`Δt = 1·T̂` 的闭式前推。
+    pub fn prediction_short(&self, t_hat_secs: f64) -> f64 {
+        self.prediction_at(1.0, t_hat_secs)
+    }
+
+    /// 显式步长前推（0be 四项②；`steps` 以 T̂ 为单位）。`prog`（实极点、
+    /// 冲量重置型）走 [`Self::prog_prediction_with_arrivals`]；其余通道＝
+    /// 闭式自由演化（二阶解，退役一阶短视近似 `u + v·T̂`——0am 改造）。
+    pub fn prediction_at(&self, steps: f64, t_hat_secs: f64) -> f64 {
+        if !t_hat_secs.is_finite() || t_hat_secs <= 0.0 || !steps.is_finite() || steps <= 0.0 {
             return self.u;
         }
-        self.free_evolution_at(RLI_PREDICTION_STEPS * t_hat_secs).0
+        let dt = steps * t_hat_secs;
+        if self.kind == ChannelKind::Prog && self.is_overdamped() {
+            return self.prog_prediction_with_arrivals(dt);
+        }
+        self.free_evolution_at(dt).0
+    }
+
+    /// `prog` 前推修正（0be 四项①，2026-09-21 用户令）：自由衰减 ＋
+    /// **期望注入项**。机制＝`prog` 是**冲量重置型**（成功到达把 `u` 置 1），
+    /// 闭式自由演化只含衰减、不含未来注入 ⇒ 对拍中系统性偏低（137-run
+    /// h=10 均值 0.091 vs 实际 0.592）。
+    ///
+    /// 模型（近似，如实登记）：成功到达为速率 λ̂ 的泊松过程，各到达把 `u`
+    /// 置 1（`v` 不踢）。设窗口年龄 `s`（自当前时刻起算），则
+    ///
+    /// ```text
+    /// E[u(t+τ)] = e^(−λ̂τ)·g_free(τ) + λ̂·∫₀^τ e^(−λ̂s)·g(s) ds
+    /// ```
+    ///
+    /// 其中 `g_free` ＝当前状态 (u₀,v₀) 的自由演化 u 分量；`g(s)` ＝自
+    /// 「注入当刻状态 (1, v₀)」自由演化的 u 分量（**同刻注入近似**：未来
+    /// 到达时刻的 v 用当前 v 代替——如实登记为近似面）。积分有闭式
+    /// （[`overdamped_decay_integrals`]，q = ζω + λ̂ > μ 恒成立）：
+    /// O(1)、无迭代、无噪声、无拟合参数。
+    ///
+    /// λ̂ 未激活（间隔样本不足——退化路径）时**严格**退回自由衰减。
+    fn prog_prediction_with_arrivals(&self, dt: f64) -> f64 {
+        let free = self.free_evolution_at(dt).0;
+        let Some(lambda) = self.lambda_hat() else {
+            return free;
+        };
+        let zeta_w = self.zeta * self.omega;
+        let q = zeta_w + lambda;
+        let (i_cosh, i_sinh) = overdamped_decay_integrals(q, self.mu(), dt);
+        // b̄ = (v₀ + ζω)/μ：注入当刻 (u=1, v=v₀) 的快模偏置。
+        let b_c = (self.v + zeta_w) / self.mu();
+        let injection = lambda * (i_cosh + b_c * i_sinh);
+        libm::exp(-lambda * dt) * free + injection
+    }
+
+    /// 会话内在线到达率估计 λ̂（0be 四项①）：成功事件到达间隔 EMA 的倒数。
+    /// `None` ＝未激活（间隔样本 < [`RLI_LAMBDA_MIN_GAPS`]——退化路径）。
+    pub fn lambda_hat(&self) -> Option<f64> {
+        if self.lambda_gap_samples < RLI_LAMBDA_MIN_GAPS {
+            return None;
+        }
+        self.lambda_gap_ema
+            .map(|gap| 1.0 / gap.max(RLI_LAMBDA_GAP_MIN_SECS))
+    }
+
+    /// 成功到达间隔记账（0be 四项①；`inject_set` 内调用——间隔在更新
+    /// `last_inject_t` 前读取）。间隔先钳制到语义上下界，再 EMA（α 见
+    /// [`RLI_LAMBDA_EMA_ALPHA`]）。**估计式**：只有矩统计，无损失、无梯度。
+    fn note_success_gap(&mut self, t: f64) {
+        let Some(prev) = self.last_inject_t else {
+            return;
+        };
+        let dt = t - prev;
+        if !dt.is_finite() || dt <= 0.0 {
+            return;
+        }
+        let gap = dt.clamp(RLI_LAMBDA_GAP_MIN_SECS, RLI_LAMBDA_GAP_MAX_SECS);
+        self.lambda_gap_ema = Some(match self.lambda_gap_ema {
+            None => gap,
+            Some(ema) => ema + RLI_LAMBDA_EMA_ALPHA * (gap - ema),
+        });
+        self.lambda_gap_samples = self.lambda_gap_samples.saturating_add(1);
     }
 
     /// 闭式自由演化单点求值（不改状态）：把当前 `(u, v)` 按设计 §2 精确
@@ -388,6 +586,7 @@ impl RliChannel {
             u: self.u,
             v: self.v,
             prediction: self.prediction(t_hat_secs),
+            prediction_short: self.prediction_short(t_hat_secs),
             envelope: self.envelope,
             rhythm: self.rhythm,
             mode_slow: self.mode_slow(),
@@ -520,8 +719,11 @@ impl RliChannel {
         self.refresh_envelope(1.0);
     }
 
-    /// 新鲜度型通道（prog）：成功置 1（同现行 1D `prog` 语义）。
+    /// 新鲜度型通道（prog）：成功置 1（同现行 1D `prog` 语义）。0be 四项①
+    /// 起同时记账**成功到达间隔**（λ̂ 的输入；间隔在 `last_inject_t` 更新前
+    /// 读取——见 [`Self::note_success_gap`]）。
     pub fn inject_set(&mut self, t: f64, value: f64) {
+        self.note_success_gap(t);
         self.advance(t);
         self.note_arrival(t);
         self.u = value;
@@ -590,6 +792,10 @@ impl RliChannel {
             last_inject_t: self.last_inject_t.map(quantize_state),
             hit_count: self.hit_count,
             last_hit_t: self.last_hit_t.map(quantize_state),
+            // 0be 四项①：λ̂ 估计器状态（间隔 EMA ＋样本计数）随侧车持久
+            // ——会话级自适应参数，跨 prompt 精确续接。
+            lambda_gap_ema: self.lambda_gap_ema.map(quantize_state),
+            lambda_gap_samples: self.lambda_gap_samples,
         }
     }
 
@@ -615,6 +821,333 @@ impl RliChannel {
         self.last_inject_t = snapshot.last_inject_t;
         self.hit_count = snapshot.hit_count;
         self.last_hit_t = snapshot.last_hit_t;
+        // 0be 四项①：λ̂ 估计器状态（sanitize：非有限/非正 EMA 落回 None＝
+        // 未激活；legacy 快照无字段 ⇒ None/0，与「尚无成功间隔」同义可分）。
+        self.lambda_gap_ema = snapshot
+            .lambda_gap_ema
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .map(|v| v.clamp(RLI_LAMBDA_GAP_MIN_SECS, RLI_LAMBDA_GAP_MAX_SECS));
+        self.lambda_gap_samples = snapshot.lambda_gap_samples;
+    }
+}
+
+/// 未决算预测（0be 四项④：繁杂度指标的在线配对件——决策轮发出，
+/// 「首个 ≥ 到期时刻的决策轮」消费；与对拍件 §1 同口径）。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RliPendingPrediction {
+    /// 发出时刻（会话相对秒）。
+    pub issue_t: f64,
+    /// 发出时刻的水平 u（持久性基线）。
+    pub issue_u: f64,
+    /// 前推值（发出时刻按分通道 horizon 计算）。
+    pub pred: f64,
+    /// 到期时刻（`issue_t + horizon·T̂`）。
+    pub due_t: f64,
+}
+
+/// 繁杂度状态（0be 四项④，2026-09-21 用户二次裁定「机制照抄疲劳度、只需
+/// 一个指标」）——**会话级**（随侧车延续；不设跨会话桥接）。指标链：
+///
+/// ```text
+/// ρ_i   = |pred_i − real_i| / |issue_u_i − real_i|   （逐样本误差比；分母≈0 跳过）
+/// ρ_ch  = 窗内 ρ_i 的中位                                  （逐通道）
+/// ρ_cur = 各就绪通道 ρ_ch 的中位                            （跨通道；四条复极点通道，禁用 prog）
+/// ρ_base= 前 BASELINE_SAMPLES 个 ρ_cur 样本的中位（冻结）  （本会话前段基线）
+/// c     = clamp(ρ_cur / ρ_base, C_MIN, C_MAX)              （放大倍数）
+/// θ_t   : c 的 (1−q) 分位追踪（θ 同法：c ≥ θ → θ·e^(+η)，否则 θ·e^(−η(1−q)/q)）
+/// ```
+///
+/// 越线（`c > θ_t` 且 `c > 1`）即**锁存**（`latched`，含中途尖峰）；档位键
+/// [`RLI_CPLX_TIERS`]（`q85`/`q95`/`q99`）——投递与「每档一次」由宿主面
+/// 侧车键簿记（照拷贝疲劳度 E9）。样本不足 = 未就绪（退化路径：无提醒）。
+#[derive(Debug, Clone)]
+pub struct RliComplexity {
+    /// 四条复极点通道的 ρ 窗（顺序 = [`RLI_CPLX_KINDS`]）。
+    channel_windows: [VecDeque<f64>; RLI_CPLX_KINDS.len()],
+    /// 各通道未决算预测（配对后出窗；cap = PER_CHANNEL_CAP）。
+    pending: [VecDeque<RliPendingPrediction>; RLI_CPLX_KINDS.len()],
+    /// 合成样本窗（ρ_cur 流；cap = PER_CHANNEL_CAP）。
+    combined: VecDeque<f64>,
+    /// 基线（前 `BASELINE_SAMPLES` 个合成样本中位；`None` = 未冻结）。
+    baseline: Option<f64>,
+    /// 已产出的合成样本数。
+    samples: u64,
+    /// 三条自校准阈值（θ85/θ95/θ99）。
+    theta: [f64; RLI_CPLX_TIERS.len()],
+    /// 越线锁存（每条阈值一次；投递键由宿主面侧车簿记）。
+    latched: [bool; RLI_CPLX_TIERS.len()],
+    /// 当前 c（未就绪 = None）。
+    current_c: Option<f64>,
+}
+
+/// 繁杂度样本通道（**四条复极点通道**；禁用 `prog`——h≥2 结构性负会报假
+/// 疲劳，用户裁定见项目索引 `OBS-RLI-SESSION-FATIGUE`）。
+pub const RLI_CPLX_KINDS: [ChannelKind; 4] = [
+    ChannelKind::Err,
+    ChannelKind::Stall,
+    ChannelKind::Slow,
+    ChannelKind::Deny,
+];
+
+impl Default for RliComplexity {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RliComplexity {
+    fn new() -> Self {
+        Self {
+            channel_windows: std::array::from_fn(|_| VecDeque::new()),
+            pending: std::array::from_fn(|_| VecDeque::new()),
+            combined: VecDeque::new(),
+            baseline: None,
+            samples: 0,
+            // θ 初值 1.0 ＝「与基线同」的倍数单位（自校准后浮动）。
+            theta: [1.0; RLI_CPLX_TIERS.len()],
+            latched: [false; RLI_CPLX_TIERS.len()],
+            current_c: None,
+        }
+    }
+
+    /// 是否就绪（基线已冻结）。
+    pub fn ready(&self) -> bool {
+        self.baseline.is_some()
+    }
+
+    /// 已产出的合成样本数。
+    pub fn samples(&self) -> u64 {
+        self.samples
+    }
+
+    /// 当前放大倍数 c（未就绪 = `None`）。
+    pub fn current_c(&self) -> Option<f64> {
+        self.current_c
+    }
+
+    /// 本会话前段基线 ρ_base（未冻结 = `None`）。
+    pub fn baseline(&self) -> Option<f64> {
+        self.baseline
+    }
+
+    /// 第 `idx` 条自校准阈值。
+    pub fn theta(&self, idx: usize) -> f64 {
+        self.theta[idx]
+    }
+
+    /// 第 `idx` 档是否曾越线（锁存）。
+    pub fn latched(&self, idx: usize) -> bool {
+        self.latched[idx]
+    }
+
+    /// 繁杂度读数（宿主／渲染面用的只读快照）。
+    pub fn reading(&self) -> RliComplexityReading {
+        RliComplexityReading {
+            ready: self.ready(),
+            samples: self.samples,
+            c: self.current_c,
+            rho_base: self.baseline,
+            theta: self.theta,
+            latched: self.latched,
+        }
+    }
+
+    /// 决策轮推进：先消费到期预测（逐通道出窗），再发出新预测；然后更新
+    /// 合成样本、基线与三条自校准阈值（含锁存）。返回当前 c（未就绪
+    /// = `None`）——副作用面仅本结构（影子侧无注入）。
+    fn on_decision_round(
+        &mut self,
+        t: f64,
+        t_hat: f64,
+        channels: &[RliChannel; RLI_CHANNELS.len()],
+    ) -> Option<f64> {
+        let mut produced = false;
+        for (slot, &kind) in RLI_CPLX_KINDS.iter().enumerate() {
+            let ch = &channels[RliShadow::index_of(kind)];
+            // 消费到期预测：首个 ≥ due_t 的决策轮（当前轮）出窗。
+            while let Some(front) = self.pending[slot].front() {
+                if front.due_t > t {
+                    break;
+                }
+                let pending = self.pending[slot].pop_front().expect("front exists");
+                let denom = (pending.issue_u - ch.u()).abs();
+                if denom > 1e-9 {
+                    let rho = ((pending.pred - ch.u()).abs() / denom).clamp(0.0, RLI_CPLX_RHO_MAX);
+                    push_capped(&mut self.channel_windows[slot], rho, RLI_CPLX_PER_CHANNEL_CAP);
+                    produced = true;
+                }
+            }
+            // 发出新预测（分通道 horizon；`prog` 不参与——本表只含复极点通道）。
+            let horizon = rli_horizon_steps(kind) * t_hat;
+            push_capped(
+                &mut self.pending[slot],
+                RliPendingPrediction {
+                    issue_t: t,
+                    issue_u: ch.u(),
+                    pred: ch.prediction_at_horizon(t_hat),
+                    due_t: t + horizon,
+                },
+                RLI_CPLX_PER_CHANNEL_CAP,
+            );
+        }
+        if produced {
+            // 合成样本：各就绪通道窗中位 → 跨通道中位（≥2 通道就绪才产出）。
+            let mut per_channel: Vec<f64> = Vec::with_capacity(RLI_CPLX_KINDS.len());
+            for window in &self.channel_windows {
+                if window.len() >= RLI_CPLX_MIN_CHANNEL_SAMPLES {
+                    let mut v: Vec<f64> = window.iter().copied().collect();
+                    per_channel.push(median_of(&mut v));
+                }
+            }
+            if per_channel.len() >= 2 {
+                let rho_cur = median_of(&mut per_channel);
+                push_capped(&mut self.combined, rho_cur, RLI_CPLX_PER_CHANNEL_CAP);
+                self.samples = self.samples.saturating_add(1);
+                if self.baseline.is_none() && self.samples >= RLI_CPLX_BASELINE_SAMPLES as u64 {
+                    let mut v: Vec<f64> = self.combined.iter().copied().collect();
+                    self.baseline = Some(median_of(&mut v));
+                }
+            }
+        }
+        let Some(base) = self.baseline else {
+            return None;
+        };        let mut window: Vec<f64> = self.combined.iter().copied().collect();
+        let rho_cur = median_of(&mut window);
+        let c = if base > 1e-9 {
+            (rho_cur / base).clamp(RLI_CPLX_C_MIN, RLI_CPLX_C_MAX)
+        } else {
+            1.0
+        };
+        self.current_c = Some(c);
+        // 三条阈值（θ 同法：log 空间乘性更新，平衡点 P(c ≥ θ) = 1−q）。
+        for (idx, (_, q)) in RLI_CPLX_TIERS.iter().enumerate() {
+            if c >= self.theta[idx] {
+                self.theta[idx] *= libm::exp(RLI_ETA_INIT);
+                if c > 1.0 {
+                    // 越线锁存（含中途尖峰；「每档一次」的簿记在宿主面）。
+                    self.latched[idx] = true;
+                }
+            } else {
+                self.theta[idx] *= libm::exp(-RLI_ETA_INIT * (1.0 - q) / q);
+            }
+        }
+        Some(c)
+    }
+
+    fn snapshot(&self) -> RliComplexitySnapshot {
+        RliComplexitySnapshot {
+            channel_windows: self
+                .channel_windows
+                .iter()
+                .map(|w| w.iter().map(|v| quantize_state(*v)).collect())
+                .collect(),
+            pending: self
+                .pending
+                .iter()
+                .map(|p| {
+                    p.iter()
+                        .map(|e| RliPendingPrediction {
+                            issue_t: quantize_state(e.issue_t),
+                            issue_u: quantize_state(e.issue_u),
+                            pred: quantize_state(e.pred),
+                            due_t: quantize_state(e.due_t),
+                        })
+                        .collect()
+                })
+                .collect(),
+            combined: self.combined.iter().map(|v| quantize_state(*v)).collect(),
+            baseline: self.baseline.map(quantize_state),
+            samples: self.samples,
+            theta: self.theta.iter().map(|v| quantize_state(*v)).collect(),
+            latched: self.latched.to_vec(),
+        }
+    }
+
+    /// 从快照续接；尺寸不符（legacy／损坏）＝保持 fresh 状态并返回 false
+    /// （调用方口径：繁杂度是可选读数面，坏结构不影响通道续接）。
+    fn restore(&mut self, snapshot: &RliComplexitySnapshot) -> bool {
+        if snapshot.channel_windows.len() != RLI_CPLX_KINDS.len()
+            || snapshot.pending.len() != RLI_CPLX_KINDS.len()
+            || snapshot.theta.len() != RLI_CPLX_TIERS.len()
+            || snapshot.latched.len() != RLI_CPLX_TIERS.len()
+        {
+            return false;
+        }
+        for (slot, values) in snapshot.channel_windows.iter().enumerate() {
+            self.channel_windows[slot] = values
+                .iter()
+                .rev()
+                .take(RLI_CPLX_PER_CHANNEL_CAP)
+                .rev()
+                .copied()
+                .collect();
+        }
+        for (slot, entries) in snapshot.pending.iter().enumerate() {
+            self.pending[slot] = entries
+                .iter()
+                .rev()
+                .take(RLI_CPLX_PER_CHANNEL_CAP)
+                .rev()
+                .copied()
+                .collect();
+        }
+        self.combined = snapshot
+            .combined
+            .iter()
+            .rev()
+            .take(RLI_CPLX_PER_CHANNEL_CAP)
+            .rev()
+            .copied()
+            .collect();
+        self.baseline = snapshot.baseline.filter(|v| v.is_finite() && *v > 0.0);
+        self.samples = snapshot.samples;
+        for (idx, theta) in snapshot.theta.iter().enumerate() {
+            if theta.is_finite() && *theta > 1e-9 {
+                self.theta[idx] = *theta;
+            }
+        }
+        for (idx, latched) in snapshot.latched.iter().enumerate() {
+            self.latched[idx] = *latched;
+        }
+        self.current_c = None; // 由下一次决策轮重算（读数不虚构）。
+        true
+    }
+}
+
+/// 繁杂度读数（只读快照；宿主面投递判定与渲染面共用）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RliComplexityReading {
+    /// 基线是否已冻结（未就绪 = 无提醒——退化路径）。
+    pub ready: bool,
+    /// 已产出合成样本数。
+    pub samples: u64,
+    /// 当前放大倍数 c（未就绪 = `None`）。
+    pub c: Option<f64>,
+    /// 本会话前段基线 ρ_base。
+    pub rho_base: Option<f64>,
+    /// 三条自校准阈值（θ85/θ95/θ99，顺序 = [`RLI_CPLX_TIERS`]）。
+    pub theta: [f64; RLI_CPLX_TIERS.len()],
+    /// 越线锁存（顺序同上）。
+    pub latched: [bool; RLI_CPLX_TIERS.len()],
+}
+
+fn push_capped<T>(deque: &mut VecDeque<T>, item: T, cap: usize) {
+    deque.push_back(item);
+    if deque.len() > cap {
+        deque.pop_front();
+    }
+}
+
+fn median_of(values: &mut [f64]) -> f64 {
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = values.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+    if n % 2 == 1 {
+        values[n / 2]
+    } else {
+        0.5 * (values[n / 2 - 1] + values[n / 2])
     }
 }
 
@@ -633,6 +1166,12 @@ pub struct RliShadow {
     /// [`RLI_FEATURE_SERIES_CAP`]、live-only 不随侧车持久化）。与
     /// [`RLI_ANCHOR_FEATURE_TABLE`] 同序。
     anchor_series: Vec<VecDeque<f64>>,
+    /// 0be 四项④（2026-09-21）：会话级繁杂度读数（指标链见
+    /// [`RliComplexity`]；随侧车延续，不设跨会话桥接）。
+    cplx: RliComplexity,
+    /// 0be 四项③（2026-09-21）：自适应参数轨迹（决策轮粒度、cap
+    /// [`RLI_ADAPT_TRACE_CAP`]、随侧车持久——复算可核）。
+    adapt_trace: VecDeque<RliAdaptTraceRow>,
 }
 
 impl Default for RliShadow {
@@ -660,6 +1199,8 @@ impl RliShadow {
             anchor_series: (0..RLI_ANCHOR_FEATURE_TABLE.len())
                 .map(|_| VecDeque::with_capacity(RLI_FEATURE_SERIES_CAP))
                 .collect(),
+            cplx: RliComplexity::new(),
+            adapt_trace: VecDeque::with_capacity(RLI_ADAPT_TRACE_CAP),
         }
     }
 
@@ -698,6 +1239,22 @@ impl RliShadow {
     /// 自判域状态机（0am 改造四项①；PULL 面与域一致性读数面）。
     pub fn domain(&self) -> &RliDomainMachine {
         &self.domain
+    }
+
+    /// 繁杂度状态（0be 四项④；会话级读数——指标链见 [`RliComplexity`]）。
+    pub fn complexity(&self) -> &RliComplexity {
+        &self.cplx
+    }
+
+    /// 繁杂度读数（只读快照；宿主面投递判定与渲染共用）。
+    pub fn complexity_reading(&self) -> RliComplexityReading {
+        self.cplx.reading()
+    }
+
+    /// 自适应参数轨迹（0be 四项③；决策轮粒度、旧在前、cap
+    /// [`RLI_ADAPT_TRACE_CAP`]）。
+    pub fn adapt_trace(&self) -> Vec<RliAdaptTraceRow> {
+        self.adapt_trace.iter().copied().collect()
     }
 
     /// 锚点序列（0am 改造补充项④，2026-09-20；**采样粒度＝事件级**，同日
@@ -768,6 +1325,24 @@ impl RliShadow {
         let env_err = self.channel(ChannelKind::Err).envelope();
         let u_prog = self.channel(ChannelKind::Prog).u();
         self.domain.record_round(t, u_err, u_prog, v_err, env_err);
+        // 0be 四项④：繁杂度推进（消费到期预测 → 发出新预测 → 合成样本／
+        // 基线／三条自校准阈值＋锁存）。
+        let c = self.cplx.on_decision_round(t, self.t_hat, &self.channels);
+        // 0be 四项③：自适应参数轨迹（决策轮粒度；复算可核）。λ̂ 取 prog
+        // 通道估计（未激活 = None——与真值 0 不混同）。
+        let lambda_hat = self.channel(ChannelKind::Prog).lambda_hat();
+        push_capped(
+            &mut self.adapt_trace,
+            RliAdaptTraceRow {
+                round: self.domain.round(),
+                t: quantize_state(t),
+                lambda_hat: lambda_hat.map(quantize_state),
+                c: c.map(quantize_state),
+                rho_base: self.cplx.baseline().map(quantize_state),
+                theta: self.cplx.theta.map(quantize_state),
+            },
+            RLI_ADAPT_TRACE_CAP,
+        );
         // 锚点序列采样（**事件级**：决策轮与每个工具事件各一次；见
         // [`Self::sample_anchor_series`]）。
         self.sample_anchor_series();
@@ -821,6 +1396,10 @@ impl RliShadow {
             steps: self.steps,
             channels: self.channels.iter().map(RliChannel::snapshot).collect(),
             domain: Some(self.domain.snapshot()),
+            // 0be 四项④：繁杂度状态（legacy 快照缺字段 = None ⇒ fresh）。
+            complexity: Some(self.cplx.snapshot()),
+            // 0be 四项③：自适应参数轨迹（已有行逐字段量化；legacy = 空）。
+            adapt_trace: self.adapt_trace.iter().copied().collect(),
         }
     }
 
@@ -851,6 +1430,21 @@ impl RliShadow {
         if let Some(domain) = &snapshot.domain {
             self.domain.restore(domain);
         }
+        // 0be 四项④：繁杂度状态续接；legacy／结构不符 = fresh（可选读数面
+        // ——坏结构不拖垮通道与时间轴续接）。
+        match &snapshot.complexity {
+            Some(complexity) if self.cplx.restore(complexity) => {}
+            _ => self.cplx = RliComplexity::new(),
+        }
+        // 0be 四项③：自适应参数轨迹续接（cap 截断；legacy = 空）。
+        self.adapt_trace = snapshot
+            .adapt_trace
+            .iter()
+            .rev()
+            .take(RLI_ADAPT_TRACE_CAP)
+            .rev()
+            .copied()
+            .collect();
         true
     }
 }
@@ -1156,6 +1750,56 @@ pub struct RliChannelSnapshot {
     pub hit_count: u64,
     #[serde(default)]
     pub last_hit_t: Option<f64>,
+    /// 0be 四项①：成功到达间隔 EMA（`None` ＝未记录/未激活——legacy
+    /// 快照缺字段落 `None`，与「尚无间隔样本」同义；FR-7 口径下
+    /// 不可得与估计值不混同）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lambda_gap_ema: Option<f64>,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub lambda_gap_samples: u64,
+}
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
+/// 繁杂度快照（0be 四项④；随 [`RliShadowSnapshot::complexity`] 入会话侧车。
+/// 缺字段 = legacy ⇒ fresh 状态；数组尺寸校验失败 = fresh）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RliComplexitySnapshot {
+    /// 四条复极点通道的 ρ 窗（顺序 = [`RLI_CPLX_KINDS`]）。
+    pub channel_windows: Vec<Vec<f64>>,
+    /// 各通道未决算预测（配对件；跨 prompt 同刻近似不重置）。
+    pub pending: Vec<Vec<RliPendingPrediction>>,
+    /// 合成样本窗（ρ_cur 流）。
+    pub combined: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<f64>,
+    pub samples: u64,
+    /// 三条自校准阈值（顺序 = [`RLI_CPLX_TIERS`]）。
+    pub theta: Vec<f64>,
+    /// 越线锁存（顺序同上）。
+    pub latched: Vec<bool>,
+}
+
+/// 自适应参数轨迹单行（0be 四项③，2026-09-21）——决策轮粒度、随侧车
+/// 持久（**复算可核**：轨迹与在线自适应同源同序，可对照重放复算）。
+/// `lambda_hat`／`c`／`rho_base` 为 `Option`（不可得与真值 0 不混同——
+/// FR-7 口径：λ̂ 未激活、繁杂度未就绪都不落假 0）。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RliAdaptTraceRow {
+    /// 会话相对决策轮（与域行同轴）。
+    pub round: u64,
+    /// 会话相对墙钟秒。
+    pub t: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lambda_hat: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rho_base: Option<f64>,
+    /// 三条自校准阈值（顺序 = [`RLI_CPLX_TIERS`]）。
+    pub theta: [f64; RLI_CPLX_TIERS.len()],
 }
 
 /// 影子族快照（随 [`super::temporal::TemporalSessionSnapshot::rli_shadow`]
@@ -1170,6 +1814,12 @@ pub struct RliShadowSnapshot {
     /// legacy 快照——恢复时保持 fresh 域机器，通道与时间轴照常续接）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<RliDomainSnapshot>,
+    /// 0be 四项④（2026-09-21）：繁杂度状态（缺字段 = legacy ⇒ fresh）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complexity: Option<RliComplexitySnapshot>,
+    /// 0be 四项③（2026-09-21）：自适应参数轨迹（缺字段 = legacy ⇒ 空）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adapt_trace: Vec<RliAdaptTraceRow>,
 }
 
 #[cfg(test)]
@@ -1613,7 +2263,8 @@ mod tests {
             "series values finite"
         );
         assert_eq!(shadow.feature("nope", 5), Vec::<f64>::new());
-        assert_eq!(RliShadow::known_feature_names().len(), 11);
+        // 0be 四项②：短视锚点独立化后名集合 11 → 13（pred1_err/pred1_prog）。
+        assert_eq!(RliShadow::known_feature_names().len(), 13);
         // 序列不随快照持久化（live-only）。
         let snap = shadow.snapshot();
         let mut restored = RliShadow::new();
@@ -1862,6 +2513,235 @@ mod tests {
         assert!(
             (live_u - restored_u).abs() < 1e-3,
             "legacy restore keeps the channel face ({restored_u} vs {live_u})"
+        );
+    }
+
+    /// 0be 四项①：λ̂ 需要至少 2 个成功间隔才激活；间隔先钳制到语义上下界
+    /// 再进 EMA（估计式——只有矩统计，无损失、无梯度）。
+    #[test]
+    fn lambda_hat_requires_min_gaps_and_clamps() {
+        let omega = TAU / (RLI_PROG_PERIOD_ROUNDS * 8.0);
+        let mut ch = RliChannel::new(ChannelKind::Prog, omega);
+        ch.inject_set(10.0, 1.0);
+        assert_eq!(ch.lambda_hat(), None, "no gap yet");
+        ch.inject_set(20.0, 1.0);
+        assert_eq!(ch.lambda_hat(), None, "one gap < MIN_GAPS");
+        ch.inject_set(30.0, 1.0);
+        let lambda = ch.lambda_hat().expect("two gaps activate");
+        assert!((lambda - 0.1).abs() < 1e-9, "λ̂ = 1/gap (got {lambda})");
+        // 0.1 s 的间隔按 0.5 s 下界记账：λ̂ 上移但不越上界。
+        ch.inject_set(30.1, 1.0);
+        let clamped = ch.lambda_hat().expect("still active");
+        assert!(clamped > lambda, "tight gap raises the rate toward the clamp");
+        assert!(clamped <= 1.0 / RLI_LAMBDA_GAP_MIN_SECS + 1e-9);
+    }
+
+    /// 0be 四项①退化路径：λ̂ 未激活时 `prog` 前推**严格**等于自由衰减；
+    /// 激活后预测上抬（期望注入项为正）。
+    #[test]
+    fn prog_prediction_degenerates_to_free_decay_without_lambda() {
+        let omega = TAU / (RLI_PROG_PERIOD_ROUNDS * 8.0);
+        let mut ch = RliChannel::new(ChannelKind::Prog, omega);
+        ch.inject_set(0.0, 1.0);
+        let t_hat = 8.0;
+        let free = ch.free_evolution_at(RLI_PREDICTION_STEPS * t_hat).0;
+        assert_eq!(
+            ch.prediction(10.0 * t_hat / RLI_PREDICTION_STEPS),
+            free,
+            "without λ̂ the closed form is the free decay (strict)"
+        );
+        ch.inject_set(20.0, 1.0);
+        ch.inject_set(40.0, 1.0);
+        assert!(ch.lambda_hat().is_some());
+        let uplifted = ch.prediction(10.0 * t_hat / RLI_PREDICTION_STEPS);
+        assert!(
+            uplifted > ch.free_evolution_at(RLI_PREDICTION_STEPS * t_hat).0,
+            "expected-injection term lifts the forecast ({uplifted})"
+        );
+    }
+
+    /// 0be 四项①：预测对 λ̂ 单调不减（同状态、同 horizon）。
+    #[test]
+    fn prog_prediction_is_monotone_in_arrival_rate() {
+        let omega = TAU / (RLI_PROG_PERIOD_ROUNDS * 8.0);
+        let mut sparse = RliChannel::new(ChannelKind::Prog, omega);
+        let mut dense = RliChannel::new(ChannelKind::Prog, omega);
+        for ch in [&mut sparse, &mut dense] {
+            ch.inject_set(0.0, 1.0);
+            ch.advance(3.0);
+        }
+        sparse.lambda_gap_ema = Some(600.0);
+        sparse.lambda_gap_samples = 2;
+        dense.lambda_gap_ema = Some(1.0);
+        dense.lambda_gap_samples = 2;
+        let p_sparse = sparse.prediction_at(RLI_PREDICTION_STEPS, 8.0);
+        let p_dense = dense.prediction_at(RLI_PREDICTION_STEPS, 8.0);
+        let free = sparse.free_evolution_at(RLI_PREDICTION_STEPS * 8.0).0;
+        assert!(p_sparse >= free - 1e-12, "sparse ≥ free");
+        assert!(p_dense > p_sparse, "denser arrivals ⇒ higher forecast");
+    }
+
+    /// 0be 四项①：闭式期望注入项与数值积分对拍（同一模型、同一状态）。
+    #[test]
+    fn prog_prediction_matches_numeric_injection_integral() {
+        let omega = TAU / (RLI_PROG_PERIOD_ROUNDS * 8.0);
+        let mut ch = RliChannel::new(ChannelKind::Prog, omega);
+        ch.inject_set(0.0, 1.0);
+        ch.inject_set(12.0, 1.0);
+        ch.lambda_gap_ema = Some(12.0);
+        ch.lambda_gap_samples = 2;
+        let t_hat = 8.0;
+        let tau = RLI_PREDICTION_STEPS * t_hat;
+        let lambda = 1.0 / 12.0;
+        let free = ch.free_evolution_at(tau).0;
+        let mut probe = ch.clone();
+        probe.u = 1.0;
+        let steps = 4_000usize;
+        let h = tau / steps as f64;
+        let mut acc = 0.0;
+        for i in 0..=steps {
+            let s = i as f64 * h;
+            let w = if i == 0 || i == steps { 0.5 } else { 1.0 };
+            acc += w * libm::exp(-lambda * s) * probe.free_evolution_at(s).0;
+        }
+        let numeric = libm::exp(-lambda * tau) * free + lambda * acc * h;
+        let closed = ch.prediction_at(RLI_PREDICTION_STEPS, t_hat);
+        assert!(
+            (closed - numeric).abs() < 1e-4,
+            "closed {closed} vs numeric {numeric}"
+        );
+    }
+
+    /// 0be 四项②：分通道 horizon 表钉住；短视锚点＝`1·T̂` 独立档。
+    #[test]
+    fn horizon_table_and_short_anchor_pin() {
+        assert_eq!(rli_horizon_steps(ChannelKind::Slow), 1.0);
+        assert_eq!(rli_horizon_steps(ChannelKind::Stall), 2.0);
+        assert_eq!(rli_horizon_steps(ChannelKind::Err), RLI_PREDICTION_STEPS);
+        assert_eq!(rli_horizon_steps(ChannelKind::Deny), 30.0);
+        assert_eq!(rli_horizon_steps(ChannelKind::Prog), RLI_PREDICTION_STEPS);
+
+        let mut err = RliChannel::new(ChannelKind::Err, err_omega());
+        err.inject(0.0, 1.0);
+        let t_hat = 8.0;
+        assert_eq!(
+            err.prediction_at_horizon(t_hat),
+            err.prediction_at(RLI_PREDICTION_STEPS, t_hat)
+        );
+        assert_eq!(err.prediction_short(t_hat), err.prediction_at(1.0, t_hat));
+        assert!(
+            (err.prediction_at_horizon(t_hat) - err.prediction_short(t_hat)).abs() > 1e-9,
+            "Err keeps the short anchor independent of the channel horizon"
+        );
+
+        let mut slow = RliChannel::new(ChannelKind::Slow, TAU / RLI_SLOW_PERIOD_SECS);
+        slow.inject(0.0, 1.0);
+        assert_eq!(
+            slow.prediction_at_horizon(t_hat),
+            slow.prediction_short(t_hat),
+            "Slow h=1 ≡ the short anchor (per-channel horizon)"
+        );
+
+        // 非法 horizon / T̂ ⇒ 保守落回当前水平（不虚构前推）。
+        assert_eq!(err.prediction_at(0.0, t_hat), err.u());
+        assert_eq!(err.prediction_at(f64::NAN, t_hat), err.u());
+        assert_eq!(err.prediction_at(RLI_PREDICTION_STEPS, -1.0), err.u());
+    }
+
+    /// 0be 四项④：繁杂度就绪门槛、c 计算、锁存与读数面（同模块测试可触
+    /// 内部状态——直置基线与窗）。
+    #[test]
+    fn complexity_requires_baseline_then_latches_and_reads() {
+        let mut shadow = RliShadow::new();
+        assert!(!shadow.complexity().ready(), "no baseline initially");
+        {
+            let cplx = &mut shadow.cplx;
+            cplx.combined = VecDeque::from(vec![2.0; RLI_CPLX_BASELINE_SAMPLES]);
+            cplx.baseline = Some(1.0);
+            cplx.samples = RLI_CPLX_BASELINE_SAMPLES as u64;
+            cplx.theta = [1.5, 2.5, 3.5];
+        }
+        shadow.on_decision_round(10.0, 8.0);
+        assert!(shadow.complexity().ready());
+        assert_eq!(shadow.complexity().current_c(), Some(2.0));
+        assert!(shadow.complexity().latched(0), "c=2.0 ≥ θ85=1.5 ∧ c>1");
+        assert!(!shadow.complexity().latched(1), "c < θ95");
+        assert!(!shadow.complexity().latched(2), "c < θ99");
+        // θ 同法：越线档上移、未越线档下移。
+        assert!(shadow.complexity().theta(0) > 1.5);
+        assert!(shadow.complexity().theta(1) < 2.5);
+        let reading = shadow.complexity_reading();
+        assert_eq!(reading.c, Some(2.0));
+        assert_eq!(reading.latched, [true, false, false]);
+        assert!(reading.ready);
+    }
+
+    /// 0be 四项③④：繁杂度与 λ̂ 估计器状态随影子快照持久；legacy 快照
+    /// （无字段）＝可选面 fresh、通道与 λ̂ 照常续接。
+    #[test]
+    fn complexity_and_lambda_state_ride_the_shadow_snapshot() {
+        let events = synthetic_events(0x0BEE_0001, 80);
+        let mut a = RliShadow::new();
+        feed(&mut a, &events);
+        let snap = a.snapshot();
+        assert!(snap.complexity.is_some(), "complexity rides the snapshot");
+        assert!(!snap.adapt_trace.is_empty(), "adapt trace rides the snapshot");
+        let lambda = a.channel(ChannelKind::Prog).lambda_hat();
+        assert!(lambda.is_some(), "synthetic successes activate λ̂");
+
+        let mut b = RliShadow::new();
+        assert!(b.restore(&snap));
+        assert_eq!(b.complexity().samples(), a.complexity().samples());
+        assert_eq!(b.complexity().ready(), a.complexity().ready());
+        assert_eq!(b.adapt_trace().len(), a.adapt_trace().len());
+        let lambda_b = b.channel(ChannelKind::Prog).lambda_hat();
+        assert!(
+            (lambda_b.unwrap() - lambda.unwrap()).abs() < 1e-3,
+            "λ̂ estimate survives the (3-decimal) snapshot"
+        );
+
+        let mut legacy = snap.clone();
+        legacy.complexity = None;
+        legacy.adapt_trace.clear();
+        let mut c = RliShadow::new();
+        assert!(c.restore(&legacy));
+        assert!(!c.complexity().ready(), "legacy ⇒ fresh complexity face");
+        assert_eq!(c.complexity().samples(), 0);
+        assert!(c.adapt_trace().is_empty());
+        let lambda_c = c.channel(ChannelKind::Prog).lambda_hat();
+        assert!(
+            (lambda_c.unwrap() - lambda.unwrap()).abs() < 1e-3,
+            "λ̂ estimator restores even on legacy complexity"
+        );
+    }
+
+    /// 0be 四项③：轨迹 cap 128、保留最近行、未激活/未就绪落 `None`
+    /// （FR-7：不可得与真值 0 不混同）。
+    #[test]
+    fn adapt_trace_caps_and_marks_inactive_states() {
+        let mut shadow = RliShadow::new();
+        for i in 0..200u64 {
+            shadow.on_decision_round(i as f64 * 10.0, 8.0);
+        }
+        let trace = shadow.adapt_trace();
+        assert_eq!(trace.len(), RLI_ADAPT_TRACE_CAP, "cap 128, oldest dropped");
+        assert_eq!(trace.first().map(|r| r.round), Some(200 - 128 + 1));
+        assert_eq!(trace.last().map(|r| r.round), Some(200));
+        assert!(trace.iter().all(|r| r.lambda_hat.is_none()), "no successes");
+        assert!(trace.iter().all(|r| r.c.is_none()), "no samples yet");
+        assert!(trace.iter().all(|r| r.rho_base.is_none()));
+    }
+
+    /// 0be 四项②：短视锚点进入锚点序列（新名 `pred1_*` 事件级采样）。
+    #[test]
+    fn short_anchor_series_samples_under_new_names() {
+        let mut shadow = RliShadow::new();
+        shadow.on_decision_round(1.0, 8.0);
+        assert_eq!(shadow.feature("pred1_err", 20).len(), 1);
+        assert_eq!(shadow.feature("pred1_prog", 20).len(), 1);
+        assert!(
+            shadow.feature("env_prog", 20).is_empty(),
+            "withdrawn name keeps sampling nothing"
         );
     }
 }

@@ -19,6 +19,7 @@ mod compact;
 pub mod console;
 mod console_exec;
 pub(crate) mod console_mode;
+pub mod complexity;
 pub mod context_scale;
 pub mod controller;
 mod delivery;

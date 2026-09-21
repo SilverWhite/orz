@@ -37,13 +37,19 @@ pub use estimator::{
 // 0am S2（2026-09-17）：RLI 影子族公开面。
 // 0am 改造四项①②（2026-09-20）＋补充项①②④（2026-09-20）：预测步长常数 +
 // 自判域机器族 + 配极表 + 锚点序列表公开面。
+// 0be 四项（2026-09-21）：λ̂／分通道 horizon／短视锚点／自适应轨迹／繁杂度、
+// 公开面（宿主投递判定与渲染面共用）。
 pub use rli::{
-    RLI_ANCHOR_FEATURE_NAMES, RLI_ANCHOR_FEATURE_TABLE, RLI_CHANNELS,
-    RLI_DOMAIN_ERR_ENVELOPE_FLOOR, RLI_DOMAIN_ERR_PRESSURE, RLI_DOMAIN_PROG_LOW,
-    RLI_DOMAIN_RECENT_CAP, RLI_ETA_INIT, RLI_FEATURE_SERIES_CAP, RLI_PREDICTION_STEPS,
-    RLI_PROG_ZETA, RLI_Q, RLI_SNAPSHOT_SCHEMA, RLI_TAU_R_HALF_PERIODS, RLI_THETA_INIT, RLI_ZETA,
-    RliAnchor, RliAnchors, RliChannel, RliChannelSnapshot, RliDomainMachine, RliDomainRow,
-    RliDomainSegment, RliDomainSnapshot, RliDomainSpike, RliShadow, RliShadowSnapshot,
+    RLI_ADAPT_TRACE_CAP, RLI_ANCHOR_FEATURE_NAMES, RLI_ANCHOR_FEATURE_TABLE, RLI_CHANNELS,
+    RLI_CPLX_BASELINE_SAMPLES, RLI_CPLX_KINDS, RLI_CPLX_MIN_CHANNEL_SAMPLES,
+    RLI_CPLX_PER_CHANNEL_CAP, RLI_CPLX_TIERS, RLI_DOMAIN_ERR_ENVELOPE_FLOOR,
+    RLI_DOMAIN_ERR_PRESSURE, RLI_DOMAIN_PROG_LOW, RLI_DOMAIN_RECENT_CAP, RLI_ETA_INIT,
+    RLI_FEATURE_SERIES_CAP, RLI_LAMBDA_EMA_ALPHA, RLI_LAMBDA_GAP_MAX_SECS,
+    RLI_LAMBDA_GAP_MIN_SECS, RLI_LAMBDA_MIN_GAPS, RLI_PREDICTION_STEPS, RLI_PROG_ZETA, RLI_Q,
+    RLI_SNAPSHOT_SCHEMA, RLI_TAU_R_HALF_PERIODS, RLI_THETA_INIT, RLI_ZETA, RliAdaptTraceRow,
+    RliAnchor, RliAnchors, RliChannel, RliChannelSnapshot, RliComplexity, RliComplexityReading,
+    RliComplexitySnapshot, RliDomainMachine, RliDomainRow, RliDomainSegment, RliDomainSnapshot,
+    RliDomainSpike, RliPendingPrediction, RliShadow, RliShadowSnapshot, rli_horizon_steps,
     rli_zeta_for,
 };
 pub use temporal::{
