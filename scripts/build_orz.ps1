@@ -40,6 +40,13 @@ if (-not (Test-Path $orzRoot)) { Write-Error "orz workspace not found at $orzRoo
 # 前导 `--` 容错（0bd ③ 同族）：裸 `--` 被 PowerShell 吞掉/透传两种都收。
 $extraArgs = @($Extra | Where-Object { $_ -ne '--' })
 
+# 0.6.10 重建轮补（0bd ① 同族）：构建前置补齐 `PROTOC`——`orz-tools-api`
+# 的 build.rs 走 tonic_build，宿主缺 `protoc` 时在**依赖阶段**即失败（exit 101），
+# 此前只有狗粮启动器装配该键（scripts/dogfood_launch.ps1 同路径）。存在即设入，
+# 仅回显；不存在时下面清单行会显式报『未设』，不静默。
+$protoc = 'D:\tb-eval\.tools\protoc-25.3\bin\protoc.exe'
+if (-not $env:PROTOC -and (Test-Path -LiteralPath $protoc)) { $env:PROTOC = $protoc }
+
 # ① 构建前置自检：宿主提交余量（commit 上限＝F14 根因面）
 $os = Get-CimInstance Win32_OperatingSystem
 $commitTotalGB = $os.TotalVirtualMemorySize / 1MB
@@ -64,6 +71,7 @@ Write-Host '== orz 构建装配清单（0bd ①） =='
 Write-Host ("host       = {0} 核 / 物理 {1:n1} GiB（余 {2:n1}）/ commit {3:n1} GiB（余 {4:n1}，使用 {5}%）" -f `
     $cores, $memTotalGB, $memFreeGB, $commitTotalGB, $commitFreeGB, $usedPct)
 Write-Host "jobs       = $jobsDisp"
+Write-Host "protoc     = $(if ($env:PROTOC) { $env:PROTOC } else { '（未设——依赖 protoc 的目标会失败）' })"
 $verb = if ($Check) { 'check' } else { 'build' }
 $mode = if ($Release) { '--release' } else { '（debug）' }
 Write-Host "cmd        = cargo $verb -p $Package $mode -j $jobsN $($extraArgs -join ' ')  [cwd=$orzRoot]"

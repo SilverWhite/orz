@@ -1,4 +1,4 @@
-# run_orz_tests.ps1 — 0bc 杂项 FR2（2026-09-21）
+﻿# run_orz_tests.ps1 — 0bc 杂项 FR2（2026-09-21）
 # 目的：dogfood 会话把 ORZ_ACAF_FAIL_CLOSED=1 / ORZ_ACAF_MANIFEST /
 # ORZ_ACAF_KEYSTORE / ORZ_ACAF_BINARY 沿进程树下沉给测试进程，使「起 run」
 # 类测试在 fail-closed 下批量 panic 假红（案例 ORZ-ENV-POLLUTION-001）。
@@ -50,6 +50,12 @@ if ($cargoArgs -notcontains '--') {
         Write-Host '[run_orz_tests] 检测到被吞的前导 --：已在测试参数前补回分隔符（0bd ③）。'
     }
 }
+# 0.6.10 重建轮补（与 build_orz.ps1 同形；0bd ① 同族）：测试入口也要 `PROTOC`——
+# `orz-tools-api` 的 build.rs 在**依赖阶段**即需要 protoc（缺键 ⇒ 测试构建 exit 101）；
+# 此前只有狗粮启动器装配该键。存在即设入、仅回显，不覆盖用户在图上位。
+$protoc = 'D:\tb-eval\.tools\protoc-25.3\bin\protoc.exe'
+if (-not $env:PROTOC -and (Test-Path -LiteralPath $protoc)) { $env:PROTOC = $protoc }
+Write-Host "[run_orz_tests] PROTOC=$($env:PROTOC)"
 # 0bg ④：auto 降并行档（与 build_orz.ps1〔0bd ①〕同阈值同口径）——未显式
 # 给 -j/--jobs 时按宿主提交余量选档：余量紧⇒1／偏紧⇒2／宽裕⇒min(核,8)。
 $hasJobs = $false

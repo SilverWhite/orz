@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   狗粮 run 启动器（FR-A14 处置，2026-09-17）：env＋信任＋载体路径＋显式 cwd 断言一次装配。
 .DESCRIPTION
