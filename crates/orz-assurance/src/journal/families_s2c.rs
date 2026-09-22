@@ -2386,9 +2386,28 @@ pub fn verify_console_order_rejected(events: &[Value]) -> Vec<String> {
 }
 
 /// Python `_verify_v02_mechanical_audit` (MECHANICAL-AUDIT-LAYER): closed
-/// kind vocabulary, full payload shape (key / non-negative round / summary /
-/// nullable string anomaly).
+/// kind vocabulary（9 值，与 schema `mechanical-audit-update-event-payload-
+/// v0.2` 的 kind 枚举逐字互证），payload 形状**按 kind 分支**：
+/// `retrieval_batch` 走五键批读数（0av S1），其余 kind 走均一四键
+/// （key / non-negative round / summary / nullable string anomaly）。
+///
+/// 0bg S2（2026-09-22，TODO「Rust 侧仍只认三值…须实测核实是否构成对拍
+/// 空洞」的修复）：本函数此前只认 3 值（tool_result / plan_gate / budget）
+/// 而 schema 与 Python 侧已 8 值——**真 journal 会被记假错**（0bd 轮实测
+/// kinds 含 plan_write_guidance / context_scale / model_compression，空洞
+/// 坐实）。本批补齐 9 值（新增 `lif_domain`＝LIF 域迁移连带记录，均一四键）
+/// 并按分支校验 payload，与 Python 镜像同规。
 pub fn verify_mechanical_audit(events: &[Value]) -> Vec<String> {
+    const UNIFORM_KINDS: &[&str] = &[
+        "tool_result",
+        "plan_gate",
+        "budget",
+        "attention_ladder",
+        "context_scale",
+        "model_compression",
+        "plan_write_guidance",
+        "lif_domain",
+    ];
     let mut errors = Vec::new();
     for (index, event) in events.iter().enumerate() {
         if !is_v02(event)
@@ -2398,13 +2417,17 @@ pub fn verify_mechanical_audit(events: &[Value]) -> Vec<String> {
         }
         let payload = event.get("payload").cloned().unwrap_or(Value::Null);
         let kind = str_of(payload.get("kind"));
-        if !matches!(
-            kind,
-            Some("tool_result") | Some("plan_gate") | Some("budget")
-        ) {
+        let known = match kind {
+            Some("retrieval_batch") => true,
+            Some(k) => UNIFORM_KINDS.contains(&k),
+            None => false,
+        };
+        if !known {
             errors.push(format!(
                 "event {index}: mechanical_audit_update kind {:?} must be \
-                 tool_result / plan_gate / budget",
+                 tool_result / plan_gate / budget / attention_ladder / \
+                 context_scale / model_compression / plan_write_guidance / \
+                 retrieval_batch / lif_domain",
                 payload
                     .get("kind")
                     .map(|v| v.to_string())
@@ -2417,6 +2440,50 @@ pub fn verify_mechanical_audit(events: &[Value]) -> Vec<String> {
             ));
             continue;
         };
+        if kind == Some("retrieval_batch") {
+            // 0av S1：批读数五键（非负整数／非空串；与 Python 镜像同规）。
+            for key in [
+                "activation_id",
+                "usable",
+                "cap",
+                "retrieval_calls",
+                "terminal_reason",
+            ] {
+                if entry.get(key).is_none() {
+                    errors.push(format!(
+                        "event {index}: mechanical_audit_update retrieval_batch \
+                         payload needs {key}"
+                    ));
+                }
+            }
+            for key in ["usable", "cap", "retrieval_calls"] {
+                if let Some(value) = entry.get(key)
+                    && py_int(Some(value)).is_none_or(|n| n < 0)
+                {
+                    errors.push(format!(
+                        "event {index}: mechanical_audit_update retrieval_batch \
+                         {key} must be a non-negative integer"
+                    ));
+                }
+            }
+            if let Some(value) = entry.get("activation_id")
+                && str_of(Some(value)).is_none_or(str::is_empty)
+            {
+                errors.push(format!(
+                    "event {index}: mechanical_audit_update retrieval_batch \
+                     activation_id must be a non-empty string"
+                ));
+            }
+            if let Some(value) = entry.get("terminal_reason")
+                && str_of(Some(value)).is_none_or(str::is_empty)
+            {
+                errors.push(format!(
+                    "event {index}: mechanical_audit_update retrieval_batch \
+                     terminal_reason must be a non-empty string"
+                ));
+            }
+            continue;
+        }
         let key = str_of(entry.get("key"));
         if key.is_none_or(str::is_empty) {
             errors.push(format!(

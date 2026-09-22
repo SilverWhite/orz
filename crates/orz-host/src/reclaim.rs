@@ -475,13 +475,6 @@ mod tests {
         dir
     }
 
-    fn write_file(dir: &Path, rel: &str, bytes: usize) -> PathBuf {
-        let path = dir.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, vec![b'x'; bytes]).unwrap();
-        path
-    }
-
     fn dir_size(path: &Path) -> u64 {
         let mut total = 0;
         if let Ok(entries) = std::fs::read_dir(path) {

@@ -56,6 +56,13 @@ pub(crate) const KIND_PLAN_WRITE_GUIDANCE: &str = "plan_write_guidance";
 /// 模型面零改动、不进审查表/报告块。payload 形状与本族其余 kind 的
 /// {key,round,summary,anomaly} 不同（schema 按 kind 条件分支校验）。
 pub(crate) const KIND_RETRIEVAL_BATCH: &str = "retrieval_batch";
+/// 0bg S2（2026-09-22，用户裁决「连带记录」）：LIF 域迁移**连带记录**——
+/// LIF `域迁移+n` 即时计数徽章撤出模型面后（模型面只留 RLI 确认式），迁移
+/// 事实改由机械层留痕：key＝`lif.domain_migration`（每键一条覆盖写）、
+/// summary＝`{from}→{to}@r{n}；累计 m 次`、anomaly＝null（**不进报告块**）。
+/// **只记不发模型**、逐次历史由 journal 事件流（本 kind 的覆盖写＋LIF
+/// 事件面）可离线复算。payload 形状＝均一四键（同 tool_result 族）。
+pub(crate) const KIND_LIF_DOMAIN: &str = "lif_domain";
 
 /// 一条对象键的审查结果（每键至多一条，新结果覆盖旧结果）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -763,6 +770,7 @@ mod tests {
                 KIND_MODEL_COMPRESSION.to_string(),
                 KIND_PLAN_WRITE_GUIDANCE.to_string(),
                 KIND_RETRIEVAL_BATCH.to_string(),
+                KIND_LIF_DOMAIN.to_string(),
             ]
         );
         // 0av S1：schema 按 kind 条件分支校验 payload——retrieval_batch 走
@@ -829,6 +837,7 @@ mod tests {
                 KIND_CONTEXT_SCALE.to_string(),
                 KIND_MODEL_COMPRESSION.to_string(),
                 KIND_PLAN_WRITE_GUIDANCE.to_string(),
+                KIND_LIF_DOMAIN.to_string(),
             ]
         );
         // 分支触发面与 kind 枚举互补且不交——两分支并集恰为全枚举。

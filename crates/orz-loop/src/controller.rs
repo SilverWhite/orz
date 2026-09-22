@@ -749,6 +749,9 @@ pub struct AgentLoopController {
     /// 成功读取」的版本游标——live-only、随 run 复位；`blackboard_read`
     /// 成功 live 读取后推进对应分区游标（其余分区保持未读徽章）。
     pub(crate) blackboard_read_cursors: Mutex<std::collections::HashMap<String, u64>>,
+    /// 0bg S2（2026-09-22）：LIF 域迁移**连带记录**游标——已落机械记录的
+    /// 累计迁移数；消费方 [`Self::take_new_lif_migrations`]（只记不发模型）。
+    pub(crate) lif_migration_recorded: Mutex<u64>,
 }
 
 /// P2-14 S1：`board_stamp_pin` 的 RAII 守卫——主车道决策轮工具段持有，
@@ -965,6 +968,8 @@ impl AgentLoopController {
             lif: Mutex::new(new_lif_engine()),
             board_stamp_pin: Mutex::new(None),
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
+            // 0bg S2：LIF 域迁移连带记录游标（只记不发模型）。
+            lif_migration_recorded: Mutex::new(0),
             plan_first_enabled: false,
             plan_first_session_done: false,
             session_turn: 1,
@@ -1590,6 +1595,8 @@ impl AgentLoopController {
             lif: Mutex::new(new_lif_engine()),
             board_stamp_pin: Mutex::new(None),
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
+            // 0bg S2：LIF 域迁移连带记录游标（只记不发模型）。
+            lif_migration_recorded: Mutex::new(0),
             plan_first_enabled: false,
             plan_first_session_done: false,
             session_turn: 1,
@@ -2385,6 +2392,43 @@ impl AgentLoopController {
     /// 说明（不虚构读数）。渲染内容 = 通道锚点（u/v/10·T̂ 预测/E/节律/θ/
     /// hits）＋自判动作域。**不再渲染 LIF 对照**（补充项②：RLI 不与 LIF
     /// 对照——域一致性口径改对「框架实际动作结果」，由离线观测件核读）。
+    /// 0bg S2（2026-09-22，摩擦 g／用户裁决 (c) 同批）：分通道明细行——`now`
+    /// 面尾段与 `selector=channels` 折叠面**单一来源**（超预算时 now 面让位、
+    /// 明细仍可折叠读取）。0be 四项② 口径照旧：`pred` 标注实际 horizon 档位、
+    /// 短视锚点 `p1(1T̂)` 独立、`prog` 带 λ̂（未激活 = "—"，FR-7 不混同真值 0）。
+    fn rli_channel_lines(shadow: &orz_assurance::lif::RliShadow, t_hat: f64) -> Vec<String> {
+        let mut lines = Vec::new();
+        for &kind in &orz_assurance::lif::RLI_CHANNELS {
+            let ch = shadow.channel(kind);
+            let horizon = orz_assurance::lif::rli_horizon_steps(kind);
+            let lambda = if kind == orz_assurance::lif::ChannelKind::Prog {
+                format!(
+                    " λ̂={}",
+                    ch.lambda_hat()
+                        .map_or_else(|| "—".to_string(), |l| format!("{l:.3}"))
+                )
+            } else {
+                String::new()
+            };
+            lines.push(format!(
+                "  {}: u={:.2} v={:+.3} pred({:.0}T̂)={:.2} p1(1T̂)={:.2} \
+                 E={:.2} r={:.0} θ={:.2} hits={}{}",
+                format!("{kind:?}").to_lowercase(),
+                ch.u(),
+                ch.v(),
+                horizon,
+                ch.prediction_at_horizon(t_hat),
+                ch.prediction_short(t_hat),
+                ch.envelope(),
+                ch.rhythm(),
+                ch.theta(),
+                ch.hit_count(),
+                lambda,
+            ));
+        }
+        lines
+    }
+
     pub(crate) fn render_rli_section(
         &self,
         selector: Option<&str>,
@@ -2413,6 +2457,10 @@ impl AgentLoopController {
                     t_hat,
                     domain.current_domain().as_str(),
                 )];
+                // 0bg S2（2026-09-22，用户裁决 (c)）：面头**固定符号表一行**
+                // ——缩写族在面头一次给全（不逐行注解、避免挤掉读数；与摩擦 g
+                // 同批）。单一源＝`RLI_SYMBOL_LEGEND`（工具描述同引用）。
+                lines.push(orz_assurance::lif::RLI_SYMBOL_LEGEND.to_string());
                 if let Some(row) = domain.now() {
                     lines.push(format!(
                         "自判域行: r{} [{:.0}s | {} | 入域 r{} | 驻留 {} 轮] | \
@@ -2474,52 +2522,9 @@ impl AgentLoopController {
                         .median_dwell
                         .map_or_else(|| "—".to_string(), |d| format!("{d} 轮")),
                 ));
-                // 0bf ③：近提醒（事件追溯面；模型面两触发提醒一次性投递在
-                // pull-delta 头，`rli.now` 只列最近 2 条供回看）。
-                let notices: Vec<String> = shadow
-                    .notices()
-                    .iter()
-                    .rev()
-                    .take(2)
-                    .rev()
-                    .map(|n| n.text.clone())
-                    .collect();
-                if !notices.is_empty() {
-                    lines.push(format!("近提醒: {}", notices.join(" | ")));
-                }
-                // 0be 四项②：分通道 horizon（`pred` 标注实际档位）＋短视锚点
-                // 独立化（`p1(1T̂)`）；`prog` 另有 ① 的 λ̂（未激活 = "—"，
-                // 与真值 0 不混同——FR-7 口径）。
-                for &kind in &orz_assurance::lif::RLI_CHANNELS {
-                    let ch = shadow.channel(kind);
-                    let horizon = orz_assurance::lif::rli_horizon_steps(kind);
-                    let lambda = if kind == orz_assurance::lif::ChannelKind::Prog {
-                        format!(
-                            " λ̂={}",
-                            ch.lambda_hat()
-                                .map_or_else(|| "—".to_string(), |l| format!("{l:.3}"))
-                        )
-                    } else {
-                        String::new()
-                    };
-                    lines.push(format!(
-                        "  {}: u={:.2} v={:+.3} pred({:.0}T̂)={:.2} p1(1T̂)={:.2} \
-                         E={:.2} r={:.0} θ={:.2} hits={}{}",
-                        format!("{kind:?}").to_lowercase(),
-                        ch.u(),
-                        ch.v(),
-                        horizon,
-                        ch.prediction_at_horizon(t_hat),
-                        ch.prediction_short(t_hat),
-                        ch.envelope(),
-                        ch.rhythm(),
-                        ch.theta(),
-                        ch.hit_count(),
-                        lambda,
-                    ));
-                }
-                // 0be 四项④：繁杂度读数（未就绪 = 机械如实；越线锁存面供
-                // 宿主投递判定对照——"已投递/未投递"由侧车档键簿记）。
+                // 0be 四项④（0bg S2 前移——摩擦 g：繁杂度行不再落窗外）：
+                // 繁杂度读数（未就绪 = 机械如实；越线锁存面供宿主投递判定
+                // 对照——"已投递/未投递"由侧车档键簿记）。
                 let cplx = shadow.complexity();
                 let tier_keys = orz_assurance::lif::RLI_CPLX_TIERS
                     .iter()
@@ -2553,6 +2558,40 @@ impl AgentLoopController {
                         "繁杂度: 未就绪（合成样本 {}/{}；就绪后按本会话前段基线自校准）",
                         cplx.samples(),
                         orz_assurance::lif::RLI_CPLX_BASELINE_SAMPLES,
+                    ));
+                }
+                // ——核心段到此为止；其后明细段（近提醒／分通道）按预算让位 ——
+                let core_len = lines.len();
+                // 0bf ③：近提醒（事件追溯面；模型面提醒一次性投递在 pull-delta
+                // 头，`rli.now` 只列最近 2 条供回看——0bg S2 起文案自带注解）。
+                let notices: Vec<String> = shadow
+                    .notices()
+                    .iter()
+                    .rev()
+                    .take(2)
+                    .rev()
+                    .map(|n| n.text.clone())
+                    .collect();
+                for text in notices {
+                    lines.push(format!("近提醒: {text}"));
+                }
+                // 0be 四项②：分通道明细（尾段；超预算最先让位——明细面
+                // `selector=channels` 折叠可读）。渲染与折叠面单一来源。
+                lines.extend(Self::rli_channel_lines(shadow, t_hat));
+                // 0bg S2（摩擦 g：1 KiB 截断可见性）：**预算内装配＋显式省略
+                // 行**——超预算从尾部让位（分通道 → 近提醒；核心行不剪），
+                // 不静默截断；被剪行以省略行点名可读去处。
+                const NOW_BUDGET: usize = 830;
+                let mut omitted = 0usize;
+                while lines.len() > core_len
+                    && lines.iter().map(|l| l.len() + 1).sum::<usize>() > NOW_BUDGET
+                {
+                    lines.pop();
+                    omitted += 1;
+                }
+                if omitted > 0 {
+                    lines.push(format!(
+                        "…已省 {omitted} 行（分通道明细 selector=channels；域历史 selector=history）"
                     ));
                 }
                 lines.join("\n")
@@ -2654,9 +2693,21 @@ impl AgentLoopController {
                 }
                 line
             }
+            "channels" => {
+                // 0bg S2（2026-09-22，摩擦 g 的让位目标）：分通道明细折叠面
+                // ——now 面超预算时明细段让位到这里（读数不丢、可折叠读；
+                // 渲染与 now 尾段单一来源）。
+                let mut lines = vec![format!(
+                    "rli.channels → [RLI on | T̂={:.1}s | 自判域 {}]（明细；符号表见 now 面头）",
+                    t_hat,
+                    domain.current_domain().as_str(),
+                )];
+                lines.extend(Self::rli_channel_lines(shadow, t_hat));
+                lines.join("\n")
+            }
             other => {
                 return Err(format!(
-                    "invalid rli selector: {other} — 合法值 now|recent|history|feature"
+                    "invalid rli selector: {other} — 合法值 now|recent|history|feature|channels"
                 ));
             }
         };
@@ -2783,13 +2834,14 @@ impl AgentLoopController {
         // （既有 10MiB 疲劳提醒机制不变；固化写入为 KB 量级，水位无虞）。
         let watermark = self.blackboard_watermark_label();
         let mut items = self.blackboard.read().partition_revisions();
-        let (temporal_round, migration_count, last_migration, rli_steps, rli_pending_notices) = {
+        // 0bg S2：`migration_count`/`last_migration` 原为「域迁移+n」徽章输入；
+        // 双迁移定案后模型面不再渲染该徽章（迁移事实改走机械记录，见
+        // `take_new_lif_migrations`），此处只取 round 与 RLI 面读数。
+        let (temporal_round, rli_steps, rli_pending_notices) = {
             let lif = self.lif.lock().unwrap();
             let t = lif.temporal();
             (
                 t.round(),
-                t.migration_count(),
-                t.history().last().copied(),
                 lif.rli_shadow().map(|s| s.steps()),
                 // 0bf ③（2026-09-22）：未投递 RLI 提醒（两触发；文案触发时
                 // 定格，含失配概率）——一次性投递候选，见下方头段。
@@ -2812,12 +2864,6 @@ impl AgentLoopController {
         }
 
         let mut cursors = self.blackboard_read_cursors.lock().unwrap();
-        // 双基线（审查处理 M1）：temporal 徽章用 round 游标；域迁移段用
-        // migration_count 基线——两者刻度不同，不可共用一把尺。
-        let migration_baseline = cursors
-            .get(Self::MIGRATION_CURSOR_KEY)
-            .copied()
-            .unwrap_or(0);
         // 0ap（2026-09-18，设计 §3 主面）：水位标旁增**滑块读数段**——主
         // 滑块以外未压缩分块数 N＋估算 token（「滑块外可压缩 N 块 ≈ est K」）。
         // 读时现算：分段文本由调用方在工具执行点现算传入（messages 在握、
@@ -2839,25 +2885,25 @@ impl AgentLoopController {
             header.push(' ');
             header.push_str(&badges.join(" "));
         }
-        if migration_count > migration_baseline
-            && let Some(m) = last_migration
-        {
-            let delta = migration_count.saturating_sub(migration_baseline);
-            header.push_str(&format!(
-                " 域迁移+{delta}: {}→{}@r{}",
-                m.from.as_str(),
-                m.to.as_str(),
-                m.at_round
-            ));
-        }
+        // 0bg S2（2026-09-22，双迁移通知定案）：LIF `域迁移+n` **即时计数
+        // 徽章撤出模型面**——迁移事实改由机械层连带记录
+        // （`mechanical_audit_update{kind:"lif_domain", key:"lif.domain_migration"}`，
+        // 见 `take_new_lif_migrations` 与 agent_loop 挂点）；模型面只留 RLI
+        // 「域迁移确认」（稳定后一次性）。LIF 自身计数照旧内部累计。
         // 0bf ③（2026-09-22，用户令「模型面提醒只留两触发…一次性投递」）：
-        // RLI 提醒段——pull-delta 头一次性携带（仿 域迁移 段形态）。预算内
-        // 最多 2 条、逐条先量后挂（不截断半条）；挂上的即时计入投递集合，
-        // 未挂的留待下次读取（不重不漏）。文案在触发时定格（含失配概率）。
+        // RLI 提醒段——pull-delta 头一次性携带。预算内最多 2 条、逐条先量后
+        // 挂（不截断半条）；**0bg S2：域类提醒（迁移确认／掩盖缺口）每次
+        // 投递至多 1 条**（用户定案「每轮最多一条域类提醒」——第二条留待
+        // 下次读取，不重不漏）。文案在触发时定格（含注解）。
         let mut attached_notices = 0usize;
+        let mut attached_domain_notice = false;
         for text in &rli_pending_notices {
             if attached_notices >= 2 {
                 break;
+            }
+            let domain_class = text.starts_with("域迁移确认") || text.starts_with("掩盖缺口");
+            if domain_class && attached_domain_notice {
+                continue;
             }
             let piece = if attached_notices == 0 {
                 format!(" RLI提醒: {text}")
@@ -2869,19 +2915,17 @@ impl AgentLoopController {
             }
             header.push_str(&piece);
             attached_notices += 1;
+            attached_domain_notice |= domain_class;
         }
         // 0ae D0：水位状态标恒挂（用户定案「各分区响应头带读数」）；
         // 增量徽章与域迁移段只在有变化时追加（原「零噪音」纪律对徽章
         // 部分继续成立）。
         let header = orz_assurance::tool_envelope::enforce_bound(header, HEADER_CAP);
-        // 推进本次读取分区的游标（成功 live 读语义）。读 temporal 时同时
-        // 推进 round 徽章游标与迁移计数基线（未读徽章模型：迁移摘要跟随
-        // temporal 分区被读而清零）。
+        // 推进本次读取分区的游标（成功 live 读语义）。0bg S2：迁移计数基线
+        // 随「域迁移+n」徽章一并退役（迁移事实改走机械记录，模型面只留 RLI
+        // 「域迁移确认」——双迁移通知定案）。
         if let Some((_, revision)) = items.iter().find(|(n, _)| *n == section) {
             cursors.insert(section.to_string(), *revision);
-            if section == "temporal" {
-                cursors.insert(Self::MIGRATION_CURSOR_KEY.to_string(), migration_count);
-            }
         }
         drop(cursors);
         // 0bf ③：携带即投递（在游标锁释放后单独取 lif 锁——不倒锁序）。
@@ -2892,10 +2936,6 @@ impl AgentLoopController {
         }
         format!("{header}\n{body}")
     }
-
-    /// 域迁移段的独立基线游标键（审查处理 M1，设计 §3/§4）——迁移计数
-    /// 与 temporal round 刻度不同，必须分存；随 run 复位（同其余游标）。
-    const MIGRATION_CURSOR_KEY: &'static str = "temporal_migration";
 
     /// PULL 自描述（2026-08-31 审查处理 M2）：渲染层「失败形状」判定——
     /// 参数组合错误 / 未知分区 / 点读未找到在渲染层以文本返回（O4 先例
@@ -2926,6 +2966,39 @@ impl AgentLoopController {
             .unwrap()
             .temporal_mut()
             .restore_spikes(spikes);
+    }
+
+    /// 0bg S2（2026-09-22，双迁移定案「连带记录」）：取出**尚未落机械记录**
+    /// 的 LIF 域迁移（`(from, to, at_round, 累计序数 m)`），并推进内部游标。
+    /// 消费方（agent_loop 逐轮）据此写
+    /// `mechanical_audit_update{kind:"lif_domain", key:"lif.domain_migration",
+    /// payload:{round, summary:"{from}→{to}@r{n}；累计 m 次", anomaly:null}}`
+    /// ——只记不发模型；逐次历史由 journal 可离线复算。
+    pub(crate) fn take_new_lif_migrations(
+        &self,
+    ) -> Vec<(orz_assurance::lif::Domain, orz_assurance::lif::Domain, u64, u64)> {
+        let lif = self.lif.lock().unwrap();
+        let t = lif.temporal();
+        let total = t.migration_count();
+        let mut recorded = self.lif_migration_recorded.lock().unwrap();
+        if total <= *recorded {
+            return Vec::new();
+        }
+        let history = t.history();
+        // history 有界（≤20）⇒ 其下标 j 对应累计序数 = (total − len) + j + 1。
+        let offset = total.saturating_sub(history.len() as u64);
+        let new_count = (total - *recorded) as usize;
+        let start = history.len().saturating_sub(new_count.min(history.len()));
+        let out = history[start..]
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let cumulative = offset + (start as u64) + (i as u64) + 1;
+                (m.from, m.to, m.at_round, cumulative)
+            })
+            .collect::<Vec<_>>();
+        *recorded = total;
+        out
     }
 
     /// P2-10 F2 §3.5 (I4): the current domain spikes (sidecar persistence).
@@ -3556,7 +3629,7 @@ impl AgentLoopController {
                         "selector": {
                             "type": "string",
                             "enum": ["now", "recent", "history", "feature"],
-                            "description": "P2-10 F2 §3.3 (2026-08-30): temporal 查询面选择器——now（当前决策轮行，默认）/ recent（最近 k 行）/ history（域迁移日志 ≤20）/ feature（name 特征序列，k≤20）。仅与 section=temporal 组合有效（rli 参考面支持 now|recent|history|feature）；其余分区忽略（审查处理 R4 / F7）。",
+                            "description": "P2-10 F2 §3.3 (2026-08-30): temporal 查询面选择器——now（当前决策轮行，默认）/ recent（最近 k 行）/ history（域迁移日志 ≤20）/ feature（name 特征序列，k≤20）。仅与 section=temporal 组合有效（0bg S2 起 rli 参考面支持 now|recent|history|feature|channels——now 面头一行固定符号表；`channels`＝分通道明细折叠面）；其余分区忽略（审查处理 R4 / F7）。",
                         },
                         "k": {
                             "type": "integer",
@@ -6388,10 +6461,12 @@ body"
         }
         let out = controller.attach_pull_delta("plan", "body".to_string(), 0, None);
         assert!(out.contains("temporal+2"), "{out}");
-        assert!(out.contains("域迁移+1: normal→stuck@r2"), "{out}");
+        // 0bg S2（双迁移定案）：模型面不再携带「域迁移+n」摘要段——迁移事实
+        // 走机械记录（kind=lif_domain）。
+        assert!(!out.contains("域迁移+"), "{out}");
         // 读 temporal（仍显示未读徽章并推进 temporal 游标）→ 再读时清零。
         let out2 = controller.attach_pull_delta("temporal", "body".to_string(), 0, None);
-        assert!(out2.contains("域迁移+1: normal→stuck@r2"), "{out2}");
+        assert!(!out2.contains("域迁移+"), "{out2}");
         let out3 = controller.attach_pull_delta("temporal", "body".to_string(), 0, None);
         // 0ae D0：水位恒挂 ⇒ 无增量时头仍存在（只剩水位，无徽章/迁移段）。
         assert!(out3.starts_with("[黑板 增量 水位【0.0M/10M】]"), "{out3}");
@@ -6499,18 +6574,36 @@ body"
             "v_err=",
             "pred(10T̂)",
             "err:",
-            "prog:",
+            // 0bg S2：`prog:` 等尾段明细在超预算时让位到 `selector=channels`
+            // 折叠面（下方单独断言）——now 面只保证核心行 + 让位标。
             // 0be 四项②④（2026-09-21）：分通道 horizon＋短视锚点＋λ̂＋繁杂度
             // 读数（未就绪时机械如实）。
             "p1(1T̂)",
             "λ̂=",
             "繁杂度:",
+            // 0bg S2（2026-09-22）：面头固定符号表一行（用户裁决 (c)）。
+            "符号:",
         ] {
             assert!(now.contains(needle), "now render missing {needle}: {now}");
         }
+        // 0bg S2：分通道明细折叠面（now 超预算的让位目标；渲染单一来源）。
+        let channels = controller
+            .render_rli_section(Some("channels"), None, None)
+            .unwrap();
+        assert!(channels.contains("rli.channels"), "{channels}");
+        for needle in ["err:", "stall:", "slow:", "deny:", "prog:", "p1(1T̂)", "λ̂="] {
+            assert!(
+                channels.contains(needle),
+                "channels 面缺 {needle}: {channels}"
+            );
+        }
+        // 0bg S2 标定批：分通道 horizon 峰档（Stall=2／Slow=5／Deny=10；
+        // Err/Prog=10）逐通道标注。
         assert!(
-            now.contains("pred(2T̂)") && now.contains("pred(1T̂)") && now.contains("pred(30T̂)"),
-            "分通道 horizon 表（Stall=2/Slow=1/Deny=30）应逐通道标注: {now}"
+            channels.contains("pred(2T̂)")
+                && channels.contains("pred(5T̂)")
+                && channels.contains("pred(10T̂)"),
+            "分通道 horizon 表（Stall=2/Slow=5/Deny=10/Err=Prog=10）应逐通道标注: {channels}"
         );
         assert!(
             !now.contains("LIF"),
@@ -6579,9 +6672,10 @@ body"
         assert!(!out3.contains("rli+"), "cursor cleared after read: {out3}");
     }
 
-    /// PULL 自描述 §3/§4（2026-08-31 审查处理 M1 回归）：temporal 双基线——
-    /// round 徽章游标与迁移计数基线分开推进；读 temporal 后发生的新迁移
-    /// 仍以准确的「域迁移+n」出现在其它分区读取头上（不再被 round 刻度吞掉）。
+    /// 0bg S2（2026-09-22，双迁移通知定案）：模型面**不再**渲染 LIF「域迁移
+    /// +n」徽章——迁移事实改由机械层连带记录（`kind=lif_domain`，见
+    /// `take_new_lif_migrations`）；本测试改为断言徽章**消失**且各分区读取头
+    /// 不再携带迁移段（原「双基线」回归随之退役——模型面已无该段）。
     #[test]
     fn pull_delta_migration_baseline_tracks_new_migrations_after_temporal_read() {
         let controller =
@@ -6599,13 +6693,22 @@ body"
         }
         let first = controller.attach_pull_delta("temporal", "body".to_string(), 0, None);
         assert!(first.contains("temporal+5"), "{first}");
-        assert!(first.contains("域迁移+3"), "{first}");
+        assert!(
+            !first.contains("域迁移+"),
+            "双迁移定案（0bg S2）：模型面不再渲染「域迁移+n」: {first}"
+        );
         // 读 temporal 后双基线推进 → 无增量时零噪音。
         let quiet = controller.attach_pull_delta("temporal", "body".to_string(), 0, None);
         // 0ae D0：水位恒挂；无增量时仅水位头 + 正文。
         assert_eq!(quiet, "[黑板 增量 水位【0.0M/10M】]\nbody", "{quiet}");
-        // 之后新发生 2 次迁移（round 5→7、migration 3→5）：读 plan 应显示
-        // temporal+2 与 域迁移+2（准确新迁移计数，而非 migration−round）。
+        // 机械记录消费：首次调用应取回既有 3 次迁移（游标自 0 起步；序数 1..3）。
+        let initial = controller.take_new_lif_migrations();
+        assert_eq!(initial.len(), 3, "{initial:?}");
+        assert_eq!(initial[0].3, 1, "累计序数");
+        assert_eq!(initial[2].3, 3, "累计序数");
+        // 之后新发生 2 次迁移（round 5→7、migration 3→5）：读 plan 显示
+        // temporal+2（round 徽章照旧）；**迁移不再进模型面**（机械记录消费
+        // 见 `take_new_lif_migrations`——计数器准确推进、逐次可核）。
         {
             let mut guard = controller.lif.lock().unwrap();
             let temporal = guard.temporal_mut();
@@ -6614,17 +6717,20 @@ body"
         }
         let plan_read = controller.attach_pull_delta("plan", "== plan ==\n".to_string(), 0, None);
         assert!(plan_read.contains("temporal+2"), "{plan_read}");
-        assert!(plan_read.contains("域迁移+2"), "{plan_read}");
-        // 再读 temporal：仍显示未读迁移并清双基线。
-        let temporal_read = controller.attach_pull_delta("temporal", "body".to_string(), 0, None);
-        assert!(temporal_read.contains("域迁移+2"), "{temporal_read}");
+        assert!(!plan_read.contains("域迁移+"), "{plan_read}");
+        // 机械记录消费：两次新迁移带准确累计序数（4、5）。
+        let migrations = controller.take_new_lif_migrations();
+        assert_eq!(migrations.len(), 2, "{migrations:?}");
+        assert_eq!(migrations[0].2, 6, "at_round");
+        assert_eq!(migrations[0].3, 4, "累计序数");
+        assert_eq!(migrations[1].3, 5, "累计序数");
+        assert!(controller.take_new_lif_migrations().is_empty(), "游标已推进");
         let quiet2 = controller.attach_pull_delta("temporal", "body".to_string(), 0, None);
-        assert_eq!(
-            quiet2,
-            "[黑板 增量 水位【0.0M/10M】]
-body",
+        assert!(
+            quiet2.starts_with("[黑板 增量 水位【0.0M/10M】]") && quiet2.ends_with("\nbody"),
             "{quiet2}"
         );
+        assert!(!quiet2.contains("域迁移+"), "{quiet2}");
     }
 
     /// PULL 自描述 §4（2026-08-31 审查处理 N1）：增量头自身 ≤256 B——全分区

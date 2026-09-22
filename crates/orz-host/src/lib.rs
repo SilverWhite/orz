@@ -3800,14 +3800,20 @@ mod tests {
         // spawn would die on arrival). The follow-up is a real
         // `run_terminal_cmd` — the original review flagged that a `read_file`
         // follow-up (no process) could not catch the latch.
+        // 0bg ①（2026-09-22）：续跑活性调用改**显式更长覆盖**——宿主 2s 默认
+        // 预算在并行负载（宿主套件并行档）下可能被冷启动壳层吃掉，让本测试
+        // 假红（0bd 轮定位：串行 322/0/5 全绿、并行恒现 1 条）。语义不变：
+        // 断言的是「超时后进程类工具仍可用」，不是 2s 这个界；显式 30s 覆盖
+        // 只去负载敏感，不放宽断言强度。
         let follow_up = host
-            .call_tool(
+            .call_tool_with_timeout(
                 "run_terminal_cmd",
                 serde_json::json!({
                     "command": "echo orz-alive",
                     "description": "post-timeout liveness",
                 }),
                 "call-t2",
+                Some(std::time::Duration::from_secs(30)),
             )
             .await
             .expect("process-type tool works after the timeout");

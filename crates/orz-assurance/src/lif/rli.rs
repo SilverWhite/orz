@@ -119,17 +119,19 @@ pub const RLI_RHYTHM_TOLERANCE_HALF_PERIODS: f64 = 0.5;
 pub const RLI_PREDICTION_STEPS: f64 = 10.0;
 
 /// 分通道 horizon 表（0be 四项②，2026-09-21 用户令「分通道 horizon ＋短视
-/// 锚点独立化」；依据＝[`RLI_FORECAST_CONTRAST`] §2／§2.1 逐通道最优档：
-/// Slow／Stall 短视最优（h=1–2）、Err／Deny 长视最优（h=5–30））。
+/// 锚点独立化」；**0bg S2 标定批 2026-09-22**：依 0bf 探针 skill 表
+/// （`rli-forecast-contrast-0bf.json`）逐通道峰档重标——Slow h=1→**5**
+/// （skill +0.317 vs h1 +0.222）、Deny h=30→**10**（+0.638 vs h30 +0.571）；
+/// Err=10、Stall=2、Prog=10 保持（峰档/弱档；探针读数见 0bf 报告 §3）。
 /// **语义常数、禁拟合**；`prog` 维持默认档（修正项 ① 后另测）。
 ///
 /// [`RLI_FORECAST_CONTRAST`]: ../../../../../docs/audits/RLI_FORECAST_CONTRAST_2026-09-21.md
 pub fn rli_horizon_steps(kind: ChannelKind) -> f64 {
     match kind {
-        ChannelKind::Slow => 1.0,
+        ChannelKind::Slow => 5.0,
         ChannelKind::Stall => 2.0,
         ChannelKind::Err => RLI_PREDICTION_STEPS,
-        ChannelKind::Deny => 30.0,
+        ChannelKind::Deny => 10.0,
         ChannelKind::Prog => RLI_PREDICTION_STEPS,
     }
 }
@@ -1250,7 +1252,46 @@ pub enum RliNoticeKind {
     MigrationConfirmed,
     /// 持续越线（通道 `u ≥ θ` 连续 [`RLI_STREAK_K`] 个采样点）。
     StreakCrossed,
+    /// 掩盖缺口（0bg S1，2026-09-22 用户裁决「直接做掩盖缺口吧」）：**域
+    /// 覆盖缺口**事实——就绪（已完成段 ≥ [`RLI_COVERAGE_MIN_SEGMENTS`]）∧
+    /// 存在未访问域（分母＝四值域枚举，`Start` 不计）∧ 当前段驻留 ≥ 该域
+    /// 已完段驻留中位（不足退全域中位）时，在**触发沿**报一次；域切换后
+    /// 重武装。**每轮最多一条域类提醒**（与域迁移确认同轮时让位，沿不吞——
+    /// 条件持续成立即下一轮报）。
+    CoverageGap,
 }
+
+/// 0bg S2（2026-09-22，用户裁决「该加的注解都加上」⇒ **随报**全采纳）：
+/// 每条模型面提醒的**固定模板注解**（术语释义／基准／非阻断声明；**自含**
+/// ——不引用历史消息，压缩后仍可解读）。**单一源（FR-5）**：提醒文案、面头
+/// 符号表与工具描述都引用本处；钉子保同步（`notice_texts_stay_within_budget`
+/// 与 `symbol_legend_is_single_source`）。预算：本体＋注解
+/// ≤ [`RLI_NOTICE_TEXT_BUDGET`] B/条（仍在 pull-delta 挂头的 256 B 帽内）。
+pub fn rli_notice_annotation(kind: RliNoticeKind) -> &'static str {
+    match kind {
+        RliNoticeKind::CoverageGap => {
+            "〔g=未访域占比；r=驻留÷该域已完段中位；域失配=累计超期；仅读数非阻断〕"
+        }
+        RliNoticeKind::MigrationConfirmed => {
+            "〔稳定=震荡结束后确认的轮数；失配=ρ>1占比；仅读数非阻断〕"
+        }
+        RliNoticeKind::StreakCrossed => "〔连续k个采样点u≥θ；失配=ρ>1占比；仅读数非阻断〕",
+    }
+}
+
+/// 0bg S2：提醒**本体＋注解**的字节预算（B/条）——注解随报的成本上界
+/// （用户裁决「随报的成本不大…关键是要方便模型理解」的口径门）。
+pub const RLI_NOTICE_TEXT_BUDGET: usize = 240;
+
+/// 0bg S2：覆盖缺口就绪门——已完成段数下限（用户令「冷启动久些不是坏事，
+/// 域建模与预测本就需要基础数据量」；域图需基础数据量）。
+pub const RLI_COVERAGE_MIN_SEGMENTS: u64 = 3;
+
+/// 0bg S2：RLI 面**面头固定符号表**（一行；不逐行注解、避免挤掉读数——
+/// 用户裁决 (c)）。与 [`rli_notice_annotation`] 同为单一源素材：工具描述
+/// 由本常量拼入（钉子保同步）。
+pub const RLI_SYMBOL_LEGEND: &str =
+    "符号: u=水平 v=速率 pred=闭式前推 p1=短视 E=包络 r=节律 θ=阈 λ̂=到达率 ρ=失配率 c=繁杂度 T̂=轮语义秒";
 
 /// 一次模型面提醒（0bf ③；**一次性投递**：pull-delta 头携带一次后置
 /// `delivered`；随 RLI 影子快照入侧车——跨 prompt 不丢、不重发）。
@@ -1301,6 +1342,10 @@ pub struct RliShadow {
     grid_samples: u64,
     /// 0bf ④：采样点总数（决策轮＋工具事件＋网格补点；开销读数面）。
     sample_points: u64,
+    /// 0bg S2（2026-09-22）：掩盖缺口（[`RliNoticeKind::CoverageGap`]）**触发
+    /// 沿重武装**标志——触发一次后置 `false`，域切换重武装（`true`）。随
+    /// 侧车持久（legacy 快照缺字段 = `true`，宁可多报一次也不吞）。
+    coverage_gap_armed: bool,
 }
 
 impl Default for RliShadow {
@@ -1334,6 +1379,8 @@ impl RliShadow {
             notices: VecDeque::with_capacity(RLI_NOTICE_CAP),
             grid_samples: 0,
             sample_points: 0,
+            // 0bg S2：掩盖缺口触发沿重武装——新建即待触发。
+            coverage_gap_armed: true,
         }
     }
 
@@ -1420,6 +1467,13 @@ impl RliShadow {
         self.grid_samples
     }
 
+    /// 0bg S2（2026-09-22）：域覆盖读数（掩盖缺口判据与随报字段的单一
+    /// 来源）——就绪/越线判定由 [`Self::coverage_gap_text`] 消费，测试与
+    /// 渲染可直接读。
+    pub fn coverage_stats(&self) -> RliCoverageStats {
+        self.domain.coverage_stats()
+    }
+
     /// 采样点总数（决策轮＋工具事件＋网格补点；0bf ④ 开销读数面）。
     pub fn sample_points(&self) -> u64 {
         self.sample_points
@@ -1482,6 +1536,7 @@ impl RliShadow {
 
     /// 0bf ③④（2026-09-22）：**采样点结算**（决策轮／工具事件／网格补点
     /// 三源共用）——锚点序列采样 ＋ 持续越线观察 ＋ 采样计数。持续越线只
+    /// 观察四条压力通道（err／stall／slow／deny；`prog` 不参与——新鲜
     /// 观察**四条压力通道**（err／stall／slow／deny；`prog` 不参与——新鲜
     /// 度高不是异常）。观察为纯读数：不改 θ、不改 fires、不反馈。
     fn note_sample_point(&mut self, t: f64) {
@@ -1549,6 +1604,57 @@ impl RliShadow {
         }
     }
 
+    /// 0bg S2（2026-09-22）：掩盖缺口文案（只给读数与特征、无动作建议）。
+    /// 返回 `None` ＝ 未达触发条件（就绪门／缺口 `g>0`／越线门——判据读自
+    /// [`RliCoverageStats`] 单一来源）。文案＋注解 ≤
+    /// [`RLI_NOTICE_TEXT_BUDGET`] B/条（由 `push_notice` 统一追加注解）。
+    fn coverage_gap_text(&self) -> Option<String> {
+        let stats = self.domain.coverage_stats();
+        if stats.completed_segments < RLI_COVERAGE_MIN_SEGMENTS || stats.uncovered.is_empty() {
+            return None;
+        }
+        // 越线门：当前段驻留 ≥ 该域已完段中位；不足退会话内全域中位。
+        let median = stats.current_median.or(stats.fallback_median)?;
+        if stats.current_dwell < median {
+            return None;
+        }
+        let ratio = stats.current_dwell as f64 / (median.max(1) as f64);
+        let listed = stats
+            .uncovered
+            .iter()
+            .take(2)
+            .map(|d| d.as_str())
+            .collect::<Vec<_>>()
+            .join("/");
+        let more = if stats.uncovered.len() > 2 { "…" } else { "" };
+        Some(format!(
+            "掩盖缺口: 未访 {listed}{more}；g={:.2}；驻留 {} 轮（中位 {}；r={:.1}）；域失配 {}/{} 轮",
+            stats.g, stats.current_dwell, median, ratio, stats.overdue_rounds, stats.completed_rounds,
+        ))
+    }
+
+    /// 0bg S2：掩盖缺口**触发沿**评估——就绪 ∧ g>0 ∧ 越线 ⇒ 报一次并关闭
+    /// 沿（域切换／`restore` 重武装）；已关闭或条件不满足 ⇒ `false`。
+    /// 抽为独立方法：触发逻辑可单测、不经决策轮的域机副作用。
+    pub(crate) fn maybe_push_coverage_gap(&mut self, t: f64) -> bool {
+        if !self.coverage_gap_armed {
+            return false;
+        }
+        let Some(text) = self.coverage_gap_text() else {
+            return false;
+        };
+        let round = (self.domain.round() > 0).then(|| self.domain.round());
+        self.push_notice(RliNotice {
+            kind: RliNoticeKind::CoverageGap,
+            t,
+            round,
+            text,
+            delivered: false,
+        });
+        self.coverage_gap_armed = false;
+        true
+    }
+
     /// 失配概率文案（0bf ③）：最近 ρ 样本中失配（ρ > 1）占比；未就绪 =
     /// 「—」（FR-7：不可得与真值 0 不混同）。
     fn mismatch_probability_text(&self) -> String {
@@ -1558,7 +1664,13 @@ impl RliShadow {
     }
 
     /// 0bf ③：压入模型面提醒（cap [`RLI_NOTICE_CAP`]，超限丢最旧）。
-    fn push_notice(&mut self, notice: RliNotice) {
+    ///
+    /// 0bg S2（2026-09-22）：**注解随报**——文案在本方法统一追加
+    /// [`rli_notice_annotation`]（固定模板；单一源，不重复散落各构造点），
+    /// 本体＋注解 ≤ [`RLI_NOTICE_TEXT_BUDGET`] B/条（钉子
+    /// `notice_texts_stay_within_budget` 逐 kind 断言）。
+    fn push_notice(&mut self, mut notice: RliNotice) {
+        notice.text.push_str(rli_notice_annotation(notice.kind));
         self.notices.push_back(notice);
         while self.notices.len() > RLI_NOTICE_CAP {
             self.notices.pop_front();
@@ -1590,13 +1702,22 @@ impl RliShadow {
         let v_err = self.channel(ChannelKind::Err).v();
         let env_err = self.channel(ChannelKind::Err).envelope();
         let u_prog = self.channel(ChannelKind::Prog).u();
+        let domain_before = self.domain.current_domain();
         self.domain.record_round(t, u_err, u_prog, v_err, env_err);
+        let switched = self.domain.current_domain() != domain_before;
         // 0be 四项④：繁杂度推进（消费到期预测 → 发出新预测 → 合成样本／
         // 基线／三条自校准阈值＋锁存）。
         let c = self.cplx.on_decision_round(t, self.t_hat, &self.channels);
+        // 0bg S2：域切换 ⇒ 掩盖缺口（CoverageGap）触发沿**重武装**（用户
+        // 裁决「触发沿一次、域切换重武装」）。
+        if switched {
+            self.coverage_gap_armed = true;
+        }
         // 0bf ③（2026-09-22）：域迁移确认（等震荡结束后一次）→ 模型面提醒
         // （随报失配概率；只报一次由 take 消费语义保证）。
+        let mut domain_notice_pushed = false;
         if let Some(conf) = self.domain.take_confirmed_migration() {
+            domain_notice_pushed = true;
             let p = self.mismatch_probability_text();
             let round = (conf.at_round > 0).then_some(conf.at_round);
             self.push_notice(RliNotice {
@@ -1613,6 +1734,13 @@ impl RliShadow {
                 ),
                 delivered: false,
             });
+        }
+        // 0bg S2（2026-09-22，用户裁决「直接做掩盖缺口吧」）：掩盖缺口
+        // （CoverageGap）——就绪 ∧ g>0 ∧ 越线 ⇒ **触发沿**报一次；**每轮
+        // 最多一条域类提醒**（本轮已有域迁移确认时让位——沿不被吞：条件
+        // 持续成立即下一轮报）。
+        if !domain_notice_pushed {
+            self.maybe_push_coverage_gap(t);
         }
         // 0be 四项③：自适应参数轨迹（决策轮粒度；复算可核）。λ̂ 取 prog
         // 通道估计（未激活 = None——与真值 0 不混同）。
@@ -1694,6 +1822,7 @@ impl RliShadow {
             notices: self.notices.iter().cloned().collect(),
             grid_samples: self.grid_samples,
             sample_points: self.sample_points,
+            coverage_gap_armed: self.coverage_gap_armed,
         }
     }
 
@@ -1752,6 +1881,8 @@ impl RliShadow {
             .collect();
         self.grid_samples = snapshot.grid_samples;
         self.sample_points = snapshot.sample_points;
+        // 0bg S2：掩盖缺口重武装标志续接（legacy 缺字段 = true，见快照定义）。
+        self.coverage_gap_armed = snapshot.coverage_gap_armed;
         true
     }
 }
@@ -1837,6 +1968,49 @@ pub struct RliMigrationConfirmed {
     pub at_t: f64,
     /// 确认时的稳定轮数（= 自 `at_round` 起新域连续驻留轮数）。
     pub settle_rounds: u64,
+}
+
+/// 0bg S2（2026-09-22）：域覆盖读数（掩盖缺口判据＋随报字段的单一来源；
+/// 由 [`RliDomainMachine::coverage_stats`] 推导——不单独存储，与域段/
+/// 倾向同口径"由迁移点推导"）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RliCoverageStats {
+    /// 未访问域（按域序 `normal < pressure < low_progress < stuck`）。
+    pub uncovered: Vec<Domain>,
+    /// 未访问域占比（分母＝四值域枚举；`Start` 不计）。
+    pub g: f64,
+    /// 已完成段数（相邻迁移点之间；末段＝当前段不计）。
+    pub completed_segments: u64,
+    /// 已完段累计驻留轮数（域失配/离开率的分母面）。
+    pub completed_rounds: u64,
+    /// 当前自判域。
+    pub current_domain: Domain,
+    /// 当前段驻留轮数（含入域轮）。
+    pub current_dwell: u64,
+    /// 该域（当前域）已完段驻留中位（无 = `None` ⇒ 退全域中位）。
+    pub current_median: Option<u64>,
+    /// 会话内全域已完段驻留中位（退档面）。
+    pub fallback_median: Option<u64>,
+    /// **域失配**（域模型的累计超期）：Σ max(0, 段驻留 − 该域已完段中位)
+    /// （轮）——随触发一并报、不独立触发。
+    pub overdue_rounds: u64,
+    /// 超期段数（分子面读数）。
+    pub overdue_segments: u64,
+}
+
+/// 中位（整数域；偶数取中间两值平均向下取整——与倾向的 f64 中位同序，
+/// 整数面避免浮点噪声进读数）。
+fn median_u64(values: &mut [u64]) -> Option<u64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_unstable();
+    let n = values.len();
+    Some(if n % 2 == 1 {
+        values[n / 2]
+    } else {
+        (values[n / 2 - 1] + values[n / 2]) / 2
+    })
 }
 
 /// 域转移倾向读数（0bf ②，2026-09-22）——**本会话纯经验统计**（零拟合；
@@ -2033,6 +2207,83 @@ impl RliDomainMachine {
 
     pub fn round(&self) -> u64 {
         self.round
+    }
+
+    /// 0bg S2（2026-09-22）：域覆盖读数——掩盖缺口（`CoverageGap`）判据与
+    /// 随报字段的**单一来源**（触发点与测试共用，避免两处口径漂移）。
+    ///
+    /// 口径（S1 勘定稿）：
+    /// - 分母＝四值域枚举（`normal/pressure/low_progress/stuck`；`Start`
+    ///   仅首采样前哨兵、不计）；`g = 未访问域占比`；
+    /// - 已完成段＝相邻迁移点（含轮号）之间的段（驻留＝轮差）；末段＝当前段
+    ///   （不并入"已完段"）；
+    /// - 「该域已完段中位」不足（该域无已完段）⇒ 退会话内全域中位；
+    /// - **域失配**＝Σ max(0, 段驻留 − 该域已完段中位)（轮），并给超期段数
+    ///   ——域模型的累计超期（随触发一并报；不独立触发）。
+    pub fn coverage_stats(&self) -> RliCoverageStats {
+        let mut visited: Vec<Domain> = Vec::new();
+        let mut completed: Vec<(Domain, u64)> = Vec::new();
+        for w in self.spikes.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            if !visited.contains(&a.domain) {
+                visited.push(a.domain);
+            }
+            if let (Some(r1), Some(r2)) = (a.round, b.round)
+                && r2 >= r1
+            {
+                completed.push((a.domain, r2 - r1));
+            }
+        }
+        if let Some(last) = self.spikes.last()
+            && !visited.contains(&last.domain)
+        {
+            visited.push(last.domain);
+        }
+        if self.round > 0 && !visited.contains(&self.current) {
+            visited.push(self.current);
+        }
+        visited.retain(|d| *d != Domain::Start);
+        let uncovered: Vec<Domain> = [Domain::Normal, Domain::Pressure, Domain::LowProgress, Domain::Stuck]
+            .into_iter()
+            .filter(|d| !visited.contains(d))
+            .collect();
+        let g = uncovered.len() as f64 / 4.0;
+        let completed_rounds: u64 = completed.iter().map(|(_, d)| d).sum();
+        let mut fallback_values: Vec<u64> = completed.iter().map(|(_, d)| *d).collect();
+        let fallback_median = median_u64(&mut fallback_values);
+        let mut current_values: Vec<u64> = completed
+            .iter()
+            .filter(|(d, _)| *d == self.current)
+            .map(|(_, d)| *d)
+            .collect();
+        let current_median = median_u64(&mut current_values);
+        let mut overdue_rounds: u64 = 0;
+        let mut overdue_segments: u64 = 0;
+        for (domain, dwell) in &completed {
+            let mut values: Vec<u64> = completed
+                .iter()
+                .filter(|(d, _)| d == domain)
+                .map(|(_, d)| *d)
+                .collect();
+            if let Some(median) = median_u64(&mut values)
+                && *dwell > median
+            {
+                overdue_rounds = overdue_rounds.saturating_add(dwell - median);
+                overdue_segments = overdue_segments.saturating_add(1);
+            }
+        }
+        RliCoverageStats {
+            uncovered,
+            g,
+            completed_segments: completed.len() as u64,
+            completed_rounds,
+            current_domain: self.current,
+            current_dwell: self.round.saturating_sub(self.entry_round) + 1,
+            current_median,
+            fallback_median,
+            overdue_rounds,
+            overdue_segments,
+        }
     }
 
     pub fn current_domain(&self) -> Domain {
@@ -2245,6 +2496,17 @@ fn is_zero_u64(v: &u64) -> bool {
     *v == 0
 }
 
+/// serde 缺省（0bg S2）：`coverage_gap_armed` legacy 缺字段 = `true`
+/// （宁可多报一次也不吞；域切换会重武装）。
+fn is_true_default() -> bool {
+    true
+}
+
+/// `skip_serializing_if`（serde 传字段引用）：`true` 不落盘（缺省即真）。
+fn is_true(v: &bool) -> bool {
+    *v
+}
+
 /// 繁杂度快照（0be 四项④；随 [`RliShadowSnapshot::complexity`] 入会话侧车。
 /// 缺字段 = legacy ⇒ fresh 状态；数组尺寸校验失败 = fresh）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2314,6 +2576,10 @@ pub struct RliShadowSnapshot {
     /// 0bf ④：采样点总数（决策轮＋工具事件＋网格补点；legacy = 0）。
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub sample_points: u64,
+    /// 0bg S2（2026-09-22）：掩盖缺口触发沿重武装标志（legacy 缺字段 =
+    /// `true`——宁可多报一次也不吞；域切换重武装）。
+    #[serde(default = "is_true_default", skip_serializing_if = "is_true")]
+    pub coverage_gap_armed: bool,
 }
 
 #[cfg(test)]
@@ -2623,6 +2889,107 @@ mod tests {
                 "{kind:?} rhythm {} vs {}",
                 ca.rhythm(),
                 cb.rhythm()
+            );
+        }
+    }
+
+    /// 0bg S2（2026-09-22，用户裁决「直接做掩盖缺口吧」）：掩盖缺口触发——
+    /// 就绪（已完段 ≥3）∧ 未访域 ∧ 越线（当前段驻留 ≥ 该域已完段中位）⇒
+    /// 触发沿报一次；关闭后不重复；重武装（域切换语义）后可再报。
+    #[test]
+    fn coverage_gap_fires_on_edge_and_respects_budget() {
+        let mut shadow = RliShadow::new();
+        shadow.domain.has_success = true;
+        shadow.domain.round = 12;
+        shadow.domain.current = Domain::Normal;
+        shadow.domain.entry_round = 7;
+        shadow.domain.spikes = vec![
+            RliDomainSpike {
+                t: 0.0,
+                domain: Domain::Normal,
+                round: Some(1),
+            },
+            RliDomainSpike {
+                t: 30.0,
+                domain: Domain::Stuck,
+                round: Some(4),
+            },
+            RliDomainSpike {
+                t: 50.0,
+                domain: Domain::Pressure,
+                round: Some(6),
+            },
+            RliDomainSpike {
+                t: 60.0,
+                domain: Domain::Normal,
+                round: Some(7),
+            },
+        ];
+        let stats = shadow.coverage_stats();
+        assert_eq!(stats.completed_segments, 3, "{stats:?}");
+        assert_eq!(stats.uncovered, vec![Domain::LowProgress]);
+        assert!((stats.g - 0.25).abs() < 1e-9, "g={}", stats.g);
+        assert_eq!(stats.current_dwell, 6, "r7..=r12");
+        assert_eq!(stats.current_median, Some(3), "Normal 段 [r1,r4)=3");
+        assert_eq!(stats.overdue_rounds, 0, "{stats:?}");
+
+        assert!(shadow.maybe_push_coverage_gap(70.0), "沿上应触发");
+        assert!(!shadow.coverage_gap_armed, "触发后沿关闭（域切换重武装）");
+        assert!(!shadow.maybe_push_coverage_gap(71.0), "沿关闭后不重复");
+        let notice = shadow.notices().last().copied().expect("notice pushed");
+        assert_eq!(notice.kind, RliNoticeKind::CoverageGap);
+        assert!(notice.text.starts_with("掩盖缺口: "), "{}", notice.text);
+        assert!(notice.text.contains("未访 low_progress"), "{}", notice.text);
+        assert!(notice.text.contains("g=0.25"), "{}", notice.text);
+        assert!(notice.text.contains("r=2.0"), "{}", notice.text);
+        assert!(notice.text.contains("域失配 0/6 轮"), "{}", notice.text);
+        assert!(
+            notice.text.len() <= RLI_NOTICE_TEXT_BUDGET,
+            "本体＋注解 {}B 超预算: {}",
+            notice.text.len(),
+            notice.text
+        );
+
+        // 域切换重武装语义（on_decision_round 中 switched 分支直接置位）。
+        shadow.coverage_gap_armed = true;
+        assert!(shadow.maybe_push_coverage_gap(80.0), "重武装后可再报");
+    }
+
+    /// 0bg S2：提醒**本体＋注解** ≤ [`RLI_NOTICE_TEXT_BUDGET`]（最坏形态；
+    /// 注解为固定模板、单一源 [`rli_notice_annotation`]）。
+    #[test]
+    fn notice_texts_stay_within_budget() {
+        let worst = [
+            (
+                RliNoticeKind::StreakCrossed,
+                "持续越线: err×5 stall×5 slow×5 deny×5（失配概率 0.12）",
+            ),
+            (
+                RliNoticeKind::MigrationConfirmed,
+                "域迁移确认: low_progress→normal@r123（稳定 12 轮；失配概率 0.12）",
+            ),
+            (
+                RliNoticeKind::CoverageGap,
+                "掩盖缺口: 未访 pressure/low_progress…；g=0.50；驻留 999 轮（中位 999；r=9.9）；域失配 99/999 轮",
+            ),
+        ];
+        for (kind, body) in worst {
+            let total = body.len() + rli_notice_annotation(kind).len();
+            assert!(
+                total <= RLI_NOTICE_TEXT_BUDGET,
+                "{kind:?}: 本体＋注解 {total}B 超预算: {body}"
+            );
+        }
+    }
+
+    /// 0bg S2：面头符号表——缩写族单行给全（渲染面与工具描述引用同一常量；
+    /// 用户裁决 (c) 的「面头固定符号表一行」）。
+    #[test]
+    fn symbol_legend_names_the_abbreviation_family() {
+        for needle in ["u=", "v=", "pred=", "p1=", "E=", "r=", "θ=", "λ̂=", "ρ=", "c=", "T̂"] {
+            assert!(
+                RLI_SYMBOL_LEGEND.contains(needle),
+                "符号表缺 {needle}: {RLI_SYMBOL_LEGEND}"
             );
         }
     }
@@ -3109,10 +3476,13 @@ mod tests {
     /// 0be 四项②：分通道 horizon 表钉住；短视锚点＝`1·T̂` 独立档。
     #[test]
     fn horizon_table_and_short_anchor_pin() {
-        assert_eq!(rli_horizon_steps(ChannelKind::Slow), 1.0);
+        // 0bg S2 标定批（2026-09-22）：Slow 1→5、Deny 30→10（0bf 探针 skill
+        // 表峰档：Slow h5 +0.317 vs h1 +0.222；Deny h10 +0.638 vs h30 +0.571）；
+        // Err/Stall/Prog 保持（峰档或弱档）。
+        assert_eq!(rli_horizon_steps(ChannelKind::Slow), 5.0);
         assert_eq!(rli_horizon_steps(ChannelKind::Stall), 2.0);
         assert_eq!(rli_horizon_steps(ChannelKind::Err), RLI_PREDICTION_STEPS);
-        assert_eq!(rli_horizon_steps(ChannelKind::Deny), 30.0);
+        assert_eq!(rli_horizon_steps(ChannelKind::Deny), 10.0);
         assert_eq!(rli_horizon_steps(ChannelKind::Prog), RLI_PREDICTION_STEPS);
 
         let mut err = RliChannel::new(ChannelKind::Err, err_omega());
@@ -3130,10 +3500,15 @@ mod tests {
 
         let mut slow = RliChannel::new(ChannelKind::Slow, TAU / RLI_SLOW_PERIOD_SECS);
         slow.inject(0.0, 1.0);
+        // 0bg S2 标定批：Slow 升到 h=5 后与短视锚点（h=1）**分列**（不再恒等）。
         assert_eq!(
             slow.prediction_at_horizon(t_hat),
-            slow.prediction_short(t_hat),
-            "Slow h=1 ≡ the short anchor (per-channel horizon)"
+            slow.prediction_at(5.0, t_hat),
+            "Slow h=5（标定批）"
+        );
+        assert!(
+            (slow.prediction_at_horizon(t_hat) - slow.prediction_short(t_hat)).abs() > 1e-9,
+            "Slow 分通道 horizon 与短视锚点分列（标定批）"
         );
 
         // 非法 horizon / T̂ ⇒ 保守落回当前水平（不虚构前推）。

@@ -4951,6 +4951,30 @@ pub(crate) async fn run_agent_loop(
                     }),
                 )
                 .await?;
+            // 0bg S2（2026-09-22，双迁移定案「连带记录」）：LIF 域迁移事实
+            // ——模型面「域迁移+n」徽章撤除后，机械层连带留痕（只记不发
+            // 模型；每键一条覆盖写，逐次历史由 journal 事件流可离线复算）。
+            for (from, to, at_round, cumulative) in controller.take_new_lif_migrations() {
+                let payload = mechanical_audit.record(
+                    "lif.domain_migration",
+                    at_round.min(u32::MAX as u64) as u32,
+                    format!(
+                        "{}→{}@r{at_round}；累计 {cumulative} 次",
+                        from.as_str(),
+                        to.as_str()
+                    ),
+                    None,
+                );
+                writer
+                    .record(
+                        EventType::MechanicalAuditUpdate,
+                        serde_json::json!({
+                            "kind": crate::mechanical_audit::KIND_LIF_DOMAIN,
+                            "payload": payload
+                        }),
+                    )
+                    .await?;
+            }
         }
         // TER T1.7 (2026-09-04)：`max_tool_rounds == 0` = 默认无硬限——
         // 只有显式配置非零上限时才挂载轮数闸（escape hatch 语义）。
