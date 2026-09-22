@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
   狗粮 run 启动器（FR-A14 处置，2026-09-17）：env＋信任＋载体路径＋显式 cwd 断言一次装配。
 .DESCRIPTION
@@ -9,12 +9,20 @@
     ③ ACAF manifest 复用或现场 provision；
     ④ 题面文件可读。
   全部通过才起跑；-DryRun 只装配与打印，不启动。
+  0bd 增补（2026-09-22）：⑤⑧ RLI 开关显式入装配清单（缺省 on＝常开；-RliOff
+  置 kill switch）；⑭ 题面按显式 UTF-8 读取（PS 5.1 缺省按 ANSI 读无 BOM
+  题面 ⇒ 整篇乱码，0be 轮实测）。
 .PARAMETER TaskFile
   题面文件路径（相对 $Workspace 或绝对路径；惯例 .tmp-*-task.txt）。
+.PARAMETER RliOff
+  关闭 RLI（kill switch：写 ORZ_LIF_RLI_SHADOW=0）。缺省显式写 1＝常开
+  （0bf ① 起语义反转：未设/1 = on；0/off/false/no = off）。
 .EXAMPLE
   powershell -File scripts/dogfood_launch.ps1 -TaskFile .tmp-friction-task.txt -DryRun
 .EXAMPLE
   powershell -File scripts/dogfood_launch.ps1 -TaskFile .tmp-0am-task.txt
+.EXAMPLE
+  powershell -File scripts/dogfood_launch.ps1 -TaskFile .tmp-0bd-task.txt -RliOff -DryRun
 #>
 param(
     [string]$Workspace = 'D:\CLI',
@@ -23,6 +31,7 @@ param(
     [Parameter(Mandatory = $true)][string]$TaskFile,
     [string]$MaxWallclock = '0',
     [switch]$Shadow,
+    [switch]$RliOff,
     [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
@@ -37,8 +46,15 @@ Assert-True ($ws -eq 'D:\CLI') "workspace 必须为 D:\CLI（实得 $ws）"
 $taskPath = if ([System.IO.Path]::IsPathRooted($TaskFile)) { $TaskFile } else { Join-Path $ws $TaskFile }
 Assert-True (Test-Path -LiteralPath $taskPath) "题面文件不存在：$taskPath"
 $taskPath = (Resolve-Path -LiteralPath $taskPath).Path
-$prompt = Get-Content -LiteralPath $taskPath -Raw
+# ⑭（0bd）：读取端显式 UTF-8——PS 5.1 缺省按 ANSI（本机 GB2312）读**无 BOM**
+# 的 UTF-8 题面会整篇乱码（0be 轮 journal run_started.payload.prompt 实测
+# `璇峰厛鏌ョ湅…`）；显式 UTF-8 对带/不带 BOM 两种 UTF-8 都正确。
+$prompt = Get-Content -LiteralPath $taskPath -Raw -Encoding UTF8
 Assert-True ($prompt.Trim().Length -gt 0) "题面文件为空：$taskPath"
+$taskBytes = [System.IO.File]::ReadAllBytes($taskPath)
+$taskBom = ($taskBytes.Length -ge 3 -and $taskBytes[0] -eq 0xEF -and `
+    $taskBytes[1] -eq 0xBB -and $taskBytes[2] -eq 0xBF)
+$taskEncDisp = if ($taskBom) { 'utf-8 BOM' } else { 'utf-8 无 BOM' }
 
 # ② 载体三件套
 $orz       = Join-Path $BinDir 'orz.exe'
@@ -70,6 +86,10 @@ $env:ORZ_ACAF_MANIFEST    = $manifest
 $env:ORZ_ACAF_KEYSTORE    = $keystore
 $env:ORZ_ACAF_BINARY      = $signer
 $env:ORZ_ACAF_FAIL_CLOSED = if ($Shadow) { '0' } else { '1' }
+# ⑤⑧（0bd）：RLI 显式装配——缺省 on（0bf ① 语义反转：kill switch 才关）；
+# -RliOff ⇒ 显式 0。写清单保证会话姿态可核（0bc 轮缺口：靠会话 env 透传、
+# 装配清单未显式）。
+$env:ORZ_LIF_RLI_SHADOW = if ($RliOff) { '0' } else { '1' }
 $protoc = 'D:\tb-eval\.tools\protoc-25.3\bin\protoc.exe'
 if (Test-Path -LiteralPath $protoc) { $env:PROTOC = $protoc }
 $grokHome = Join-Path $BinDir 'grok-home'
@@ -80,7 +100,9 @@ Write-Host '== 狗粮启动装配清单 =='
 Write-Host "cwd        = $ws（断言通过：非 orz 子模块）"
 $verDisp = if ($ver -eq 'unknown') { 'unknown' } else { "v$ver" }
 Write-Host "carrier    = $orz（$verDisp；sha256 $($sha.Substring(0,12))…）"
-Write-Host "task       = $taskPath（$($prompt.Length) 字符）"
+Write-Host "task       = $taskPath（$($prompt.Length) 字符；$taskEncDisp；读取=显式 UTF-8）"
+$rliDisp = if ($RliOff) { 'off（-RliOff kill switch）' } else { 'on（缺省常开）' }
+Write-Host "rli        = $rliDisp（ORZ_LIF_RLI_SHADOW=$($env:ORZ_LIF_RLI_SHADOW)）"
 Write-Host "env        = MAX_WALLCLOCK=$MaxWallclock / ACAF fail-closed=$(-not $Shadow) / PROTOC=$($env:PROTOC) / GROK_HOME=$($env:GROK_HOME)"
 Write-Host 'flags      = --real --allow-write --allow-shell --allow-network -p <task>'
 if ($DryRun) { Write-Host '（-DryRun：装配与断言全部通过；未启动。）'; exit 0 }
