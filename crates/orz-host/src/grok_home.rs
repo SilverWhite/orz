@@ -150,6 +150,18 @@ mod tests {
             }
             guard
         }
+
+        /// 0bd ⑨（2026-09-22）：先清除现有值（调用方假定 GROK_HOME 未设）。
+        /// dogfood 会话把 GROK_HOME 沿进程树下沉；未清时 `redirect_grok_home_with`
+        /// 直接返回 `EnvRespected` ⇒ 下列测试假红（0bc 现场实证；夹具自清）。
+        fn cleared() -> Self {
+            let guard = Self::capture();
+            // SAFETY: test-only, single-threaded under the lock.
+            unsafe {
+                std::env::remove_var("GROK_HOME");
+            }
+            guard
+        }
     }
 
     impl Drop for EnvVarGuard {
@@ -192,7 +204,7 @@ mod tests {
     #[test]
     fn writable_install_dir_claims_install_dir() {
         with_lock(|| {
-            let _guard = EnvVarGuard::capture();
+            let _guard = EnvVarGuard::cleared();
             let tmp = tmpdir("install-writable");
             let placement = redirect_grok_home_with(&tmp, Some(&tmp));
             let expected = tmp.join("grok-home");
@@ -210,7 +222,7 @@ mod tests {
     #[test]
     fn unwritable_install_dir_falls_back_to_workspace() {
         with_lock(|| {
-            let _guard = EnvVarGuard::capture();
+            let _guard = EnvVarGuard::cleared();
             let tmp = tmpdir("install-unwritable");
             // A file where a directory is expected → create_dir_all fails.
             let blocker = tmp.join("not-a-dir");
@@ -232,7 +244,7 @@ mod tests {
     #[test]
     fn both_unwritable_leaves_user_dir() {
         with_lock(|| {
-            let _guard = EnvVarGuard::capture();
+            let _guard = EnvVarGuard::cleared();
             let tmp = tmpdir("both-unwritable");
             let blocker = tmp.join("not-a-dir");
             std::fs::write(&blocker, b"x").expect("write blocker");

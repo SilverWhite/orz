@@ -2844,7 +2844,9 @@ mod tests {
     fn windows_trailing_dot_gsa_spelling_denied() {
         let tmp = TempDir::new().unwrap();
         let ws = dunce::canonicalize(tmp.path()).unwrap();
-        let (_gsa, _terminal, canonical_root, journal) = make_real_volume(&ws);
+        // 0bd ④b：本测试只用 `dotted_*` 拼写形态——`journal` 值不参与
+        // 断言（HEAD 预置 `unused variable` 警告一条，前缀下划线消警）。
+        let (_gsa, _terminal, canonical_root, _journal) = make_real_volume(&ws);
         let volume = SessionVolumeRoot(canonical_root);
 
         let dotted_journal = ws.join(".gsa.").join("journal.jsonl");

@@ -303,12 +303,14 @@ pub(crate) fn initial_acaf_fail_closed() -> bool {
 
 #[cfg(test)]
 pub(crate) fn initial_acaf_fail_closed() -> bool {
-    // 单元测试中，未显式配置 signer 的逻辑测试默认保持 shadow，
-    // 专门测试 ACAF 的单测通过 .with_acaf_fail_closed(true) 显式开启强校验。
-    std::env::var("ORZ_ACAF_FAIL_CLOSED")
-        .ok()
-        .and_then(|v| parse_acaf_fail_closed_env(&v).ok())
-        .unwrap_or(false)
+    // 0bd ⑨（2026-09-22）：单元测试**一律不读会话 env**（夹具自清）。
+    // 背景：dogfood 载体把 `ORZ_ACAF_FAIL_CLOSED=1` 沿进程树下沉，而单测
+    // 进程未配置 signer——此前的 env 读取把整批逻辑测试拉进 enforce，run
+    // 起点即拒（"refusing to start the run"），全量实测 216/833 假红
+    // （0bc 现场登记；0bd ⑨ 收口）。
+    // 意图不变：逻辑测试默认 shadow；专门测试 ACAF 的单测通过
+    // `.with_acaf_fail_closed(true)` **显式**开启强校验（显式入口保留）。
+    false
 }
 
 /// Streaming pacing (Phase 3 slice #6): a round's `model_output` (journaled,

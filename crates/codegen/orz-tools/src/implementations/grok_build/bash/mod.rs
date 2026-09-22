@@ -1685,6 +1685,9 @@ ${%- if shell_uses_semicolon %}
 ${%- endif %}
 ${%- if not has_unix_utilities %}
   - The Unix utilities `grep`, `head`, `tail`, `sed`, `awk`, and `find` are NOT available in this shell. Use the dedicated tools instead.
+${%- endif %}
+${%- if is_windows %}
+  - Windows PowerShell notes: to pass arguments to a `.ps1` script, prefer `powershell -File <script.ps1> <args>` — invoking a script via `& <script> … -- <args>` swallows a bare `--`; if non-ASCII (CJK) output looks garbled under Windows PowerShell 5.1, set `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` at the start of the command.
 ${%- endif %}"#
     }
 

@@ -57,6 +57,10 @@ pub use resource_job::{
 // re-export broke every non-Windows build of the workspace (E0432 on Linux).
 #[cfg(windows)]
 pub use resource_job::{duplicate_job_handle, image_fingerprint_from_handle};
+// 0bd ④a（2026-09-22）：`process_alive`（kill-face 探针；两平台各有实现）补入
+// 公开面——0z S2R 引入时未 re-export，HEAD 预置 dead_code 警告一条；导出即
+// 可达（不删：kill-face/宿主杀面测试的现成探针）。
+pub use resource_job::process_alive;
 
 // ---------------------------------------------------------------------------
 // TTY detach — pre_exec building block
