@@ -14,6 +14,10 @@
 # PowerShell 5.1 吞裸 `--`（`& script ... -- --test-threads=1` 实测 `--`
 # 不进 $args，测试参数被 cargo 当自有参数 ⇒ unexpected argument）——未见
 # 分隔符时按测试二进制专属旗标启发式补回 `--`（脚本接口层，不代改模型命令）。
+# 0bg 升级（2026-09-22）：④ **测试入口 auto 降并行档**——把 build_orz.ps1
+# （0bd ①）的宿主提交余量自检引到测试入口（同阈值同口径；显式 -j/--jobs 照
+# 用不改）；① **宿主套件红判据入口＝串行档**（追加 `-- --test-threads=1`）
+# ——并行档的负载/计时敏感红（0bd §5）是已知边界，断言强度不放宽。
 # 用法（从任意目录）：
 #   powershell -File scripts\run_orz_tests.ps1 test -p orz-loop --lib -j 2
 #   powershell -File scripts\run_orz_tests.ps1 test -p orz-loop --lib -- --test-threads=1
@@ -46,6 +50,36 @@ if ($cargoArgs -notcontains '--') {
         Write-Host '[run_orz_tests] 检测到被吞的前导 --：已在测试参数前补回分隔符（0bd ③）。'
     }
 }
+# 0bg ④：auto 降并行档（与 build_orz.ps1〔0bd ①〕同阈值同口径）——未显式
+# 给 -j/--jobs 时按宿主提交余量选档：余量紧⇒1／偏紧⇒2／宽裕⇒min(核,8)。
+$hasJobs = $false
+foreach ($a in $cargoArgs) {
+    $s = [string]$a
+    if ($s -eq '-j' -or $s -eq '--jobs' -or $s -like '-j[0-9]*' -or $s -like '--jobs=*') { $hasJobs = $true; break }
+}
+if (-not $hasJobs -and $cargoArgs.Count -gt 0) {
+    $os = Get-CimInstance Win32_OperatingSystem
+    $commitTotalGB = $os.TotalVirtualMemorySize / 1MB
+    $commitFreeGB  = $os.FreeVirtualMemory / 1MB
+    $usedPct       = if ($commitTotalGB -gt 0) { [Math]::Round(100 * (1 - $commitFreeGB / $commitTotalGB), 1) } else { 0 }
+    $cores         = [Environment]::ProcessorCount
+    $jobsN = if ($usedPct -ge 88 -or $commitFreeGB -lt 4) { 1 }
+             elseif ($usedPct -ge 72 -or $commitFreeGB -lt 12) { 2 }
+             else { [Math]::Min($cores, 8) }
+    $sep = -1
+    for ($i = 0; $i -lt $cargoArgs.Count; $i++) { if ([string]$cargoArgs[$i] -eq '--') { $sep = $i; break } }
+    $insertAt = if ($sep -ge 0) { $sep } else { $cargoArgs.Count }
+    $head = if ($insertAt -gt 0) { @($cargoArgs[0..($insertAt - 1)]) } else { @() }
+    $tail = if ($insertAt -lt $cargoArgs.Count) { @($cargoArgs[$insertAt..($cargoArgs.Count - 1)]) } else { @() }
+    $cargoArgs = @($head + @('-j', "$jobsN") + $tail)
+    Write-Host ("[run_orz_tests] auto 并行档 -j {0}（commit 使用 {1}% / 余 {2:n1} GiB；0bg ④；显式 -j 优先）" -f $jobsN, $usedPct, $commitFreeGB)
+}
+# 0bg ①：宿主套件红判据入口＝串行档——并行档无显式 test-threads 时给一行提示
+# （0bd §5 定位：并行恒现 1 条＋浮动 1 条＝负载/计时敏感；断言强度不放宽）。
+if (($cargoArgs -join ' ') -match 'orz-host' -and ($cargoArgs -join ' ') -notmatch 'test-threads') {
+    Write-Host '[run_orz_tests] 提示（0bg ①）：orz-host 红判据入口＝串行档（追加 -- --test-threads=1）。'
+}
+
 Push-Location $orzRoot
 try {
     & cargo @cargoArgs

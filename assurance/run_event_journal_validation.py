@@ -2054,12 +2054,15 @@ def _verify_v02_mechanical_audit(events: list[dict[str, Any]]) -> list[str]:
             "model_compression",
             "plan_write_guidance",
             "retrieval_batch",
+            # 0bg S2（2026-09-22）：LIF 域迁移连带记录（key=lif.domain_migration；
+            # 均一四键形状）——LIF `域迁移+n` 徽章撤出模型面后的机械层留痕。
+            "lif_domain",
         ):
             errors.append(
                 f"event {index}: mechanical_audit_update kind {kind!r} must be "
                 "tool_result / plan_gate / budget / attention_ladder / "
                 "context_scale / model_compression / plan_write_guidance / "
-                "retrieval_batch"
+                "retrieval_batch / lif_domain"
             )
         if not isinstance(entry, dict):
             errors.append(

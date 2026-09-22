@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   orz 构建入口（0bd ①）：构建前置自检＋自动降并行度（F14 宿主机 commit 上限缓解）。
 .DESCRIPTION

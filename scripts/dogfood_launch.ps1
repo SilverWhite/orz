@@ -55,6 +55,20 @@ $taskBytes = [System.IO.File]::ReadAllBytes($taskPath)
 $taskBom = ($taskBytes.Length -ge 3 -and $taskBytes[0] -eq 0xEF -and `
     $taskBytes[1] -eq 0xBB -and $taskBytes[2] -eq 0xBF)
 $taskEncDisp = if ($taskBom) { 'utf-8 BOM' } else { 'utf-8 无 BOM' }
+# 0bg ⑥（2026-09-22，写入端强制 BOM）：题面磁盘形态统一为 UTF-8 **带 BOM**。
+# 读取端（0bd ⑭）已显式 UTF-8，但链上/链下仍有按 ANSI 读题面者（0be 轮
+# 实测乱码）；启动器是唯一机械点——缺 BOM ⇒ 原地以带 BOM 形态重写（内容经
+# 显式 UTF-8 读回，字节语义不变）；读回含替换字符（U+FFFD＝文件真身非
+# UTF-8／损坏）⇒ 显式断言失败，不给「侥幸猜对」留门。
+if ($prompt.Contains([char]0xFFFD)) {
+    Assert-True $false "题面不是有效 UTF-8（读回含替换字符 U+FFFD）：$taskPath —— 请以 UTF-8 保存题面（0bd ⑭／0bg ⑥）"
+}
+if (-not $taskBom) {
+    [System.IO.File]::WriteAllText($taskPath, $prompt, (New-Object System.Text.UTF8Encoding($true)))
+    $taskBom = $true
+    $taskEncDisp = 'utf-8 BOM（启动器写入端已补）'
+    Write-Host "[dogfood_launch] 题面缺 BOM ⇒ 已原地重写为 UTF-8 带 BOM（0bg ⑥ 写入端强制）：$taskPath"
+}
 
 # ② 载体三件套
 $orz       = Join-Path $BinDir 'orz.exe'
