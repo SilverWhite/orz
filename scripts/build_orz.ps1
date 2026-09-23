@@ -32,6 +32,8 @@ param(
     [switch]$Check,
     [switch]$Clean,
     [switch]$DryRun,
+    # 0bh ⑥（2026-09-22）：余量排队口径（显式开关；缺省关＝行为不变）。
+    [switch]$WaitForHeadroom,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$Extra
 )
 $ErrorActionPreference = 'Stop'
@@ -57,11 +59,36 @@ $usedPct       = if ($commitTotalGB -gt 0) { [Math]::Round(100 * (1 - $commitFre
 $cores         = [Environment]::ProcessorCount
 
 # ② 并行度决策（auto 档：阈值＝本机经验先验，随读数复核；显式 -Jobs 照用）
+# 0bh ⑥（2026-09-22）：争用面收口——`-WaitForHeadroom` 排队口径（显式开关，
+# 缺省关＝行为不变）；启动前额外做一次**同名重活进程扫描**（cargo/rustc/orz）
+# 与软提示；余量不足且开关开启时按 15 s 节拍轮询等待（≤30 min，超时如实报出）。
+if ($WaitForHeadroom -and $Jobs -eq 'auto') {
+    $waitDeadline = (Get-Date).AddMinutes(30)
+    while ($true) {
+        $osProbe = Get-CimInstance Win32_OperatingSystem
+        $freeProbe = $osProbe.FreeVirtualMemory / 1MB
+        $usedProbe = if ($osProbe.TotalVirtualMemorySize -gt 0) { 100 * (1 - $osProbe.FreeVirtualMemory / $osProbe.TotalVirtualMemorySize) } else { 0 }
+        $heavy = @(Get-Process -Name cargo, rustc, orz -ErrorAction SilentlyContinue).Count
+        if (($usedProbe -lt 72 -and $freeProbe -ge 12) -or (Get-Date) -gt $waitDeadline) {
+            Write-Host ("争用面     = 重活进程 {0} 个；commit 使用 {1:n1}% / 余 {2:n1} GiB（{3}）" -f `
+                $heavy, $usedProbe, $freeProbe, $(if ((Get-Date) -gt $waitDeadline) { '等待超时，按当前余量继续' } else { '已达开跑线' }))
+            break
+        }
+        Write-Host ("[等待余量] 争用中：重活进程 {0} 个；commit 使用 {1:n1}% / 余 {2:n1} GiB（15 s 后重试；-WaitForHeadroom）" -f `
+            $heavy, $usedProbe, $freeProbe)
+        Start-Sleep -Seconds 15
+    }
+}
 if ($Jobs -eq 'auto') {
     $jobsN = if ($usedPct -ge 88 -or $commitFreeGB -lt 4) { 1 }
              elseif ($usedPct -ge 72 -or $commitFreeGB -lt 12) { 2 }
              else { [Math]::Min($cores, 8) }
     $jobsDisp = "$jobsN（auto：commit 使用 $usedPct% / 余 $('{0:n1}' -f $commitFreeGB) GiB）"
+    # 0bh ⑥ 软提示（不阻断）：紧余量/高使用率时如实提示争用面与降并依据。
+    if ($usedPct -ge 72 -or $commitFreeGB -lt 12) {
+        Write-Host ("软提示     = commit 余量偏紧（使用 {0}%、余 {1:n1} GiB）——已按 auto 档降并行；" -f $usedPct, $commitFreeGB) -NoNewline
+        Write-Host "如与其它重活并跑，可用 -WaitForHeadroom 排队或稍后重试（判定归你，脚本不代办）。"
+    }
 } else {
     $jobsN = [int]$Jobs
     $jobsDisp = "$jobsN（显式）"

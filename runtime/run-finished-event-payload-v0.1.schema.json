@@ -11,6 +11,26 @@
     "status": { "enum": ["completed"] },
     "turn_count": { "type": "integer", "minimum": 0 },
     "tool_rounds": { "type": "integer", "minimum": 0 },
+    "intent": {
+      "enum": ["conclude", "pause", "other"],
+      "description": "FUS-NEUTRAL-TERMINAL (2026-09-22, 0bh ⑯): 模型侧结束自述的意向——pause＝暂停（结束的一个意向取值，非新通道）；other＝未识别取值（不驳回，原文入 unrecognized）。无声明时字段缺省（旧形不变）。"
+    },
+    "reason": {
+      "enum": ["completed", "partial", "blocked", "awaiting_response", "other"],
+      "description": "FUS-NEUTRAL-TERMINAL: 结束原因类别——「完成」降为与其它原因平级的一种；other＝未识别取值（不驳回）。"
+    },
+    "summary": {
+      "type": "string",
+      "description": "FUS-NEUTRAL-TERMINAL: 结束摘要（常态化——每次结束都写；不审查不罚不做质量门）。机械层只做长度卫生（>4K 字符截断并标注）。"
+    },
+    "unrecognized": {
+      "type": "string",
+      "description": "FUS-NEUTRAL-TERMINAL: 声明块内未识别字段/取值原文（P2：只记录不驳回；≤500 字符截断）。"
+    },
+    "await_channel": {
+      "enum": ["enabled", "disabled"],
+      "description": "FUS-NEUTRAL-TERMINAL: 暂停通道状态（ORZ_MODEL_STOP_AWAIT；跑分装置显式置关时=disabled）。仅 intent=pause 时出现——声明本身不因开关改写。"
+    },
     "degraded": {
       "type": "object",
       "description": "FUS-HOST-RESOURCE-SAFETY §4.3 (2026-09-12, 0z S2): journal-degraded 降级摘要——recorder 进入 Degraded 模式后由写入任务注入（可选；出现即 degraded_complete 分类证据）。",
