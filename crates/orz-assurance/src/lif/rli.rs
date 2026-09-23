@@ -1346,6 +1346,15 @@ pub struct RliShadow {
     /// 沿重武装**标志——触发一次后置 `false`，域切换重武装（`true`）。随
     /// 侧车持久（legacy 快照缺字段 = `true`，宁可多报一次也不吞）。
     coverage_gap_armed: bool,
+    /// 0bh ①（2026-09-22）：提醒**投递总数**（pull-delta 头实际携带过的条数；
+    /// 投递率分子；随侧车持久）。
+    notice_delivered_total: u64,
+    /// 0bh ①：**预算受阻暂存数**（本轮装不下、留待下次读取的条数；投递率
+    /// 分母的另一半；不重不漏——`delivered + deferred` 对照提醒队列总数可核）。
+    notice_deferred_total: u64,
+    /// 0bh ①：最近一次装配后的**头段余量**（字节；独立提醒预算减已用——
+    /// 「头段余量可核」钉子；随侧车持久）。
+    notice_headroom_bytes: u64,
 }
 
 impl Default for RliShadow {
@@ -1381,6 +1390,10 @@ impl RliShadow {
             sample_points: 0,
             // 0bg S2：掩盖缺口触发沿重武装——新建即待触发。
             coverage_gap_armed: true,
+            // 0bh ①：投递面会计从零起（投递率可核）。
+            notice_delivered_total: 0,
+            notice_deferred_total: 0,
+            notice_headroom_bytes: 0,
         }
     }
 
@@ -1459,7 +1472,47 @@ impl RliShadow {
                 marked += 1;
             }
         }
+        self.notice_delivered_total += marked as u64;
         marked
+    }
+
+    /// 0bh ①（2026-09-22）：按**未投递列表索引**标记投递——域类提醒的让位
+    /// （每次至多 1 条）会让「前 n 条」口径错位（被让位者从未到达却可能被
+    /// 标成已投递）。装配循环持有索引，此接口与循环严格同口径。
+    /// 返回实际标记条数，并累计 `notice_delivered_total`。
+    pub fn mark_notices_delivered_at(&mut self, indices: &[usize]) -> usize {
+        let pending: Vec<usize> = self
+            .notices
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| !n.delivered)
+            .map(|(i, _)| i)
+            .collect();
+        let mut marked = 0usize;
+        for &pending_pos in indices {
+            if let Some(&idx) = pending.get(pending_pos) {
+                self.notices[idx].delivered = true;
+                marked += 1;
+            }
+        }
+        self.notice_delivered_total += marked as u64;
+        marked
+    }
+
+    /// 0bh ①（2026-09-22）：投递面会计——预算受阻的暂存条数与**头段余量**
+    /// （字节）落影子（随侧车持久；「头段余量可核＋投递率计数」钉子）。
+    pub fn record_notice_delivery_accounting(&mut self, deferred: usize, headroom_bytes: usize) {
+        self.notice_deferred_total += deferred as u64;
+        self.notice_headroom_bytes = headroom_bytes as u64;
+    }
+
+    /// 0bh ①：投递率读数 `(已投递, 预算受阻, 最近头段余量字节)`。
+    pub fn notice_delivery_stats(&self) -> (u64, u64, u64) {
+        (
+            self.notice_delivered_total,
+            self.notice_deferred_total,
+            self.notice_headroom_bytes,
+        )
     }
 
     /// 网格补点计数（0bf ④；开销读数面）。
@@ -1823,6 +1876,10 @@ impl RliShadow {
             grid_samples: self.grid_samples,
             sample_points: self.sample_points,
             coverage_gap_armed: self.coverage_gap_armed,
+            // 0bh ①：投递面会计（legacy 缺字段 = 0）。
+            notice_delivered_total: self.notice_delivered_total,
+            notice_deferred_total: self.notice_deferred_total,
+            notice_headroom_bytes: self.notice_headroom_bytes,
         }
     }
 
@@ -1883,6 +1940,10 @@ impl RliShadow {
         self.sample_points = snapshot.sample_points;
         // 0bg S2：掩盖缺口重武装标志续接（legacy 缺字段 = true，见快照定义）。
         self.coverage_gap_armed = snapshot.coverage_gap_armed;
+        // 0bh ①：投递面会计续接（legacy 缺字段 = 0——投递率从本会话已知部分起算）。
+        self.notice_delivered_total = snapshot.notice_delivered_total;
+        self.notice_deferred_total = snapshot.notice_deferred_total;
+        self.notice_headroom_bytes = snapshot.notice_headroom_bytes;
         true
     }
 }
@@ -2580,6 +2641,15 @@ pub struct RliShadowSnapshot {
     /// `true`——宁可多报一次也不吞；域切换重武装）。
     #[serde(default = "is_true_default", skip_serializing_if = "is_true")]
     pub coverage_gap_armed: bool,
+    /// 0bh ①（2026-09-22）：提醒投递总数（投递率分子；legacy 缺字段 = 0）。
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub notice_delivered_total: u64,
+    /// 0bh ①：预算受阻暂存数（legacy 缺字段 = 0）。
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub notice_deferred_total: u64,
+    /// 0bh ①：最近头段余量（字节；legacy 缺字段 = 0）。
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub notice_headroom_bytes: u64,
 }
 
 #[cfg(test)]

@@ -1344,6 +1344,17 @@ async fn compress_blocks_now(
     let archive_write_failed =
         !crate::summary::write_archive_retry(&archive_dir, &archive_path, &markdown);
     let digest = crate::summary::archive_digest(&markdown);
+    // 0bh ③＋⑮（2026-09-22）：定位符行——折块与截断的**压缩回执**带
+    // `r<轮>·b<块>·s<journal seq>` 指针（设计 §4.1 三生成点之回执面；
+    // `journal_from` 取窗口级 journal 起点，s 口径与分块表一致）。
+    let pointer_line = crate::model_face::render_pointer_line(
+        &selected
+            .iter()
+            .map(|b| (b.number, b.first_round))
+            .collect::<Vec<_>>(),
+        &ledger_locators,
+        locators.journal_seq.map(|(from, _)| from),
+    );
     let marker = crate::model_face::compression_marker(
         &numbers,
         first_round,
@@ -1357,6 +1368,7 @@ async fn compress_blocks_now(
         &replay.join("\n"),
         &locators,
         &ledger_locators,
+        &pointer_line,
     );
     let insert_at = ranges
         .get(first_round)
@@ -1653,6 +1665,12 @@ async fn truncate_model_face_blocks(
     if !crate::summary::write_archive_retry(&archive_dir, &archive_path, &markdown) {
         archive_write_failed = true;
     }
+    // 0bh ③＋⑮：截断回执同样带定位符行（与压缩回执同形态）。
+    let pointer_line = crate::model_face::render_pointer_line(
+        &live.iter().map(|b| (b.number, b.first_round)).collect::<Vec<_>>(),
+        &ledger_locators,
+        locators.journal_seq.map(|(from, _)| from),
+    );
     let marker = crate::model_face::truncation_marker(
         &numbers,
         first_round,
@@ -1662,6 +1680,7 @@ async fn truncate_model_face_blocks(
         &locators,
         &replay_text,
         &ledger_locators,
+        &pointer_line,
     );
     let insert_at = ranges
         .get(first_round)
@@ -6304,19 +6323,12 @@ mod tests {
     // `with_context_scale_milestones` 退役，改由 `v8_test_ladder` 把 H1／T1
     // 钉到任意刻度。
 
-    /// v8 阶梯测试缝隙：四档软提醒抬到不可达刻度，**H1 硬打断**与
+    /// v8 阶梯测试缝隙：软提醒抬到不可达刻度，**H1 硬打断**与
     /// **T1 硬截断**分别钉在 `hard`／`truncate`（模型面估算刻度）。
-    fn v8_test_ladder(hard: u64, truncate: u64) -> [crate::context_scale::LadderStep; 6] {
+    /// 0bh ④（2026-09-22）：软档改 192/256 双档 ⇒ 测试梯同缩为 4 档。
+    fn v8_test_ladder(hard: u64, truncate: u64) -> [crate::context_scale::LadderStep; 4] {
         use crate::context_scale::{LadderStep, LadderTier};
         [
-            LadderStep {
-                tokens: u64::MAX - 3,
-                tier: LadderTier::Soft,
-            },
-            LadderStep {
-                tokens: u64::MAX - 2,
-                tier: LadderTier::Soft,
-            },
             LadderStep {
                 tokens: u64::MAX - 1,
                 tier: LadderTier::Soft,
@@ -6367,19 +6379,11 @@ mod tests {
             ScriptedResponse::text("终答").with_prompt_tokens(100),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // 初始 prompt 估算 ≈400K（800K 字符）⇒ 四个软档在**同一次 loop-top**
-        // 一起越线；硬档抬到不可达（本钉只测软档合并）。
+        // 初始 prompt 估算 ≈400K（800K 字符）⇒ 两个软档在**同一次 loop-top**
+        // 一起越线；硬档抬到不可达（本钉只测软档合并）。0bh ④：软档双档。
         let ladder = [
             LadderStep {
                 tokens: 100_000,
-                tier: LadderTier::Soft,
-            },
-            LadderStep {
-                tokens: 150_000,
-                tier: LadderTier::Soft,
-            },
-            LadderStep {
-                tokens: 200_000,
                 tier: LadderTier::Soft,
             },
             LadderStep {
@@ -6498,18 +6502,10 @@ mod tests {
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         // 首轮工具结果 20K 字符（估算 +10K）⇒ 软档（3K）与 T1（4K）在**同一次
-        // loop-top** 一起越线；H1 与其余软档抬到不可达。
+        // loop-top** 一起越线；H1 与另一软档抬到不可达。0bh ④：软档双档。
         let ladder = [
             LadderStep {
                 tokens: 3_000,
-                tier: LadderTier::Soft,
-            },
-            LadderStep {
-                tokens: u64::MAX - 2,
-                tier: LadderTier::Soft,
-            },
-            LadderStep {
-                tokens: u64::MAX - 1,
                 tier: LadderTier::Soft,
             },
             LadderStep {
@@ -7354,18 +7350,11 @@ mod tests {
             ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // 四个软刻度钉在会话面量级（静态开销由阶梯缝隙 pin 0）；硬档抬到不可达。
+        // 两个软刻度钉在会话面量级（静态开销由阶梯缝隙 pin 0）；硬档抬到不可达。
+        // 0bh ④：软档双档（192/256 步距语义）。
         let ladder = [
             LadderStep {
                 tokens: 100_000,
-                tier: LadderTier::Soft,
-            },
-            LadderStep {
-                tokens: 200_000,
-                tier: LadderTier::Soft,
-            },
-            LadderStep {
-                tokens: 300_000,
                 tier: LadderTier::Soft,
             },
             LadderStep {

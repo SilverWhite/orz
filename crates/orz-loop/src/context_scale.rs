@@ -14,11 +14,16 @@
 //!
 //! | 档 | 模型面估算 | ≈真实 token | 形态 |
 //! |---|---|---|---|
-//! | R1–R4 | 192 / 224 / 256 / 288K | ≈148 / 172 / 197 / 222K | 软提醒 |
+//! | R1–R2 | 192 / 256K | ≈148 / 197K | 软提醒（**64K 步距**；0bh ④ 定稿取消 224K） |
 //! | **H1** | **320K** | ≈246K | **硬提醒：打断（开压缩窗口）** |
 //! | **T1** | **500K** | ≈385K | **硬截断（主滑块以外的全部分块）** |
 //!
 //! 换算：`估算 ≈ 真实 ÷ 0.77`（设计 §3.1 换算纪律）。每档**每会话一次**；
+//! 0bh ④（2026-09-22，用户定稿「保留 192／256 双档」）——软梯由 32K 步距拉成
+//! 64K 步距，方向是**少提醒、拉带宽**而非抬阈值。**承重件推论**（随 0bh S1
+//! 文档化）：真机 0bg 轮 7 次压缩**全部** `mode=model_summary／reason=model_selected`
+//! （机械 RHYTHM 线 0 次）⇒ 软提醒是「让压缩保持模型自撰」的承重件，故只拉
+//! 步距、不砍档。
 //! H1／T1 各一次/会话；950K 取消（它只是 provider 1M 窗口的安全上限、不是
 //! 质量许可额度）；1.10M 估算守卫降为**异常保险**（单轮暴涨／换算漂移），
 //! 越线**强制截断到线上**（v7 的「不开窗」行为随之作废）。
@@ -105,21 +110,17 @@ pub struct LadderStep {
 
 /// v8 默认阶梯（生产固定——刻度值进文案，改值即改语义；测试经
 /// `with_context_scale_ladder` 用极小刻度驱动）。
-pub const DEFAULT_LADDER: [LadderStep; 6] = [
+///
+/// 0bh ④（2026-09-22 用户定稿）：软档 **192／256**（64K 步距），取消 224K；
+/// 320（H1 硬提醒）／500（T1 硬截断）不动。每一软档恰贴在一条机械线之前
+/// （192K≈RHYTHM／256K≈FALLBACK），单档含义唯一。
+pub const DEFAULT_LADDER: [LadderStep; 4] = [
     LadderStep {
         tokens: 192_000,
         tier: LadderTier::Soft,
     },
     LadderStep {
-        tokens: 224_000,
-        tier: LadderTier::Soft,
-    },
-    LadderStep {
         tokens: 256_000,
-        tier: LadderTier::Soft,
-    },
-    LadderStep {
-        tokens: 288_000,
         tier: LadderTier::Soft,
     },
     LadderStep {
@@ -147,7 +148,7 @@ pub struct LadderFire {
 ///
 /// 2026-09-16 实现批（用户裁定「守卫降值 ＋ 重新武装，双管齐下」）：
 ///
-/// - **软提醒（192/224/256/288K）＝每会话一次**（水位随侧车持久化、恢复不重发）；
+/// - **软提醒（192/256K）＝每会话一次**（水位随侧车持久化、恢复不重发）；
 /// - **H1／T1 ＝按越线重新武装**（`latched` 闩）：越过线发一次，落到线下即复位
 ///   ⇒ 每次再越线都会再提醒/再截断。理由＝T1 只响一次时，模型面可以在无任何
 ///   信号的情况下重新长到守卫线（实测口径），500K 天花板名存实亡；H1 随之重新
@@ -332,10 +333,13 @@ pub fn hard_reminder_block(
 }
 
 /// **T1 硬截断告知块**（设计 §5）：① 已截断 N 块／约 M token；② 可按块回放
-/// （给块表与回放口径）；③ 任务无需中止。
+/// （给块表与回放口径）；③ 工作现场与残段未动（**状况陈述**）。
 ///
 /// 2026-09-16 审查 R-12③ 处置补录：一轮内只注入最高档 ⇒ T1 那轮的软／硬提醒
 /// 被压掉，告知块必须自己带上**截断后的当前读数**（否则该轮模型看不到任何读数）。
+/// 0bh ⑯ 子项（2026-09-22，用户批准「去判断而非去建议」，处置优先级 删＞保留＞改）：
+/// 删除原③句「任务无需中止：…继续即可」——「该不该继续」是模型的判断，
+/// 机械层只留事实（「工作现场与残段逐字未动」）与回放指引。
 pub fn truncation_notice_block(
     truncated_blocks: usize,
     freed_tokens: u64,
@@ -357,7 +361,7 @@ pub fn truncation_notice_block(
          1. 已截断 {truncated_blocks} 块／≈{freed_tokens}tk token；\n\
          2. **可按块回放**——逐字原文全量留档（会话档案 ＋ 按块档案 ＋ journal），\
          用 read_file offset/limit 分页读回：\n{replay}\n\
-         3. **任务无需中止**：工作现场（最近若干完整轮）与残段逐字未动，继续即可。{failure}\n\
+         3. 工作现场（最近若干完整轮）与残段逐字未动。{failure}\n\
          {block_table}\n\
          {declaration}",
         reading(model_face_tokens),
@@ -386,7 +390,7 @@ pub fn guard_truncation_notice_block(
          {truncated_blocks} 个**已闭合分块**（≈{freed_tokens}tk token）以把请求压回线上\
          （截断后当前读数 {}）：\n\
          {replay}\n\
-         任务无需中止（工作现场与残段逐字未动）；需要更早内容时按上表回放。{failure}",
+         工作现场与残段逐字未动；需要更早内容时按上表回放。{failure}",
         reading_only(guard_tokens),
         reading(model_face_tokens),
     )
@@ -408,18 +412,34 @@ pub fn first_block_reminder_block() -> String {
     )
 }
 
+/// 0bh ④（2026-09-22，门二＝A「只做目标档建议」）：压缩**目标档**建议——
+/// 建议把模型面读数压到最低软档以下（贴线复压会立刻再来一轮；真机实测连号
+/// 压缩仅隔 52 个事件）。**只告知、不做机械护栏**：不加折叠下限、不动
+/// `max_reduction_ratio`，压缩仍交模型自选。
+pub const COMPRESSION_TARGET_TIER_TOKENS: u64 = 192_000;
+
+/// 目标档建议行（单一来源；`context_compress` 响应与 H1 窗口块共用）。
+fn target_tier_advice() -> String {
+    format!(
+        "目标档：≤{}K（R1 软档——压到最低软档以下，避免贴线复压）",
+        COMPRESSION_TARGET_TIER_TOKENS / 1000
+    )
+}
+
 /// H1 的压缩窗口任务块（打断式提醒注入——FR-3：不锁工具面；量尺＝模型面阶梯）。
 pub fn compression_window_block(milestone_tokens: u64) -> String {
     let k = milestone_tokens / 1000;
     format!(
         "{WINDOW_NOTICE_PREFIX} · 窗口 · 模型面 {k}K] 打断式提醒（不锁工具面、动作照常）。请在窗口内完成：\n\
-         1. 产出语义摘要块（见上）——机械层用它替换**工作现场之外**的分块（可按块区间指定）；\n\
+         1. 产出语义摘要块（见上）——机械层用它替换**工作现场之外**的分块（可按块区间指定）；\
+         {}。\n\
          2. 若有关键结论需要跨压缩长期留存，一并固化到黑板\
          （{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes；黑板不受上下文窗口影响）。\n\
          （读数与再发起可随时调用 {CONTEXT_COMPRESS_TOOL_NAME}：窗口在程中时它只返回当前\
          读数，不会重复开窗。）\n\
          窗口结束仍未产出摘要块 ⇒ 机械层**不做压缩兜底**（模型面总量只由模型自压与\
-         H1/T1 管），如实落账 `model_participated=false`。"
+         H1/T1 管），如实落账 `model_participated=false`。",
+        target_tier_advice()
     )
 }
 
@@ -458,7 +478,8 @@ pub fn context_compress_response(
         CompressRequestState::Requested => format!(
             "压缩窗口已请求：下一个安全边界将开启模型参与压缩窗口（≤3 轮）。\
              窗口轮请产出语义摘要块（机械层据以折叠主滑块外的已闭合分块），\
-             必要时用 {BLACKBOARD_WRITE_TOOL_NAME} 固化关键结论。"
+             必要时用 {BLACKBOARD_WRITE_TOOL_NAME} 固化关键结论。{}",
+            target_tier_advice()
         ),
         CompressRequestState::InProgress => {
             "压缩窗口已在程中（in_progress）：本轮即窗口轮，请直接产出语义摘要块或固化黑板；无需重复发起。"
@@ -542,6 +563,7 @@ mod tests {
         let requested = context_compress_response(CompressRequestState::Requested, &readout);
         assert!(requested.contains("压缩窗口已请求"), "{requested}");
         assert!(requested.contains("blackboard_write"), "{requested}");
+        assert!(requested.contains("目标档：≤192K"), "{requested}");
         assert!(
             requested.contains("滑块读数：滑块外可压缩 3 块 ≈ est 153K（主滑块外共 5 块）"),
             "{requested}"
@@ -566,6 +588,26 @@ mod tests {
         }
     }
 
+    /// 0bh ④ 钉（2026-09-22，门二＝A）：目标档建议**只做告知、不做机械护栏**
+    /// ——`context_compress` 响应与 H1 窗口块共用同一行建议（单一来源）；
+    /// 建议目标＝最低软档（192K）；不加折叠下限、不动 `max_reduction_ratio`。
+    #[test]
+    fn compression_target_tier_advice_is_shared_and_advisory() {
+        let readout = crate::model_face::SliderReadout {
+            compressible_blocks: 2,
+            compressible_estimate_tokens: 102_400,
+            total_blocks: 3,
+        };
+        let requested = context_compress_response(CompressRequestState::Requested, &readout);
+        assert!(requested.contains("目标档：≤192K"), "{requested}");
+        let window = compression_window_block(320_000);
+        assert!(window.contains("目标档：≤192K"), "{window}");
+        assert_eq!(COMPRESSION_TARGET_TIER_TOKENS, 192_000);
+        // 「只告知」：建议文本不得携带机械扣留语义（护栏词）。
+        assert!(!requested.contains("必须"), "{requested}");
+        assert!(!window.contains("必须"), "{window}");
+    }
+
     #[test]
     fn ladder_fires_each_tier_exactly_once_and_in_policy_order() {
         let mut state = ContextScaleState::new();
@@ -573,10 +615,10 @@ mod tests {
         let fires = state.due(330_000, &DEFAULT_LADDER);
         assert_eq!(
             fires.iter().map(|f| f.milestone_tokens).collect::<Vec<_>>(),
-            vec![192_000, 224_000, 256_000, 288_000, 320_000]
+            vec![192_000, 256_000, 320_000]
         );
         assert_eq!(fires[0].tier, LadderTier::Soft);
-        assert_eq!(fires[4].tier, LadderTier::HardReminder);
+        assert_eq!(fires[2].tier, LadderTier::HardReminder);
         // 每档一次：重复查询零返回；T1 单独一次。
         assert!(state.due(330_000, &DEFAULT_LADDER).is_empty());
         let fires = state.due(501_000, &DEFAULT_LADDER);
@@ -599,7 +641,7 @@ mod tests {
         let fires = state.due(330_000, &DEFAULT_LADDER);
         assert_eq!(
             fires.iter().map(|f| f.milestone_tokens).collect::<Vec<_>>(),
-            vec![224_000, 256_000, 288_000, 320_000]
+            vec![256_000, 320_000]
         );
         // 字面水位随侧车往返（first_block），不参与数值刻度。
         assert!(state.has_flag(FLAG_FIRST_BLOCK));
@@ -617,15 +659,7 @@ mod tests {
         );
         assert_eq!(
             state.notified_keys(),
-            vec![
-                "192k",
-                "224k",
-                "256k",
-                "288k",
-                "320k",
-                "500k",
-                FLAG_FIRST_BLOCK
-            ]
+            vec!["192k", "256k", "320k", "500k", FLAG_FIRST_BLOCK]
         );
     }
 
@@ -650,7 +684,13 @@ mod tests {
         let notice =
             truncation_notice_block(3, 41_000, 460_000, "- 块#1 …", "[上下文分块表 v0.1]", false);
         assert!(notice.contains("已截断 3 块"));
-        assert!(notice.contains("任务无需中止"));
+        // 0bh ⑯ 子项：判断句已删——机械层不再替模型断言「该不该继续」，
+        // 只留状况陈述（工作现场未动）与回放指引。
+        assert!(!notice.contains("任务无需中止"), "{notice}");
+        assert!(
+            notice.contains("工作现场（最近若干完整轮）与残段逐字未动"),
+            "{notice}"
+        );
         // 2026-09-16（审查 R-12③ 处置）：一层内只注入最高档 ⇒ 告知块自带
         // **截断后读数**，压掉同轮软／硬提醒才是无损的。
         assert!(notice.contains("截断后当前读数"), "{notice}");

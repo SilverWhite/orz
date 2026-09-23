@@ -105,6 +105,10 @@ pub struct FaceMarkers {
     /// 每块的**外挂台账 `[seq]` 闭区间**（marker 的「台账定位」行反解；
     /// 三元一致的第三键——2026-09-16 实现批补齐，设计 §2 §11）。
     pub ledger_seq: BTreeMap<u32, (u64, u64)>,
+    /// 每块所属 marker 的 **journal seq 闭区间**（0bh ⑮ 2026-09-22：指针
+    /// `r<轮>·b<块>·s<journal seq>` 的 `s` 来源——marker「原文定位（四项）」
+    /// 的 `- journal: run=… seq=a–b` 行反解；同 marker 内各块共享区间）。
+    pub journal_seq: BTreeMap<u32, (u64, u64)>,
 }
 
 impl FaceMarkers {
@@ -119,12 +123,31 @@ impl FaceMarkers {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.compressed.is_empty() && self.truncated.is_empty() && self.ledger_seq.is_empty()
+        self.compressed.is_empty()
+            && self.truncated.is_empty()
+            && self.ledger_seq.is_empty()
+            && self.journal_seq.is_empty()
     }
 
     /// 该块的外挂台账 `[seq]` 区间（未外挂 ⇒ `None`）。
     pub fn ledger_range(&self, number: u32) -> Option<(u64, u64)> {
         self.ledger_seq.get(&number).copied()
+    }
+
+    /// 该块的 journal seq 区间（0bh ⑮；旧 marker 缺行 ⇒ `None`）。
+    pub fn journal_range(&self, number: u32) -> Option<(u64, u64)> {
+        self.journal_seq.get(&number).copied()
+    }
+
+    /// 0bh ⑮：该块的定位符 `r<轮>·b<块>·s<seq>`（≤24 B；`s` 缺 ⇒ 用台账
+    /// seq 顶位并在渲染处如实标注；两者都缺 ⇒ `None`——不虚构）。
+    pub fn pointer_for(&self, number: u32, first_round: usize) -> Option<String> {
+        let seq = self
+            .journal_seq
+            .get(&number)
+            .map(|(from, _)| *from)
+            .or_else(|| self.ledger_seq.get(&number).map(|(from, _)| *from))?;
+        Some(format!("r{}·b{number}·s{seq}", first_round + 1))
     }
 }
 
@@ -343,8 +366,32 @@ pub fn face_markers(messages: &[Message]) -> FaceMarkers {
         for (number, range) in parse_marker_ledger_seqs(&m.content) {
             out.ledger_seq.insert(number, range);
         }
+        // 0bh ⑮：journal seq 区间（指针 `s` 的权威来源）——同 marker 的
+        // 各块共享该区间；旧 marker 缺行则如实缺（pointer 退用台账 seq）。
+        if let Some(range) = parse_marker_journal_range(&m.content) {
+            for n in parse_marker_blocks(&m.content)
+                .map(|(_, numbers)| numbers)
+                .unwrap_or_default()
+            {
+                out.journal_seq.insert(n, range);
+            }
+        }
     }
     out
+}
+
+/// 反解 marker 的 journal seq 区间（`- journal: run=… seq=a–b（…）`；
+/// 区间用 **en dash** `–`，与 `LocatorPointers::render_marker_lines` 同源）。
+/// 缺失/脏数据 ⇒ `None`（指针不虚构）。
+pub fn parse_marker_journal_range(content: &str) -> Option<(u64, u64)> {
+    let line = content
+        .lines()
+        .map(str::trim_start)
+        .find(|l| l.starts_with("- journal:"))?;
+    let after = line.split_once("seq=")?.1;
+    let end = after.find(['（', '）', ' ']).unwrap_or(after.len());
+    let (a, b) = after[..end].split_once('–')?;
+    Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
 }
 
 /// 反解 marker 的「台账定位」行（`台账定位: 块#1 [seq] 12-25; 块#2 [seq] 26-40`）。
@@ -734,6 +781,14 @@ pub fn render_block_table(
             }
             None => "台账 [seq] —（本 marker 未带定位行）".to_string(),
         };
+        // 0bh ⑮（2026-09-22，设计 §4.1）：块号 ↔ **定位符** `r<轮>·b<块>·s<seq>`
+        // ——`s`＝journal 事件行号（marker「原文定位（四项）」的 journal 行反解；
+        // 旧 marker 缺行时退用台账 seq 并在形态上不改写）。指针 ≤24 B/条。
+        let pointer = match markers.pointer_for(block.number, block.first_round) {
+            Some(ptr) => format!(" | 指针 {ptr}"),
+            None => String::new(),
+        };
+        let ledger = format!("{ledger}{pointer}");
         let tools = if block.tools.is_empty() {
             "无工具".to_string()
         } else {
@@ -829,9 +884,9 @@ pub fn archive_tag(session_id: Option<&str>, run_id: &str) -> String {
     }
 }
 
-/// 阶梯里的**硬截断刻度**（T1；设计 §3 表最后一档）。阶梯结构固定为六档
-/// （四软 ＋ 硬提醒 ＋ 硬截断），缺档时退化为最大刻度。
-pub fn ladder_truncate_tokens(ladder: &[crate::context_scale::LadderStep; 6]) -> u64 {
+/// 阶梯里的**硬截断刻度**（T1；设计 §3 表最后一档）。阶梯结构固定为四档
+/// （0bh ④ 定稿 2026-09-22：两软 ＋ 硬提醒 ＋ 硬截断），缺档时退化为最大刻度。
+pub fn ladder_truncate_tokens(ladder: &[crate::context_scale::LadderStep; 4]) -> u64 {
     ladder
         .iter()
         .filter(|s| s.tier == crate::context_scale::LadderTier::HardTruncate)
@@ -860,6 +915,31 @@ pub fn render_ledger_locator_line(entries: &[(u32, (u64, u64))]) -> String {
     format!("台账定位: {}", parts.join("; "))
 }
 
+/// 0bh ③＋⑮（2026-09-22）：**定位符行**（`指针: r<轮>·b<块>·s<seq>；…`）——
+/// 压缩回执/截断回执与分块表共用同一形态（设计 §4.1：`s`＝journal 事件
+/// 行号；三生成点之「压缩回执」）。入参＝每块（块号，块首轮）＋窗口
+/// journal 起点（`locators.journal_seq`）；缺 journal 起点或缺块 ⇒ 空串
+/// （如实留空、不虚构）。
+pub fn render_pointer_line(
+    blocks: &[(u32, usize)],
+    ledger_locators: &[(u32, (u64, u64))],
+    journal_from: Option<u64>,
+) -> String {
+    let Some(jfrom) = journal_from else {
+        return String::new();
+    };
+    let mut parts: Vec<String> = blocks
+        .iter()
+        .filter(|(number, _)| ledger_locators.iter().any(|(n, _)| n == number))
+        .map(|(number, first_round)| format!("r{}·b{number}·s{jfrom}", first_round + 1))
+        .collect();
+    if parts.is_empty() {
+        return String::new();
+    }
+    parts.sort();
+    format!("指针（回查：blackboard_read section=journal anchor=）: {}", parts.join("；"))
+}
+
 /// 分块压缩 marker（`[前文上下文已压缩 v0.4-分块压缩]`；restore-retained）。
 ///
 /// `summary` ＝ 模型产出的语义摘要块（机械识别，可为空 ⇒ 纯结构化轨）。
@@ -877,6 +957,7 @@ pub fn compression_marker(
     replay: &str,
     locators: &crate::summary::LocatorPointers,
     ledger_locators: &[(u32, (u64, u64))],
+    pointer_line: &str,
 ) -> String {
     let semantic = summary
         .map(|s| format!("\n== 语义摘要（模型产出） ==\n{s}\n"))
@@ -888,6 +969,11 @@ pub fn compression_marker(
     let version = BLOCK_MARKER_COMPRESSED_VERSION;
     let locator_lines = locators.render_marker_lines(archive_path, digest);
     let ledger_line = render_ledger_locator_line(ledger_locators);
+    let pointer_display = if pointer_line.is_empty() {
+        String::new()
+    } else {
+        format!("{pointer_line}\n")
+    };
     let archive_display = archive_path.display().to_string();
     let session_display = session.unwrap_or("（无）");
     format!(
@@ -895,6 +981,7 @@ pub fn compression_marker(
          {BLOCK_MARKER_RANGE_LABEL}{}\n\
          摘要 ID: {summary_id}\n被处理轮次: 轮 {}-{}（{} 轮）\n\
          {ledger_line}\n\
+         {pointer_display}\
          摘要存档: {archive_display}\n摘要 digest: sha256:{digest}\n\
          黑板会话: {session_display}\n\
          {locator_lines}\n\
@@ -918,6 +1005,7 @@ pub fn truncation_marker(
     locators: &crate::summary::LocatorPointers,
     replay: &str,
     ledger_locators: &[(u32, (u64, u64))],
+    pointer_line: &str,
 ) -> String {
     let numbers_text = render_block_numbers(numbers);
     let count = numbers.len();
@@ -926,6 +1014,11 @@ pub fn truncation_marker(
     let version = BLOCK_MARKER_TRUNCATED_VERSION;
     let locator_lines = locators.render_marker_lines(archive_path, "（截断记录，无摘要）");
     let ledger_line = render_ledger_locator_line(ledger_locators);
+    let pointer_display = if pointer_line.is_empty() {
+        String::new()
+    } else {
+        format!("{pointer_line}\n")
+    };
     let archive_display = archive_path.display().to_string();
     format!(
         "[前文上下文已压缩 {version}]\n\
@@ -933,6 +1026,7 @@ pub fn truncation_marker(
          被截断: {} 块 ≈{freed_tokens}tk token（模型面估算）\n\
          被处理轮次: 轮 {}-{}\n\
          {ledger_line}\n\
+         {pointer_display}\
          截断记录存档: {archive_display}\n\
          {locator_lines}\n\
          == 原文回放（按块） ==\n{replay}\n\
@@ -1229,6 +1323,7 @@ mod tests {
                 "- 块#1: 完整内容见 .gsa/compaction/blocks/block-0001.md",
                 &crate::summary::LocatorPointers::default(),
                 &[(1, (12, 25))],
+                "指针（回查：blackboard_read section=journal anchor=）: r1·b1·s12",
             ),
             tool_call_id: None,
             tool_calls: Vec::new(),
@@ -1346,6 +1441,7 @@ mod tests {
                 &crate::summary::LocatorPointers::default(),
                 "- 块#1 …",
                 &[],
+                "",
             ),
             tool_call_id: None,
             tool_calls: Vec::new(),
@@ -1381,6 +1477,7 @@ mod tests {
             "- 块#1 …",
             &crate::summary::LocatorPointers::default(),
             &[(1, (12, 25)), (2, (26, 40))],
+            "指针（回查：blackboard_read section=journal anchor=）: r1·b1·s12；r1·b2·s12",
         );
         let messages = vec![Message {
             role: Role::User,
@@ -1417,6 +1514,7 @@ mod tests {
             &crate::summary::LocatorPointers::default(),
             "- 块#1 …",
             &[],
+            "",
         );
         let messages = vec![Message {
             role: Role::User,

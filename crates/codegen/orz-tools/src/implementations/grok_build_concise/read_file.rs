@@ -8,6 +8,7 @@ It is okay to read a file that does not exist; an error will be returned.
 Usage:
 - You can optionally specify ${{ params.read.offset }} and ${{ params.read.limit }} (especially handy for long files).
 - Lines in the output are numbered starting at 1, using following format: LINE_NUMBER→LINE_CONTENT.
+- Pass `outline=true` (text files only) to get a section outline — one `L<line>: <heading>` entry per Markdown heading — instead of the content; use it to locate a section before reading a range.
 - Text files larger than the coarse gate (default 64 KiB, configurable 8–64 KiB via ORZ_READ_FILE_COARSE_GATE_BYTES — TER T1.10 W-F13a) return a read-handle envelope (path / size / encoding / content_sha256 / available range / bounded preview ≤4 KiB / truncated / offset) instead of full content; continue with offset=… or switch to grep/structure-first.
 - Every text read returns a content anchor — sha256 / size / mtime (mtime may be absent) — in the envelope header or as a trailing [read anchor] line. Before editing a file, copy that anchor into the edit call's expected_anchor so the write gate verifies the file is unchanged; a mismatch rejects the edit and requires re-reading first.
 - You have the capability to call multiple tools in a single response. It is always better to speculatively read multiple files as a batch that are potentially useful."#;
@@ -186,6 +187,7 @@ mod tests {
             limit: None,
             pages: None,
             format: None,
+            outline: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)

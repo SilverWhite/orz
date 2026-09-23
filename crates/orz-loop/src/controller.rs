@@ -1797,9 +1797,118 @@ impl AgentLoopController {
         self.render_blackboard_section_fold(section, since, epoch, receipt_id, None)
     }
 
+    /// 0bh ⑭（2026-09-22，BLACKBOARD_GUIDE_AND_POINTER_DESIGN §3 设计 A）：
+    /// 黑板说明书分区（`blackboard_read section=guide`）——pull 面（不自动
+    /// 注入、零徽章）、整响应 ≤1 KiB、单源渲染（digest 随行）。
+    pub(crate) fn render_board_guide() -> String {
+        let digest = sha256_hex(Self::BOARD_GUIDE_BODY.as_bytes());
+        let digest8: String = digest.chars().take(8).collect();
+        format!(
+            "[黑板说明书 guide v1 · digest sha256:{digest8}]\n\
+             {}\n\
+             —— 结束自述通道（中性终态；0bh ⑯）——\n{syntax}",
+            Self::BOARD_GUIDE_BODY,
+            syntax = crate::model_stop::model_stop_syntax_line(),
+        )
+    }
+
+    /// 0bh ⑮（2026-09-22，设计 §4.1/§4.2）：journal anchor 回查——定位符
+    /// `r<轮>·b<块>·s<seq>`（可选 `#<sha8>`）机械定位到本 run journal 事件，
+    /// **只回该事件的机械字段摘要（≤512 B）＋指针回显**（不整行灌 journal）；
+    /// 错误三态如实文本（指针不存在／属于其他 run 或已归档／已过期）。
+    pub(crate) fn resolve_journal_anchor(events_path: &Path, anchor: &str) -> String {
+        let bounded =
+            |s: String| orz_assurance::tool_envelope::enforce_bound(s, 512);
+        let (ptr, sha) = match anchor.split_once('#') {
+            Some((p, s)) => (p.trim(), Some(s.trim().to_ascii_lowercase())),
+            None => (anchor.trim(), None),
+        };
+        fn num(part: Option<&str>, tag: char) -> Option<u64> {
+            part?.trim().strip_prefix(tag)?.trim().parse().ok()
+        }
+        let mut parts = ptr.split('·');
+        let (r, b, s) = (num(parts.next(), 'r'), num(parts.next(), 'b'), num(parts.next(), 's'));
+        let extra = parts.next();
+        let (Some(r), Some(b), Some(s)) = (r, b, s) else {
+            return bounded(format!(
+                "指针不存在：{anchor}（格式应为 r<轮>·b<块>·s<seq>[#sha8]，如 r5·b1·s123）"
+            ));
+        };
+        if extra.is_some() {
+            return bounded(format!(
+                "指针不存在：{anchor}（格式应为 r<轮>·b<块>·s<seq>[#sha8]）"
+            ));
+        }
+        let Ok(content) = std::fs::read_to_string(events_path) else {
+            return bounded(format!(
+                "该指针属于其他 run 或已归档：{anchor}（本 run journal 不可读：{}）",
+                events_path.display()
+            ));
+        };
+        let lines: Vec<&str> = content.lines().collect();
+        let total = lines.len();
+        let mut hit_index: Option<usize> = None;
+        for (i, line) in lines.iter().enumerate() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if v.get("sequence").and_then(|x| x.as_u64()) == Some(s) {
+                hit_index = Some(i);
+                break;
+            }
+        }
+        let Some(i) = hit_index else {
+            let max = lines
+                .last()
+                .and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+                .and_then(|v| v.get("sequence").and_then(|x| x.as_u64()))
+                .unwrap_or(0);
+            if s > max {
+                return bounded(format!(
+                    "指针不存在：s{s} 越界（本 run 事件数 {total}，最大 sequence {max}）"
+                ));
+            }
+            return bounded(format!(
+                "该指针属于其他 run 或已归档：{anchor}（本 run {total} 条事件中无 s{s}）"
+            ));
+        };
+        let line = lines[i];
+        let v: serde_json::Value =
+            serde_json::from_str(line).unwrap_or(serde_json::Value::Null);
+        let current = sha256_hex(line.as_bytes());
+        let cur8: String = current.chars().take(8).collect();
+        if let Some(expected) = sha.as_deref().filter(|e| !e.is_empty())
+            && expected != cur8
+        {
+            return bounded(format!(
+                "指针已过期：内容 sha 与指针不符（当前 sha8={cur8}；指针 #{expected}）"
+            ));
+        }
+        let event_type = v.get("event_type").and_then(|x| x.as_str()).unwrap_or("?");
+        let ts = v.get("timestamp").and_then(|x| x.as_str()).unwrap_or("?");
+        let keys = v
+            .get("payload")
+            .and_then(|p| p.as_object())
+            .map(|o| o.keys().cloned().collect::<Vec<_>>().join(","))
+            .unwrap_or_default();
+        bounded(format!(
+            "指针 r{r}·b{b}·s{s}#{cur8} → seq={s}｜{event_type}｜{ts}｜payload 键=[{keys}]\
+             （机械字段摘要 ≤512 B；内容一致性见 #sha8）"
+        ))
+    }
+
+    /// guide 正文（单一来源；digest 覆盖本常量——0bh ⑭：单源＋digest）。
+    const BOARD_GUIDE_BODY: &str = "黑板＝会话的可读工作记忆：plan/notes（模型可写）＋ \
+        edits/exec/actions/entities/deps/processes/env/temporal/rli（机械分区）。\
+        读：blackboard_read section=<分区>；写：blackboard_write。\n\
+        定位符（分块表／压缩回执的「指针」行）：`r<轮>·b<块>·s<seq>`（s＝journal 事件\
+        行号，可带 #sha8）——回查：blackboard_read section=journal anchor=r5·b1·s123\
+        （返回该事件机械摘要 ≤512 B；#sha8 不符＝已过期提示）。\n\
+        压缩与回放：被压块逐字原文在本地全量档案＋按块回放档案；较早内容用「域位置＋\
+        轮号」导航；压缩只有建议不设强制（是否压缩由模型决定）。";
+
     /// B2 渲染折叠（2026-09-03，P2-13 / 设计 §9/§12）：在
-    /// [`Self::render_blackboard_section`] 之上叠加 `domain`+`round_from`/
-    /// `round_to` 显式展开参数（R2）与折叠态 live 渲染。
+    /// [`Self::render_blackboard_section`] 之上叠加 `domain`+`round_from`/    /// `round_to` 显式展开参数（R2）与折叠态 live 渲染。
     ///
     /// - 可折叠分区 = exec / edits / tool_actions（带 (round, domain) 章的
     ///   累积行；actions/plan/entities/deps/retrieval/session/temporal
@@ -2829,6 +2938,11 @@ impl AgentLoopController {
         slider_readout: Option<&str>,
     ) -> String {
         const HEADER_CAP: usize = 256;
+        // 0bh ①（2026-09-22）：RLI 提醒段的**独立预算**——提醒不再与徽章挤
+        // 同一 256 B 头段（真机实锤 17 条仅 4 次到达：头段余量 40–42 B <
+        // 单条 60–91 B ⇒ 静默让位）。核算单位＝提醒本体＋注解 ≤240 B/条
+        // （0bg 定稿）；有提醒时头段上限＝ HEADER_CAP ＋ NOTICE_BUDGET。
+        const NOTICE_BUDGET: usize = 240;
         // 0ae D0（2026-09-15，设计 §3，用户定案）：水位状态标——黑板 live
         // 字节水位明示为【x.xM/10M】式读数，随每个 live 读取响应头携带
         // （既有 10MiB 疲劳提醒机制不变；固化写入为 KB 量级，水位无虞）。
@@ -2869,7 +2983,14 @@ impl AgentLoopController {
         // 读时现算：分段文本由调用方在工具执行点现算传入（messages 在握、
         // 纯函数、零新增记账），本方法不做任何新锁获取、不倒锁序（既有
         // blackboard → lif → cursors 顺序不变）。None ＝不渲染（测试面）。
-        let mut header = match slider_readout {
+        // ── 0bh ①（2026-09-22）：提醒投递预算独立化 ─────────────────────
+        // 真机实锤（0bg 轮主会话回查：`RUN-CLI-6ab274e2` 消息面 17 条提醒仅
+        // 4 次到达模型）——头段被水位标＋徽章占去 189–216 B，留给提醒只剩
+        // 40–42 B（单条本体 60–91 B、含注解最坏 ≤240 B）且超预算 `break`
+        // **静默**。装配顺序据此反转：**先提醒（独立预算段）、徽章让位/折叠**
+        // ——提醒不再与徽章挤同一 256 B；无提醒时头段预算维持 256 B 不变，
+        // 有提醒时上限＝ HEADER_CAP ＋ NOTICE_BUDGET（提醒段独立于 256）。
+        let core = match slider_readout {
             Some(segment) => format!("[黑板 增量 水位{watermark} {segment}]"),
             None => format!("[黑板 增量 水位{watermark}]"),
         };
@@ -2881,28 +3002,25 @@ impl AgentLoopController {
                 badges.push(format!("{name}+{delta}"));
             }
         }
-        if !badges.is_empty() {
-            header.push(' ');
-            header.push_str(&badges.join(" "));
-        }
-        // 0bg S2（2026-09-22，双迁移通知定案）：LIF `域迁移+n` **即时计数
-        // 徽章撤出模型面**——迁移事实改由机械层连带记录
-        // （`mechanical_audit_update{kind:"lif_domain", key:"lif.domain_migration"}`，
-        // 见 `take_new_lif_migrations` 与 agent_loop 挂点）；模型面只留 RLI
-        // 「域迁移确认」（稳定后一次性）。LIF 自身计数照旧内部累计。
         // 0bf ③（2026-09-22，用户令「模型面提醒只留两触发…一次性投递」）：
         // RLI 提醒段——pull-delta 头一次性携带。预算内最多 2 条、逐条先量后
         // 挂（不截断半条）；**0bg S2：域类提醒（迁移确认／掩盖缺口）每次
         // 投递至多 1 条**（用户定案「每轮最多一条域类提醒」——第二条留待
         // 下次读取，不重不漏）。文案在触发时定格（含注解）。
+        // 0bh ①：装配改「提醒优先、徽章让位」——未挂的提醒给短告知（不静默）。
+        let mut notice_segment = String::new();
         let mut attached_notices = 0usize;
+        let mut attached_indices: Vec<usize> = Vec::new();
+        let mut deferred_notices = 0usize;
         let mut attached_domain_notice = false;
-        for text in &rli_pending_notices {
+        for (pending_pos, text) in rli_pending_notices.iter().enumerate() {
             if attached_notices >= 2 {
-                break;
+                deferred_notices += 1;
+                continue;
             }
             let domain_class = text.starts_with("域迁移确认") || text.starts_with("掩盖缺口");
             if domain_class && attached_domain_notice {
+                // 域类让位：留待下次读取（不重不漏），不计入预算受阻。
                 continue;
             }
             let piece = if attached_notices == 0 {
@@ -2910,17 +3028,76 @@ impl AgentLoopController {
             } else {
                 format!(" | {text}")
             };
-            if header.len() + piece.len() > HEADER_CAP {
-                break;
+            if notice_segment.len() + piece.len() > NOTICE_BUDGET {
+                deferred_notices += 1;
+                continue;
             }
-            header.push_str(&piece);
+            notice_segment.push_str(&piece);
             attached_notices += 1;
+            attached_indices.push(pending_pos);
             attached_domain_notice |= domain_class;
         }
+        // 徽章让位/折叠：徽章只在「头段预算 − 核心 − 提醒段」的余量内渲染
+        // ——**有提醒时徽章让位，而不是让提醒让位**；余量不足则折叠为
+        // 「前缀徽章 ＋ …(+k)」（不截断半条、不静默丢）。独立提醒预算段
+        // （HEADER_CAP＋NOTICE_BUDGET）只在「核心＋提醒段」本身就超 256 的
+        // 退化情形兜底（单条最坏 240 B 时仍可投递）。
+        let mut badges_part = String::new();
+        if !badges.is_empty() {
+            let budget = HEADER_CAP
+                .saturating_sub(core.len())
+                .saturating_sub(notice_segment.len());
+            let joined = badges.join(" ");
+            if joined.len() <= budget {
+                badges_part = joined;
+            } else {
+                let mut kept: Vec<&str> = Vec::new();
+                let mut omitted = 0usize;
+                for (i, badge) in badges.iter().enumerate() {
+                    let remaining = badges.len() - i - 1;
+                    // 折叠标记预留（"…(+NN)" ≤ 8 B）。
+                    let reserve = if remaining > 0 { 8 } else { 0 };
+                    let candidate_len =
+                        kept.iter().map(|b| b.len() + 1).sum::<usize>() + badge.len();
+                    if candidate_len + reserve <= budget {
+                        kept.push(badge);
+                    } else {
+                        omitted = badges.len() - i;
+                        break;
+                    }
+                }
+                let mut folded = kept.join(" ");
+                if omitted > 0 {
+                    if !folded.is_empty() {
+                        folded.push(' ');
+                    }
+                    folded.push_str(&format!("…(+{omitted})"));
+                }
+                badges_part = folded;
+            }
+        }
+        let mut header = core;
+        if !badges_part.is_empty() {
+            header.push(' ');
+            header.push_str(&badges_part);
+        }
+        header.push_str(&notice_segment);
+        // 未挂的提醒不静默（0bh ① 的另一半）：给短告知，提醒本体仍留在
+        // 队列、下次读取重试（不重不漏）；计数照常入影子（见下）。
+        if deferred_notices > 0 {
+            header.push_str(&format!(" | RLI提醒+{deferred_notices}条暂存"));
+        }
         // 0ae D0：水位状态标恒挂（用户定案「各分区响应头带读数」）；
-        // 增量徽章与域迁移段只在有变化时追加（原「零噪音」纪律对徽章
+        // 增量徽章与提醒段只在有变化时追加（原「零噪音」纪律对徽章
         // 部分继续成立）。
-        let header = orz_assurance::tool_envelope::enforce_bound(header, HEADER_CAP);
+        // 0bh ①：总帽——常态 256 B；「核心＋提醒段」本身超 256 时放到
+        // 256＋240（独立提醒预算段的退化兜底）。
+        let total_cap = if header.len() <= HEADER_CAP {
+            HEADER_CAP
+        } else {
+            HEADER_CAP + NOTICE_BUDGET
+        };
+        let header = orz_assurance::tool_envelope::enforce_bound(header, total_cap);
         // 推进本次读取分区的游标（成功 live 读语义）。0bg S2：迁移计数基线
         // 随「域迁移+n」徽章一并退役（迁移事实改走机械记录，模型面只留 RLI
         // 「域迁移确认」——双迁移通知定案）。
@@ -2929,10 +3106,17 @@ impl AgentLoopController {
         }
         drop(cursors);
         // 0bf ③：携带即投递（在游标锁释放后单独取 lif 锁——不倒锁序）。
-        if attached_notices > 0
-            && let Some(shadow) = self.lif.lock().unwrap().rli_shadow_mut()
-        {
-            shadow.mark_notices_delivered(attached_notices);
+        // 0bh ①：投递按**索引**标记（域类让位会让「前 n 条」口径错位——
+        // 索引口径与装配循环严格一致）；投递/暂存计数与头段余量入影子
+        // （「delivered 计数化」＋余量可核；随侧车持久）。
+        if attached_notices > 0 || deferred_notices > 0 {
+            if let Some(shadow) = self.lif.lock().unwrap().rli_shadow_mut() {
+                shadow.mark_notices_delivered_at(&attached_indices);
+                shadow.record_notice_delivery_accounting(
+                    deferred_notices,
+                    total_cap.saturating_sub(header.len()),
+                );
+            }
         }
         format!("{header}\n{body}")
     }
@@ -4166,19 +4350,63 @@ impl AgentLoopController {
             .await?;
         self.journal_pending_host_resource_facts(host, writer)
             .await?;
+        // 0bh ⑯（2026-09-22，设计 NEUTRAL_TERMINATION_AND_MODEL_STOP_DESIGN §4）：
+        // **中性终态与结束自述**——模型在收束轮（无工具轮）文本里声明
+        // `[RUN_END]`（intent/reason/summary）时，机械层**如实落账**：
+        // 旧字段/旧取值语义不变（v0.1 冻结回放面按旧值解释历史 journal），
+        // 新面以**新增字段**承载（最小契约面）。P1/P2＝判断归模型、机械层
+        // 只记录与传话（不判定、不建议、不驳回——未识别取值归 `other` 并
+        // 原样收入 `unrecognized`）。无声明 ⇒ 载荷与旧形逐字一致。
+        let mut terminal_payload = serde_json::json!({
+            "status": status,
+            // 0p S1 / W2 D-2 (2026-09-07)：真实会话轮计数（ACP 会话
+            // 内第 N 个 prompt；CLI 单 run 缺省 1）——退役硬编码 1。
+            "turn_count": self.session_turn,
+            "tool_rounds": tool_rounds,
+        });
+        if let Some(decl) = last_text
+            .as_deref()
+            .and_then(crate::model_stop::extract_model_stop)
+            && let Some(obj) = terminal_payload.as_object_mut()
+        {
+            use crate::model_stop::{StopIntent, model_stop_await_enabled};
+            obj.insert("intent".into(), serde_json::json!(decl.intent.as_str()));
+            obj.insert("reason".into(), serde_json::json!(decl.reason.as_str()));
+            // 摘要常态化：每次结束都写（缺失＝空串，不审查不罚不做质量门）；
+            // 机械层只做长度卫生（≤4K 字符，超出截断并如实标注）。
+            let summary = if decl.summary.chars().count() > 4_000 {
+                let cut: String = decl.summary.chars().take(4_000).collect();
+                format!("{cut}…（截断）")
+            } else {
+                decl.summary.clone()
+            };
+            obj.insert("summary".into(), serde_json::json!(summary));
+            if !decl.raw_unrecognized.is_empty() {
+                let raw = if decl.raw_unrecognized.chars().count() > 500 {
+                    let cut: String = decl.raw_unrecognized.chars().take(500).collect();
+                    format!("{cut}…（截断）")
+                } else {
+                    decl.raw_unrecognized.clone()
+                };
+                obj.insert("unrecognized".into(), serde_json::json!(raw));
+            }
+            // 暂停＝结束的意向取值；跑分装置显式置关时只标注通道状态
+            // （P2：声明本身不驳回、不改写）。
+            if decl.intent == StopIntent::Pause {
+                obj.insert(
+                    "await_channel".into(),
+                    serde_json::json!(if model_stop_await_enabled() {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }),
+                );
+            }
+        }
         // 0z S2 §4.3：降级卷以 `run_terminated { reason: journal_degraded }`
         // 显式收尾（正常完成时本调用恒为 RunFinished，行为不变）。
         writer
-            .record_terminal(
-                terminal_event,
-                serde_json::json!({
-                    "status": status,
-                    // 0p S1 / W2 D-2 (2026-09-07)：真实会话轮计数（ACP 会话
-                    // 内第 N 个 prompt；CLI 单 run 缺省 1）——退役硬编码 1。
-                    "turn_count": self.session_turn,
-                    "tool_rounds": tool_rounds,
-                }),
-            )
+            .record_terminal(terminal_event, terminal_payload)
             .await?;
 
         // Grill mode (2026-08-08): persist the full conversation (incl. tool
@@ -4824,6 +5052,92 @@ mod tests {
         assert_eq!(turn_count_of(Some(1)).await, 1);
         assert_eq!(turn_count_of(None).await, 1, "缺省 = 单提示语义不变");
         assert_eq!(turn_count_of(Some(0)).await, 1, "n<1 钳为 1");
+    }
+
+    /// 0bh ⑯ 钉（2026-09-22，设计 §4）：**中性终态与结束自述**——收束轮文本
+    /// 带 `[RUN_END]` 声明 ⇒ `run_finished` 以**新增字段**如实落账
+    /// （intent/reason/summary；旧字段语义不变）；无声明 ⇒ 载荷与旧形逐字
+    /// 一致（向后兼容）；未识别取值归 `other` ＋原文入 `unrecognized`
+    /// （P2：只记录不驳回）。
+    #[tokio::test]
+    async fn run_finished_carries_model_stop_declaration() {
+        async fn payload_of(text: &str, id: &str) -> serde_json::Value {
+            let dir = test_dir();
+            let journal = JournalRecorder::new(dir.clone());
+            let host = TestHost {
+                journal,
+                tool_result: None,
+            };
+            // 与 turn_count 测试同形：一次 run 需两轮脚本（首轮后仍有收束轮）。
+            let gateway: Arc<dyn ModelGateway> =
+                Arc::new(FakeProvider::from_texts(vec![text, text]));
+            let controller = AgentLoopController::with_gateway(gateway);
+            controller
+                .run_turn(&host, "hi", id, MANIFEST, 0, None, None, None)
+                .await
+                .unwrap();
+            let events = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+            let finished = events
+                .lines()
+                .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+                .find(|l| l["event_type"] == "run_finished")
+                .expect("run_finished event");
+            let value = finished["payload"].clone();
+            let _ = std::fs::remove_dir_all(&dir);
+            value
+        }
+        // 旧形：无声明 ⇒ 只 status/turn_count/tool_rounds（逐字兼容断言）。
+        let legacy = payload_of("普通终答，无声明", "RUN-STOP-LEGACY").await;
+        assert_eq!(
+            legacy,
+            serde_json::json!({
+                "status": "completed",
+                "turn_count": 1,
+                "tool_rounds": 0,
+            }),
+            "无声明路径载荷与旧形逐字一致"
+        );
+        // 中性终态：暂停＋待回应＋摘要（新增字段承载）。
+        let paused = payload_of(
+            "先停在这里。\n[RUN_END]\nintent: pause\nreason: awaiting_response\n\
+             summary: 已试 A/B；现场在 C；需要确认 D\n[/RUN_END]",
+            "RUN-STOP-PAUSE",
+        )
+        .await;
+        assert_eq!(paused["status"], serde_json::json!("completed"), "旧字段不动");
+        assert_eq!(paused["intent"], serde_json::json!("pause"));
+        assert_eq!(paused["reason"], serde_json::json!("awaiting_response"));
+        assert!(
+            paused["summary"].as_str().unwrap().contains("需要确认 D"),
+            "{paused}"
+        );
+        assert!(
+            matches!(
+                paused["await_channel"].as_str(),
+                Some("enabled") | Some("disabled")
+            ),
+            "暂停通道标注：{paused}"
+        );
+        // 结束（完成降为一种原因）：conclude/partial。
+        let partial = payload_of(
+            "[RUN_END]\nintent: conclude\nreason: partial\nsummary: 六件落码，余件待续\n[/RUN_END]",
+            "RUN-STOP-PARTIAL",
+        )
+        .await;
+        assert_eq!(partial["intent"], serde_json::json!("conclude"));
+        assert_eq!(partial["reason"], serde_json::json!("partial"));
+        // 未识别取值：不驳回（other ＋ 原文留存）。
+        let other = payload_of(
+            "[RUN_END]\nintent: hold\nreason: stuck\nsummary: x\n[/RUN_END]",
+            "RUN-STOP-OTHER",
+        )
+        .await;
+        assert_eq!(other["intent"], serde_json::json!("other"));
+        assert_eq!(other["reason"], serde_json::json!("other"));
+        assert!(
+            other["unrecognized"].as_str().unwrap().contains("stuck"),
+            "{other}"
+        );
     }
 
     /// 0v-C（2026-09-12）：全链重放回归——prompt 里的 URL 会被 journal 漏斗
@@ -5989,15 +6303,8 @@ mod tests {
         ]));
         let fat = "F".repeat(4_000); // ≈2K 估算/轮
         // 极小阶梯：T1 钉在 2K 模型面估算 ⇒ 首个 loop-top 必然越线。
+        // 0bh ④：软档 192/256 双档 ⇒ 测试梯 4 档（软档抬到不可达）。
         let ladder = [
-            LadderStep {
-                tokens: u64::MAX,
-                tier: LadderTier::Soft,
-            },
-            LadderStep {
-                tokens: u64::MAX,
-                tier: LadderTier::Soft,
-            },
             LadderStep {
                 tokens: u64::MAX,
                 tier: LadderTier::Soft,
@@ -6951,5 +7258,73 @@ body"
         controller.lif.lock().unwrap().disable_rli_shadow();
         let off = controller.attach_pull_delta("rli", "rli: x".to_string(), 0, None);
         assert!(!off.contains("RLI提醒:"), "{off}");
+    }
+
+    /// 0bh ①（2026-09-22）**任务面钉子**：徽章让位后提醒仍可投递——构造长
+    /// 头段（全分区大徽章）＋ 一条待投递提醒，断言：提醒本体在头段内（不被
+    /// 静默吞掉）、徽章出现折叠标记、头段总长 ≤256 B；**投递面钉子**：头段
+    /// 余量与 delivered/暂存计数可核（`rli_shadow` 读数）。
+    #[test]
+    fn pull_delta_long_header_folds_badges_instead_of_swallowing_notices() {
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        {
+            let mut w = controller.blackboard().write();
+            w.revisions.plan = u64::MAX;
+            w.revisions.notes = u64::MAX;
+            w.revisions.exec = u64::MAX;
+            w.revisions.edits = u64::MAX;
+            w.revisions.tool_actions = u64::MAX;
+            w.revisions.internal_ret = u64::MAX;
+            w.revisions.external_ret = u64::MAX;
+            w.actions.revision = u64::MAX;
+            w.entities.register_file(
+                "a.txt",
+                true,
+                Some(1),
+                Some(2),
+                Some("a".repeat(64)),
+                None,
+                "2026-09-22T00:00:00Z",
+            );
+        }
+        {
+            let mut guard = controller.lif.lock().unwrap();
+            let mut t = 0.0f64;
+            for _ in 0..7u32 {
+                t += 1.0;
+                guard.on_decision_round(t);
+                guard.on_tool_event(t + 0.5, orz_assurance::lif::ToolEvent::error(Some(900)));
+            }
+        }
+        let out = controller.attach_pull_delta("plan", "body".to_string(), 0, None);
+        let first_line = out.lines().next().expect("header line");
+        assert!(first_line.contains("RLI提醒:"), "提醒被吞：{first_line}");
+        assert!(first_line.contains("持续越线"), "{first_line}");
+        assert!(
+            first_line.contains("…(+"),
+            "长头段应折叠徽章而非静默：{first_line}"
+        );
+        assert!(
+            first_line.len() <= 256,
+            "头段超 256 B 预算：{} B / {first_line}",
+            first_line.len()
+        );
+        assert!(first_line.is_char_boundary(first_line.len()));
+        assert!(out.contains("\nbody"), "body lost: {out}");
+        // 投递面钉子：delivered 计数化 + 头段余量可核。
+        let (delivered, deferred, headroom) = controller
+            .lif
+            .lock()
+            .unwrap()
+            .rli_shadow()
+            .expect("shadow present")
+            .notice_delivery_stats();
+        assert_eq!(delivered, 1, "投递计数");
+        assert_eq!(deferred, 0, "无受阻暂存");
+        assert!(headroom <= 240, "头段余量应在提醒预算内：{headroom}");
+        // 一次性投递语义保持：再读不重发。
+        let again = controller.attach_pull_delta("plan", "body".to_string(), 0, None);
+        assert!(!again.contains("RLI提醒:"), "{again}");
     }
 }

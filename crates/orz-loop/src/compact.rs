@@ -62,11 +62,12 @@ pub struct ContextCompactConfig {
     /// 才触及，越线行为＝**强制截断到线上**（v7 的「不开窗降级」随勘误作废）。
     /// env `ORZ_MODEL_FACE_GUARD_TOKENS` 覆盖。
     pub model_face_guard_tokens: u64,
-    /// **注意力阶梯**（v8 设计 §3）：默认
-    /// `[192/224/256/288K 软提醒 → 320K 硬打断 → 500K 硬截断]`（模型面估算
+    /// **注意力阶梯**（v8 设计 §3；0bh ④ 定稿 2026-09-22＝软档 **192/256K**
+    /// 64K 步距、取消 224K）：默认
+    /// `[192/256K 软提醒 → 320K 硬打断 → 500K 硬截断]`（模型面估算
     /// 刻度）。**生产固定**——刻度值进文案，改值即改语义；
     /// `with_context_scale_ladder` 仅供测试用极小值驱动。
-    pub context_scale_ladder: [crate::context_scale::LadderStep; 6],
+    pub context_scale_ladder: [crate::context_scale::LadderStep; 4],
     /// P0-D review fix (2026-08-14, ADR-0010 v1.14): the end-of-session
     /// compaction gate — **v8 实现批后只在检索／grill 车道生效**（主车道
     /// 收尾压缩已退役，见结构体头注）。
@@ -134,15 +135,16 @@ impl AgentLoopController {
     }
 
     /// v8 阶梯测试缝隙（设计 §3）：用极小刻度驱动软提醒／H1／T1 三形态
-    /// （生产固定 192/224/256/288/320/500K，不暴露 env——刻度值进文案，
-    /// 改值即改语义）。传入表原样采用（长度须为 6，保持六档结构）。
+    /// （生产固定 192/256/320/500K——0bh ④ 定稿软档 192/256；不暴露 env
+    /// ——刻度值进文案，改值即改语义）。传入表原样采用（长度须为 4：
+    /// 2 软 + H1 + T1）。
     ///
     /// 2026-09-16 实现批（审查 R-9）：测试刻度是「会话面」量级 ⇒ 同时把
     /// **静态开销读数 pin 0**（否则系统提示词＋工具定义会把小刻度一步顶穿）。
     /// 生产不 pin（按上一轮请求实测；见 `with_model_face_static_overhead`）。
     pub fn with_context_scale_ladder(
         mut self,
-        ladder: [crate::context_scale::LadderStep; 6],
+        ladder: [crate::context_scale::LadderStep; 4],
     ) -> Self {
         self.context_compact.context_scale_ladder = ladder;
         self.model_face_static_overhead_pin = Some(0);

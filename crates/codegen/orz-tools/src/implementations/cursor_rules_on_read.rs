@@ -694,6 +694,7 @@ mod tests {
             limit: None,
             pages: None,
             format: None,
+            outline: None,
         };
 
         let first = xai_tool_runtime::Tool::run(&GrokReadFileTool, test_ctx(shared), input)

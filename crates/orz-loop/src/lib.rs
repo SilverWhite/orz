@@ -38,6 +38,7 @@ mod host_exec;
 mod immediate_delivery;
 pub(crate) mod mechanical_audit;
 pub mod model_face;
+pub mod model_stop;
 pub mod orientation;
 pub(crate) mod planning;
 pub(crate) mod processes;

@@ -1741,12 +1741,21 @@ pub fn format_content_output(
     let cut_idx = first_idx_exceed_cum_limit(&trimmed_lines, max_output_bytes);
     final_output_lines.extend_from_slice(&trimmed_lines[..cut_idx]);
 
-    let remaining_matches = count_matches(&trimmed_lines[cut_idx..]);
-    if remaining_matches > 0 {
+    // Explicit omission notice (0bh ⑪): report the true number of omitted
+    // output lines (not just match lines) so a byte cut that lands on context
+    // lines cannot go silent; when the line budget was hit without a byte
+    // cut, still say so and how to narrow for the rest.
+    let omitted_lines = trimmed_lines.len() - cut_idx;
+    if omitted_lines > 0 {
         final_output_lines.push(format!(
-            "... [{}{} lines truncated] ...",
-            is_truncated_str, remaining_matches
+            "... [{}{} lines truncated; narrow the pattern or add a path/glob to see the rest] ...",
+            is_truncated_str, omitted_lines
         ));
+    } else if is_truncated {
+        final_output_lines.push(
+            "... [output truncated at the budget; narrow the pattern or add a path/glob to see the rest] ..."
+                .to_string(),
+        );
     }
 
     final_output_lines.join("\n")
@@ -1778,12 +1787,19 @@ pub fn format_files_with_matches_output(
     let cut_idx = first_idx_exceed_cum_limit(&trimmed_lines, max_output_bytes);
     final_output_lines.extend_from_slice(&trimmed_lines[..cut_idx]);
 
-    if output_lines.len() > cut_idx {
+    // Explicit omission notice (0bh ⑪): see format_content_output — report
+    // every omitted line and keep the narrowing hint.
+    let omitted_lines = output_lines.len() - cut_idx;
+    if omitted_lines > 0 {
         final_output_lines.push(format!(
-            "... [{}{} lines truncated] ...",
-            is_truncated_str,
-            output_lines.len() - cut_idx
+            "... [{}{} lines truncated; narrow the pattern or add a path/glob to see the rest] ...",
+            is_truncated_str, omitted_lines
         ));
+    } else if is_truncated {
+        final_output_lines.push(
+            "... [output truncated at the budget; narrow the pattern or add a path/glob to see the rest] ..."
+                .to_string(),
+        );
     }
 
     final_output_lines.join("\n")
@@ -1826,12 +1842,19 @@ pub fn format_count_output(
     let cut_idx = first_idx_exceed_cum_limit(&trimmed_lines, max_output_bytes);
     final_output_lines.extend_from_slice(&trimmed_lines[..cut_idx]);
 
-    if output_lines.len() > cut_idx {
+    // Explicit omission notice (0bh ⑪): see format_content_output — report
+    // every omitted line and keep the narrowing hint.
+    let omitted_lines = output_lines.len() - cut_idx;
+    if omitted_lines > 0 {
         final_output_lines.push(format!(
-            "... [{}{} lines truncated] ...",
-            is_truncated_str,
-            output_lines.len() - cut_idx
+            "... [{}{} lines truncated; narrow the pattern or add a path/glob to see the rest] ...",
+            is_truncated_str, omitted_lines
         ));
+    } else if is_truncated {
+        final_output_lines.push(
+            "... [output truncated at the budget; narrow the pattern or add a path/glob to see the rest] ..."
+                .to_string(),
+        );
     }
 
     final_output_lines.join("\n")
@@ -2050,6 +2073,58 @@ mod tests {
             None,
         );
         assert!(result.starts_with("Found at least 1 matching lines"));
+        // 0bh ⑪: budget-level truncation without a byte cut still gets an
+        // explicit footer — the omission is never silent.
+        assert!(
+            result.contains("output truncated at the budget; narrow the pattern"),
+            "budget footer missing: {result}"
+        );
+    }
+
+    #[test]
+    fn test_format_content_output_cut_on_context_lines_still_reports_truncation() {
+        // 0bh ⑪: the cut region holds only context lines ('-' separator), so a
+        // match-count footer would go silent; the line-count footer must not.
+        let lines: Vec<String> = vec!["a.txt", "1:alpha", "2-beta", "3-gamma"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let result = format_content_output(
+            lines,
+            false,
+            DEFAULT_MAX_CHARS_PER_LINE,
+            12, // fits "a.txt" + "1:alpha"; the two context lines are cut
+            None,
+        );
+        assert!(
+            result.contains("2 lines truncated; narrow the pattern"),
+            "context-only cut must still report omitted lines: {result}"
+        );
+    }
+
+    #[test]
+    fn test_files_and_count_footers_carry_narrowing_guidance() {
+        // 0bh ⑪: files/count modes share the same explicit-omission contract.
+        let files: Vec<String> = vec!["a.rs", "b.rs", "c.rs"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let files_out =
+            format_files_with_matches_output(files, false, DEFAULT_MAX_CHARS_PER_LINE, 4, None);
+        assert!(
+            files_out.contains("2 lines truncated; narrow the pattern"),
+            "files footer missing guidance: {files_out}"
+        );
+
+        let counts: Vec<String> = vec!["a.rs:3", "b.rs:2", "c.rs:1"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let count_out = format_count_output(counts, false, DEFAULT_MAX_CHARS_PER_LINE, 6, None);
+        assert!(
+            count_out.contains("2 lines truncated; narrow the pattern"),
+            "count footer missing guidance: {count_out}"
+        );
     }
 
     #[test]
@@ -2604,7 +2679,7 @@ mod tests {
     /// (NOT `str::lines()`, which would strip a trailing `\r` off a body line and
     /// thereby hide the very divergence these tests guard). Drops the
     /// `<workspace_result>` wrapper, the "Found …" summary (first line), and an
-    /// optional `... [N lines truncated] ...` footer (last line).
+    /// optional footer (last line), e.g. `... [N lines truncated; …] ...`.
     fn card_body(card: &str) -> String {
         let after_open = &card[card.find('\n').expect("wrapper newline") + 1..];
         let formatted = after_open
@@ -2873,7 +2948,7 @@ mod tests {
         );
     }
 
-    /// Byte-cap truncation appends a `... [N lines truncated] ...`
+    /// Byte-cap truncation appends a `... [N lines truncated; narrow …] ...`
     /// footer. The streamed body equals `trimmed_lines[..cut_idx]` — excluding
     /// BOTH the summary and the footer (both terminal-only).
     #[test]
@@ -2889,7 +2964,7 @@ mod tests {
         .into_owned();
 
         assert!(
-            card.contains("lines truncated]"),
+            card.contains("lines truncated; narrow the pattern"),
             "expected a truncation footer in the card: {card}"
         );
         assert_eq!(
@@ -3103,8 +3178,10 @@ mod tests {
             .expect("stream ended without a Terminal")
             .expect("grep terminal ok");
         let card = String::from_utf8_lossy(&output.stdout);
-        let card_lines: Vec<&str> = card.lines().collect();
-        let body_from_card = card_lines[2..card_lines.len() - 1].join("\n");
+        // The card may carry a terminal-only footer (here: the "output
+        // truncated at the budget…" notice); strip it via the shared helper so
+        // the comparison targets exactly the streamed body projection.
+        let body_from_card = card_body(card.as_ref());
         assert_eq!(
             deltas, body_from_card,
             "accumulated deltas must equal the terminal card body even when truncated"

@@ -435,6 +435,7 @@ mod tests {
             limit: None,
             pages: None,
             format: None,
+            outline: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -478,6 +479,7 @@ mod tests {
             limit: None,
             pages: None,
             format: None,
+            outline: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -518,6 +520,7 @@ mod tests {
             limit: None,
             pages: None,
             format: None,
+            outline: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -541,6 +544,7 @@ mod tests {
             limit: None,
             pages: None,
             format: None,
+            outline: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -566,6 +570,7 @@ mod tests {
             limit: Some(2),
             pages: None,
             format: None,
+            outline: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -602,6 +607,7 @@ mod tests {
             limit: Some(2),
             pages: None,
             format: None,
+            outline: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -665,6 +671,7 @@ mod tests {
             limit: Some(2),
             pages: None,
             format: None,
+            outline: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -718,6 +725,7 @@ mod tests {
             limit: Some(5),
             pages: None,
             format: None,
+            outline: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -760,6 +768,7 @@ mod tests {
             limit: Some(5),
             pages: None,
             format: None,
+            outline: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -797,6 +806,7 @@ mod tests {
             limit: None,
             pages: None,
             format: None,
+            outline: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -833,6 +843,7 @@ mod tests {
             limit: Some(50),
             pages: None,
             format: None,
+            outline: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -868,6 +879,7 @@ mod tests {
             limit: Some(2000),
             pages: None,
             format: None,
+            outline: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)

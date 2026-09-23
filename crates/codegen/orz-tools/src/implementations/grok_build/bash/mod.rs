@@ -1680,6 +1680,7 @@ ${%- else %}
   - Timeout enforcement: when the timeout fires, the wrapper${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately (no graceful-termination grace period).${%- else %} kills the child process group (SIGTERM, escalated to SIGKILL after a ~1s grace period). Descendants that did not detach via `setsid` / `nohup` will also be killed.${%- endif %}
 ${%- endif %}
   - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.
+  - Call-scope lifecycle (0bh ②, 2026-09-22): every descendant process started inside this call is reaped together with the call — the wrapper owns them (${%- if is_windows %}Job Object kill-on-close${%- else %}process-group signal${%- endif %}). Put long-lived work on the managed background path (the mid-run status above is that path's entry) rather than starting a detached daemon here.
 ${%- if shell_uses_semicolon %}
   - '&&' is not supported in this shell; chain sequential commands with ';'.
 ${%- endif %}
@@ -1705,6 +1706,7 @@ ${%- else %}
   - Timeout enforcement: when the timeout fires, the wrapper${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately (no graceful-termination grace period).${%- else %} kills the child process group (SIGTERM, escalated to SIGKILL after a ~1s grace period). Descendants that did not detach via `setsid` / `nohup` will also be killed.${%- endif %}
 ${%- endif %} `${{ params.execute.timeout }}: 0` in `${%- if params is defined and params.execute is defined and params.execute.is_background %}${{ params.execute.is_background }}${%- else %}background${%- endif %}: true` mode disables the wrapper timeout entirely${%- if tools.by_kind.kill_task_action %}; the child's lifetime is owned by the model via ${{ tools.by_kind.kill_task_action }}${%- endif %}.
   - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.
+  - Call-scope lifecycle (0bh ②, 2026-09-22): every descendant process started inside this call is reaped together with the call — the wrapper owns them (${%- if is_windows %}Job Object kill-on-close${%- else %}process-group signal${%- endif %}). Put long-lived work on the managed background path (see the background parameter below — that path is its entry) rather than starting a detached daemon here.
   - You can use the ${{ params.execute.is_background }} parameter to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background.${%- if system_reminders_enabled %} You are notified on completion, so do not poll or sleep-wait for it.${%- elif tools.by_kind.background_task_action %} Check on it later with the ${{ tools.by_kind.background_task_action }} tool.${%- endif %}${%- if has_unix_utilities %} You do not need to use '&' at the end of the command when using this parameter.${%- endif %}
 ${%- if shell_uses_semicolon %}
   - '&&' is not supported in this shell; chain sequential commands with ';'.
@@ -1721,6 +1723,7 @@ Usage notes:
   - You can specify an optional ${{ params.execute.timeout }} in milliseconds (up to ${{ max_timeout_ms | default(300000) }}ms). If not specified, commands will timeout after ${{ default_timeout_ms | default(120000) }}ms.
   - Timeout enforcement: when the timeout fires, the wrapper${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately (no graceful-termination grace period).${%- else %} kills the child process group (SIGTERM, escalated to SIGKILL after a ~1s grace period).${%- endif %}
   - If the output exceeds {max_output_bytes} characters, output will be truncated before being returned to you.
+  - Call-scope lifecycle (0bh ②, 2026-09-22): every descendant process started inside this call is reaped together with the call — the wrapper owns them (${%- if is_windows %}Job Object kill-on-close${%- else %}process-group signal${%- endif %}). Background execution is disabled in this configuration, so keep long-lived work out of this tool.
 ${%- if shell_uses_semicolon %}
   - '&&' is not supported in this shell; chain sequential commands with ';'.
 ${%- endif %}

@@ -1541,7 +1541,8 @@ impl AgentLoopController {
                         let content = format!(
                             "invalid blackboard_read section: {raw} — section 必须 \
                              是字符串（plan|edits|tool_actions|exec|actions|session|\
-                             internal_ret|external_ret|entities|deps|processes|env|temporal|rli）"
+                             internal_ret|external_ret|entities|deps|processes|env|temporal|rli|\
+                             guide|journal）"
                         );
                         let mut completed = serde_json::json!({
                             "tool": tc.name,
@@ -1649,6 +1650,55 @@ impl AgentLoopController {
                             "error": content,
                         });
                         // F3 (2026-08-16 审查收口): direct 盖章对称。
+                        stamp_direct(&mut completed);
+                        writer.record(EventType::ToolCompleted, completed).await?;
+                        self.push_tool_action_stamped(
+                            ToolDispatcher::action_category(&tc.name).to_string(),
+                            tc.name.clone(),
+                            chrono_utc_now(),
+                        );
+                        let result = ToolResult {
+                            output: content,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                            ..Default::default()
+                        };
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content: result.output.clone(),
+                            tool_call_id: Some(tc.call_id.clone()),
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                            round: None,
+                        });
+                        return Ok((result, None));
+                    }
+                },
+                None => None,
+            };
+            // 0bh ⑮（2026-09-22，BLACKBOARD_GUIDE_AND_POINTER_DESIGN §4.1/§4.2）：
+            // 可选 `anchor` 点读——定位符 `r<轮>·b<块>·s<seq>[#sha8]` 机械
+            // 定位到本 run journal 事件，只回**机械字段摘要**（≤512 B）＋
+            // 指针回显（仅与 section=journal 组合；错误三态在渲染层如实
+            // 返回）。非字符串/空串 = 显式报错（同 receipt_id 纪律，绝不
+            // 静默回退整段）。
+            let anchor = match tc.arguments.get("anchor") {
+                Some(raw) => match raw.as_str() {
+                    Some(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+                    _ => {
+                        let content = format!(
+                            "invalid blackboard_read anchor: {raw} — anchor 必须是非空\
+                             字符串定位符（r<轮>·b<块>·s<seq>[#sha8]，如 r5·b1·s123）；\
+                             该参数与 section=journal 组合使用"
+                        );
+                        let mut completed = serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "section": section,
+                            "error": content,
+                        });
                         stamp_direct(&mut completed);
                         writer.record(EventType::ToolCompleted, completed).await?;
                         self.push_tool_action_stamped(
@@ -2040,6 +2090,27 @@ impl AgentLoopController {
             // 2026-08-21 全面审查处理（O4）：session 组合错误（epoch /
             // receipt_id）走参数级显式报错——exit_code 1 + error 字段，
             // 绝不静默回退（同非法 epoch/receipt_id 纪律）。
+            // 0bh ⑮ 组合纪律（2026-09-22，设计 §4.2）：anchor＝单事件点读面
+            // ——仅与 section=journal 组合，且与其余过滤/展开参数互斥；
+            // 显式文本错误（绝不静默忽略 anchor）。
+            let anchor_combo_error: Option<String> =
+                if anchor.is_some()
+                    && (section != "journal"
+                        || since.is_some()
+                        || epoch.is_some()
+                        || receipt_id.is_some()
+                        || expand.is_some()
+                        || failures_only.is_some()
+                        || search.is_some())
+                {
+                    Some(format!(
+                        "blackboard_read anchor 仅与 section=journal 组合有效，且与 \
+                         since_timestamp/epoch/receipt_id/expand/failures_only/search 互斥\
+                         ——anchor 是单事件点读（≤512 B）；省略其余参数后重试（section={section}）"
+                    ))
+                } else {
+                    None
+                };
             let content = if section == "temporal" {
                 // P2-10 F2 §3.3 (I3): temporal 分区查询面——selector
                 // now|recent|history|feature（+ k ≤ 20 / name）；fires 不
@@ -2467,6 +2538,39 @@ impl AgentLoopController {
                         return Ok((result, None));
                     }
                 }
+            } else if let Some(err) = anchor_combo_error {
+                err
+            } else if let Some(a) = anchor.as_deref() {
+                // 0bh ⑮：定位符点读（组合纪律已保证 section=journal 且无其它参数）。
+                match writer.journal_dir() {
+                    Some(dir) => crate::controller::AgentLoopController::resolve_journal_anchor(
+                        &dir.join("events.jsonl"),
+                        a,
+                    ),
+                    None => format!(
+                        "该指针属于其他 run 或已归档：{a}（grill 丢弃模式无 run journal）"
+                    ),
+                }
+            } else if section == "journal" {
+                "blackboard_read section=journal 需带 anchor=r<轮>·b<块>·s<seq>[#sha8]\
+                 ——本分区只提供定位符点读（分块表/压缩回执里的「指针」行可直接复制）"
+                    .to_string()
+            } else if section == "guide" {
+                // 0bh ⑭：黑板说明书分区（pull 面、零徽章、≤1 KiB；单源＋digest）。
+                // 组合纪律：说明书是 live 只读面——带过滤/展开参数 = 显式文本错误。
+                if since.is_some()
+                    || epoch.is_some()
+                    || receipt_id.is_some()
+                    || expand.is_some()
+                    || failures_only.is_some()
+                    || search.is_some()
+                {
+                    "blackboard_read guide 只支持 live 读取（不带 since_timestamp/epoch/\
+                     receipt_id/expand/failures_only/search）——省略这些参数后重试"
+                        .to_string()
+                } else {
+                    crate::controller::AgentLoopController::render_board_guide()
+                }
             } else if section == "notes" {
                 // 0ae D0：模型自有工作笔记分区（blackboard_write 落点）。
                 let bb = self.blackboard.read();
@@ -2512,6 +2616,8 @@ impl AgentLoopController {
             // exit_code 0）同样不挂头、不推进（2026-08-31 审查处理 M2：
             // 模型拿到的是错误文本，不算读过该分区）。
             let content = if epoch.is_none()
+                && section != "guide"
+                && section != "journal"
                 && !crate::controller::AgentLoopController::is_blackboard_render_error(&content)
             {
                 // 0ap（设计 §3 主面）：live 读取响应头搭**滑块读数段**——
@@ -2534,6 +2640,9 @@ impl AgentLoopController {
             // rli 参考面同格 ≤1 KiB（0am 改造四项③）；
             // processes live 分区整响应 ≤8 KiB（TER T1.6，T0.2 §5.1）。
             let content = if section == "temporal" || section == "rli" {
+                orz_assurance::tool_envelope::enforce_bound(content, 1024)
+            } else if section == "guide" {
+                // 0bh ⑭：说明书 ≤1 KiB（pull 面、零徽章）。
                 orz_assurance::tool_envelope::enforce_bound(content, 1024)
             } else if section == "processes" || section == "env" {
                 orz_assurance::tool_envelope::enforce_bound(content, 8192)
