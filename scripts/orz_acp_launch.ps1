@@ -19,6 +19,9 @@
   zed | vscode | jetbrains | custom —— 只影响 -DryRun 打印的配置片段。
 .PARAMETER ReadOnly
   不带 --allow-write／--allow-shell／--allow-network（只读姿态）。
+.PARAMETER FakeProvider
+  自检用：不带 `--real`，落到脚本化 FakeProvider（零模型调用）。仅用于验证
+  接入链路本身（PowerShell → orz 的 stdio 透传），正式使用不要带。
 .EXAMPLE
   powershell -File scripts/orz_acp_launch.ps1 -Client zed -DryRun
 .EXAMPLE
@@ -33,6 +36,7 @@ param(
     [ValidateSet('zed', 'vscode', 'jetbrains', 'custom')][string]$Client = 'zed',
     [switch]$RliOff,
     [switch]$ReadOnly,
+    [switch]$FakeProvider,
     [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
@@ -52,7 +56,14 @@ $provision = Join-Path $BinDir 'orz-acaf-provision.exe'
 foreach ($f in @($orz, $signer, $provision)) { Assert-True (Test-Path -LiteralPath $f) "载体缺件：$f" }
 $ver = (Get-Item $orz).VersionInfo.ProductVersion
 if ([string]::IsNullOrWhiteSpace($ver)) { $ver = 'unknown' }
-$sha = (Get-FileHash -LiteralPath $orz -Algorithm SHA256).Hash
+# 用 .NET 算哈希而不是 `Get-FileHash`：被编辑器/客户端这类外部进程拉起时，
+# `Microsoft.PowerShell.Utility` 未必随 PSModulePath 自动装载（实测被 Python
+# 子进程拉起即 CommandNotFoundException）。此路径只为装配清单可读性，失败不阻断。
+$sha = try {
+    $h = [System.Security.Cryptography.SHA256]::Create()
+    try { ([System.BitConverter]::ToString($h.ComputeHash([System.IO.File]::ReadAllBytes($orz)))).Replace('-', '') }
+    finally { $h.Dispose() }
+} catch { '' }
 
 # ③ ACAF：manifest 在册则复用，否则现场 provision（与狗粮启动器同形）
 $manifest = Join-Path $AcafRoot 'signer-manifest.json'
@@ -79,7 +90,8 @@ if (Test-Path -LiteralPath $protoc) { $env:PROTOC = $protoc }
 $grokHome = Join-Path $BinDir 'grok-home'
 if (Test-Path -LiteralPath $grokHome) { $env:GROK_HOME = $grokHome; $env:GROK_AGENT = '1' }
 
-$flags = @('--stdio', '--real')
+$flags = @('--stdio')
+if (-not $FakeProvider) { $flags += '--real' }
 if (-not $ReadOnly) { $flags += @('--allow-write', '--allow-shell', '--allow-network') }
 
 if ($DryRun) {
