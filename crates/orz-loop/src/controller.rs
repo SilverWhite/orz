@@ -1801,13 +1801,13 @@ impl AgentLoopController {
     /// 黑板说明书分区（`blackboard_read section=guide`）——pull 面（不自动
     /// 注入、零徽章）、整响应 ≤1 KiB、单源渲染（digest 随行）。
     pub(crate) fn render_board_guide() -> String {
-        let digest = sha256_hex(Self::BOARD_GUIDE_BODY.as_bytes());
+        let body = Self::board_guide_body();
+        let digest = sha256_hex(body.as_bytes());
         let digest8: String = digest.chars().take(8).collect();
         format!(
             "[黑板说明书 guide v1 · digest sha256:{digest8}]\n\
-             {}\n\
+             {body}\n\
              —— 结束自述通道（中性终态；0bh ⑯）——\n{syntax}",
-            Self::BOARD_GUIDE_BODY,
             syntax = crate::model_stop::model_stop_syntax_line(),
         )
     }
@@ -1897,15 +1897,23 @@ impl AgentLoopController {
         ))
     }
 
-    /// guide 正文（单一来源；digest 覆盖本常量——0bh ⑭：单源＋digest）。
-    const BOARD_GUIDE_BODY: &str = "黑板＝会话的可读工作记忆：plan/notes（模型可写）＋ \
-        edits/exec/actions/entities/deps/processes/env/temporal/rli（机械分区）。\
-        读：blackboard_read section=<分区>；写：blackboard_write。\n\
-        定位符（分块表／压缩回执的「指针」行）：`r<轮>·b<块>·s<seq>`（s＝journal 事件\
-        行号，可带 #sha8）——回查：blackboard_read section=journal anchor=r5·b1·s123\
-        （返回该事件机械摘要 ≤512 B；#sha8 不符＝已过期提示）。\n\
-        压缩与回放：被压块逐字原文在本地全量档案＋按块回放档案；较早内容用「域位置＋\
-        轮号」导航；压缩只有建议不设强制（是否压缩由模型决定）。";
+    /// guide 正文（单一来源；digest 覆盖本函数输出——0bh ⑭：单源＋digest）。
+    /// 2026-09-23 重建批同步（0ao 机械扫描面）：工具名按 `tool_names` 常量插值
+    /// （与其余生产文案同形），生产文案不落字面 ⇒ `LITERAL_EXEMPTS` 维持
+    /// **空表**口径（不为本面新增豁免）。文案逐字不变 ⇒ digest 不变。
+    fn board_guide_body() -> String {
+        format!(
+            "黑板＝会话的可读工作记忆：plan/notes（模型可写）＋ \
+             edits/exec/actions/entities/deps/processes/env/temporal/rli（机械分区）。\
+             读：blackboard_read section=<分区>；写：{}。\n\
+             定位符（分块表／压缩回执的「指针」行）：`r<轮>·b<块>·s<seq>`（s＝journal 事件\
+             行号，可带 #sha8）——回查：blackboard_read section=journal anchor=r5·b1·s123\
+             （返回该事件机械摘要 ≤512 B；#sha8 不符＝已过期提示）。\n\
+             压缩与回放：被压块逐字原文在本地全量档案＋按块回放档案；较早内容用「域位置＋\
+             轮号」导航；压缩只有建议不设强制（是否压缩由模型决定）。",
+            crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME,
+        )
+    }
 
     /// B2 渲染折叠（2026-09-03，P2-13 / 设计 §9/§12）：在
     /// [`Self::render_blackboard_section`] 之上叠加 `domain`+`round_from`/    /// `round_to` 显式展开参数（R2）与折叠态 live 渲染。

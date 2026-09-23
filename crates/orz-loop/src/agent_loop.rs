@@ -6438,23 +6438,19 @@ mod tests {
             injected[0].content
         );
 
-        // 水位面：四档照记（会话级事实不留缺口）。
+        // 水位面：两个软档照记（会话级事实不留缺口）。0bh ④：软档 192／256 双档
+        // ⇒ 本钉的测试梯同缩为两个软刻度（2026-09-23 重建批同步：断言随梯改）。
         assert_eq!(
             controller.context_scale_notified_keys(),
-            vec![
-                "100k".to_string(),
-                "150k".to_string(),
-                "200k".to_string(),
-                "250k".to_string()
-            ]
+            vec!["100k".to_string(), "250k".to_string()]
         );
 
-        // 事件面：四行照落，只有最高档 form=standalone_block。
+        // 事件面：两行照落，只有最高档 form=standalone_block。
         let scale: Vec<_> = audit_events(&dir)
             .into_iter()
             .filter(|e| e.payload["kind"] == crate::mechanical_audit::KIND_CONTEXT_SCALE)
             .collect();
-        assert_eq!(scale.len(), 4, "四档事件照落: {scale:?}");
+        assert_eq!(scale.len(), 2, "两档事件照落: {scale:?}");
         let summary_of = |key: &str| -> String {
             scale
                 .iter()
@@ -6472,11 +6468,7 @@ mod tests {
             "最高档须实际注入: {}",
             summary_of("context_scale:250k")
         );
-        for key in [
-            "context_scale:100k",
-            "context_scale:150k",
-            "context_scale:200k",
-        ] {
+        for key in ["context_scale:100k"] {
             assert!(
                 summary_of(key).contains("form=suppressed_superseded_by_higher_tier"),
                 "{key} 须记为「被更高档吞掉」: {}",
@@ -7854,8 +7846,10 @@ mod tests {
             .flat_map(|r| r.messages.iter())
             .find(|m| m.content.contains("已把**工作现场以外**"))
             .expect("T1 告知块");
+        // 0bh ⑯ 子项（2026-09-23 重建批同步）：替模型下判断的「任务无需中止」句已删
+        // ⇒ 本钉改钉**状况陈述**（删句后仍须如实告知现场未动）。
         assert!(
-            notice.content.contains("任务无需中止"),
+            notice.content.contains("工作现场") && notice.content.contains("逐字未动"),
             "{}",
             notice.content
         );
@@ -8125,9 +8119,10 @@ mod tests {
         let summary = cut.payload["payload"]["summary"].as_str().unwrap_or("");
         assert!(summary.contains("guard_hit=true"), "{summary}");
         let requests = fake.received_requests();
+        // 同上：判据由「任务无需中止」改为状况陈述（⑯ 子项已删该句）。
         assert!(
             requests.iter().flat_map(|r| r.messages.iter()).any(|m| {
-                m.content.contains("上限守卫") && m.content.contains("任务无需中止")
+                m.content.contains("上限守卫") && m.content.contains("逐字未动")
             }),
             "守卫告知块须注入"
         );
