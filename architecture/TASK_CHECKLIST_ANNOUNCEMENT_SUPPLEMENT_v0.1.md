@@ -1,3 +1,5 @@
+> **pre-ADR-0010 冻结状态头（2026-09-24，审查修复批）**：本文件属 pre-ADR-0010 时期冻结 fixture／development-only spike——**非 `current`、仅历史基线**，不作为实现依据；当前设计权威＝[`ADR-0010`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（本状态头为其 §7.2 归档规则的**就地冻结**轻量替代，不移档不改正文，2026-09-24 批登记）。
+
 # Task Checklist Announcement Supplement v0.1
 
 Status: design supplement; intended to extend `CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md`, `PLAN_MODE_AND_PROCESS_USAGE_MONITOR_v0.1.md`, and the existing Orientation Runtime Guard without changing hard gate semantics.

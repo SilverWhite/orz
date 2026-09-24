@@ -2,6 +2,7 @@ _prototype_smoke/
 prototype/.pytest_cache/
 /.pytest_cache/
 /.agents/
+/.zcode/
 *.egg-info/
 .build/
 

@@ -1,9 +1,17 @@
 # ADR-0001：构建证据约束型本地 Agent 内核
 
-- 状态：Proposed
+- 状态：superseded (partial) by ADR-0010 —— 见下方处置注记（2026-09-24）
 - 日期：2026-07-17
 - 决策范围：Agent CLI 的产品边界、控制面、案例库、反捷径与思维独立性
 - 实现状态：development-only contract probe 已开始；生产内核与模型 runner 未开始
+
+> **处置注记（2026-09-24，审查修复批）**：状态由 "Proposed" 改为如实处置，正文不改写。
+> ① **被取代**：本 ADR 的"本地优先 Agent 内核"路线由 [`ADR-0010`](ADR-0010-fusion-runtime-and-agent-architecture.md)
+> （accepted/frozen，2026-08-09）的融合运行时实际取代；其核心子系统 **EvidenceKernel、case-library、
+> journal-replay、ReasoningPrecommitment 在 orz 落码中零命中**（2026-09-24 全库 `orz/crates` 扫描复核），未进实现。
+> ② **精神继承**：案例库纪律（历史错误回避＋反思维惯性、案例不作默认答案上下文）由
+> [`docs/cases/`](../docs/cases/README.md) 案例库精神继承（同族追加先例：`ORZ-PS1-BOM-001`）。
+> ③ 本文件保留为历史设计输入，不作为实现依据（权威层级见 ADR-0010 §7.1）。
 
 ## 1. 背景
 

@@ -105,6 +105,9 @@
      会漏「没写 plan 但真干了活」的 run）。**跑分口径不做特殊处理**（用户令「跑分环境
      不用管…前面的成绩没法算，因为那些是 deepseek v4 flash 跑的，现在已经默认被接到
      4.1 了」）。见 §14.76。
+   - 冻结版本补记（2026-09-24 追加 v1.79）：**T1 必定压缩三步升级（滑块 v8 补足）＋
+     0bk 解析偏差修正**——见 §14.77；v1.80（2026-09-24 复审补记）＝§14.77 两边缘
+     澄清（复位点精确化＋强制窗块自带模板；立项 0bn）——见 §14.77 复审补记。
    - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -676,13 +679,14 @@ revision 递增与保持 active 是另一个互斥 commit，不能出现“新�
 
 ### 4.5 Counterexample 与运行活性守卫
 
-Counterexample Gate 在 plan 写入前执行一次 plan 变体，在正式答案前执行一次 answer 变体；正式答案
-变体必须显式告知“仅出现一次”。它只检查前提、反证和结论强度，不进入普通工具循环、不代替
-Orientation、不拥有子代理关闭权。
+Counterexample Gate 在正式答案前执行一次 answer 变体，并显式告知“仅出现一次”（**2026-09-24 勘误**：
+plan 写入前的 plan 变体已随 §14.49 于 2026-09-01 退役——原句「在 plan 写入前执行一次 plan 变体」
+为措辞残留，生产面仅存 answer 变体，与实现一致）。它只检查前提、反证和结论强度，不进入普通工具
+循环、不代替 Orientation、不拥有子代理关闭权。
 
 **2026-09-23 收窄（用户裁决；0bi ⑩，见 §14.76）**：answer 变体**只在「本 run 有执行事实
 （`tool_rounds > 0`，或存在编辑/产物）或 plan 存在且未完成」时触发**；纯文本短答（无工具轮、
-无未完成 plan）**跳过**。plan 变体（plan 写入前）与 `once_only` 语义不变。**跑分口径不做
+无未完成 plan）**跳过**。`once_only` 语义不变（plan 变体已于 2026-09-01 退役，见 §14.49）。**跑分口径不做
 特殊处理**（历史成绩因模型代际更换整体失效，将重跑）。
 
 Orientation 可以读取 checklist/blackboard 中的 current step、task position、next output target 和工具
@@ -693,7 +697,7 @@ claim disposition 或 hard constraint change。Checklist 是用户可见的 soft
 
 | 守卫 | 默认值 | 模型可见 | 行为 |
 |---|---:|---|---|
-| Tool execution timeout | 300 秒，可配置 | 返回明确 timeout 结果 | `kill_active` 终止当前进程树但不闩闭后续 spawn，loop 可继续 |
+| Tool execution timeout | 300 秒，可配置 | 返回明确 timeout 结果 | `kill_active` 终止当前进程树但不闩闭后续 spawn，loop 可继续（**2026-09-04 本行已由 §14.55 第 1 项取代**：工具执行层去自身硬超时——`timeout` 只作 auto-backgrounding deadline 引用，kill-on-timeout 仅存于显式 `auto_background_on_timeout=false` 逃生阀；评测墙钟由 runner/sandbox 施加，`BACKGROUND_MAX_RUNTIME` 10h 为绝对安全兜底例外） |
 | Stream liveness | 20 秒 warning / 90 秒 idle / 30 分钟 total | 只看到失败/partial 结果 | 中止无进展请求；有 reasoning/content chunk 即刷新 activity |
 | Activity stall watchdog | 360 秒，可配置 | 否 | 无 journal/tool/model-stream 活动时写 `run_invalidated{stall}` |
 | Max wallclock | host/harness 配置 | 否 | 到点写 `run_invalidated{wallclock}`，保留完整 hash chain 后正常退出 |
@@ -5850,3 +5854,67 @@ RLI 影子默认关、生产 1D 不动）。选型出处按用户裁决**脱敏�
    的落点（ACP 车道门控缓冲 or 替换语义），本项不动该部分。
 6. **实施状态**：设计已定，**落码待 0bi S2**（落点＝`agent_loop.rs` 终答候选处条件，兼读
    `tool_rounds` 与黑板 plan 状态）。
+
+#### §14.77 T1 必定压缩三步升级（滑块 v8 补足）＋ 0bk 解析偏差修正（2026-09-24，v1.79）
+
+**性质**：修订滑块上下文 v8（§14.69）阶梯 T1 档的**行为语义**（设计补足，用户当轮裁决）＋
+登记 0bk 实现面偏差修正（0bi 报告 §10-⑤ 勘定）。
+
+**起因一（0bk）**：0bi 真机 run 实锤**浅压缩＝实现面解析偏差**——模型意图正确
+（`压缩块: 1-62（全部已闭合块；工作现场保留）`），但 `extract_block_selection` 只接受
+裸区间 ⇒ 带注解区间整条解析失败 ⇒ 静默退化为「只压最旧一块」（12 次压缩 6 次如此、
+实得削减 ≤16%，模型不知区间被丢弃）。用户裁「**模型做的是对的但实现是错的**」
+「**压缩下限这个设计就不加也不留**」「**机械层的压缩是明确设计**……不用改」。
+
+**起因二（补足）**：v8 的 T1（500K 估算 ≈385K 真实）为**机械硬截断**——内容直接移出
+模型面。用户裁「500K 变成**必定压缩**而不是硬截止」，并定三步升级形态：再次询问时
+**明示上下文质量已严重衰减**；模型确定性不压缩则**第三次机械截断**，**仅留当前主滑块**
+并**明确标注需要前置上下文时回查前置存档**。
+
+**裁决与实现**：
+
+1. **0bk（只修实现面）**：解析放宽——每段取**数字核心**（前导数字/`-`/空白），其后
+   行内注解（中/英括号、说明文字）不再使解析失败；全角冒号 `压缩块：` 识别；**非法段
+   仍拒** ⇒ 三态 `BlockSelection{NotSpecified/Specified/Unrecognized}`。**失败如实回报**：
+   Unrecognized ⇒ 不压缩、注入「区间未识别」告知块（引用原行＋当前可压区间＋正确
+   写法）＋审计落账，**禁止静默退化**。**缺省如实标注**：未指定区间 ⇒ 最旧一块（模型
+   自选窗维持现状），压缩回执（marker/存档）新增「区间说明」对账行（缺省行为／声明
+   区间 vs 实得块）。不加压缩下限、不加连号抑制、不做工作点标定、不动机械层压缩产物。
+2. **T1 三步升级**：越线（有已闭合分块时）不再直接截断——① 首问：强制开压缩窗口
+   （≤3 轮，`CompressionWindowKind::Mandatory`，schema 复用 `context_scale_window`
+   reason 零枚举面变更），缺省压缩范围＝**主滑块以外全部已闭合分块**（不给
+   `压缩块:` 行＝按全部处理；H1／模型自选窗缺省仍为最旧一块）；② 窗口收口未产出
+   ⇒ 升级再询问（明示「上下文质量已严重衰减（≈385K 真实已过模型普遍可靠下沿）」
+   与「最后一次压缩窗口」）＋复位 T1 闩；③ 仍未产出 ⇒ 机械截断兜底（仅留主滑块，
+   逐字落盘可回放），告知块如实携带「已两次开窗未产出」与「**需要前置上下文时请
+   回查存档**」。升级计数在压缩达成或截断执行后复位；**无可压分块**（溢出在滑块内）
+   ⇒ 维持指针化路径；**700K 守卫线完全不动**。H1（320K）文案随新语义改写（宣告
+   强制压缩而非截断）。
+3. **不变项**：两轨只作用于主滑块以外的块（§4）；本地面零覆盖（I3）；前缀纪律（I6）；
+   `context_compressed` 事件 schema（mode/reason 闭枚举零新增）；700K 守卫异常保险；
+   输出面（completion/reasoning）必需、不处理。
+4. **实施状态**：S2 已落码（`orz-loop`：`context_scale.rs`／`agent_loop.rs`／
+   `model_face.rs`／`compact.rs`／`controller.rs`），`cargo test -p orz-loop --lib`
+   串行全绿（845/0，含新增钉：带注解区间解析／失败回报／缺省标注／三步升级全流程）；
+   S3 载体重建与 S3 真机观察（压缩次数与实得削减对照 0bi 基线 12 次/6 次 ≤16%）
+   随下一狗粮轮。
+
+   **复审补记（2026-09-24，0bm 复审批；两边缘单独立项 `0bn`，来源＝[`073 复审`](../docs/audits/073_UNCOMMITTED_REVIEW_AND_REMEDIATION_2026-09-24.md) R1/R2）**：
+   本条第 2 项三步升级存在两处实施边缘，设计语义就此澄清——① **复位点精确化**：强制窗
+   收口轮「产出语义摘要但压缩未落地」（区间未识别／无可压块／台账失败）同计为「未产出」
+   ⇒ 计入升级计数并复位 T1 闩（原措辞「压缩达成或截断执行后复位」漏此两头不沾态 ⇒
+   升级链可停摆）；② **强制压缩窗块须自带摘要格式模板**（含「≥2 小节」要求；不再依赖
+   H1 提醒块同消息注入，恢复会话不缺）。**被否备选留档**：从上下文预算豁免／常驻化
+   （破零常驻注入纪律、牵连改写「仅留主滑块」语义、不解决停摆本体）。设计细节与钉子
+   方向见 v8 稿 §15；S2 落码待放行（建议随 0bm 载体重建前置）。
+
+#### §14.78 UI 形态权威解冻与 Web 优先执行形态（2026-09-24，v1.80）
+
+用户裁决（2026-09-24，原文口径）：「UI 的具体形态设计就用那三份 UI 设计稿即可」「那三个稿子要从冻结状态里拽回来」「我们搬 xai 并以 xai 作为基础就是为了复用成熟组件，能复用的当然直接复用……甚至做成 web 的都可以」「能照搬的就照搬，我们遵守开源协议」「先做 web 后补 TUI 形式的 UI」。
+
+1. **形态权威解冻**：三份 UI 设计稿——[`CLI_UI_INTERACTION_MODEL_v0.1`](../architecture/CLI_UI_INTERACTION_MODEL_v0.1.md)、[`CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1`](../architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md)、[`CONTENT_PANE_CONVERSATION_RENDERING_v0.1`](../architecture/CONTENT_PANE_CONVERSATION_RENDERING_v0.1.md)——自 2026-09-24 批「pre-ADR-0010 就地冻结」状态**解除冻结**，与综合稿 [`UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md`](../docs/UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md) 共同构成 orz UI 的**形态设计权威**。三稿正文不回改；凡与本 ADR（含 §2.4 条 8、§2.6）冲突处以本 ADR 为准。
+2. **执行形态＝Web 优先、TUI 形式后补**：先落 Web 形态（本地服务承载 ACP-over-WebSocket 桥 ＋ 静态前端），TUI 形式随后补齐；两者共用同一套形态（同三稿）与同一套复用映射（综合稿 §4），不得另起设计。
+3. **复用原则＝能照搬就照搬**：搬 xai 上游成熟组件的既有政策在本主题内细化——**每个 UI 区块必须标注来源件**；有来源件而不照搬者视为偏离，须在设计稿登记理由。旧时代桌面外观语言在 Web 侧直接照搬 `98.css`／`XP.css`（均 MIT）。
+4. **协议合规为照搬前置**：Apache-2.0 件保留 `LICENSE`／`NOTICE`／`THIRD-PARTY-NOTICES` 与单 crate 来源标注；MIT 件保留版权与许可文本并纳入父仓 `THIRD-PARTY-NOTICES`；新搬件随搬随登记进 [`fusion-component-register-v0.1.yaml`](../upstream/fusion-component-register-v0.1.yaml)。
+5. **投影纪律不变**：Web／TUI 均只消费 host/loop/journal 事实，不拥有执行事实、permission、session persistence 或 restore（§2.4 条 8、§2.6）；不得建立第二套产品 runtime。
+6. **登记**：立项 `0br`（P1，执行形态＝Web 优先，随本批）；索引条目 `DESIGN-UI-FORM-CONSOLIDATED`（`current-design`）；`FUS-UI-BOUNDARY` 加 2026-09-24 补记（Web 形态属产品面候选，过渡面仍为外部 ACP 客户端）。

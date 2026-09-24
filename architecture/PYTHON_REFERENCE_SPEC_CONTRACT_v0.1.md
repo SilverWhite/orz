@@ -1,3 +1,5 @@
+> **pre-ADR-0010 冻结状态头（2026-09-24，审查修复批）**：本文件属 pre-ADR-0010 时期冻结 fixture／development-only spike——**非 `current`、仅历史基线**，不作为实现依据；当前设计权威＝[`ADR-0010`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（本状态头为其 §7.2 归档规则的**就地冻结**轻量替代，不移档不改正文，2026-09-24 批登记）。
+
 # Python Reference-Spec Contract v0.1
 
 **状态**: 事实/设计约束（2026-08-06，Phase 3 slice #14 定稿）。本文件把 FORK 架构文档 §7 声明的"Python 项目 = reference spec + conformance suite + schema authority"物化为可执行的契约：权威范围、schema 注册表、轨标识约定、豁免登记、同步纪律与变更流程。

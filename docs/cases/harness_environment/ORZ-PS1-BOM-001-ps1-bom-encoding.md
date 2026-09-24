@@ -9,3 +9,7 @@
   - 正例：同内容加 BOM 后 `powershell -File scripts/dogfood_launch.ps1 -TaskFile .tmp-friction-task.txt -DryRun` 通过（2026-09-17/09-18 两日实测，含主会话复核）。
 - **同族先例**：`GAP-ENCODING-GATE`（orz 工具面 UTF-8/GB18030 解码门——同一「解码假设错位」家族在脚本工具链的镜像）。
 - **验证记录**：2026-09-17 run `RUN-CLI-6aac0af5` 内首踩即修（BOM 后双例自测过）；2026-09-18 主会话复核复跑正负例通过。
+- **同族追加（2026-09-24）**：**BOM 断言必须落字节面**——0bi 轮（run `RUN-CLI-6ab3dbe5`）① 的 `.ps1` 解析钉首版用
+  `[IO.File]::ReadAllText` 后取首字符判 BOM，而该 API **读回时已剥掉 BOM** ⇒ 断言结构性假红；改为
+  `ReadAllBytes` 判前三字节 `EF BB BF` ＋ `[scriptblock]::Create` 实际解析后转绿。教训＝BOM 这类**字节面事实**
+  不能用字符面 API 核验（读文本先剥 BOM 是库语义，不是文件事实）。

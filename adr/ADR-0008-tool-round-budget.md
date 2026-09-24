@@ -1,8 +1,14 @@
-# ADR-0008：模型↔工具轮次预算（历史 8→40；当前默认值由 ADR-0010 修订为 120）
+# ADR-0008：模型↔工具轮次预算（历史 8→40；经 ADR-0010 两轮修订：40→120，2026-09-04 再撤默认硬限为无限制）
 
-- 状态：accepted / partially superseded by ADR-0010（§2.2 数值 40→120；其余语义保留）
+- 状态：accepted / partially superseded by ADR-0010（§2.2 数值 40→120；其余语义保留；**2026-09-04 二次取代：默认硬限撤销——见下方第二次取代注记**）
 - 日期：2026-08-07
 - 关联：`存档/docs/implementation-history/FIX_PLAN_2026-08-06.md` D-8（跑分 P7/LOOP-14）、`docs/POLYGLOT_BENCHMARK_FINDINGS_2026-08-06.md` P7、`docs/DESIGN_IMPLEMENTATION_DEVIATION_AUDIT_2026-08-06.md` LOOP-14、`orz-loop/src/controller.rs`、`orz-loop/src/prompt.rs`（`TOOL_ROUND_BUDGET`）、ADR-0007（transport 重试，同批定稿）
+
+> **第二次取代注记（2026-09-04，ADR-0010 §14.55 第 2 项 TER 正式裁决）**：默认工具轮硬限撤销——
+> `max_tool_rounds` 默认 **0（unlimited）**，session/提示面按 unlimited 渲染；`>0` 显式配置逃生阀保留
+> `budget_insufficient`/exhaustion 语义。原 §2.1「全局轮次预算处理合法但永不收敛」的**终止性保证现由
+> 连续拒绝熔断 ＋ 墙钟兜底承担**（连续拒绝断路器；评测墙钟由 runner/sandbox 施加；`BACKGROUND_MAX_RUNTIME`
+> 10h 绝对安全兜底与 idle-kill 见 §14.55 第 1/5 项）。本注记仅登记头部，正文不改写。
 
 ## 1. 背景
 

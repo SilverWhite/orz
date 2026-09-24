@@ -54,3 +54,8 @@ run id/session8/时间戳、交接声明来源、断链 run 产物显式标记�
 `0xc000001d`（STATUS_ILLEGAL_INSTRUCTION）崩溃会在 `target/**/deps` 残留零长度 `.rmeta`／半成品 rlib ⇒ 后续报
 `crate X required to be available in rlib format`／`invalid metadata files for crate`／`can't find crate`，
 形态**指向依赖而非崩溃本身**；纪律＝读数前先核环境、`-j 1` 串行复现、`cargo clean` 前后各记一次读数）。不新增阻断门。
+
+同族追加（2026-09-24）：⑨**BOM 断言必须落字节面**（`ORZ-PS1-BOM-001` 同族：`[IO.File]::ReadAllText` 会**剥掉**
+BOM ⇒ 用它判「文件是否带 BOM」的测试**结构性假红**；改 `ReadAllBytes` 判前三字节 `EF BB BF` ＋
+`[scriptblock]::Create` 实际解析。来源＝0bi 轮（run `RUN-CLI-6ab3dbe5`）① 落码现场，
+即「同一编码假设错位家族在**测试作者面**的镜像」）。不新增阻断门。

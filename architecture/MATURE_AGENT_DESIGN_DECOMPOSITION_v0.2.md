@@ -1,3 +1,5 @@
+> **pre-ADR-0010 冻结状态头（2026-09-24，审查修复批）**：本文件属 pre-ADR-0010 时期冻结 fixture／development-only spike——**非 `current`、仅历史基线**，不作为实现依据；当前设计权威＝[`ADR-0010`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（本状态头为其 §7.2 归档规则的**就地冻结**轻量替代，不移档不改正文，2026-09-24 批登记）。
+
 # 成熟 Agent 设计深拆与职责收缩 v0.2
 
 状态：架构审计与 implementation spike 重排；**不修改现有协议语义**，不接入真实模型，不迁入旧研究

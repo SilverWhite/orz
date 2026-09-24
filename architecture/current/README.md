@@ -1,7 +1,7 @@
 # 当前生产架构投影（Current Architecture Projection）
 
-> **状态**：`current-design`（投影文件，不独立产生新设计）；**更新日期**：2026-09-18
-> **设计权威**：[`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（含 §14.52 会话黑板、§14.54 压缩快照、§14.55 工具执行层改革、§14.65 检索双车道、§14.69 上下文滑块 v8、§14.72 压缩交互第九工具）
+> **状态**：`current-design`（投影文件，不独立产生新设计）；**更新日期**：2026-09-24
+> **设计权威**：[`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（含 §14.52 会话黑板、§14.54 压缩快照、§14.55 工具执行层改革、§14.65 检索双车道、§14.69 上下文滑块 v8、§14.72 压缩交互第九工具、§14.76 反例门触发条件收窄——answer 变体仅在有执行事实或未完成 plan 时触发）
 > **治理边界**：本文件为 ADR-0010 与当前真实代码运行链路的直映投影，不独立产生新设计。
 
 ---

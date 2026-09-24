@@ -1,3 +1,5 @@
+> **UI 形态权威（2026-09-24 用户裁决解冻）**：本文件经用户令「那三个稿子要从冻结状态里拽回来」**解除 pre-ADR-0010 冻结（2026-09-24 批就地冻结的反向操作）**，与综合稿 [`UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md`](../docs/UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md) 共同构成 orz UI 的**形态设计权威**（执行形态＝Web 优先、TUI 形式后补；复用原则＝能照搬就照搬、遵守开源协议）；定位与冲突裁决仍以 [`ADR-0010 §2.4／§2.6／§14.78`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) 为准。正文不回改（细节属早期基线、保留原样），仅解除冻结标注。
+
 # CLI UI Simplification Supplement v0.1
 
 状态：UI direction supplement；补充 `CLI_UI_INTERACTION_MODEL_v0.1.md`，用于指导下一轮 TUI 精简和中文化。

@@ -147,3 +147,10 @@ answer packet 与 journal 事件 `tool_availability_check`。当前 probe_regist
 - 真实 runtime adapter 的 tool registry 探针（替代 fixture registry）
 - 将 tool availability context block 注入真实模型 system prompt 的接线
 - 对已知不可用工具的模型幻觉进行更精确的 claim 级别检测
+
+## 勘误（2026-09-24，审查修复批；原文不改写）
+
+1. **测试计数勘误**：本档 §文件清单与 §测试覆盖记 **26 个测试**（8＋4＋5＋5＋4）；2026-09-24 实测
+   `pytest assurance/tests/test_tool_availability_gate.py --collect-only` 收集 **24** 个，以实测为准。
+2. **机制双轨化补记**：tool availability 门机制已双轨化——Rust 侧移植见
+   `orz/crates/orz-assurance/src/gates/tool_availability.rs`；本档所记 Python 侧（`assurance/`）保留为历史基线轨。

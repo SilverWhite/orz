@@ -1,6 +1,6 @@
 # 写入面 emoji 机械剥离设计（2026-09-23）
 
-> 状态：**v1.0 定稿，待实施**（0bi ⑪）。来源＝2026-09-23 用户裁决。索引条目：`FUS-WRITE-EMOJI-STRIP`。
+> 状态：**v1.0 已落码（0bi ⑪；run `RUN-CLI-6ab3dbe5`，轮达成 2026-09-24）**。咽喉点按 §5 退路定案＝**编辑族输入解码点**（`run_search_replace`；非 FileSystem 写原语，0BI 档 §3-1）。来源＝2026-09-23 用户裁决。索引条目：`FUS-WRITE-EMOJI-STRIP`。实施记录：[`0BI_FRICTION_CARRYOVER_2026-09-23`](audits/0BI_FRICTION_CARRYOVER_2026-09-23.md) §2-⑪。
 > 入口：`TODO.md` P1-0bi ⑪ / `docs/BACKLOG_AND_PRIORITIES.md` 0bi。
 
 ## 1. 一句话设计
@@ -36,6 +36,12 @@
 
 **范围定稿（2026-09-23 用户令）**：「就是文件里全盘不要出现 emoji」——不设扩展名白名单，
 代码文件与文档同等处理；确有需要的场景只走 §5 的逃逸开关。
+
+> **hashline 整文件口径补记（2026-09-24，0bm 复审批）**：`grok_build_hashline` 编辑面的
+> 写入面＝**整文件内容**（无单一 `new_string`），故其剥离作用于最终写入的整文件——既有
+> 内容中的历史遗留 emoji（含逃逸开关期写入的）亦会一并剥离（剥离不增删行、行号锚不漂移、
+> 告知行随报）。此为「只作用于本次写入的内容」在 hashline 形态下的解释，实现注释已同步
+> 声明；`search_replace` 路径维持「只剥 `new_string`」不变。
 
 ## 4. 判据（Unicode 层，保守）
 
