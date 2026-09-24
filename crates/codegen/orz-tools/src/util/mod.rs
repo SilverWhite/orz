@@ -1,6 +1,8 @@
 pub mod base64_images;
 pub mod binary;
 pub mod command_display;
+pub(crate) mod emoji_strip;
+pub(crate) mod emoji_strip_ranges;
 pub mod encoding;
 pub mod env;
 pub mod fs;

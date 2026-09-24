@@ -197,7 +197,10 @@ mod tests {
         let decl = extract_model_stop(text).unwrap();
         assert_eq!(decl.intent, StopIntent::Conclude);
         assert!(extract_model_stop("没有声明块").is_none());
-        assert!(extract_model_stop("[RUN_END]\nintent: pause").is_none(), "未闭合不认");
+        assert!(
+            extract_model_stop("[RUN_END]\nintent: pause").is_none(),
+            "未闭合不认"
+        );
     }
 
     #[test]

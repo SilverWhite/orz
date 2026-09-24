@@ -440,6 +440,8 @@ mod tests {
                 false,
                 None,
                 None,
+                // 0bl 审查修复（2026-09-24）：测试调用面无取消令牌。
+                None,
             )
             .await
             .unwrap();
@@ -497,6 +499,8 @@ mod tests {
                 false,
                 None,
                 None,
+                // 0bl 审查修复（2026-09-24）：测试调用面无取消令牌。
+                None,
             )
             .await
             .unwrap();
@@ -535,6 +539,8 @@ mod tests {
                 false,
                 false,
                 None,
+                None,
+                // 0bl 审查修复（2026-09-24）：测试调用面无取消令牌。
                 None,
             )
             .await
@@ -628,6 +634,8 @@ mod tests {
                 false,
                 None,
                 None,
+                // 0bl 审查修复（2026-09-24）：测试调用面无取消令牌。
+                None,
             )
             .await
             .unwrap();
@@ -707,6 +715,8 @@ mod tests {
                 false,
                 false,
                 None,
+                None,
+                // 0bl 审查修复（2026-09-24）：测试调用面无取消令牌。
                 None,
             )
             .await
@@ -803,6 +813,8 @@ mod tests {
                 false,
                 false,
                 None,
+                None,
+                // 0bl 审查修复（2026-09-24）：测试调用面无取消令牌。
                 None,
             )
             .await

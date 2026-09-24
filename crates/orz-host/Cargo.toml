@@ -70,6 +70,9 @@ base64 = { workspace = true }
 windows = { workspace = true, features = [
     "Win32_Storage_FileSystem",
     "Win32_System_SystemInformation",
+    # 0bl 审查修复（2026-09-24）：超时杀树优先 per-call job 句柄定向
+    # `TerminateJobObject`。
+    "Win32_System_JobObjects",
 ] }
 
 [target.'cfg(unix)'.dependencies]

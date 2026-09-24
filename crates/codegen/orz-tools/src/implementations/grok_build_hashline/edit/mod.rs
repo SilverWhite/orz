@@ -210,6 +210,31 @@ fn to_search_replace(
     }
 }
 
+/// 0bl 审查修复（2026-09-24）：把机械 emoji 剥离告知行尾附到成功编辑的
+/// 工具输出（两个 prompt 字段；与 search_replace 的同名辅助函数同形）；
+/// 失败面不改动（告知只在写入成功后随行）。
+fn attach_emoji_strip_notice(
+    result: crate::types::output::SearchReplaceOutput,
+    notice: Option<&crate::util::emoji_strip::StripNotice>,
+) -> crate::types::output::SearchReplaceOutput {
+    let Some(notice) = notice else {
+        return result;
+    };
+    match result {
+        crate::types::output::SearchReplaceOutput::EditsApplied(mut applied) => {
+            let line = notice.render();
+            applied.tool_output_for_prompt.push('\n');
+            applied.tool_output_for_prompt.push_str(&line);
+            if let Some(concise) = applied.tool_output_for_prompt_concise.as_mut() {
+                concise.push('\n');
+                concise.push_str(&line);
+            }
+            crate::types::output::SearchReplaceOutput::EditsApplied(applied)
+        }
+        other => other,
+    }
+}
+
 impl crate::types::tool_metadata::ToolMetadata for HashlineEditTool {
     fn kind(&self) -> ToolKind {
         ToolKind::Edit
@@ -284,7 +309,9 @@ impl xai_tool_runtime::Tool for HashlineEditTool {
     async fn run(
         &self,
         ctx: xai_tool_runtime::ToolCallContext,
-        input: HashlineEditInput,
+        // 0bl 审查修复（2026-09-24）：`mut`——写入面 emoji 剥离需就地改写
+        // op 内容（新文件 Write 路径），保证写盘与输出一致。
+        mut input: HashlineEditInput,
     ) -> Result<crate::types::output::SearchReplaceOutput, xai_tool_runtime::ToolError> {
         use crate::types::tool_metadata::shared_resources;
         let resources = shared_resources(&ctx)?;
@@ -327,11 +354,31 @@ impl xai_tool_runtime::Tool for HashlineEditTool {
                 if let Some(m) = resolved {
                     m.resolved_path
                 } else {
+                    // 0bl 审查修复（2026-09-24）：新文件写入面与既有文件写
+                    // 回同规——写入内容先过机械 emoji 剥离（逃逸开关同
+                    // search_replace：`ORZ_WRITE_KEEP_EMOJI`），告知行随成功
+                    // 输出尾附；新文件无原 BOM 形态可保，按无 BOM 契约编码
+                    // （`encode_text_preserving_bom(_, false)`）。剥离后就地
+                    // 改写 op 内容，使写盘与 apply_edits 的输出一致。
+                    let emoji_strip_notice = match input.edits.first_mut() {
+                        Some(HashlineOp::Write { content })
+                            if !crate::util::emoji_strip::keep_emoji_requested() =>
+                        {
+                            let (stripped, notice) = crate::util::emoji_strip::strip_emoji(content);
+                            if notice.is_some() {
+                                *content = stripped;
+                            }
+                            notice
+                        }
+                        _ => None,
+                    };
                     // For Write ops on new files, allow creation.
                     if input.edits.len() == 1
                         && let HashlineOp::Write { ref content } = input.edits[0]
                     {
-                        if let Err(e) = fs.write_file(&joined_path, content.as_bytes()).await {
+                        let write_bytes =
+                            crate::util::encoding::encode_text_preserving_bom(content, false);
+                        if let Err(e) = fs.write_file(&joined_path, &write_bytes).await {
                             let display_path = display_dcwd.join(&input.file_path);
                             return Ok(match e.io_error_kind() {
                                 Some(std::io::ErrorKind::NotFound) => {
@@ -352,12 +399,18 @@ impl xai_tool_runtime::Tool for HashlineEditTool {
                         let abs = crate::util::fs::canonicalize_with_timeout(joined_path).await;
                         let r = apply::apply_edits(content, &input.edits, &abs, &*scheme);
                         let edit_details = r.edit_details;
-                        return Ok(to_search_replace(
+                        let output = to_search_replace(
                             r.output,
                             &abs,
                             "",
                             r.new_content.as_deref(),
                             edit_details,
+                        );
+                        // 0bl 审查修复（2026-09-24）：emoji 告知行只随成功
+                        // 输出尾附（失败面不改动，与 search_replace 同形）。
+                        return Ok(attach_emoji_strip_notice(
+                            output,
+                            emoji_strip_notice.as_ref(),
                         ));
                     }
 
@@ -396,40 +449,82 @@ impl xai_tool_runtime::Tool for HashlineEditTool {
                 });
             }
         };
-        let old_content = crate::util::encoding::decode_text(&file_bytes).0;
-
-        let apply_result = apply::apply_edits(&old_content, &input.edits, &path, &*scheme);
-
-        if let Some(ref new_content) = apply_result.new_content
-            && let Err(e) = fs.write_file(&path, new_content.as_bytes()).await
-        {
-            let err_output = HashlineEditOutput::Error(types::HashlineEditError {
-                error: types::HashlineEditErrorKind::IoError,
-                message: format!("Edits validated but failed to write file: {e}."),
-                requested_anchor: None,
-                current: None,
-                context: None,
-                context_start_line: None,
-                shifted_to: None,
-                shifted_anchor: None,
-                ambiguous_candidates: vec![],
-            });
-            return Ok(to_search_replace(
-                err_output,
-                &path,
-                &old_content,
-                None,
-                vec![],
+        // 0bm 复审补口（2026-09-24）：编辑入口 UTF-16 fail-closed 门——与
+        // search_replace 同一单点（`util::encoding::utf16_shaped_input`）。
+        // 0bl ③ 修洞时只设了 search_replace 双路径；hashline 既有文件路径
+        // 同样「解码后写回」，不设门即保留同一静默乱码洞。新建文件路径
+        // 不设门（old 内容不流入写回），口径与 search_replace 一致。
+        if crate::util::encoding::utf16_shaped_input(&file_bytes) {
+            return Ok(crate::types::output::SearchReplaceOutput::InvalidInput(
+                crate::util::encoding::utf16_rejection_message(&input.file_path),
             ));
+        }
+        // 0bl 审查修复（2026-09-24）：解码标签记录原文件 BOM 形态，写回时
+        // 按同形编码（镜像 search_replace 的 `had_bom` 接法），不再裸写
+        // UTF-8 字节。
+        let (old_content, encoding_label) = crate::util::encoding::decode_text(&file_bytes);
+        let had_bom = crate::util::encoding::label_had_bom(&encoding_label);
+
+        let mut apply_result = apply::apply_edits(&old_content, &input.edits, &path, &*scheme);
+
+        // 0bl 审查修复（2026-09-24）：hashline 没有单一 `new_string`——写入
+        // 面就是整文件内容。写回前对最终写入内容做机械 emoji 剥离（逃逸
+        // 开关同 search_replace：`ORZ_WRITE_KEEP_EMOJI`），告知行随成功输出
+        // 尾附（见 `attach_emoji_strip_notice`）。口径声明（0bm 复审注记）：
+        // 因写入面＝整文件，**既有内容中的 emoji 也会一并剥离**（含历史遗留
+        // 或逃逸开关期写入的）——与「只剥本次写入内容」的设计表述在此按
+        // 「本次写入＝整文件」解释；剥离不增删行（行号锚不漂移），与
+        // search_replace「只剥插入段」的口径差异如实记录于此。
+        let emoji_strip_notice = match apply_result.new_content.as_deref() {
+            Some(new_content) if !crate::util::emoji_strip::keep_emoji_requested() => {
+                let (stripped, notice) = crate::util::emoji_strip::strip_emoji(new_content);
+                if notice.is_some() {
+                    apply_result.new_content = Some(stripped);
+                }
+                notice
+            }
+            _ => None,
+        };
+        if let Some(ref new_content) = apply_result.new_content {
+            // 0bl 审查修复（2026-09-24）：写回按原文件 BOM 形态（`had_bom`
+            // 来自解码标签），BOM 文件编辑后 BOM 保留。
+            let write_bytes =
+                crate::util::encoding::encode_text_preserving_bom(new_content, had_bom);
+            if let Err(e) = fs.write_file(&path, &write_bytes).await {
+                let err_output = HashlineEditOutput::Error(types::HashlineEditError {
+                    error: types::HashlineEditErrorKind::IoError,
+                    message: format!("Edits validated but failed to write file: {e}."),
+                    requested_anchor: None,
+                    current: None,
+                    context: None,
+                    context_start_line: None,
+                    shifted_to: None,
+                    shifted_anchor: None,
+                    ambiguous_candidates: vec![],
+                });
+                return Ok(to_search_replace(
+                    err_output,
+                    &path,
+                    &old_content,
+                    None,
+                    vec![],
+                ));
+            }
         }
 
         let edit_details = apply_result.edit_details;
-        Ok(to_search_replace(
+        let output = to_search_replace(
             apply_result.output,
             &path,
             &old_content,
             apply_result.new_content.as_deref(),
             edit_details,
+        );
+        // 0bl 审查修复（2026-09-24）：emoji 告知行只随成功（EditsApplied）
+        // 输出尾附；失败面不改动。
+        Ok(attach_emoji_strip_notice(
+            output,
+            emoji_strip_notice.as_ref(),
         ))
     }
 }
@@ -610,6 +705,124 @@ mod tests {
             on_disk.contains("line2\nappended"),
             "EOF append should not introduce extra blank line.\nActual: {on_disk}"
         );
+    }
+
+    /// 0bl 审查修复（2026-09-24）：带 UTF-8 BOM 的文件经 hashline 编辑后
+    /// BOM 保留（写回按解码标签的 BOM 形态编码，不再裸写 UTF-8 字节）。
+    #[tokio::test]
+    async fn hashline_edit_preserves_bom() {
+        let tmp = TempDir::new().unwrap();
+        let mut initial = b"\xEF\xBB\xBF".to_vec();
+        initial.extend_from_slice(b"line1\nline2\n");
+        std::fs::write(tmp.path().join("bom.txt"), &initial).unwrap();
+
+        // 锚点以解码后内容（BOM 已剥）为口径，与工具的解码一致。
+        let old_content = "line1\nline2\n";
+        let anchors = anchors_for(old_content);
+        let tool = HashlineEditTool;
+        let resources = test_resources(tmp.path());
+        let input = HashlineEditInput {
+            file_path: "bom.txt".to_string(),
+            edits: vec![HashlineOp::Replace {
+                anchor: anchors[0].clone(),
+                end_anchor: None,
+                content: "changed".to_owned(),
+            }],
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, SearchReplaceOutput::EditsApplied(_)),
+            "expected success, got {result:?}"
+        );
+        let on_disk = std::fs::read(tmp.path().join("bom.txt")).unwrap();
+        assert!(
+            on_disk.starts_with(&[0xEF, 0xBB, 0xBF]),
+            "BOM must survive the hashline edit: {on_disk:02X?}"
+        );
+        assert_eq!(
+            String::from_utf8(on_disk).unwrap(),
+            "\u{FEFF}changed\nline2\n"
+        );
+    }
+
+    /// 0bm 复审补口（2026-09-24）：hashline 既有文件路径的 UTF-16 fail-closed
+    /// 门——UTF-16LE BOM 文件编辑被拒（与 search_replace 同一判定与文案），
+    /// 文件保持逐字节不动（不产生静默乱码写回）。
+    #[tokio::test]
+    async fn hashline_edit_rejects_utf16_shaped_file() {
+        let tmp = TempDir::new().unwrap();
+        let mut initial: Vec<u8> = vec![0xFF, 0xFE];
+        initial.extend("old line\n".encode_utf16().flat_map(u16::to_le_bytes));
+        std::fs::write(tmp.path().join("utf16.txt"), &initial).unwrap();
+
+        let tool = HashlineEditTool;
+        let resources = test_resources(tmp.path());
+        let input = HashlineEditInput {
+            file_path: "utf16.txt".to_string(),
+            // 门在 apply 之前触发，锚点串不参与匹配（合法性不作前提）。
+            edits: vec![HashlineOp::Replace {
+                anchor: "1:abc".to_string(),
+                end_anchor: None,
+                content: "changed".to_owned(),
+            }],
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match &result {
+            SearchReplaceOutput::InvalidInput(message) => {
+                assert!(message.contains("UTF-16"), "rejection text: {message}");
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read(tmp.path().join("utf16.txt")).unwrap(),
+            initial,
+            "rejected file must stay byte-identical"
+        );
+    }
+
+    /// 0bl 审查修复（2026-09-24）：hashline 写入面（整文件内容）中的 emoji
+    /// 被机械剥离，告知行随成功编辑的工具输出返回（行号为写入内容内部
+    /// 行号）；写回磁盘与输出一致。
+    #[tokio::test]
+    async fn hashline_write_strips_emoji_with_notice() {
+        let _guard = crate::util::emoji_strip::EMOJI_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("notes.txt"), "old\n").unwrap();
+
+        let anchors = anchors_for("old\n");
+        let tool = HashlineEditTool;
+        let resources = test_resources(tmp.path());
+        let input = HashlineEditInput {
+            file_path: "notes.txt".to_string(),
+            edits: vec![HashlineOp::Replace {
+                anchor: anchors[0].clone(),
+                end_anchor: None,
+                content: "Hello \u{1F389} world".to_owned(),
+            }],
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(applied) => {
+                let content = std::fs::read_to_string(tmp.path().join("notes.txt")).unwrap();
+                assert_eq!(content, "Hello world\n");
+                assert!(
+                    applied
+                        .tool_output_for_prompt
+                        .contains("[emoji 剥离] 1 处（写入内容 L1 行）"),
+                    "got: {}",
+                    applied.tool_output_for_prompt
+                );
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
     }
 
     /// The erased tool must produce ToolOutput::SearchReplace, not a custom variant.

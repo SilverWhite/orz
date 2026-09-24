@@ -236,7 +236,13 @@ impl AgentLoopController {
                     // THIN-HARNESS-REDESIGN R1 (§4.4): with auto-close this
                     // branch is dormant in the production flow (disposition
                     // is gone) — retained for the restore/dormant paths.
-                    let mut a = reg.states.remove(&role).unwrap();
+                    // 0bl 审查修复（2026-09-24）：get 匹配 Active 后此 remove
+                    // 必然命中（同锁窗口内无并发改写者）——expect 显式声明
+                    // 该不变量，替代裸 unwrap。
+                    let mut a = reg
+                        .states
+                        .remove(&role)
+                        .expect("activation state present (matched Active above)");
                     let task_goal = a.next_goal.take().unwrap_or_else(|| goal.clone());
                     // 第二批分档：`continue` 重入覆盖为最新档（close record
                     // 登记最后一次派发的 effort）。
@@ -2315,6 +2321,8 @@ mod tests {
                 false,
                 None,
                 None,
+                // 0bl 审查修复（2026-09-24）：测试调用面无取消令牌。
+                None,
             )
             .await
             .unwrap();
@@ -2346,6 +2354,8 @@ mod tests {
                 false,
                 false,
                 None,
+                None,
+                // 0bl 审查修复（2026-09-24）：测试调用面无取消令牌。
                 None,
             )
             .await
@@ -2505,6 +2515,8 @@ mod tests {
                 false,
                 None,
                 None,
+                // 0bl 审查修复（2026-09-24）：测试调用面无取消令牌。
+                None,
             )
             .await
             .unwrap();
@@ -2585,6 +2597,8 @@ mod tests {
                 false,
                 false,
                 None,
+                None,
+                // 0bl 审查修复（2026-09-24）：测试调用面无取消令牌。
                 None,
             )
             .await

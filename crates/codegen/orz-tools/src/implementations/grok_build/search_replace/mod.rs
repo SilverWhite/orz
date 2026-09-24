@@ -90,6 +90,28 @@ pub struct SearchReplaceInput {
         description = "Replace all occurrences of ${{ params.edit.old_string }} (default false)"
     )]
     pub replace_all: bool,
+    /// Optional line-window anchor edit mode (0bi ⑤, 2026-09-23). When set,
+    /// `old_string` must be empty and the edit replaces the content of lines
+    /// `start_line..=end_line` (1-based, inclusive) with `new_string`,
+    /// provided the file's current raw bytes still hash to `sha256` (the same
+    /// anchor the read tool reports). A mismatch rejects the edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Optional line-window anchor edit: replace lines start_line..=end_line (1-based, inclusive) with new_string when the file still matches this sha256. Requires an empty ${{ params.edit.old_string }}; a mismatch rejects the edit and requires re-reading."
+    )]
+    pub anchor: Option<SearchReplaceAnchor>,
+}
+/// Line-window edit anchor (0bi ⑤, 2026-09-23).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct SearchReplaceAnchor {
+    #[schemars(
+        description = "sha256 (hex) of the file's current raw bytes, as reported by the read tool's anchor."
+    )]
+    pub sha256: String,
+    #[schemars(description = "First line of the window to replace (1-based, inclusive).")]
+    pub start_line: usize,
+    #[schemars(description = "Last line of the window to replace (1-based, inclusive).")]
+    pub end_line: usize,
 }
 fn default_true() -> bool {
     true
@@ -148,10 +170,22 @@ pub struct SearchReplaceTool;
 ///
 /// Concise prompt swapping is done by the caller after this returns.
 pub(crate) async fn run_search_replace(
-    input: SearchReplaceInput,
+    mut input: SearchReplaceInput,
     ctx: &xai_tool_runtime::ToolCallContext,
     resources: SharedResources,
 ) -> Result<SearchReplaceOutput, xai_tool_runtime::ToolError> {
+    // 0bi ⑪（2026-09-23）：写入面 emoji 机械剥离——单一实现点（编辑族输入
+    // 解码点）。只剥写入内容（`new_string`）；`old_string` 保持原样用于匹配
+    // 既有文件字节。逃逸开关 `ORZ_WRITE_KEEP_EMOJI=1|true`（emoji 夹具仓）。
+    let emoji_strip_notice = if crate::util::emoji_strip::keep_emoji_requested() {
+        None
+    } else {
+        let (stripped, notice) = crate::util::emoji_strip::strip_emoji(&input.new_string);
+        if notice.is_some() {
+            input.new_string = stripped;
+        }
+        notice
+    };
     let cwd_override = ctx
         .extensions
         .get::<xai_tool_runtime::Cwd>()
@@ -227,7 +261,10 @@ pub(crate) async fn run_search_replace(
             )));
         }
     }
-    if input.old_string == input.new_string {
+    // 0bm 复审补口（2026-09-24）：no-op 守卫只适用于经典模式——anchor 模式
+    // 本就要求 `old_string` 为空，`new_string` 为空（清空行窗）是合法操作，
+    // 不得被「same」误拒。
+    if input.anchor.is_none() && input.old_string == input.new_string {
         return Ok(SearchReplaceOutput::InvalidInput(
             "Old string and new string are the same".to_owned(),
         ));
@@ -243,7 +280,27 @@ pub(crate) async fn run_search_replace(
             .map(|p| p.0.include_user_edit_hint)
             .unwrap_or(true);
     }
-    let result = if input.old_string.is_empty() {
+    let result = if let Some(anchor) = input.anchor.as_ref() {
+        if !input.old_string.is_empty() {
+            return Ok(SearchReplaceOutput::InvalidInput(format!(
+                "Error: anchor mode requires an empty old_string (got {} characters). Use either \
+                 the anchor window or the classic old_string/new_string mode, not both.",
+                input.old_string.chars().count()
+            )));
+        }
+        handle_anchored_replacement(
+            &input,
+            anchor,
+            &fs,
+            &notification_handle,
+            &tool_call_id,
+            &path,
+            &cwd,
+            display_cwd.as_deref(),
+            hints_enabled,
+        )
+        .await?
+    } else if input.old_string.is_empty() {
         handle_new_file_creation(
             &input,
             resources.clone(),
@@ -273,6 +330,7 @@ pub(crate) async fn run_search_replace(
         )
         .await?
     };
+    let result = attach_emoji_strip_notice(result, emoji_strip_notice.as_ref());
     if let SearchReplaceOutput::EditsApplied(applied) = &result {
         let (mut added, mut removed) = (0i64, 0i64);
         for detail in &applied.edits.details {
@@ -290,6 +348,253 @@ pub(crate) async fn run_search_replace(
     }
     Ok(result)
 }
+
+/// 0bi ⑪（2026-09-23）：把机械 emoji 剥离告知行尾附到成功编辑的工具输出
+/// （两个 prompt 字段）；失败面不改动（告知只在写入成功后随行）。
+fn attach_emoji_strip_notice(
+    result: SearchReplaceOutput,
+    notice: Option<&crate::util::emoji_strip::StripNotice>,
+) -> SearchReplaceOutput {
+    let Some(notice) = notice else {
+        return result;
+    };
+    match result {
+        SearchReplaceOutput::EditsApplied(mut applied) => {
+            let line = notice.render();
+            // 0bm 复审补口（2026-09-24）：仅当输出不以换行收尾时补分隔换行，
+            // 避免在已有尾换行的输出后产生一个空行（纯外观）。
+            if !applied.tool_output_for_prompt.ends_with('\n') {
+                applied.tool_output_for_prompt.push('\n');
+            }
+            applied.tool_output_for_prompt.push_str(&line);
+            if let Some(concise) = applied.tool_output_for_prompt_concise.as_mut() {
+                if !concise.ends_with('\n') {
+                    concise.push('\n');
+                }
+                concise.push_str(&line);
+            }
+            SearchReplaceOutput::EditsApplied(applied)
+        }
+        other => other,
+    }
+}
+
+/// 0bl 审查修复（2026-09-24）：UTF-16 形态文件的统一拒绝输出——判定与文案
+/// 已上移 `util::encoding`（hashline 编辑面共用同一单点），此处保留薄壳。
+fn utf16_rejected_output(file_path: &str) -> SearchReplaceOutput {
+    SearchReplaceOutput::InvalidInput(crate::util::encoding::utf16_rejection_message(file_path))
+}
+
+/// 0bi ⑤（2026-09-23）：锚点行窗编辑——`anchor{sha256,start_line,end_line}`
+/// 定位改动，免去整段 `old_string` 回抄。sha256 为文件原始字节的哈希（与
+/// read 工具 anchor 同源口径）；不符即拒并提示重读。行窗 1 基闭区间，窗内
+/// 各行内容以 `new_string` 整体替换；BOM/CRLF 逻辑与 `handle_replacement` 同。
+async fn handle_anchored_replacement(
+    input: &SearchReplaceInput,
+    anchor: &SearchReplaceAnchor,
+    fs: &std::sync::Arc<dyn crate::computer::types::AsyncFileSystem>,
+    notification_handle: &ToolNotificationHandle,
+    tool_call_id: &str,
+    path: &std::path::Path,
+    cwd: &std::path::Path,
+    display_cwd: Option<&std::path::Path>,
+    hints_enabled: bool,
+) -> Result<SearchReplaceOutput, xai_tool_runtime::ToolError> {
+    use sha2::{Digest, Sha256};
+    let bytes = match fs.read_file(path).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            let output = match e.io_error_kind() {
+                Some(std::io::ErrorKind::NotFound) => {
+                    let display_dcwd = display_cwd_or_cwd(cwd, display_cwd);
+                    let display_path = display_dcwd.join(&input.file_path);
+                    let msg = crate::util::format_not_found_error(
+                        &display_path,
+                        path,
+                        cwd,
+                        &display_dcwd,
+                        hints_enabled,
+                    )
+                    .await;
+                    SearchReplaceOutput::FileNotFound(msg)
+                }
+                Some(std::io::ErrorKind::IsADirectory) => SearchReplaceOutput::InvalidInput(
+                    format!("Error: {} is a directory, not a file.", input.file_path),
+                ),
+                Some(std::io::ErrorKind::InvalidFilename) => {
+                    SearchReplaceOutput::FilenameTooLong(format!(
+                        "Error: file name exceeds the {NAME_MAX}-character limit. \
+                         Please use a shorter file name.",
+                    ))
+                }
+                Some(std::io::ErrorKind::PermissionDenied) => SearchReplaceOutput::InvalidInput(
+                    format!("Error: permission denied reading {}.", input.file_path),
+                ),
+                _ => {
+                    return Err(xai_tool_runtime::ToolError::execution(
+                        xai_tool_protocol::ToolId::new("search_replace").expect("valid"),
+                        e.to_string(),
+                    ));
+                }
+            };
+            return Ok(output);
+        }
+    };
+    // 0bl 审查修复（2026-09-24）：编辑入口 UTF-16 fail-closed 门（锚点路径）。
+    if crate::util::encoding::utf16_shaped_input(&bytes) {
+        return Ok(utf16_rejected_output(&input.file_path));
+    }
+    // 0bl 审查修复（2026-09-24）：本工具层 sha 比对大小写不敏感
+    // （`eq_ignore_ascii_case`，兼容大小写混排的 hex 回抄）；loop 层
+    // `console_exec.rs` 的 `verify_content_anchor` 已同步为同一口径
+    // （0bl ⑩，双向一致）。
+    let actual_sha256 = crate::implementations::pdf_evidence::hex_string(&Sha256::digest(&bytes));
+    let expected_sha256 = anchor.sha256.trim();
+    if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+        return Ok(SearchReplaceOutput::InvalidInput(format!(
+            "Error: content anchor mismatch for {} — expected sha256 {}, found {}. The file \
+             has changed since it was read; re-read it and retry with the fresh anchor.",
+            input.file_path, expected_sha256, actual_sha256
+        )));
+    }
+    // 0bi ①：解码标签记录原文件 BOM 形态，写回时按同形编码。
+    let (old_text, encoding_label) = crate::util::encoding::decode_text(&bytes);
+    let had_bom = crate::util::encoding::label_had_bom(&encoding_label);
+    let has_crlf = old_text.contains("\r\n");
+    let normalized: std::borrow::Cow<'_, str> = if has_crlf {
+        std::borrow::Cow::Owned(old_text.replace("\r\n", "\n"))
+    } else {
+        std::borrow::Cow::Borrowed(&old_text)
+    };
+    if anchor.start_line == 0 || anchor.end_line < anchor.start_line {
+        return Ok(SearchReplaceOutput::InvalidInput(format!(
+            "Error: invalid anchor line window {}-{} (lines are 1-based and start_line must \
+             be <= end_line).",
+            anchor.start_line, anchor.end_line
+        )));
+    }
+    let segments: Vec<&str> = normalized.split('\n').collect();
+    let trailing_newline = normalized.ends_with('\n');
+    let total_lines = if normalized.is_empty() {
+        0
+    } else if trailing_newline {
+        segments.len() - 1
+    } else {
+        segments.len()
+    };
+    if anchor.end_line > total_lines {
+        return Ok(SearchReplaceOutput::InvalidInput(format!(
+            "Error: anchor line window {}-{} is out of range (the file has {} lines).",
+            anchor.start_line, anchor.end_line, total_lines
+        )));
+    }
+    let (start, end) = (anchor.start_line, anchor.end_line);
+    let mut new_text = String::with_capacity(normalized.len() + input.new_string.len());
+    for line in &segments[..start - 1] {
+        new_text.push_str(line);
+        new_text.push('\n');
+    }
+    new_text.push_str(&input.new_string);
+    if end < total_lines {
+        // 分隔换行只在 `new_string` 非空且不以换行收尾时补（0bm 复审补口：
+        // 空串＝清空行窗，前缀/后缀行各自行尾已分隔，多补即产生空行）。
+        if !input.new_string.is_empty() && !input.new_string.ends_with('\n') {
+            new_text.push('\n');
+        }
+        for (index, line) in segments[end..total_lines].iter().enumerate() {
+            if index > 0 {
+                new_text.push('\n');
+            }
+            new_text.push_str(line);
+        }
+    }
+    // 0bl 审查修复（2026-09-24）：文件终结换行此前用 `ends_with('\n')` 判定，
+    // 但后缀分支（`end < total_lines`）的循环以分隔符 `\n` 拼接后缀行、从不写
+    // 文件终结换行——末行为空行时文本恰好以分隔符收尾，终结换行被静默吞掉
+    // （`"a\nb\n\n"` 的锚点窗编辑产出 `"X\nb\n"` 而非 `"X\nb\n\n"`）。后缀分支
+    // 下终结换行无条件补（循环从不写它，且后缀末行是 split 产物、自身不可能
+    // 以 `\n` 结尾）；非后缀分支维持原判。
+    if trailing_newline {
+        if end < total_lines {
+            new_text.push('\n');
+        } else if !new_text.is_empty() && !new_text.ends_with('\n') {
+            // 0bm 复审补口（2026-09-24）：`new_text` 为空（清空行窗到文件尾
+            // ⇒ 清空整文件）不补终结换行——空文件就是零字节，不应产出一个
+            // 空行；非空前缀已自带换行时同样不补（行为不变）。
+            new_text.push('\n');
+        }
+    }
+    let removed_text = segments[start - 1..end].join("\n");
+    let write_text = if has_crlf {
+        new_text.replace("\r\n", "\n").replace('\n', "\r\n")
+    } else {
+        new_text.clone()
+    };
+    // 0bi ①：写回按原文件 BOM 形态（`had_bom` 来自解码标签）。
+    let write_bytes = crate::util::encoding::encode_text_preserving_bom(&write_text, had_bom);
+    if let Err(e) = fs.write_file(path, &write_bytes).await {
+        return Ok(match e.io_error_kind() {
+            Some(std::io::ErrorKind::AlreadyExists) => SearchReplaceOutput::InvalidInput(format!(
+                "Error: cannot write {}. A component of the path already exists as a file where a directory is expected.",
+                input.file_path
+            )),
+            Some(std::io::ErrorKind::InvalidFilename) => {
+                SearchReplaceOutput::FilenameTooLong(format!(
+                    "Error: file name exceeds the {NAME_MAX}-character limit. Please use a shorter file name."
+                ))
+            }
+            _ => SearchReplaceOutput::InvalidInput(format!(
+                "Error: failed to write {}: {e}",
+                input.file_path
+            )),
+        });
+    }
+    notification_handle.send_file_written(FileWritten {
+        tool_call_id: tool_call_id.to_string(),
+        absolute_path: path.to_path_buf(),
+        content: write_text.clone(),
+        previous_content: Some(old_text.clone()),
+        is_new_file: false,
+    });
+    let context_before = if start >= 2 {
+        segments[start - 2].to_string()
+    } else {
+        String::new()
+    };
+    let context_after = if end < total_lines {
+        segments[end].to_string()
+    } else {
+        String::new()
+    };
+    let details = vec![SearchReplaceEditDetail {
+        old_string: removed_text,
+        old_line: start,
+        new_string: input.new_string.clone(),
+        new_line: start,
+        context_before,
+        context_after,
+        line_prefix: String::new(),
+    }];
+    Ok(SearchReplaceOutput::EditsApplied(
+        SearchReplaceEditsApplied {
+            old_string: input.old_string.clone(),
+            new_string: input.new_string.clone(),
+            tool_output_for_prompt: format!(
+                "The file {} has been updated successfully.",
+                input.file_path
+            ),
+            tool_output_for_prompt_concise: Some(format!(
+                "The file {} has been updated.",
+                input.file_path
+            )),
+            absolute_path: path.to_path_buf(),
+            edits: SearchReplaceEditContextInformation { details },
+            patch: None,
+            unicode_normalized: false,
+        },
+    ))
+}
+
 /// Maximum length for a single path component (file or directory name).
 /// POSIX `NAME_MAX` is 255 on both macOS and Linux.
 const NAME_MAX: usize = 255;
@@ -329,11 +634,17 @@ async fn handle_new_file_creation(
         Ok(bytes) => !bytes.is_empty(),
         Err(_) => false,
     };
-    let old_text = match fs.read_file(path).await {
+    // 0bi ①（2026-09-23）：写侧 BOM 保真——原来带 UTF-8 BOM 的文件
+    // （`utf-8-sig` 标签）在写回时补回 BOM，避免 `.ps1` 等在 PS 5.1 下
+    // 被按本地代码页误读（0bh §5 #1 实锤）。
+    let (old_text, had_bom) = match fs.read_file(path).await {
         // GAP-ENCODING-GATE: read the target through the fixed decode chain
         // so editing a GB18030 file never mangles the match text.
-        Ok(bytes) => Some(crate::util::encoding::decode_text(&bytes).0),
-        Err(_) => None,
+        Ok(bytes) => {
+            let (text, label) = crate::util::encoding::decode_text(&bytes);
+            (Some(text), crate::util::encoding::label_had_bom(&label))
+        }
+        Err(_) => (None, false),
     };
     if file_exists && empty_old_string_does_not_override {
         let old_string_name;
@@ -349,7 +660,10 @@ async fn handle_new_file_creation(
             old_string_name
         )));
     }
-    if let Err(e) = fs.write_file(path, input.new_string.as_bytes()).await {
+    // 0bi ①：写回按原文件 BOM 形态（`had_bom` 来自解码标签）。
+    let new_file_bytes =
+        crate::util::encoding::encode_text_preserving_bom(&input.new_string, had_bom);
+    if let Err(e) = fs.write_file(path, &new_file_bytes).await {
         return Ok(match e.io_error_kind() {
             Some(std::io::ErrorKind::NotFound) => {
                 let display_dcwd = display_cwd_or_cwd(cwd, display_cwd);
@@ -689,7 +1003,15 @@ async fn handle_replacement(
             return Ok(output);
         }
     };
-    let old_text = crate::util::encoding::decode_text(&bytes).0;
+    // 0bl 审查修复（2026-09-24）：编辑入口 UTF-16 fail-closed 门（经典
+    // old_string/new_string 路径），避免 GB18030 分支"干净"解码后以 UTF-8
+    // 写回的静默乱码。
+    if crate::util::encoding::utf16_shaped_input(&bytes) {
+        return Ok(utf16_rejected_output(&input.file_path));
+    }
+    // 0bi ①：解码标签记录原文件 BOM 形态，写回时按同形编码。
+    let (old_text, encoding_label) = crate::util::encoding::decode_text(&bytes);
+    let had_bom = crate::util::encoding::label_had_bom(&encoding_label);
     let has_crlf = old_text.contains("\r\n");
     let match_text: std::borrow::Cow<'_, str> = if has_crlf {
         std::borrow::Cow::Owned(old_text.replace("\r\n", "\n"))
@@ -834,7 +1156,9 @@ async fn handle_replacement(
     } else {
         new_text.clone()
     };
-    if let Err(e) = fs.write_file(path, write_text.as_bytes()).await {
+    // 0bi ①：写回按原文件 BOM 形态（`had_bom` 来自解码标签）。
+    let write_bytes = crate::util::encoding::encode_text_preserving_bom(&write_text, had_bom);
+    if let Err(e) = fs.write_file(path, &write_bytes).await {
         return Ok(match e.io_error_kind() {
             Some(std::io::ErrorKind::AlreadyExists) => SearchReplaceOutput::InvalidInput(format!(
                 "Error: cannot write {}. A component of the path already exists as a file where a directory is expected.",
@@ -1050,6 +1374,7 @@ mod tests {
             old_string: old_string.to_string(),
             new_string: new_string.to_string(),
             replace_all: false,
+            anchor: None,
         }
     }
     fn description_renderer() -> TemplateRenderer {
@@ -1393,6 +1718,505 @@ mod tests {
             other => panic!("Expected InvalidInput, got {:?}", other),
         }
     }
+    /// Serializes tests that toggle the emoji escape-hatch env var (0bi ⑪).
+    /// 0bl 审查修复（2026-09-24）：锁上移到 `util::emoji_strip`，与
+    /// hashline_edit 的 emoji 测试共用（两处工具都读同一逃逸开关）。
+    use crate::util::emoji_strip::EMOJI_ENV_LOCK;
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        crate::implementations::pdf_evidence::hex_string(&Sha256::digest(bytes))
+    }
+
+    /// 0bi ⑪：写入内容中的 emoji 被机械剥离，告知行随成功编辑的工具输出
+    /// （两个 prompt 字段）返回。
+    #[tokio::test]
+    async fn emoji_stripped_from_written_content_with_notice() {
+        let _guard = EMOJI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("notes.txt");
+        std::fs::write(&path, "old line\n").unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = make_input(
+            "notes.txt",
+            "old line",
+            "Hello \u{1F389} world\nsecond \u{1F680} line",
+        );
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(applied) => {
+                let content = std::fs::read_to_string(&path).unwrap();
+                assert_eq!(content, "Hello world\nsecond line\n");
+                assert!(
+                    applied
+                        .tool_output_for_prompt
+                        .contains("[emoji 剥离] 2 处（写入内容 L1/L2 行）"),
+                    "got: {}",
+                    applied.tool_output_for_prompt
+                );
+                let concise = applied
+                    .tool_output_for_prompt_concise
+                    .as_deref()
+                    .unwrap_or("");
+                assert!(concise.contains("[emoji 剥离] 2 处（写入内容 L1/L2 行）"));
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    /// 0bi ⑪ 逃逸反例：`ORZ_WRITE_KEEP_EMOJI=1` 时写入逐字节不变、无告知行。
+    #[tokio::test]
+    async fn emoji_escape_hatch_keeps_writes_byte_identical() {
+        let _guard = EMOJI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("fixture.txt");
+        std::fs::write(&path, "old\n").unwrap();
+        // SAFETY: serialized by EMOJI_ENV_LOCK; restored before releasing it.
+        unsafe {
+            std::env::set_var(crate::util::emoji_strip::KEEP_EMOJI_ENV, "1");
+        }
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = make_input("fixture.txt", "old", "keep \u{1F389} me");
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        unsafe {
+            std::env::remove_var(crate::util::emoji_strip::KEEP_EMOJI_ENV);
+        }
+        match result {
+            SearchReplaceOutput::EditsApplied(applied) => {
+                let content = std::fs::read_to_string(&path).unwrap();
+                assert_eq!(content, "keep \u{1F389} me\n");
+                assert!(!applied.tool_output_for_prompt.contains("emoji 剥离"));
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    /// 0bi ⑤：锚点行窗改写——按 1 基闭区间替换窗内容，免整段回抄。
+    #[tokio::test]
+    async fn anchor_replaces_line_window() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("window.txt");
+        std::fs::write(&path, "l1\nl2\nl3\nl4\n").unwrap();
+        let sha = sha256_hex(&std::fs::read(&path).unwrap());
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let mut input = make_input("window.txt", "", "X\nY");
+        input.anchor = Some(SearchReplaceAnchor {
+            sha256: sha,
+            start_line: 2,
+            end_line: 3,
+        });
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(_) => {
+                let content = std::fs::read_to_string(&path).unwrap();
+                assert_eq!(content, "l1\nX\nY\nl4\n");
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    /// 0bl 审查修复（2026-09-24）：锚点行窗编辑不得吞掉文件末尾空行——
+    /// 后缀分支以分隔符 `\n` 拼接后缀行，末行为空行时旧逻辑把分隔符误当
+    /// 文件终结换行，产出丢一个 `\n` 的文件。
+    #[tokio::test]
+    async fn anchor_window_edit_preserves_trailing_blank_line() {
+        async fn run_case(
+            dir: &std::path::Path,
+            name: &str,
+            initial: &str,
+            new: &str,
+            expected: &str,
+        ) {
+            let path = dir.join(name);
+            std::fs::write(&path, initial).unwrap();
+            let sha = sha256_hex(&std::fs::read(&path).unwrap());
+            let tool = SearchReplaceTool;
+            let resources = test_resources(dir);
+            let mut input = make_input(name, "", new);
+            input.anchor = Some(SearchReplaceAnchor {
+                sha256: sha,
+                start_line: 1,
+                end_line: 1,
+            });
+            let result =
+                xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                    .await
+                    .unwrap();
+            assert!(
+                matches!(result, SearchReplaceOutput::EditsApplied(_)),
+                "{name}: expected EditsApplied, got {result:?}"
+            );
+            let content = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(content, expected, "{name}: shape must be preserved");
+        }
+        let tmp = TempDir::new().unwrap();
+        // 末行为空行（回归钉子）：空行与其终结换行都必须保留。
+        run_case(tmp.path(), "blank.txt", "a\nb\n\n", "X", "X\nb\n\n").await;
+        // 末行非空行：既有行为不变（后缀分支下终结换行照常补）。
+        run_case(tmp.path(), "plain.txt", "a\nb\nc\n", "X", "X\nb\nc\n").await;
+        // 无终结换行的文件：保持无终结换行。
+        run_case(tmp.path(), "bare.txt", "a\nb\nc", "X", "X\nb\nc").await;
+        // new_string 自带尾换行：视作自带分隔符，语义不变。
+        run_case(tmp.path(), "selfnl.txt", "a\nb\n\n", "X\n", "X\nb\n\n").await;
+    }
+
+    /// 0bm 复审补口（2026-09-24）：anchor 模式下 `new_string` 为空＝清空
+    /// 行窗，是合法操作——no-op 守卫（`old_string == new_string`）只在经典
+    /// 模式生效，不得以「same」误拒；清空到文件尾 ⇒ 空文件（零字节，不产
+    /// 出一个空行）。
+    #[tokio::test]
+    async fn anchor_mode_allows_clearing_the_window_with_empty_new_string() {
+        async fn clear_case(
+            dir: &std::path::Path,
+            name: &str,
+            initial: &str,
+            start: usize,
+            end: usize,
+            expected: &str,
+        ) {
+            let path = dir.join(name);
+            std::fs::write(&path, initial).unwrap();
+            let sha = sha256_hex(&std::fs::read(&path).unwrap());
+            let tool = SearchReplaceTool;
+            let resources = test_resources(dir);
+            let mut input = make_input(name, "", "");
+            input.anchor = Some(SearchReplaceAnchor {
+                sha256: sha,
+                start_line: start,
+                end_line: end,
+            });
+            let result =
+                xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                    .await
+                    .unwrap();
+            assert!(
+                matches!(result, SearchReplaceOutput::EditsApplied(_)),
+                "{name}: clearing must be allowed, got {result:?}"
+            );
+            let content = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(content, expected, "{name}: window must be cleared");
+        }
+        let tmp = TempDir::new().unwrap();
+        // 清空整文件（带终结换行）⇒ 空文件。
+        clear_case(tmp.path(), "clear_all.txt", "a\nb\n", 1, 2, "").await;
+        // 清空中段行窗 ⇒ 前后缀保留。
+        clear_case(tmp.path(), "clear_mid.txt", "a\nb\nc\n", 2, 2, "a\nc\n").await;
+    }
+
+    /// 0bl 审查修复（2026-09-24）：CRLF + 末尾空行的文件经锚点窗编辑后
+    /// 逐字节保持 CRLF 形态（写回走 `\n → \r\n` 转换）。
+    #[tokio::test]
+    async fn anchor_window_edit_preserves_crlf_trailing_blank_line() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("crlf_blank.txt");
+        std::fs::write(&path, "a\r\nb\r\n\r\n").unwrap();
+        let sha = sha256_hex(&std::fs::read(&path).unwrap());
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let mut input = make_input("crlf_blank.txt", "", "X");
+        input.anchor = Some(SearchReplaceAnchor {
+            sha256: sha,
+            start_line: 1,
+            end_line: 1,
+        });
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(_) => {
+                assert_eq!(
+                    std::fs::read(&path).unwrap(),
+                    b"X\r\nb\r\n\r\n",
+                    "CRLF + trailing blank line must be byte-preserved"
+                );
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    /// 0bl 审查修复（2026-09-24）：UTF-16LE BOM 文件的编辑被 fail-closed
+    /// 拒绝——编辑面 `decode_text` 不识别 UTF-16，宽编码文件可能被 GB18030
+    /// 分支"干净"解码后以 UTF-8 写回（静默乱码），故在读入字节后直接拒。
+    /// 文件字节保持原样。
+    #[tokio::test]
+    async fn utf16le_bom_file_edit_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("utf16.txt");
+        let mut bytes = vec![0xff, 0xfe];
+        bytes.extend("old line\n".encode_utf16().flat_map(u16::to_le_bytes));
+        std::fs::write(&path, &bytes).unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = make_input("utf16.txt", "old line", "new line");
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::InvalidInput(message) => {
+                assert!(message.contains("UTF-16"), "got: {message}");
+                assert!(message.contains("UTF-8"), "got: {message}");
+            }
+            other => panic!("Expected InvalidInput, got {:?}", other),
+        }
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            bytes,
+            "UTF-16 file must be left untouched"
+        );
+    }
+
+    /// 0bl 审查修复（2026-09-24）：锚点路径同样设 UTF-16 fail-closed 门
+    /// （sha 锚点对原始字节有效，但解码/写回仍会静默转码——门优先）。
+    #[tokio::test]
+    async fn utf16le_bom_file_anchor_edit_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("utf16_anchor.txt");
+        let mut bytes = vec![0xff, 0xfe];
+        bytes.extend("old line\n".encode_utf16().flat_map(u16::to_le_bytes));
+        std::fs::write(&path, &bytes).unwrap();
+        let sha = sha256_hex(&std::fs::read(&path).unwrap());
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let mut input = make_input("utf16_anchor.txt", "", "new line");
+        input.anchor = Some(SearchReplaceAnchor {
+            sha256: sha,
+            start_line: 1,
+            end_line: 1,
+        });
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::InvalidInput(message) => {
+                assert!(message.contains("UTF-16"), "got: {message}");
+            }
+            other => panic!("Expected InvalidInput, got {:?}", other),
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    /// 0bl 审查修复（2026-09-24）：UTF-16 fail-closed 门不得误伤 UTF-8 BOM
+    /// 文件（`EF BB BF` 与 `FF FE`/`FE FF` 前缀不同，NUL 占比门也不触发）。
+    #[tokio::test]
+    async fn utf8_bom_file_edit_not_blocked_by_utf16_gate() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("bom.txt");
+        let mut initial = b"\xEF\xBB\xBF".to_vec();
+        initial.extend_from_slice(b"old line\n");
+        std::fs::write(&path, &initial).unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = make_input("bom.txt", "old line", "new line");
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(_) => {
+                assert_eq!(
+                    std::fs::read(&path).unwrap(),
+                    b"\xEF\xBB\xBFnew line\n",
+                    "BOM must survive the edit"
+                );
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    /// 0bi ⑤：sha256 不符即拒（提示重读），文件不改。
+    #[tokio::test]
+    async fn anchor_sha256_mismatch_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("stale.txt");
+        std::fs::write(&path, "a\nb\nc\n").unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let mut input = make_input("stale.txt", "", "B");
+        input.anchor = Some(SearchReplaceAnchor {
+            sha256: "0".repeat(64),
+            start_line: 2,
+            end_line: 2,
+        });
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::InvalidInput(message) => {
+                assert!(message.contains("anchor mismatch"), "got: {message}");
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\nb\nc\n");
+            }
+            other => panic!("Expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    /// 0bi ⑤：锚点模式要求空 old_string；行窗越界即拒。
+    #[tokio::test]
+    async fn anchor_mode_guards_old_string_and_window() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("w.txt");
+        std::fs::write(&path, "a\nb\nc\n").unwrap();
+        let sha = sha256_hex(&std::fs::read(&path).unwrap());
+        let tool = SearchReplaceTool;
+
+        let resources = test_resources(tmp.path());
+        let mut input = make_input("w.txt", "b", "B");
+        input.anchor = Some(SearchReplaceAnchor {
+            sha256: sha.clone(),
+            start_line: 2,
+            end_line: 2,
+        });
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::InvalidInput(message) => {
+                assert!(message.contains("empty old_string"), "got: {message}");
+            }
+            other => panic!("Expected InvalidInput, got {:?}", other),
+        }
+
+        let resources = test_resources(tmp.path());
+        let mut input = make_input("w.txt", "", "B");
+        input.anchor = Some(SearchReplaceAnchor {
+            sha256: sha,
+            start_line: 9,
+            end_line: 9,
+        });
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::InvalidInput(message) => {
+                assert!(message.contains("out of range"), "got: {message}");
+            }
+            other => panic!("Expected InvalidInput, got {:?}", other),
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\nb\nc\n");
+    }
+
+    /// 0bi ⑤ + ①：锚点编辑保持 CRLF 与 BOM 形态。
+    #[tokio::test]
+    async fn anchor_edit_preserves_crlf_and_bom() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("crlf.txt");
+        let mut initial = Vec::new();
+        initial.extend_from_slice(b"\xEF\xBB\xBFone\r\ntwo\r\nthree\r\n");
+        std::fs::write(&path, initial).unwrap();
+        let sha = sha256_hex(&std::fs::read(&path).unwrap());
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let mut input = make_input("crlf.txt", "", "TWO");
+        input.anchor = Some(SearchReplaceAnchor {
+            sha256: sha,
+            start_line: 2,
+            end_line: 2,
+        });
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(_) => {
+                let bytes = std::fs::read(&path).unwrap();
+                assert!(bytes.starts_with(&[0xEF, 0xBB, 0xBF]), "BOM preserved");
+                assert_eq!(
+                    String::from_utf8(bytes).unwrap(),
+                    "\u{FEFF}one\r\nTWO\r\nthree\r\n"
+                );
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    /// 0bi ①：带 BOM 的 .ps1 经编辑后 BOM 保持（PS 5.1 中文解析前提）。
+    #[tokio::test]
+    async fn bom_marked_file_keeps_bom_after_edit() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("script.ps1");
+        let mut initial = Vec::new();
+        initial.extend_from_slice(b"\xEF\xBB\xBFWrite-Output \"\xE4\xB8\xAD\xE6\x96\x87\"\r\n");
+        std::fs::write(&path, initial).unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = make_input(
+            "script.ps1",
+            "Write-Output \"中文\"",
+            "Write-Output \"变更\"",
+        );
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        assert!(
+            matches!(&result, SearchReplaceOutput::EditsApplied(_)),
+            "edit failed: {result:?}"
+        );
+        let text = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(text, "\u{FEFF}Write-Output \"变更\"\r\n");
+    }
+
+    /// 0bi ① 反例：原无 BOM 的文件不引入 BOM。
+    #[tokio::test]
+    async fn bom_is_not_introduced_without_one() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("plain.txt");
+        std::fs::write(&path, "plain\n").unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = make_input("plain.txt", "plain", "done");
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        assert!(
+            matches!(&result, SearchReplaceOutput::EditsApplied(_)),
+            "edit failed: {result:?}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"done\n");
+    }
+
+    /// 0bi ① 真机钉子（Windows）：带 BOM 的 .ps1 经编辑后仍可被 PowerShell 解析。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn ps1_with_bom_remains_parseable_by_powershell() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("check.ps1");
+        let mut initial = Vec::new();
+        initial.extend_from_slice(b"\xEF\xBB\xBF");
+        initial.extend_from_slice("$msg = \"中文\"\r\nWrite-Output $msg\r\n".as_bytes());
+        std::fs::write(&path, initial).unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = make_input("check.ps1", "$msg = \"中文\"", "$msg = \"变更\"");
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        assert!(
+            matches!(&result, SearchReplaceOutput::EditsApplied(_)),
+            "edit failed: {result:?}"
+        );
+        let script = format!(
+            "$b=[IO.File]::ReadAllBytes('{path}'); if ($b.Length -lt 3 -or $b[0] -ne 0xEF -or $b[1] -ne 0xBB -or $b[2] -ne 0xBF) {{ exit 3 }}; \
+             $t=[IO.File]::ReadAllText('{path}'); $null=[scriptblock]::Create($t); exit 0",
+            path = path.display()
+        );
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .expect("powershell available");
+        assert!(
+            output.status.success(),
+            "powershell parse failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[tokio::test]
     async fn replace_all_mode() {
         let tmp = TempDir::new().unwrap();
@@ -1409,6 +2233,7 @@ mod tests {
             old_string: "aaa".to_string(),
             new_string: "ccc".to_string(),
             replace_all: true,
+            anchor: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2787,6 +3612,7 @@ neutTest_set);
             old_string: "foo".to_string(),
             new_string: "qux".to_string(),
             replace_all: true,
+            anchor: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await

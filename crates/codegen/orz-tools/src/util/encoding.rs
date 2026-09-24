@@ -350,6 +350,67 @@ pub fn write_text_utf8_no_bom(path: &Path, text: &str) -> io::Result<()> {
     std::fs::write(path, encode_text_no_bom(text))
 }
 
+/// 0bi ①（2026-09-23）：解码标签 → 原文件是否带 UTF-8 BOM。
+/// `decode_text` 只在输入以 `EF BB BF` 开头时回 `utf-8-sig`；其余标签
+/// （`utf-8` / `gb18030` / `utf-8-lossy:<p>%`）都是无 BOM 形态。
+pub fn label_had_bom(label: &str) -> bool {
+    label == "utf-8-sig"
+}
+
+/// 0bi ①（2026-09-23）：写侧 BOM 保真的**单一编码点**——编辑／写入工具
+/// 写回时按原文件形态决定是否带 UTF-8 BOM（`had_bom` 来自
+/// [`label_had_bom`]）。
+///
+/// 背景（0bh §5 #1 实锤）：`scripts/build_orz.ps1` 原带 `EF BB BF`，经编辑
+/// 工具写回后 BOM 丢失，PS 5.1 按本地代码页（GBK）误读中文注释与字符串，
+/// 报「数组索引表达式丢失」类解析错。保持 BOM＝「写回与读入同形」的最小
+/// 修复；原无 BOM 的文件维持无 BOM 契约（[`encode_text_no_bom`]）。
+pub fn encode_text_preserving_bom(text: &str, had_bom: bool) -> Vec<u8> {
+    if !had_bom {
+        return text.as_bytes().to_vec();
+    }
+    let mut bytes = Vec::with_capacity(text.len() + 3);
+    bytes.extend_from_slice(b"\xef\xbb\xbf");
+    bytes.extend_from_slice(text.as_bytes());
+    bytes
+}
+
+/// 0bl 审查修复（2026-09-24；0bm 复审补口）：编辑面 UTF-16 fail-closed 门
+/// （原为 `search_replace` 私有件；hashline 编辑面接入同一单点后上移 `util`）。
+/// 读面 `sniff_text_bytes` 能识别 UTF-16，但编辑面 `decode_text` 不识别——
+/// UTF-16 文件可能被 GB18030 分支"干净"解码后以 UTF-8 写回（静默乱码）。
+/// 字节呈 UTF-16 形态即判真：`FF FE` / `FE FF` 开头（UTF-32LE/BE BOM 的
+/// 前两字节亦然，同样按 UTF-16 形态拒），或前 8KB 内 NUL 字节占比 > 30%
+/// （宽编码签名；普通 UTF-8/GB18030 文本几乎不含 NUL）。UTF-8 BOM
+/// （`EF BB BF`）路径不受影响。编辑面的**新建文件路径不设此门**：old 内容
+/// 整体废弃、不流入写回，无静默乱码风险。残余边界（如实记录）：**无 BOM
+/// 且 ASCII 占比低**的 UTF-16（如纯 CJK 内容的 UTF-16LE，码点双字节大多
+/// 非 NUL）可逃过本启发式——Windows 生态 UTF-16 几乎必带 BOM，实际暴露面
+/// 小；属 fail-closed 门的固有近似，不做二次启发。
+pub fn utf16_shaped_input(bytes: &[u8]) -> bool {
+    if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
+        return true;
+    }
+    let sample = &bytes[..bytes.len().min(8192)];
+    if sample.is_empty() {
+        return false;
+    }
+    let nul_count = sample.iter().filter(|&&b| b == 0).count();
+    nul_count * 100 > sample.len() * 30
+}
+
+/// UTF-16 形态文件的统一拒绝文案（编辑族共用）：错误信息明确说明文件呈
+/// UTF-16 形态、编辑面不支持、请先转换为 UTF-8。
+pub fn utf16_rejection_message(file_path: &str) -> String {
+    format!(
+        "Error: {} appears to be UTF-16 encoded (BOM or NUL-byte pattern detected). \
+         The edit face does not support UTF-16 files and refuses to write them back \
+         (doing so would silently mojibake the content). Please convert the file to \
+         UTF-8 first, then retry the edit.",
+        file_path
+    )
+}
+
 /// Merge encoding labels observed on different chunks of the same stream
 /// (truncated output keeps front/back slices, and a process has separate
 /// stdout/stderr buffers). Deduplicates while preserving order — the same

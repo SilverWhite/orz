@@ -1255,7 +1255,14 @@ mod tests {
             terminal,
             flipped: std::sync::Arc::new(AtomicBool::new(false)),
         });
-        let controller = AgentLoopController::with_gateway(gateway);
+        // 0bi ⑩（ADR-0010 §14.76）：纯文本短答不再触发门 ⇒ 缺二轮即
+        // loop-top 探针不复跑；以未完成 plan 作为执行事实保持两轮序列。
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-FLIP".to_string(),
+            1,
+            "任务".to_string(),
+            vec!["步骤一".to_string()],
+        );
         controller
             .run_turn(&host, "hi", "RUN-FLIP", MANIFEST, 0, None, None, None)
             .await

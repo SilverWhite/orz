@@ -1263,8 +1263,8 @@ mod tests {
                 let base = test_dir();
                 let script = vec![
                     // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27)：无
-                    // plan 门——直接进入草稿/终答文本流。
-                    ScriptedResponse::text("第一轮草稿。"),
+                    // plan 门——直接进入终答文本流。0bi ⑩（2026-09-23）：
+                    // 纯文本短答跳过反例门，一轮模型调用即终答。
                     ScriptedResponse::text("终局答案。"),
                 ];
                 let parts = CodexAppServer::new_parts(
@@ -1341,7 +1341,8 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let script = vec![
-                    ScriptedResponse::text("草稿"),
+                    // 0bi ⑩：纯文本短答跳过反例门——单轮文本即终答
+                    // （4 字 × chunk_size 3 ⇒ 仍有多段 delta）。
                     ScriptedResponse::text("三字答案"),
                 ];
                 let parts = CodexAppServer::new_parts(
@@ -1510,10 +1511,13 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                // One text only: the gate round consumes it, the next model
-                // round exhausts the script → run fails.
+                // Empty script: the turn's single model round exhausts it
+                // → run fails. (0bi ⑩: a text-only short answer skips the
+                // counterexample gate, so the old "gate round consumes the
+                // one scripted text, next round exhausts" no longer applies
+                // — there is no gate round to burn a script item.)
                 let parts = CodexAppServer::new_parts(
-                    server_with(fake(vec![ScriptedResponse::text("唯一草稿")])),
+                    server_with(fake(vec![])),
                     base.clone(),
                     TrustPolicy::Skip,
                 );

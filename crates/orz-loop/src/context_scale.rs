@@ -16,7 +16,7 @@
 //! |---|---|---|---|
 //! | R1–R2 | 192 / 256K | ≈148 / 197K | 软提醒（**64K 步距**；0bh ④ 定稿取消 224K） |
 //! | **H1** | **320K** | ≈246K | **硬提醒：打断（开压缩窗口）** |
-//! | **T1** | **500K** | ≈385K | **硬截断（主滑块以外的全部分块）** |
+//! | **T1** | **500K** | ≈385K | **必定压缩（2026-09-24 补足，用户裁决）：强制开窗两级询问，第三次机械截断** |
 //!
 //! 换算：`估算 ≈ 真实 ÷ 0.77`（设计 §3.1 换算纪律）。每档**每会话一次**；
 //! 0bh ④（2026-09-22，用户定稿「保留 192／256 双档」）——软梯由 32K 步距拉成
@@ -81,6 +81,10 @@ pub const MODEL_SUMMARY_MIN_SECTIONS: usize = 2;
 /// 按「最旧闭合块优先」，设计 §4）。
 pub const MODEL_SUMMARY_BLOCK_LABEL: &str = "压缩块:";
 
+/// 全角冒号变体（0bk S1：模型常写 `压缩块：`，不再使区间行漏识别——漏识别
+/// 曾导致静默走缺省兜底）。
+pub const MODEL_SUMMARY_BLOCK_LABEL_FULLWIDTH: &str = "压缩块：";
+
 /// 模型实施压缩的有限轮数（H1 打断后 ≤3 轮；超轮未产出摘要 ⇒ 如实落账
 /// `model_participated=false`，**不再机械兜底压缩**——机械层不替模型决定
 /// 模型面收缩，设计 §4）。
@@ -97,7 +101,9 @@ pub enum LadderTier {
     Soft,
     /// **H1 硬提醒：打断**（注入 ＋ 开压缩窗口 ≤3 轮）。
     HardReminder,
-    /// **T1 硬截断**：机械层把主滑块以外的全部分块移出模型面。
+    /// **T1 必定压缩线**（2026-09-24 补足，用户裁决）：越线先强制开压缩窗口
+    /// （两级询问），第三次仍不产出 ⇒ 机械截断兜底（仅留主滑块，可回查存档）。
+    /// 枚举名保留 `HardTruncate`（审计键／水位键随档位刻度命名，不做破坏性改名）。
     HardTruncate,
 }
 
@@ -112,7 +118,7 @@ pub struct LadderStep {
 /// `with_context_scale_ladder` 用极小刻度驱动）。
 ///
 /// 0bh ④（2026-09-22 用户定稿）：软档 **192／256**（64K 步距），取消 224K；
-/// 320（H1 硬提醒）／500（T1 硬截断）不动。每一软档恰贴在一条机械线之前
+/// 320（H1 硬提醒）／500（T1 必定压缩）不动。每一软档恰贴在一条机械线之前
 /// （192K≈RHYTHM／256K≈FALLBACK），单档含义唯一。
 pub const DEFAULT_LADDER: [LadderStep; 4] = [
     LadderStep {
@@ -284,7 +290,7 @@ fn reading(tokens: u64) -> String {
 fn summary_block_guide() -> String {
     format!(
         "在回复中输出一个语义摘要块，机械层据此把**工作现场之外**的旧分块替换成该摘要\
-         （逐字原文仍全量留档、可按块回放）：\n\
+         （逐字原文仍全量留档、可按块回放；**至少命中 2 个小节**才被机械层识别）：\n\
          {MODEL_SUMMARY_PREFIX}]\n\
          {label} 1-4（可选：不给则由机械层按最旧闭合块优先）\n\
          目标: …\n已完成: …\n关键决策: …\n未决问题: …\n下一步: …\n关键文件: …\n\
@@ -306,9 +312,9 @@ pub fn soft_reminder_block(milestone_tokens: u64, model_face_tokens: u64) -> Str
     )
 }
 
-/// **H1 硬提醒（打断式，320K 估算 ≈246K 真实）**——宣告 T1 时将硬性截断
-/// 主滑块以外的全部分块，给出当前分块表与压缩方法，并明确「不压缩也可以，
-/// 但到时这些块只能靠回查」（设计 §5）。
+/// **H1 硬提醒（打断式，320K 估算 ≈246K 真实）**——宣告 T1 线的必定压缩
+/// 语义（2026-09-24 补足：两次强制窗口 ⇒ 第三次机械截断），给出当前分块表与
+/// 压缩方法（设计 §5＋§5 补足）。
 pub fn hard_reminder_block(
     milestone_tokens: u64,
     truncate_tokens: u64,
@@ -320,11 +326,10 @@ pub fn hard_reminder_block(
     let reading = reading(model_face_tokens);
     format!(
         "{REMINDER_INJECTED_PREFIX} {k}K · 硬提醒] 当前上下文窗口 {reading}，已越过模型间开始分化的位置\
-         （≈246K 真实 token）。到 **{t1}K 估算（≈385K 真实 token）** 时，机械层将\
-         **硬性截断工作现场以外的全部已闭合分块**：此后这些内容只能按块回放（read_file 分页）。\
-         此后**每再越线一次都会再截断一次**（该线按越线重新武装）——每次截断前都会先收到\
-         这条硬提醒。不足一块的**残段**不参与截断，留在窗口内。\n\
-         不压缩也可以——但到时这些块只能靠回查。现在就压：{}\n\
+         （≈246K 真实 token）。到 **{t1}K 估算（≈385K 真实 token）** 时，机械层将**强制开压缩窗口**，\
+         要求把工作现场以外的全部已闭合分块压缩；两次窗口内仍未产出 ⇒ 第三次机械层将**仅保留工作现场**，\
+         把其余已闭合分块移出窗口（逐字原文全量留档，需要前置上下文时按块回查存档）。\n\
+         不足一块的**残段**不参与，留在窗口内。现在就压：{}\n\
          {block_table}\n\
          {declaration}",
         summary_block_guide(),
@@ -332,8 +337,10 @@ pub fn hard_reminder_block(
     )
 }
 
-/// **T1 硬截断告知块**（设计 §5）：① 已截断 N 块／约 M token；② 可按块回放
-/// （给块表与回放口径）；③ 工作现场与残段未动（**状况陈述**）。
+/// **T1 第三步机械截断告知块**（设计 §5＋2026-09-24 必定压缩补足）：① 已截断
+/// N 块／约 M token；② 可按块回放（给块表与回放口径）；③ 工作现场与残段未动、
+/// **需要前置上下文时回查存档**（状况陈述）；`mandatory_window_fact` 非空时
+/// 如实记录「已两次强制开窗未产出」（仅三步升级路径携带）。
 ///
 /// 2026-09-16 审查 R-12③ 处置补录：一轮内只注入最高档 ⇒ T1 那轮的软／硬提醒
 /// 被压掉，告知块必须自己带上**截断后的当前读数**（否则该轮模型看不到任何读数）。
@@ -347,6 +354,7 @@ pub fn truncation_notice_block(
     replay: &str,
     block_table: &str,
     archive_write_failed: bool,
+    mandatory_window_fact: &str,
 ) -> String {
     let failure = if archive_write_failed {
         "\n4. **回放档案写入失败**（`.gsa/compaction/blocks/` 落盘未成功）——\
@@ -355,16 +363,44 @@ pub fn truncation_notice_block(
     } else {
         ""
     };
+    let fact = if mandatory_window_fact.is_empty() {
+        ""
+    } else {
+        mandatory_window_fact
+    };
     format!(
         "{REMINDER_INJECTED_PREFIX} 硬截断] 已把**工作现场以外**的 {truncated_blocks} 个**已闭合分块**\
          （≈{freed_tokens}tk token）移出当前上下文窗口（截断后当前读数 {}）：\n\
          1. 已截断 {truncated_blocks} 块／≈{freed_tokens}tk token；\n\
          2. **可按块回放**——逐字原文全量留档（会话档案 ＋ 按块档案 ＋ journal），\
          用 read_file offset/limit 分页读回：\n{replay}\n\
-         3. 工作现场（最近若干完整轮）与残段逐字未动。{failure}\n\
+         3. 工作现场（最近若干完整轮）与残段逐字未动；**需要前置上下文时请回查存档**\
+         ——按上方指针分页读回即可。{failure}\n\
+         {fact}\n\
          {block_table}\n\
          {declaration}",
         reading(model_face_tokens),
+        declaration = crate::model_face::MODEL_FACE_DECLARATION,
+    )
+}
+
+/// 0bk ②（2026-09-24）：`压缩块:` 区间行存在但解析不出合法区间 ⇒ 如实回报
+/// （引用原行＋给出当前可压区间与正确语法），**不压缩、不静默退化**。
+pub fn block_selection_unrecognized_notice(line: &str, compressible: &str) -> String {
+    // 0bm 复审补口（2026-09-24）：可压集合为空时渲染「（无）」，不给「区间：」
+    // 后接空串的残缺句。
+    let compressible = if compressible.is_empty() {
+        "（无）"
+    } else {
+        compressible
+    };
+    format!(
+        "{WINDOW_NOTICE_PREFIX} · 区间未识别] 你的语义摘要块中的区间行未能解析出任何合法区间，\
+         本次**未执行压缩**：\n原行：{line}\n\
+         当前可压区间：{compressible}（只含「已闭合且仍为原文」的分块）。\n\
+         正确写法：`{MODEL_SUMMARY_BLOCK_LABEL} 1-4, 6`（可带行内说明，\
+         如 `{MODEL_SUMMARY_BLOCK_LABEL} 1-62（全部已闭合块）`）。\n\
+         {declaration}",
         declaration = crate::model_face::MODEL_FACE_DECLARATION,
     )
 }
@@ -437,9 +473,60 @@ pub fn compression_window_block(milestone_tokens: u64) -> String {
          （{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes；黑板不受上下文窗口影响）。\n\
          （读数与再发起可随时调用 {CONTEXT_COMPRESS_TOOL_NAME}：窗口在程中时它只返回当前\
          读数，不会重复开窗。）\n\
-         窗口结束仍未产出摘要块 ⇒ 机械层**不做压缩兜底**（模型面总量只由模型自压与\
-         H1/T1 管），如实落账 `model_participated=false`。",
+         窗口结束仍未产出摘要块 ⇒ 如实落账 `model_participated=false`\
+         （机械层不替你压缩；到必定压缩线时机械层将强制再次开窗）。",
         target_tier_advice()
+    )
+}
+
+/// T1 线（必定压缩）的强制压缩窗口任务块——两级询问（2026-09-24 用户裁决的
+/// 三步升级）：`attempt`＝第几次询问（1＝首问；2＝升级再询问，明示质量衰减
+/// 与最后机会）。FR-3 口径不变：不锁工具面；量尺＝模型面阶梯。
+/// 0bn R2（2026-09-24 复审补口，v8 §15）：**摘要格式模板自嵌块本体**——
+/// 不再依赖任何早前注入的「见上」指称（H1 块可被移出／单轮暴涨被最高档抑制
+/// ／恢复会话不回放注入块），块随窗口注入即自带说明。
+pub fn mandatory_compression_window_block(
+    milestone_tokens: u64,
+    attempt: u32,
+    model_face_tokens: u64,
+    block_table: &str,
+) -> String {
+    let k = milestone_tokens / 1000;
+    let reading = reading(model_face_tokens);
+    let (head, after) = if attempt <= 1 {
+        (
+            format!(
+                "{WINDOW_NOTICE_PREFIX} · 窗口 · 必定压缩 · {k}K] 当前上下文窗口 {reading}，\
+                 已越过**必定压缩线**（{k}K 估算 ≈385K 真实 token）。机械层不替你截断——请你现在压缩："
+            ),
+            "窗口收口仍未产出 ⇒ 水位越线期间会再次开窗询问（共两次窗口机会）；\
+             第三次仍未产出 ⇒ 机械层将**仅保留工作现场**，把其余已闭合分块移出窗口。",
+        )
+    } else {
+        (
+            format!(
+                "{WINDOW_NOTICE_PREFIX} · 窗口 · 必定压缩 · {k}K · 第二次询问] 当前上下文窗口 {reading}，\
+                 仍在必定压缩线（{k}K 估算 ≈385K 真实 token）之上。**上下文质量已严重衰减**\
+                 ——≈385K 真实 token 已过模型普遍可靠下沿，压缩是解决这一问题的途径。\
+                 这是**最后一次压缩窗口**："
+            ),
+            "窗口收口仍未产出 ⇒ 机械层将**仅保留工作现场**，把其余已闭合分块全部移出窗口\
+             （逐字原文全量留档，需要前置上下文时按块回查存档）。",
+        )
+    };
+    format!(
+        "{head}\n\
+         1. 产出语义摘要块，覆盖**工作现场以外的全部已闭合分块**\
+         （不给 `{MODEL_SUMMARY_BLOCK_LABEL}` 行 ＝ 按全部处理；也可写区间收窄）。\
+         摘要块格式（自嵌本块，不依赖早前注入）：\n\
+         {guide}\n\
+         2. 若有关键结论需要跨压缩长期留存，一并固化到黑板\
+         （{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes；黑板不受上下文窗口影响）。\n\
+         {after}\n\
+         （读数与再发起可随时调用 {CONTEXT_COMPRESS_TOOL_NAME}：窗口在程中时它只返回当前读数。）\n\
+         {block_table}\n{declaration}",
+        guide = summary_block_guide(),
+        declaration = crate::model_face::MODEL_FACE_DECLARATION,
     )
 }
 
@@ -513,37 +600,71 @@ pub fn extract_model_summary(text: &str) -> Option<String> {
     Some(body.trim().to_string())
 }
 
-/// 摘要块内的**块区间指令**（可选）：`压缩块: 1-4, 6` → `[1,2,3,4,6]`。
-/// 缺省／非法 ⇒ `None`（机械层按「最旧闭合块优先」）。
-pub fn extract_block_selection(summary: &str) -> Option<Vec<u32>> {
-    let line = summary
-        .lines()
-        .map(str::trim_start)
-        .find(|l| l.starts_with(MODEL_SUMMARY_BLOCK_LABEL))?;
-    let spec = line.trim_start_matches(MODEL_SUMMARY_BLOCK_LABEL);
+/// `压缩块:` 区间指令的三态解析结果（0bk S1，2026-09-24）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockSelection {
+    /// 摘要块没有 `压缩块:` 行——走缺省语义（模型自选窗＝最旧一块；强制窗＝
+    /// 全部已闭合分块），回执如实标注属缺省行为（0bk ③）。
+    NotSpecified,
+    /// 解析成功（容忍行内注解与全角冒号）。
+    Specified(Vec<u32>),
+    /// 有 `压缩块:` 行但解析不出任何合法区间——非法段仍拒 ⇒ 如实回报，
+    /// 不得静默退化为缺省兜底（0bk ②）。
+    Unrecognized(String),
+}
+
+/// 摘要块内的**块区间指令**（0bk S1 放宽解析）：`压缩块: 1-4, 6` →
+/// `Specified([1,2,3,4,6])`。带注解区间不再使解析失败——每段取**数字核心**
+/// （前导 数字/`-`/空白 连续段），其后内容视为行内注解忽略（`1-62（全部已
+/// 闭合块；工作现场保留）` ⇒ `[1..62]`）；全角冒号 `压缩块：` 同样识别。
+/// 某段连数字核心都没有（`abc`）或区间非法 ⇒ 整条 `Unrecognized`（非法段仍
+/// 拒，携带原文行供回执如实引用）；没有 `压缩块:` 行 ⇒ `NotSpecified`。
+pub fn parse_block_selection(summary: &str) -> BlockSelection {
+    let Some(line) = summary.lines().map(str::trim_start).find(|l| {
+        l.starts_with(MODEL_SUMMARY_BLOCK_LABEL)
+            || l.starts_with(MODEL_SUMMARY_BLOCK_LABEL_FULLWIDTH)
+    }) else {
+        return BlockSelection::NotSpecified;
+    };
+    let spec = line
+        .strip_prefix(MODEL_SUMMARY_BLOCK_LABEL)
+        .or_else(|| line.strip_prefix(MODEL_SUMMARY_BLOCK_LABEL_FULLWIDTH))
+        .unwrap_or(line);
     let mut out: Vec<u32> = Vec::new();
-    for part in spec.split([',', '，']).map(str::trim) {
+    // 0bm 复审补口（2026-09-24）：`、` 是模型写多段区间的常见分隔（如
+    // `压缩块: 1-4、6`）——不识别会把「6」当注解静默截断，与 0bk ②「如实
+    // 回报」相悖；与 `,`/`，` 同列分隔集。
+    for part in spec.split([',', '，', '、']).map(str::trim) {
         if part.is_empty() {
             continue;
         }
-        let (a, b) = match part.split_once('-') {
+        let core: String = part
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '-' || c.is_whitespace())
+            .collect();
+        let (a, b) = match core.trim().split_once('-') {
             Some((a, b)) => (a.trim(), b.trim()),
-            None => (part, part),
+            None => (core.trim(), core.trim()),
         };
         let (Ok(a), Ok(b)) = (a.parse::<u32>(), b.parse::<u32>()) else {
-            return None;
+            return BlockSelection::Unrecognized(line.to_string());
         };
         if a == 0 || b < a || b > 100_000 {
-            return None;
+            return BlockSelection::Unrecognized(line.to_string());
         }
         for n in a..=b {
             if out.len() >= 512 {
-                return Some(out);
+                return BlockSelection::Specified(out);
             }
             out.push(n);
         }
     }
-    (!out.is_empty()).then_some(out)
+    if out.is_empty() {
+        // `压缩块:` 行存在但没给出任何区间本体——无区间可执行，同非法处理。
+        BlockSelection::Unrecognized(line.to_string())
+    } else {
+        BlockSelection::Specified(out)
+    }
 }
 
 #[cfg(test)]
@@ -678,11 +799,21 @@ mod tests {
         );
         assert!(hard.contains("320K · 硬提醒"));
         assert!(hard.contains("500K"));
-        assert!(hard.contains("硬性截断"));
-        assert!(hard.contains("不压缩也可以"));
+        // 2026-09-24 必定压缩补足：H1 宣告 T1 线的新语义——强制开压缩窗口、
+        // 两次窗口未产出 ⇒ 第三次机械截断（仅留工作现场、回查存档）。
+        assert!(hard.contains("强制开压缩窗口"));
+        assert!(hard.contains("仅保留工作现场"));
+        assert!(hard.contains("按块回查存档"));
         assert!(hard.contains(crate::model_face::MODEL_FACE_DECLARATION));
-        let notice =
-            truncation_notice_block(3, 41_000, 460_000, "- 块#1 …", "[上下文分块表 v0.1]", false);
+        let notice = truncation_notice_block(
+            3,
+            41_000,
+            460_000,
+            "- 块#1 …",
+            "[上下文分块表 v0.1]",
+            false,
+            "",
+        );
         assert!(notice.contains("已截断 3 块"));
         // 0bh ⑯ 子项：判断句已删——机械层不再替模型断言「该不该继续」，
         // 只留状况陈述（工作现场未动）与回放指引。
@@ -691,6 +822,8 @@ mod tests {
             notice.contains("工作现场（最近若干完整轮）与残段逐字未动"),
             "{notice}"
         );
+        // 2026-09-24 必定压缩补足：截断告知块明确「需要前置上下文时回查存档」。
+        assert!(notice.contains("需要前置上下文时请回查存档"), "{notice}");
         // 2026-09-16（审查 R-12③ 处置）：一层内只注入最高档 ⇒ 告知块自带
         // **截断后读数**，压掉同轮软／硬提醒才是无损的。
         assert!(notice.contains("截断后当前读数"), "{notice}");
@@ -703,15 +836,48 @@ mod tests {
         for block in [
             soft_reminder_block(192_000, 192_000),
             hard_reminder_block(320_000, 500_000, 320_000, "表"),
-            truncation_notice_block(1, 1_000, 460_000, "- 块#1 …", "表", false),
+            truncation_notice_block(1, 1_000, 460_000, "- 块#1 …", "表", false, ""),
             guard_truncation_notice_block(1, 1_000, 460_000, 700_000, "- 块#1 …", false),
             first_block_reminder_block(),
             compression_window_block(320_000),
+            mandatory_compression_window_block(500_000, 1, 500_000, "表"),
+            mandatory_compression_window_block(500_000, 2, 500_000, "表"),
+            block_selection_unrecognized_notice("压缩块: 全部", "1-3"),
         ] {
             assert!(
                 crate::prompt::is_injected_block_text(&block),
                 "injected block not registered: {block}"
             );
+        }
+        // 两级询问语义：首问＝规则告知；第二次＝明示质量衰减与最后机会。
+        let first = mandatory_compression_window_block(500_000, 1, 500_000, "表");
+        let second = mandatory_compression_window_block(500_000, 2, 500_000, "表");
+        assert!(first.contains("机械层不替你截断"), "{first}");
+        assert!(!first.contains("第二次询问"), "{first}");
+        assert!(second.contains("第二次询问"), "{second}");
+        assert!(second.contains("上下文质量已严重衰减"), "{second}");
+        assert!(second.contains("最后一次压缩窗口"), "{second}");
+        assert!(second.contains("按块回查存档"), "{second}");
+    }
+
+    /// 0bn R2 钉②（2026-09-24 复审补口，v8 §15）：**强制窗块自嵌摘要模板**
+    /// ——模板（含「至少命中 2 个小节」识别门槛）必须在两级询问块文本内可见，
+    /// 不再依赖任何早前注入的「（见上）」指称；否则 H1 块被移出／单轮暴涨被
+    /// 最高档抑制／恢复会话不回放时模型从未见过格式 ⇒ 产出形状错判「未产出」
+    /// ⇒ 直推升级/截断。
+    #[test]
+    fn mandatory_window_block_embeds_the_summary_template_self_contained() {
+        for ask in [
+            mandatory_compression_window_block(500_000, 1, 500_000, "表"),
+            mandatory_compression_window_block(500_000, 2, 500_000, "表"),
+        ] {
+            assert!(ask.contains(MODEL_SUMMARY_PREFIX), "{ask}");
+            assert!(ask.contains(MODEL_SUMMARY_END), "{ask}");
+            assert!(ask.contains(MODEL_SUMMARY_BLOCK_LABEL), "{ask}");
+            assert!(ask.contains("至少命中 2 个小节"), "{ask}");
+            assert!(ask.contains("目标: …"), "{ask}");
+            // 模板就地成立：不得残留依赖早前注入的指称。
+            assert!(!ask.contains("（见上）"), "{ask}");
         }
     }
 
@@ -721,14 +887,64 @@ mod tests {
             "先说明。\n[SEMANTIC_SUMMARY]\n压缩块: 2-4\n目标: x\n已完成: y\n[/SEMANTIC_SUMMARY]\n";
         let summary = extract_model_summary(text).expect("summary extracted");
         assert!(summary.starts_with(MODEL_SUMMARY_PREFIX));
-        assert_eq!(extract_block_selection(&summary), Some(vec![2, 3, 4]));
+        assert_eq!(
+            parse_block_selection(&summary),
+            BlockSelection::Specified(vec![2, 3, 4])
+        );
         assert!(
             extract_model_summary("[SEMANTIC_SUMMARY]\n目标: 只有一个段\n[/SEMANTIC_SUMMARY]")
                 .is_none()
         );
         assert_eq!(
-            extract_block_selection("[SEMANTIC_SUMMARY]\n目标: x\n"),
-            None
+            parse_block_selection("[SEMANTIC_SUMMARY]\n目标: x\n"),
+            BlockSelection::NotSpecified
+        );
+    }
+
+    /// 0bk S2 钉①（2026-09-24）：**带注解区间解析**——行内注解（中/英括号、
+    /// 说明文字）与全角冒号不再使解析失败（0bi 轮 `压缩块: 1-62（全部已闭合
+    /// 块；工作现场保留）` 曾整体解析失败 ⇒ 静默只压最旧一块）；**非法段仍
+    /// 拒**（⇒ `Unrecognized` 如实回报，不静默缺省）。
+    #[test]
+    fn annotated_block_ranges_parse_leniently_and_illegal_ones_stay_rejected() {
+        assert_eq!(
+            parse_block_selection("压缩块: 1-62（全部已闭合块；工作现场保留）"),
+            BlockSelection::Specified((1..=62).collect())
+        );
+        assert_eq!(
+            parse_block_selection("压缩块: 1-4 (already closed)"),
+            BlockSelection::Specified(vec![1, 2, 3, 4])
+        );
+        assert_eq!(
+            parse_block_selection("压缩块：2, 6（已压过的不重复）"),
+            BlockSelection::Specified(vec![2, 6])
+        );
+        // 0bm 复审补口（2026-09-24）：顿号是模型写多段区间的常见分隔，
+        // 不识别会把尾段当注解静默截断。
+        assert_eq!(
+            parse_block_selection("压缩块: 1-4、6"),
+            BlockSelection::Specified(vec![1, 2, 3, 4, 6])
+        );
+        // 非法区间（b < a）同样整条拒（0bm 复审补钉：此前无直接断言）。
+        assert_eq!(
+            parse_block_selection("压缩块: 5-3"),
+            BlockSelection::Unrecognized("压缩块: 5-3".to_string())
+        );
+        assert_eq!(
+            parse_block_selection("压缩块：7（工作现场）"),
+            BlockSelection::Specified(vec![7])
+        );
+        assert_eq!(
+            parse_block_selection("压缩块: 1-4, abc"),
+            BlockSelection::Unrecognized("压缩块: 1-4, abc".to_string())
+        );
+        assert_eq!(
+            parse_block_selection("压缩块: 全部"),
+            BlockSelection::Unrecognized("压缩块: 全部".to_string())
+        );
+        assert_eq!(
+            parse_block_selection("目标: x\n已完成: y"),
+            BlockSelection::NotSpecified
         );
     }
 }

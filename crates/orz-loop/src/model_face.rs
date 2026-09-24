@@ -937,12 +937,16 @@ pub fn render_pointer_line(
         return String::new();
     }
     parts.sort();
-    format!("指针（回查：blackboard_read section=journal anchor=）: {}", parts.join("；"))
+    format!(
+        "指针（回查：blackboard_read section=journal anchor=）: {}",
+        parts.join("；")
+    )
 }
 
 /// 分块压缩 marker（`[前文上下文已压缩 v0.4-分块压缩]`；restore-retained）。
 ///
-/// `summary` ＝ 模型产出的语义摘要块（机械识别，可为空 ⇒ 纯结构化轨）。
+/// `summary` ＝ 模型产出的语义摘要块（机械识别，可为空 ⇒ 纯结构化轨）；
+/// `selection_note` ＝ 0bk ③ 区间对账行（缺省行为／声明 vs 实得；空不渲染）。
 #[allow(clippy::too_many_arguments)]
 pub fn compression_marker(
     numbers: &[u32],
@@ -954,6 +958,7 @@ pub fn compression_marker(
     session: Option<&str>,
     mechanical_rows: &str,
     summary: Option<&str>,
+    selection_note: &str,
     replay: &str,
     locators: &crate::summary::LocatorPointers,
     ledger_locators: &[(u32, (u64, u64))],
@@ -962,6 +967,11 @@ pub fn compression_marker(
     let semantic = summary
         .map(|s| format!("\n== 语义摘要（模型产出） ==\n{s}\n"))
         .unwrap_or_default();
+    let selection_note_line = if selection_note.is_empty() {
+        String::new()
+    } else {
+        format!("区间说明: {selection_note}\n")
+    };
     let numbers_text = render_block_numbers(numbers);
     let from = rounds_from + 1;
     let to = rounds_to + 1;
@@ -979,6 +989,7 @@ pub fn compression_marker(
     format!(
         "[前文上下文已压缩 {version}]\n\
          {BLOCK_MARKER_RANGE_LABEL}{}\n\
+         {selection_note_line}\
          摘要 ID: {summary_id}\n被处理轮次: 轮 {}-{}（{} 轮）\n\
          {ledger_line}\n\
          {pointer_display}\
@@ -1320,6 +1331,7 @@ mod tests {
                 Some("sess"),
                 "[1] 轮次 1: read_file 目标=src/f0.rs",
                 None,
+                "",
                 "- 块#1: 完整内容见 .gsa/compaction/blocks/block-0001.md",
                 &crate::summary::LocatorPointers::default(),
                 &[(1, (12, 25))],
@@ -1474,6 +1486,7 @@ mod tests {
             None,
             "rows",
             Some("[SEMANTIC_SUMMARY] 目标: x"),
+            "",
             "- 块#1 …",
             &crate::summary::LocatorPointers::default(),
             &[(1, (12, 25)), (2, (26, 40))],

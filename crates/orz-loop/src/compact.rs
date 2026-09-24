@@ -158,6 +158,14 @@ impl AgentLoopController {
         self
     }
 
+    /// 必定压缩三步升级（2026-09-24）测试缝隙：种子化「强制窗收口未产出」
+    /// 连续计数（生产恒 0 起步）——`2` ＝ T1 首火即达第三步（机械截断），
+    /// 供既有 T1 截断钉以旧时序驱动新语义；三步全流程钉不用种子。
+    pub fn with_t1_window_failures(mut self, failures: u32) -> Self {
+        self.t1_window_failures_seed = failures;
+        self
+    }
+
     /// P0-D S3: override the summary reduction guards (tests relax them).
     pub fn with_summary_guards(mut self, min_compactable: u64, max_reduction_ratio: f64) -> Self {
         self.context_compact.min_compactable = min_compactable;

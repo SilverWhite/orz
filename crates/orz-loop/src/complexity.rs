@@ -233,7 +233,10 @@ mod tests {
             d.notice.text
         );
         // 已投递 → 不重复。
-        assert_eq!(pending_burden_notice(30, Some(&r), &notified(&["50"])), None);
+        assert_eq!(
+            pending_burden_notice(30, Some(&r), &notified(&["50"])),
+            None
+        );
     }
 
     #[test]
@@ -249,8 +252,8 @@ mod tests {
     #[test]
     fn later_latch_fires_after_earlier_delivery() {
         let r = reading(true, Some(9.0), [1.2, 1.5, 2.2]);
-        let d = pending_burden_notice(60, Some(&r), &notified(&["50", "70"]))
-            .expect("tier 90 reached");
+        let d =
+            pending_burden_notice(60, Some(&r), &notified(&["50", "70"])).expect("tier 90 reached");
         assert_eq!(d.notice.tier, "90");
         assert_eq!(d.tiers_to_mark, vec!["90"]);
     }

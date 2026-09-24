@@ -22,8 +22,7 @@ use orz_assurance::journal::chain::{payload_hash, sha256_hex};
 use orz_assurance::{EventType, GateDecision};
 
 use crate::agents::SubagentRole;
-use crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME;
-use crate::blackboard::SharedBlackboard;
+use crate::blackboard::{BLACKBOARD_WRITE_TOOL_NAME, SharedBlackboard, StepStatus};
 use crate::checkpoint::{self, PendingCheckpoint};
 use crate::controller::{
     AgentLoopController, AgentLoopError, ContextCompactConfig, DENIAL_BREAKER_CONSECUTIVE,
@@ -871,7 +870,22 @@ pub(crate) async fn run_template_compact(
     // `compress_blocks_now`（按块、本地面零覆盖），本函数只剩机械模板轨
     // （检索/grill 车道与会话收尾）。
     let marker_estimate = crate::summary::SUMMARY_MARKER_ESTIMATE_TOKENS;
-    let after = estimate_messages_tokens(&messages[..kept_start])
+    // 0bl 审查修复（2026-09-24）：守卫口径改为「压缩后数组」的真实估计——
+    // 旧公式 `[..kept_start] + [kept_start..]` 两段恰好并回**全量数组**，
+    // after ≈ 全量 + marker ⇒ `removable` 恒 0、`reduction_ok` 恒 false，
+    // 非 force 恒 GuardBlocked（潜伏 bug；唯一生产调用方
+    // retrieval/dispatch.rs 的 session-end 恒传 force=true 掩盖了它）。
+    // 正确口径＝drain 区间之前的头部（`[..first_round_start]`）＋保留尾
+    // （`[kept_start..]`）＋新 marker。`first_round_start`（首个带工具声明
+    // 的 assistant 消息）原在下方 retain 之后再算；守卫段发生在任何
+    // mutation（retain/drain）之前、messages 未变，故此处先行计算同一定位
+    // 点。口径注记：头部此时仍含旧滚动 marker（执行时才删除）⇒ 估计偏保守
+    // （多计一个旧 marker），只会让守卫更严，不会放行不足的压缩。
+    let first_round_start = messages
+        .iter()
+        .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+        .unwrap_or(messages.len());
+    let after = estimate_messages_tokens(&messages[..first_round_start])
         + estimate_messages_tokens(&messages[kept_start..])
         + marker_estimate;
     let removable = measured.saturating_sub(after);
@@ -923,6 +937,11 @@ pub(crate) async fn run_template_compact(
     });
     let epoch_archive = epoch_archive.flatten();
     let session_snapshot = svc.session_id;
+    // 0bl 审查修复（2026-09-24）：此处必须在 retain 删除旧 marker **之后**
+    // 重算——marker 删除使消息索引整体左移一位，drain/插入定位点若复用上方
+    // 守卫段的 retain 前口径会把旧 marker 前一条消息误入 drain 区间（声明/
+    // 回复错配 → provider 400）。上方同名定位点仅服务守卫估计；无旧 marker
+    // 时两者一致。
     let first_round_start = messages
         .iter()
         .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
@@ -1093,13 +1112,13 @@ pub(crate) async fn run_template_compact(
 /// 机械层不做任何压缩，设计 §4「模型面总量只由模型自压与 H1/T1 管」）。
 /// 边界：`?` 错误传播路径仍会丢弃状态（与 0AC-A6 Err 留痕同类，已挂账）。
 async fn finalize_model_compression_close(
-    state: &mut Option<(usize, u32)>,
+    state: &mut Option<(usize, u32, bool)>,
     audit: &mut crate::mechanical_audit::MechanicalAuditState,
     svc: &SharedLoopServices<'_>,
     writer: &mut EventWriter<'_>,
     tool_rounds: u32,
 ) -> Result<(), AgentLoopError> {
-    let Some((window_start_writes, rounds_used)) = state.take() else {
+    let Some((window_start_writes, rounds_used, _mandatory)) = state.take() else {
         return Ok(());
     };
     let writes_now = svc.blackboard.read().model_note_count();
@@ -1184,8 +1203,9 @@ fn estimate_static_overhead(system: &str, tool_defs: &[ToolDef]) -> u64 {
 ///    retained）——**本地面一条不删**（不变量 I3；块状态按块号幂等、恢复后由
 ///    marker 重建）。
 ///
-/// 返回 `None` ＝ NoOp（无可压闭合块 / 区间无命中 / 台账写失败），**不虚构
-/// 事件、不改模型面**。
+/// 返回 `None` ＝ NoOp（无可压闭合块 / 区间无命中 / 台账写失败 / 区间未识别
+/// ——最后者会注入「区间未识别」告知块并落账，**不静默**），不虚构事件、
+/// 不改模型面（压缩未执行时）。
 #[allow(clippy::too_many_arguments)]
 async fn compress_blocks_now(
     svc: &SharedLoopServices<'_>,
@@ -1194,10 +1214,13 @@ async fn compress_blocks_now(
     messages: &mut Vec<Message>,
     params: &crate::model_face::ModelFaceParams,
     archive_tag: &str,
-    selection: Option<Vec<u32>>,
+    selection: crate::context_scale::BlockSelection,
+    default_all: bool,
     summary: Option<&str>,
     reason: &str,
     locators: &crate::summary::LocatorPointers,
+    audit: &mut crate::mechanical_audit::MechanicalAuditState,
+    tool_rounds: u32,
 ) -> Result<Option<BlockCompaction>, AgentLoopError> {
     let blocks = crate::model_face::blocks_outside_slider(
         messages,
@@ -1205,19 +1228,75 @@ async fn compress_blocks_now(
         params.block_tokens,
     );
     let markers = crate::model_face::face_markers(messages);
-    // 只压**已闭合**且仍为原文的块（末块仍在增长 ⇒ 摘要会与正文漂移而落空）；
-    // 同一块在会话内不重复计数（去重键＝块号，设计 §12）。
-    let mut selected: Vec<crate::model_face::ContextBlock> = blocks
+    // 可压集合＝**已闭合**且仍为原文的块（末块仍在增长 ⇒ 摘要会与正文漂移而
+    // 落空）；同一块在会话内不重复计数（去重键＝块号，设计 §12）。
+    let compressible: Vec<crate::model_face::ContextBlock> = blocks
         .iter()
         .filter(|b| b.closed && markers.state(b.number) == crate::model_face::BlockState::Live)
-        .filter(|b| selection.as_ref().is_none_or(|sel| sel.contains(&b.number)))
         .cloned()
         .collect();
-    // 未指定区间 ⇒ **最旧块优先**（设计 §4）：2026-09-16 实现批收窄为**只压
-    // 最旧一个已闭合块**——此前会把全部已闭合块一次压掉（一个摘要吞掉最多
-    // 数百 K 估算的历史），与「模型自己控制压多少」相反、也没有界。要一次压
-    // 多块，模型在摘要块里写明 `压缩块: 1-4` 即可（该口径由钉子锁定）。
-    if selection.is_none() && selected.len() > 1 {
+    // 0bk（2026-09-24）：三态区间解析消费。**Unrecognized ⇒ 如实回报＋不压缩**
+    // （禁止静默退化为缺省兜底——0bi 轮 6/12 次浅压缩的根因即此静默）；
+    // **NotSpecified ⇒ 缺省语义**（模型自选窗＝最旧一块；强制窗＝全部已闭合
+    // 分块），回执如实标注属缺省行为。
+    let (range_filter, mut selection_note): (Option<Vec<u32>>, String) = match selection {
+        crate::context_scale::BlockSelection::Unrecognized(line) => {
+            let compressible_numbers: Vec<u32> = compressible.iter().map(|b| b.number).collect();
+            let notice = crate::context_scale::block_selection_unrecognized_notice(
+                &line,
+                &crate::model_face::render_block_numbers(&compressible_numbers),
+            );
+            let watermark = blackboard_watermark_label(svc);
+            let payload = audit.record(
+                "context_scale:block_selection_unrecognized",
+                tool_rounds,
+                format!(
+                    "form=standalone_block compressible_blocks={} line={line}",
+                    compressible.len()
+                ),
+                Some("block_selection_unrecognized".to_string()),
+            );
+            writer
+                .record(
+                    EventType::MechanicalAuditUpdate,
+                    serde_json::json!({
+                        "kind": crate::mechanical_audit::KIND_CONTEXT_SCALE,
+                        "payload": payload,
+                    }),
+                )
+                .await?;
+            messages.push(Message {
+                role: Role::User,
+                content: format!("{notice}\n{watermark}"),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+            return Ok(None);
+        }
+        crate::context_scale::BlockSelection::NotSpecified => {
+            if default_all {
+                (None, "未指定区间：必定压缩缺省＝全部已闭合分块".to_string())
+            } else {
+                (None, "缺省：未指定区间 ⇒ 机械层按最旧一块处理".to_string())
+            }
+        }
+        crate::context_scale::BlockSelection::Specified(range) => (Some(range), String::new()),
+    };
+    let mut selected: Vec<crate::model_face::ContextBlock> = compressible
+        .into_iter()
+        .filter(|b| {
+            range_filter
+                .as_ref()
+                .is_none_or(|sel| sel.contains(&b.number))
+        })
+        .collect();
+    // 缺省语义（模型自选窗维持现状，设计 §4）：**只压最旧一个已闭合块**——
+    // 此前会把全部已闭合块一次压掉（一个摘要吞掉最多数百 K 估算的历史），与
+    // 「模型自己控制压多少」相反、也没有界。要一次压多块，模型在摘要块里写明
+    // `压缩块: 1-4` 即可（该口径由钉子锁定）；强制窗缺省即全部（必定压缩）。
+    if range_filter.is_none() && !default_all && selected.len() > 1 {
         selected.truncate(1);
     }
     if selected.is_empty() {
@@ -1295,6 +1374,26 @@ async fn compress_blocks_now(
     let archive_path = archive_dir.join(format!("{id}.md"));
     let before = crate::model_face::estimate_model_face_tokens(messages, params);
     let numbers: Vec<u32> = selected.iter().map(|b| b.number).collect();
+    // 0bk ③：回执对账——声明区间 vs 实得块。声明块已不在可压集合（被前次
+    // 压缩／截断处理过）时如实注明，不再静默；同时缓解位置块号在截断/压缩后
+    // 重编带来的「声明≠实得」困惑（0bi run seq 1007）。
+    if let Some(range) = &range_filter {
+        let actual: std::collections::HashSet<u32> = numbers.iter().copied().collect();
+        let missing: Vec<u32> = range
+            .iter()
+            .filter(|n| !actual.contains(n))
+            .copied()
+            .collect();
+        let declared = crate::model_face::render_block_numbers(range);
+        selection_note = if missing.is_empty() {
+            format!("声明区间 {declared} ＝ 全部命中")
+        } else {
+            format!(
+                "声明区间 {declared}；实得 {}（其余声明块已不在可压集合：已压缩或已截断）",
+                crate::model_face::render_block_numbers(&numbers)
+            )
+        };
+    }
     let first_round = selected.first().map(|b| b.first_round).unwrap_or(0);
     let last_round = selected.last().map(|b| b.last_round).unwrap_or(0);
     let rounds: u32 = selected
@@ -1317,6 +1416,7 @@ async fn compress_blocks_now(
         "# ORZ 会话压缩摘要（v8 分块压缩 {id}）\n\n\
          - 状态: complete（mode={mode}；按块压缩，主滑块以外的分块被替换为摘要）\n\
          - 事件 reason: {reason}\n- 处理分块: {numbers}\n\
+         - 区间说明: {selection_note}\n\
          - 被处理轮次: 轮 {from}–{to}（{rounds} 轮）\n\
          - 模型面估算: 压缩前 {before}（释放 ≈{freed_tokens}tk token；压缩后读数见 marker 行）\n\
          - 黑板会话: {session}\n- 摘要存档: {path}\n\
@@ -1365,6 +1465,7 @@ async fn compress_blocks_now(
         svc.session_id,
         &mechanical_rows,
         summary,
+        &selection_note,
         &replay.join("\n"),
         &locators,
         &ledger_locators,
@@ -1419,11 +1520,18 @@ async fn compress_blocks_now(
     }))
 }
 
-/// **T1 硬截断 / 1.10M 异常保险**（滑块上下文 v8，设计 §5）：把**主滑块以外
-/// 的全部分块**移出模型面——本地面逐字一条不删（不变量 I3）、每块逐字原文
-/// 落盘可按块回放、机械层注入告知块（①已截断 N 块／≈M token；②可按块回放；
-/// ③任务无需中止），事实经 `mechanical_audit_update` 的 anomaly
-/// `hard_context_truncated_blocks` 落账。
+/// **T1 机械截断 / 700K 守卫异常保险**（滑块上下文 v8 设计 §5＋2026-09-24
+/// 必定压缩补足）：把**主滑块以外的全部分块**移出模型面——本地面逐字一条不删
+/// （不变量 I3）、每块逐字原文落盘可按块回放、机械层注入告知块（①已截断 N 块／
+/// ≈M token；②可按块回放；③工作现场与残段逐字未动、**需要前置上下文时回查
+/// 存档**——状况陈述），事实经 `mechanical_audit_update` 的 anomaly
+/// `hard_context_truncated_blocks` 落账。2026-09-24 起本函数只由**两条路径**
+/// 到达：T1 三步升级的第三次（两次强制窗未产出后）与 700K 守卫异常保险。
+/// `mandatory_window_fact` 非空时告知块如实携带「已两次开窗未产出」事实
+/// （仅三步升级路径）。
+/// 0bl 审查修复（2026-09-24）：原③「任务无需中止」随 071 修复批（0bh ⑯
+/// 「去判断而非去建议」，见 `context_scale::truncation_notice_block`）删除
+/// ——注入文本已是状况陈述，本注释同步更正（出处保留）。
 ///
 /// 返回 `None` ＝ 主滑块之外已无分块（无从截断、零事件）。
 #[allow(clippy::too_many_arguments)]
@@ -1435,6 +1543,7 @@ async fn truncate_model_face_blocks(
     params: &crate::model_face::ModelFaceParams,
     archive_tag: &str,
     guard_hit: bool,
+    mandatory_window_fact: &str,
     audit: &mut crate::mechanical_audit::MechanicalAuditState,
     tool_rounds: u32,
 ) -> Result<Option<(usize, u64)>, AgentLoopError> {
@@ -1541,6 +1650,7 @@ async fn truncate_model_face_blocks(
                 ),
                 "- （无已闭合分块：溢出体量在工作现场内）",
                 false,
+                "",
             )
         };
         let watermark = blackboard_watermark_label(svc);
@@ -1667,7 +1777,10 @@ async fn truncate_model_face_blocks(
     }
     // 0bh ③＋⑮：截断回执同样带定位符行（与压缩回执同形态）。
     let pointer_line = crate::model_face::render_pointer_line(
-        &live.iter().map(|b| (b.number, b.first_round)).collect::<Vec<_>>(),
+        &live
+            .iter()
+            .map(|b| (b.number, b.first_round))
+            .collect::<Vec<_>>(),
         &ledger_locators,
         locators.journal_seq.map(|(from, _)| from),
     );
@@ -1732,7 +1845,11 @@ async fn truncate_model_face_blocks(
             pointerized = pointerized.replaced,
         )
     };
-    // ④ 告知块（注入文本；截断事实 ＋ 回放口径 ＋ 任务无需中止）。
+    // ④ 告知块（注入文本；截断事实 ＋ 回放口径 ＋ 工作现场与残段逐字未动的
+    // 状况陈述）。0bl 审查修复（2026-09-24）：原「任务无需中止」表述随 071
+    // 修复批（0bh ⑯「去判断而非去建议」；见 `context_scale` 的
+    // `truncation_notice_block`／`guard_truncation_notice_block`）从注入文本
+    // 删除，注释同步更正。
     let table = crate::model_face::render_block_table(
         &crate::model_face::blocks_outside_slider(
             messages,
@@ -1764,6 +1881,7 @@ async fn truncate_model_face_blocks(
                 &replay_text,
                 &table,
                 archive_write_failed || ledger_write_failed,
+                mandatory_window_fact,
             )
         )
     };
@@ -1821,6 +1939,9 @@ async fn truncate_model_face_blocks(
 enum CompressionWindowKind {
     /// H1 阶梯硬提醒打断式窗口 ⇒ `context_scale_window`。
     Ladder,
+    /// T1 必定压缩线强制窗口（2026-09-24 补足，用户裁决）⇒ `context_scale_window`
+    /// （schema 复用既有 reason 值，零枚举面变更；区别在缺省压缩范围＝全部）。
+    Mandatory,
     /// 0ap `context_compress` 知情发起窗口 ⇒ `model_selected`（设计 §1）。
     ModelRequested,
 }
@@ -1828,7 +1949,7 @@ enum CompressionWindowKind {
 impl CompressionWindowKind {
     fn semantic_reason(self) -> &'static str {
         match self {
-            Self::Ladder => "context_scale_window",
+            Self::Ladder | Self::Mandatory => "context_scale_window",
             Self::ModelRequested => "model_selected",
         }
     }
@@ -1838,6 +1959,27 @@ impl CompressionWindowKind {
 /// ＝ `model_selected`（既有口径不变）。
 fn semantic_compression_reason(kind: Option<CompressionWindowKind>) -> &'static str {
     kind.map_or("model_selected", CompressionWindowKind::semantic_reason)
+}
+
+/// 0bi ⑩（ADR-0010 §14.76，2026-09-23）：answer 变体反例门的收窄判据——
+/// 本 run 有**执行事实**（≥1 个工具轮，或黑板已有编辑记录）或 **plan 存在
+/// 且未完成**（任一步骤非 Done/Failed）时才触发；纯文本短答（无工具轮、
+/// 无未完成 plan）跳过门，不再多花一轮模型调用。纯机械判据：不判内容、
+/// 不需模型参与。plan 变体（plan 写入前）不受此收窄影响。
+fn answer_gate_has_substance(svc: &SharedLoopServices<'_>, tool_rounds: u32) -> bool {
+    if tool_rounds > 0 {
+        return true;
+    }
+    let bb = svc.blackboard.read();
+    if !bb.edits.is_empty() {
+        return true;
+    }
+    bb.plan.plan_id.is_some()
+        && bb
+            .plan
+            .steps
+            .iter()
+            .any(|step| !matches!(step.status, StepStatus::Done(_) | StepStatus::Failed(_)))
 }
 
 /// The shared model↔tool loop (M1 extraction, 2026-08-10).
@@ -1991,6 +2133,11 @@ pub(crate) async fn run_agent_loop(
     // 在程压缩窗口的种类（`None` ＝ 无窗口在程）。开窗时置位、窗口不在程时
     // 清空；识别语义摘要那一刻的值随摘要进 `pending_semantic`（归因固定点）。
     let mut window_kind: Option<CompressionWindowKind> = None;
+    // T1 必定压缩线三步升级（2026-09-24 用户裁决）：强制压缩窗口收口**未产出
+    // 语义摘要**的连续次数——0＝首问、1＝升级再询问（明示质量衰减）、≥2 后
+    // 再越线 ⇒ 第三次机械截断。水位落回线下即复位（压缩已达成，升级作废）。
+    // 生产恒 0 起步；种子仅测试缝隙（`with_t1_window_failures`）。
+    let mut t1_window_failures: u32 = controller.t1_window_failures_seed;
     // loop 迭代计数（每迭代至多一个模型轮）。
     let mut loop_rounds: u32 = 0;
     // v8 原文定位指针（设计 §4 §6）：journal 窗口 epoch 起点 / 台账 `[seq]`
@@ -2015,9 +2162,10 @@ pub(crate) async fn run_agent_loop(
     let mut face_d4_block: Option<String> = None;
     // 0AE-C1 修复（2026-09-15 深审）：压缩窗口轮携带 blackboard_write 落穿
     // 正常派发路径时的**延迟收口**状态——(窗口开始写入面计数, 窗口已用
-    // 轮数)。写入在消费分支落穿后派发完成，下一 loop-top 读数真实，据实
-    // 落账 `model_compression` 审计事件（participated 由此可达）。
-    let mut model_compression_close: Option<(usize, u32)> = None;
+    // 轮数, 是否必定压缩强制窗)。写入在消费分支落穿后派发完成，下一
+    // loop-top 读数真实，据实落账 `model_compression` 审计事件（participated
+    // 由此可达）；第三位供三步升级计数（2026-09-24 必定压缩补足）。
+    let mut model_compression_close: Option<(usize, u32, bool)> = None;
     // 0ae D1（2026-09-15，设计 §4，用户裁决 DP-2）：补救规则——至第
     // N=20 轮仍无任何 blackboard_write ⇒ 再提醒一次；此后不再提醒、
     // 不设硬门。
@@ -2173,7 +2321,9 @@ pub(crate) async fn run_agent_loop(
                 )
                 .await?;
         }
-        // 阶梯（量尺＝**模型面估算**；每档每会话一次、不 rearm）。
+        // 阶梯（量尺＝**模型面估算**；软档／H1 每档每会话一次、不 rearm；
+        // 2026-09-24 必定压缩补足：T1 闩按越线重新武装，由强制窗收口处的
+        // 显式 rearm 驱动两级升级，见下方 `t1_window_failures` 增减点）。
         let mut truncate_now = false;
         if pending_checkpoint.is_none() && profile.role == AgentRole::Main {
             let ladder = svc.context_compact.context_scale_ladder;
@@ -2182,18 +2332,30 @@ pub(crate) async fn run_agent_loop(
             let has_truncate = fires
                 .iter()
                 .any(|f| f.tier == crate::context_scale::LadderTier::HardTruncate);
+            // T1 三步升级的形态判定：**没有可压分块**（溢出在滑块内／无可执行
+            // 动作）或**已两次窗口未产出** ⇒ 机械截断兜底；否则 ⇒ 强制开窗。
+            let t1_compressible = face_blocks
+                .iter()
+                .filter(|b| {
+                    b.closed
+                        && crate::model_face::face_markers(messages).state(b.number)
+                            == crate::model_face::BlockState::Live
+                })
+                .count();
+            let t1_cut = has_truncate && (t1_compressible == 0 || t1_window_failures >= 2);
             // **一轮内只注入最高档**（只读审查 R-12③ 处置，2026-09-16）：单轮
             // 暴涨会让 `due()` 一次返回 4–5 档；逐档注入等于把同一段文案（只有
             // 刻度字样不同）连发数遍——最高档的文案已含当前读数、分块表、压缩
             // 方法与下一档承诺，低档无独立信息。**水位与事件照记**（journal 保留
             // 「本轮越过了哪几档」的完整事实，payload 以 `form=` 注明是否真的注入）。
-            // T1 本轮生效时同理只发**截断告知块**（内容即将被截断，软／硬提醒都
-            // 已无意义）；告知块由 `truncate_model_face_blocks` 在截断**之后**渲染，
-            // 并如实携带截断后的当前读数（故压掉低档提醒是无损的）。
+            // T1 生效时同理只发**最高档块**：窗口路径＝必定压缩窗口块；截断路径
+            // ＝告知块由 `truncate_model_face_blocks` 在截断**之后**渲染，并如实
+            // 携带截断后的当前读数（故压掉低档提醒是无损的）。
             let highest_tokens = fires.iter().map(|f| f.milestone_tokens).max();
             let watermark = controller.blackboard_watermark_label();
             for fire in &fires {
-                let injected = !has_truncate && Some(fire.milestone_tokens) == highest_tokens;
+                let injected = Some(fire.milestone_tokens) == highest_tokens;
+                let mut pushed_block = false;
                 if injected {
                     let block = match fire.tier {
                         crate::context_scale::LadderTier::Soft => {
@@ -2221,10 +2383,29 @@ pub(crate) async fn run_agent_loop(
                                 ),
                             ))
                         }
-                        // 硬截断的告知块在截断**之后**渲染（需要截断事实读数）。
-                        crate::context_scale::LadderTier::HardTruncate => None,
+                        // T1：窗口路径注入**必定压缩窗口块**（两级询问按升级计
+                        // 数取档）；截断路径（无可压分块／第三次）的告知块在截断
+                        // **之后**渲染（需要截断事实读数）。
+                        crate::context_scale::LadderTier::HardTruncate => {
+                            if t1_cut {
+                                None
+                            } else {
+                                let table = crate::model_face::render_block_table(
+                                    &face_blocks,
+                                    &crate::model_face::face_markers(messages),
+                                    &face_params,
+                                );
+                                Some(crate::context_scale::mandatory_compression_window_block(
+                                    fire.milestone_tokens,
+                                    t1_window_failures + 1,
+                                    model_face_tokens,
+                                    &table,
+                                ))
+                            }
+                        }
                     };
                     if let Some(block) = block {
+                        pushed_block = true;
                         messages.push(Message {
                             role: Role::User,
                             content: format!("{block}\n{watermark}"),
@@ -2233,35 +2414,60 @@ pub(crate) async fn run_agent_loop(
                             reasoning_content: None,
                             round: None,
                         });
-                        if fire.tier == crate::context_scale::LadderTier::HardReminder {
-                            // H1 硬提醒＝**打断式提醒**（FR-3，0bc 长杂轮：
-                            // 不锁工具面——窗口轮工具面＝常规面、动作照常
-                            // 派发）：≤3 轮压缩窗口；窗口结束仍未产出摘要 ⇒
-                            // 如实落账 `model_participated=false`，**不再机械
-                            // 兜底压缩**。
+                        let open_window = match fire.tier {
+                            crate::context_scale::LadderTier::HardReminder => true,
+                            crate::context_scale::LadderTier::HardTruncate => !t1_cut,
+                            crate::context_scale::LadderTier::Soft => false,
+                        };
+                        if open_window {
+                            // H1 ＝打断式提醒窗口；T1 ＝**必定压缩**强制窗口
+                            // （2026-09-24 用户裁决：两次窗口未产出 ⇒ 第三次机械
+                            // 截断）。FR-3 口径不变：不锁工具面——窗口轮工具面＝
+                            // 常规面、动作照常派发；窗口结束仍未产出摘要 ⇒ 如实
+                            // 落账 `model_participated=false` 并按升级计数走
+                            // 再询问／机械截断。
                             pending_checkpoint = Some(PendingCheckpoint::ModelCompression {
                                 rounds_left: crate::context_scale::COMPRESSION_WINDOW_ROUNDS,
                                 window_start_writes: svc.blackboard.read().model_note_count(),
                             });
-                            window_kind = Some(CompressionWindowKind::Ladder);
+                            window_kind = Some(match fire.tier {
+                                crate::context_scale::LadderTier::HardTruncate => {
+                                    CompressionWindowKind::Mandatory
+                                }
+                                _ => CompressionWindowKind::Ladder,
+                            });
                         }
                     }
                 }
                 // 会话级水位：fire 即回写（随侧车持久化；新会话独立、恢复不重发）。
                 controller.mark_context_scale_notified(&fire.key);
-                let form = if injected {
+                let form = if pushed_block {
                     "standalone_block"
                 } else if has_truncate {
-                    "deferred_to_truncation_notice"
+                    // 0bm 复审更正（2026-09-24）：T1 **窗口路径**（!t1_cut）下
+                    // 低档是被「必定压缩窗口块」取代——截断只是窗口未产出的
+                    // 第三步兜底，旧值「折入截断提示」名不副实；**截断路径**
+                    // （无可压分块／种子直达第三步）才真的是让位给截断告知块，
+                    // 维持旧值。
+                    if t1_cut {
+                        "deferred_to_truncation_notice"
+                    } else {
+                        "superseded_by_mandatory_window"
+                    }
                 } else {
                     "suppressed_superseded_by_higher_tier"
+                };
+                let t1_extra = if fire.tier == crate::context_scale::LadderTier::HardTruncate {
+                    format!(" t1_window_failures={t1_window_failures} t1_cut={t1_cut}")
+                } else {
+                    String::new()
                 };
                 let payload = mechanical_audit.record(
                     format!("context_scale:{}", fire.key),
                     tool_rounds,
                     format!(
                         "milestone_tokens={} model_face_estimate_tokens={} form={form} \
-                         tier={} truncate_tokens={} blocks={} watermark={watermark}",
+                         tier={} truncate_tokens={} blocks={} watermark={watermark}{t1_extra}",
                         fire.milestone_tokens,
                         model_face_tokens,
                         match fire.tier {
@@ -2284,17 +2490,29 @@ pub(crate) async fn run_agent_loop(
                     )
                     .await?;
             }
-            truncate_now = has_truncate;
+            truncate_now = t1_cut;
         }
         // T1 硬截断 ＋ 1.10M 异常保险：把**主滑块以外的全部分块**移出模型面
-        // （设计 §5）：本地面逐字不动、可按块回放、任务无需中止。T1 一次/会话
-        // （会话级水位）；守卫线可重复触发（截断后新累积的分块才会再次越线）。
+        // （设计 §5）：本地面逐字不动、可按块回放；告知块注入的是状况陈述
+        // （工作现场与残段逐字未动）。0bl 审查修复（2026-09-24）：原「任务
+        // 无需中止」表述随 071 修复批（0bh ⑯「去判断而非去建议」，见
+        // `context_scale::truncation_notice_block`）从注入文本删除，注释
+        // 同步更正。T1 一次/会话（会话级水位）；守卫线可重复触发（截断后
+        // 新累积的分块才会再次越线）。
         model_face_tokens = crate::model_face::estimate_model_face_tokens(messages, &face_params);
         let guard_hit = model_face_tokens >= svc.context_compact.model_face_guard_tokens;
         if pending_checkpoint.is_none()
             && profile.role == AgentRole::Main
             && (truncate_now || guard_hit)
         {
+            // 三步升级走到截断时如实携带窗口事实（仅必定压缩路径；守卫路径
+            // 与滑块内指针化路径不携带）。
+            let mandatory_fact = if truncate_now && t1_window_failures >= 2 {
+                "（事实记录：水位越线期间已两次强制开窗询问压缩，窗口内未产出语义摘要；\
+                 本次截断为窗口耗尽后的机械兜底。）\n"
+            } else {
+                ""
+            };
             let cut_outcome = truncate_model_face_blocks(
                 svc,
                 writer,
@@ -2303,6 +2521,7 @@ pub(crate) async fn run_agent_loop(
                 &face_params,
                 &face_archive_tag,
                 guard_hit && !truncate_now,
+                mandatory_fact,
                 &mut mechanical_audit,
                 tool_rounds,
             )
@@ -2313,6 +2532,10 @@ pub(crate) async fn run_agent_loop(
                 context_scale.rearm(crate::model_face::ladder_truncate_tokens(
                     &svc.context_compact.context_scale_ladder,
                 ));
+            }
+            if cut_outcome.is_some() {
+                // 截断已执行 ⇒ 三步升级 episode 收口（再越线从首问重新开始）。
+                t1_window_failures = 0;
             }
             // 截断后本 epoch 的 D4 机械段与分块表随之重渲（前缀重写＝一次
             // 压缩级事件，设计 §9「重写税」口径）。
@@ -2329,6 +2552,10 @@ pub(crate) async fn run_agent_loop(
         // `context_scale_window`）。收口逻辑统一在
         // `finalize_model_compression_close`（budget 收尾 / IPG block /
         // run 尾三条异常出口同走此函数，窄边沿修复 2026-09-15）。
+        // 必定压缩三步升级（2026-09-24）：延迟收口的是**强制窗**且**未产出
+        // 语义摘要** ⇒ 升级计数＋复位 T1 闩——水位越线期间下一 loop-top 再
+        // 触发（首问→再询问→第三次机械截断）。
+        let closed_mandatory = matches!(model_compression_close, Some((_, _, true)));
         finalize_model_compression_close(
             &mut model_compression_close,
             &mut mechanical_audit,
@@ -2337,6 +2564,12 @@ pub(crate) async fn run_agent_loop(
             tool_rounds,
         )
         .await?;
+        if closed_mandatory && pending_semantic.is_none() {
+            t1_window_failures = t1_window_failures.saturating_add(1);
+            context_scale.rearm(crate::model_face::ladder_truncate_tokens(
+                &svc.context_compact.context_scale_ladder,
+            ));
+        }
         // v8 模型自压（设计 §4；取代 v7 的「摘要替换被压区」drain 形态）：
         // 模型在回复里产出**语义摘要块** ⇒ 下一个安全间隙按**块**压缩——
         // 机械层把「机械摘要行（结构化轨）＋语义摘要（模型产出）」写到 marker
@@ -2344,10 +2577,14 @@ pub(crate) async fn run_agent_loop(
         // 收口＝`context_scale_window`，模型自选＝`model_selected`。
         if let Some((summary, summary_window)) = pending_semantic.take() {
             // 0ap 复核批（P2）：归因取**摘要产出时**记录的窗口种类——工具
-            // 知情发起 ⇒ `model_selected`（设计 §1）；H1 阶梯窗口 ⇒
-            // `context_scale_window`；无窗口（模型自选）⇒ `model_selected`。
+            // 知情发起 ⇒ `model_selected`（设计 §1）；H1 阶梯窗口／T1 必定
+            // 压缩强制窗 ⇒ `context_scale_window`；无窗口（模型自选）⇒
+            // `model_selected`。
             let semantic_reason = semantic_compression_reason(summary_window);
-            let selection = crate::context_scale::extract_block_selection(&summary);
+            let selection = crate::context_scale::parse_block_selection(&summary);
+            // 必定压缩强制窗缺省＝**全部**已闭合分块（2026-09-24 补足）；
+            // H1／模型自选窗缺省＝最旧一块（既有口径，回执如实标注）。
+            let default_all = matches!(summary_window, Some(CompressionWindowKind::Mandatory));
             let locators = crate::summary::LocatorPointers {
                 ledger_seq: ledger_seq_epoch,
                 ledger_path: face_ledger_path.as_ref().map(|p| p.display().to_string()),
@@ -2357,7 +2594,7 @@ pub(crate) async fn run_agent_loop(
                 // 按块压缩不 drain 本地面（`compress_blocks_now` 内部会再置真）。
                 local_face_full: false,
             };
-            if let Some(outcome) = compress_blocks_now(
+            let compaction = compress_blocks_now(
                 svc,
                 writer,
                 host,
@@ -2365,12 +2602,15 @@ pub(crate) async fn run_agent_loop(
                 &face_params,
                 &face_archive_tag,
                 selection,
+                default_all,
                 Some(&summary),
                 semantic_reason,
                 &locators,
+                &mut mechanical_audit,
+                tool_rounds,
             )
-            .await?
-            {
+            .await?;
+            if let Some(outcome) = compaction {
                 tracing::debug!(
                     blocks = outcome.blocks,
                     rounds = outcome.rounds,
@@ -2379,11 +2619,43 @@ pub(crate) async fn run_agent_loop(
                     "v8 block compaction executed"
                 );
                 rounds_since_compact = 0;
+                // 压缩已达成 ⇒ 三步升级 episode 收口（2026-09-24 必定压缩
+                // 补足：再越线从首问重新开始）。
+                t1_window_failures = 0;
                 // 压缩已落地 ⇒ 本 epoch 收口：D4 机械段重渲、定位指针跨度与
                 // 台账 `[seq]` 游标重启（下一次压缩从新 epoch 起算）。
                 face_d4_block = None;
                 journal_epoch_start_seq = writer.seq();
                 ledger_seq_epoch = None;
+            } else if matches!(summary_window, Some(CompressionWindowKind::Mandatory)) {
+                // 0bn R1（2026-09-24 复审补口，v8 §15）：**「摘要产出 ≠ 压缩
+                // 达成」**——强制窗收口见「有产出」跳过了升级，但摘要随后未
+                // 落地（区间未识别／无可压块／区间无命中／台账写失败，四路同
+                // 返 `None`）⇒ 同计为「未产出」：升级计数＋复位 T1 闩，下一
+                // loop-top 照常首问→再询问→第三次机械截断；否则升级链两头
+                // 不沾——T1 闩已首火消费、不再二次询问也不截断，水位停在
+                // 500K 之上只剩 700K 守卫兜底。事实随报落账（与 0bk
+                // `block_selection_unrecognized` 同形），不静默。run 尾消费点
+                // 不升级：loop 已终结、链无从推进（NoOp 已如实落账）。
+                t1_window_failures = t1_window_failures.saturating_add(1);
+                context_scale.rearm(crate::model_face::ladder_truncate_tokens(
+                    &svc.context_compact.context_scale_ladder,
+                ));
+                let payload = mechanical_audit.record(
+                    "context_scale:mandatory_summary_not_landed",
+                    tool_rounds,
+                    format!("reason={semantic_reason} t1_window_failures={t1_window_failures}"),
+                    Some("mandatory_summary_not_landed".to_string()),
+                );
+                writer
+                    .record(
+                        EventType::MechanicalAuditUpdate,
+                        serde_json::json!({
+                            "kind": crate::mechanical_audit::KIND_CONTEXT_SCALE,
+                            "payload": payload,
+                        }),
+                    )
+                    .await?;
             }
         }
         // 0ap（2026-09-18，设计 §1/§4-1）：`context_compress` **知情发起**
@@ -3081,6 +3353,7 @@ pub(crate) async fn run_agent_loop(
                         crate::context_scale::COMPRESSION_WINDOW_ROUNDS
                             .saturating_sub(*rounds_left)
                             + 1,
+                        matches!(window_kind, Some(CompressionWindowKind::Mandatory)),
                     ));
                 } else {
                     // 纯文本轮：窗口轮回答保留在
@@ -3156,6 +3429,17 @@ pub(crate) async fn run_agent_loop(
                     // ——机械层不替模型决定模型面收缩（设计 §4）。窗口内模型产出
                     // 的语义摘要已由 `pending_semantic` 承载，在下一次 loop-top
                     // 按块压缩；未产出则如实落账 `model_participated=false`。
+                    // 必定压缩三步升级（2026-09-24）：强制窗收口未产出语义摘要
+                    // ⇒ 升级计数＋复位 T1 闩（下一 loop-top 再触发：首问→再
+                    // 询问→第三次机械截断）。
+                    if matches!(window_kind, Some(CompressionWindowKind::Mandatory))
+                        && !produced_summary
+                    {
+                        t1_window_failures = t1_window_failures.saturating_add(1);
+                        context_scale.rearm(crate::model_face::ladder_truncate_tokens(
+                            &svc.context_compact.context_scale_ladder,
+                        ));
+                    }
                     continue;
                 }
             } else {
@@ -3292,7 +3576,14 @@ pub(crate) async fn run_agent_loop(
             // Grill mode (2026-08-08): the counterexample gate is a
             // run-semantic (final answers); a grill question is not one
             // — skipped.
-            if !counterexample_fired && profile.counterexample_gate {
+            // 0bi ⑩（ADR-0010 §14.76，2026-09-23 用户裁决）：answer 变体
+            // 收窄——只有本 run 有执行事实（工具轮／编辑记录）或 plan 存在
+            // 且未完成时才值得自查；纯文本短答跳过，省一轮模型调用（外部
+            // ACP 客户端的「草稿＋终稿」重复面也随之短聊消解）。
+            if !counterexample_fired
+                && profile.counterexample_gate
+                && answer_gate_has_substance(svc, tool_rounds)
+            {
                 writer
                     .record(
                         EventType::CounterexampleGate,
@@ -3632,6 +3923,9 @@ pub(crate) async fn run_agent_loop(
                                 profile.probe_work_tools,
                                 None,
                                 direct_stamp,
+                                // 0bl 审查修复（2026-09-24）：取消臂令牌——
+                                // 取消落在在途工具上时即刻杀树收口。
+                                cancel,
                             )
                             .await?;
                         Ok::<_, AgentLoopError>((
@@ -4387,6 +4681,9 @@ pub(crate) async fn run_agent_loop(
                                 // degrade from it.
                                 plan_gate.as_ref().map(|g| g.attempt),
                                 direct_ctx.as_ref().map(|(stamp, _)| stamp),
+                                // 0bl 审查修复（2026-09-24）：取消臂令牌——
+                                // 取消落在在途工具上时即刻杀树收口。
+                                cancel,
                             )
                             .await?;
                         if let Some(slot) = svc.in_flight_tools {
@@ -5059,7 +5356,10 @@ pub(crate) async fn run_agent_loop(
             d4_block: face_d4_block.clone(),
             static_overhead_tokens: face_static_overhead,
         };
-        let selection = crate::context_scale::extract_block_selection(&summary);
+        let selection = crate::context_scale::parse_block_selection(&summary);
+        // 必定压缩强制窗缺省＝全部已闭合分块（2026-09-24 补足）；其余缺省＝
+        // 最旧一块（既有口径，回执如实标注）。
+        let default_all = matches!(summary_window, Some(CompressionWindowKind::Mandatory));
         let locators = crate::summary::LocatorPointers {
             ledger_seq: ledger_seq_epoch,
             ledger_path: face_ledger_path.as_ref().map(|p| p.display().to_string()),
@@ -5076,9 +5376,12 @@ pub(crate) async fn run_agent_loop(
             &face_params,
             &face_archive_tag,
             selection,
+            default_all,
             Some(&summary),
             semantic_reason,
             &locators,
+            &mut mechanical_audit,
+            tool_rounds,
         )
         .await?
         {
@@ -5727,6 +6030,164 @@ mod tests {
             // P2-14 S1 测试直调：消息构造无轮章 → 保持 v0.2 模板路径。
             None,
             // v7（S1 修订批）：直调测试的定位指针（None 项如实渲染「（无）」）。
+            &crate::summary::LocatorPointers::default(),
+        )
+        .await
+        .expect("guard path returns a decision");
+        assert_eq!(decision, CompactDecision::GuardBlocked);
+        assert_eq!(
+            messages, before_messages,
+            "guard path must not mutate messages (marker stays)"
+        );
+    }
+
+    /// 0bl 审查修复（2026-09-24）：带载荷消息构造——c1 轮（被压区间）工具
+    /// 结果 `dropped_chars` 字符、c2 轮（保留尾）工具结果 `tail_chars` 字符，
+    /// 其余与 `compact_test_messages` 同构（U0 + 旧 marker + c1/c2 两轮）。
+    fn compact_test_messages_with_payloads(
+        dropped_chars: usize,
+        tail_chars: usize,
+    ) -> Vec<Message> {
+        let mut messages = vec![Message {
+            role: Role::User,
+            content: "任务".to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        }];
+        messages.push(Message {
+            role: Role::User,
+            content: format!("{} v0.2] 摘要", crate::prompt::CONTEXT_COMPRESSED_PREFIX),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        });
+        for (id, target, result) in [
+            ("c1", "a.py", "x".repeat(dropped_chars)),
+            ("c2", "b.rs", "y".repeat(tail_chars)),
+        ] {
+            messages.push(Message {
+                role: Role::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: vec![ToolCall {
+                    name: "read_file".to_string(),
+                    arguments: serde_json::json!({"path": target}),
+                    call_id: id.to_string(),
+                }],
+                reasoning_content: None,
+                round: None,
+            });
+            messages.push(Message {
+                role: Role::Tool,
+                content: result,
+                tool_call_id: Some(id.to_string()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+        }
+        messages
+    }
+
+    /// 0bl 审查修复（2026-09-24）性质测试：非 force 路径在「确有足够可压
+    /// 内容」时守卫放行（返回 Executed，而非恒 GuardBlocked）。执行形态与
+    /// force 路径同构（旧 marker 删除 + c1 轮 drain + 新 marker 插入 + 存档
+    /// 落盘）。0bm 复审修正（2026-09-24）：measured 改**诚实口径**（对当前
+    /// 数组实估）——被压轮 60K 字符 ⇒ measured ≈30K；新公式 after ≈11K
+    /// （头部 + 保留尾 + marker）⇒ removable ≈19K ≥ 5K、11K ≤ 0.6×30K 放行，
+    /// 而旧公式 after ≈ 全量 + marker ≈41K > 18K 必拦 ⇒ 本测试对公式回退
+    /// 具备鉴别力（旧取值 measured=100K 下新旧公式同放行，无回归检出力）。
+    #[tokio::test]
+    async fn guard_allows_non_force_when_compactable_content_suffices() {
+        let dir = std::env::temp_dir().join(format!("orz-compact-pass-{}", std::process::id()));
+        let host = CompactTestHost {
+            journal: JournalRecorder::new(dir.clone()),
+        };
+        let cfg = ContextCompactConfig::default();
+        let blackboard = Arc::new(SharedBlackboard::new());
+        let denial_state = Mutex::new(DenialState::default());
+        let pacing = AtomicU32::new(0);
+        let policy = AtomicU64::new(0);
+        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &policy);
+        let mut writer = crate::controller::discard_event_writer("test-run");
+        let mut messages = compact_test_messages_with_payloads(60_000, 1);
+        let measured = crate::compact::estimate_messages_tokens(&messages);
+        let decision = run_template_compact(
+            &svc,
+            &mut writer,
+            &host,
+            &mut messages,
+            // 诚实口径：measured ＝ 调用方对当前数组的估算（与拦截测试同款）。
+            measured,
+            "rhythm",
+            false, // 非 force——本测试的主语
+            false,
+            0,
+            1,
+            None,
+            None,
+            &crate::summary::LocatorPointers::default(),
+        )
+        .await
+        .expect("execution path returns a decision");
+        assert_eq!(decision, CompactDecision::Executed);
+        assert_eq!(messages.len(), 4, "U0 + 新 marker + c2 轮");
+        assert!(
+            messages[1]
+                .content
+                .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)
+        );
+        assert_eq!(messages[2].tool_calls[0].call_id, "c2", "保留尾轮保留");
+        assert!(
+            dir.join(".gsa")
+                .join("compaction")
+                .join("compaction-test-run-0000.md")
+                .exists(),
+            "archive written"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0bl 审查修复（2026-09-24）性质测试：非 force 路径在「缩减不足」时仍
+    /// 被拦——可压量达标（removable ≈ 9K ≥ min_compactable）但压缩后读数
+    /// 不达比（after ≈ 26K > 0.6×measured ≈ 21K），`reduction_ok` 单独不满足
+    /// ⇒ GuardBlocked 且 messages 不变。与放行测试（诚实 measured）合看即
+    /// 守卫的分辨力双钉：旧公式两场景恒拦，公式回退必被放行钉检出。
+    #[tokio::test]
+    async fn guard_blocks_non_force_when_reduction_ratio_insufficient() {
+        let dir = std::env::temp_dir().join(format!("orz-compact-ratio-{}", std::process::id()));
+        let host = CompactTestHost {
+            journal: JournalRecorder::new(dir),
+        };
+        let cfg = ContextCompactConfig::default();
+        let blackboard = Arc::new(SharedBlackboard::new());
+        let denial_state = Mutex::new(DenialState::default());
+        let pacing = AtomicU32::new(0);
+        let policy = AtomicU64::new(0);
+        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &policy);
+        let mut writer = crate::controller::discard_event_writer("test-run");
+        // 被压轮 40K 字符（≈20K token）、保留尾 30K 字符（≈15K token）——
+        // 全量 ≈35K、压缩后 ≈26K（大头是保留尾 + 11K marker 估计）。
+        let mut messages = compact_test_messages_with_payloads(40_000, 30_000);
+        let before_messages = messages.clone();
+        // 诚实口径：measured ＝ 调用方对当前数组的估算。
+        let measured = crate::controller::estimate_messages_tokens(&messages);
+        let decision = run_template_compact(
+            &svc,
+            &mut writer,
+            &host,
+            &mut messages,
+            measured,
+            "rhythm",
+            false,
+            false,
+            0,
+            1,
+            None,
+            None,
             &crate::summary::LocatorPointers::default(),
         )
         .await
@@ -6517,6 +6978,9 @@ mod tests {
             .with_slider_window_tokens(1_000)
             .with_model_face_block_tokens(500)
             .with_context_scale_ladder(ladder)
+            // 2026-09-24 必定压缩补足：种子 2 ＝ 直达第三步（机械截断），
+            // 本钉以旧时序验证「T1 生效轮只发最高档（截断告知块）」。
+            .with_t1_window_failures(2)
             .with_session_id(Some("SESSION-T1-SAME-ROUND".to_string()));
         let dir = test_dir();
         let host = TestHost {
@@ -6892,13 +7356,14 @@ mod tests {
             window_block.content.contains("【"),
             "watermark rides the window block: {window_block:?}"
         );
-        // v8（设计 §5）：注入块＝**H1 硬提醒**（模型面读数 ＋ 宣告 T1 硬截断
-        // 口径 ＋ 分块表 ＋「不压缩也可以」）＋ 压缩窗口任务（同块注入）。
+        // v8（设计 §5）＋ 2026-09-24 必定压缩补足：注入块＝**H1 硬提醒**
+        // （模型面读数 ＋ 宣告 T1 必定压缩语义 ＋ 分块表）＋ 压缩窗口任务
+        // （同块注入）。
         assert!(
             window_block.content.starts_with("[CONTEXT_SCALE")
                 && window_block.content.contains("硬提醒")
                 && window_block.content.contains("当前上下文窗口")
-                && window_block.content.contains("硬性截断")
+                && window_block.content.contains("强制开压缩窗口")
                 && window_block.content.contains("模型参与压缩 · 窗口"),
             "硬提醒须携带模型面读数并与窗口任务同块注入: {window_block:?}"
         );
@@ -7802,6 +8267,9 @@ mod tests {
             .with_slider_window_tokens(1_000)
             .with_model_face_block_tokens(500)
             .with_context_scale_ladder(v8_test_ladder(u64::MAX, 4_000))
+            // 2026-09-24 必定压缩补足：种子 2 ＝ 直达第三步（机械截断）；
+            // 三步全流程（窗口→再询问→截断）由专属钉覆盖。
+            .with_t1_window_failures(2)
             .with_session_id(Some("SESSION-T1".to_string()));
         let dir = test_dir();
         let host = TestHost {
@@ -7926,6 +8394,7 @@ mod tests {
             .with_slider_window_tokens(1_000)
             .with_model_face_block_tokens(500)
             .with_context_scale_ladder(v8_test_ladder(u64::MAX, 4_000))
+            .with_t1_window_failures(2)
             .with_session_id(Some("SESSION-T1-FAIL".to_string()));
         let dir = test_dir();
         let blocked_cwd = test_dir();
@@ -7987,6 +8456,243 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&blocked_cwd);
+    }
+
+    /// **T1 必定压缩三步升级全流程钉**（2026-09-24 用户裁决；设计 §5 补足）：
+    /// 首问（必定压缩窗口）→ 窗口未产出 ⇒ 升级再询问（明示质量衰减与最后
+    /// 机会）⇒ 仍未产出 ⇒ **第三次机械截断**（仅留主滑块）＋告知块如实携带
+    /// 「已两次开窗未产出」与「需要前置上下文时回查存档」。
+    #[tokio::test]
+    async fn t1_mandatory_compression_escalates_through_two_windows_then_truncates() {
+        let old_round = "T".repeat(6_000);
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+                .with_prompt_tokens(100),
+            // 第一次强制窗（3 轮）：全部不产出语义摘要。
+            ScriptedResponse::text("不压").with_prompt_tokens(100),
+            ScriptedResponse::text("不压").with_prompt_tokens(100),
+            ScriptedResponse::text("不压").with_prompt_tokens(100),
+            // 第二次强制窗（3 轮）：仍不产出。
+            ScriptedResponse::text("不压").with_prompt_tokens(100),
+            ScriptedResponse::text("不压").with_prompt_tokens(100),
+            ScriptedResponse::text("不压").with_prompt_tokens(100),
+            // 第三步机械截断后的终答（＋反例门轮）。
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, 4_000))
+            .with_session_id(Some("SESSION-T1-ESCALATE".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: old_round.clone(),
+                ..ok_result()
+            }),
+        };
+        controller
+            .run_turn(
+                &host,
+                "必定压缩三步升级测试",
+                "RUN-T1-ESCALATE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // ① 两级询问块：第一次＝规则告知（不替你截断）；第二次＝明示质量
+        // 衰减与最后机会；两块都不携带「区间未识别」族文案。
+        let requests = fake.received_requests();
+        let mandatory_blocks: Vec<&str> = requests
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .filter_map(|m| m.content.contains("必定压缩").then_some(m.content.as_str()))
+            .collect();
+        let first_ask = mandatory_blocks
+            .iter()
+            .find(|c| c.contains("机械层不替你截断"))
+            .expect("第一次必定压缩窗口块");
+        assert!(!first_ask.contains("第二次询问"), "{first_ask}");
+        let second_ask = mandatory_blocks
+            .iter()
+            .find(|c| c.contains("第二次询问"))
+            .expect("第二次（升级）窗口块");
+        assert!(second_ask.contains("上下文质量已严重衰减"), "{second_ask}");
+        assert!(second_ask.contains("最后一次压缩窗口"), "{second_ask}");
+        assert!(second_ask.contains("按块回查存档"), "{second_ask}");
+
+        // ② T1 档审计如实携带升级读数：首火 failures=0、三火 failures=2 且
+        // t1_cut=true。
+        let fires: Vec<String> = audit_events(&dir)
+            .into_iter()
+            .filter(|e| e.payload["kind"] == crate::mechanical_audit::KIND_CONTEXT_SCALE)
+            .filter_map(|e| {
+                let key = e.payload["payload"]["key"].as_str()?;
+                let summary = e.payload["payload"]["summary"].as_str()?;
+                (key != "first_block" && summary.contains("t1_window_failures="))
+                    .then(|| summary.to_string())
+            })
+            .collect();
+        assert!(
+            fires.iter().any(|s| s.contains("t1_window_failures=0")),
+            "{fires:?}"
+        );
+        assert!(
+            fires
+                .iter()
+                .any(|s| s.contains("t1_window_failures=2 t1_cut=true")),
+            "{fires:?}"
+        );
+
+        // ③ 第三步机械截断照常执行（安全闸门优先）＋告知块携带窗口事实与
+        // 前置回查标注。
+        let cut = audit_events(&dir)
+            .into_iter()
+            .find(|e| e.payload["payload"]["key"] == "context_scale:hard_truncate")
+            .expect("第三步截断事实落账");
+        assert_eq!(
+            cut.payload["payload"]["anomaly"],
+            "hard_context_truncated_blocks"
+        );
+        let notice = requests
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .find(|m| m.content.contains("已把**工作现场以外**"))
+            .expect("第三步截断告知块");
+        assert!(
+            notice.content.contains("已两次强制开窗询问压缩"),
+            "{}",
+            notice.content
+        );
+        assert!(
+            notice.content.contains("需要前置上下文时请回查存档"),
+            "{}",
+            notice.content
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **0bn R1 钉①**（2026-09-24 复审补口，v8 §15）：**「摘要产出 ≠ 压缩
+    /// 达成」**——强制窗产出语义摘要但压缩**未落地**（区间未识别：`压缩块:
+    /// 全部`）时，升级链必须照常推进（未落地 ⇒ 同计「未产出」：升级计数＋
+    /// 复位 T1 闩 ⇒ 第二次询问 ⇒ 第三次机械截断收敛），**不得停摆**。修复前
+    /// 形态：收口判「有产出」跳过升级、消费 `None` 静默 ⇒ T1 闩已首火消费、
+    /// 不再二次询问也不截断（只剩 700K 守卫兜底，本钉守卫抬到不可达即死锁）。
+    /// 同时钉 0bn R2 的伴生读数：未落地事实落账 `mandatory_summary_not_landed`
+    /// （不静默）。
+    #[tokio::test]
+    async fn mandatory_window_summary_that_fails_to_land_still_escalates_and_does_not_stall() {
+        let old_round = "T".repeat(6_000);
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+                .with_prompt_tokens(100),
+            // 第一次强制窗：产出**语义摘要**但区间不可识别 ⇒ 摘要「有产出」
+            // 而压缩未落地（`compress_blocks_now` 返回 None ＋ 0bk 告知块）。
+            ScriptedResponse::text(
+                "工作照常。\n[SEMANTIC_SUMMARY]\n压缩块: 全部\n目标: x\n已完成: y\n[/SEMANTIC_SUMMARY]",
+            )
+            .with_prompt_tokens(100),
+            // 第二次窗口（升级再询问）：三轮全不产出。
+            ScriptedResponse::text("不压").with_prompt_tokens(100),
+            ScriptedResponse::text("不压").with_prompt_tokens(100),
+            ScriptedResponse::text("不压").with_prompt_tokens(100),
+            // 第三步机械截断后的终答（＋反例门轮）。
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            // 700K 守卫抬到不可达：收敛必须由三步升级自身达成，不得借守卫兜底。
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, 4_000))
+            .with_session_id(Some("SESSION-T1-NOT-LANDED".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: old_round.clone(),
+                ..ok_result()
+            }),
+        };
+        controller
+            .run_turn(
+                &host,
+                "必定压缩未落地不停摆测试",
+                "RUN-T1-NOT-LANDED",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // ① 未落地事实落账（不静默）＋升级计数如实携带。
+        let not_landed = audit_events(&dir)
+            .into_iter()
+            .find(|e| e.payload["payload"]["key"] == "context_scale:mandatory_summary_not_landed")
+            .expect("强制窗摘要未落地须落账");
+        assert_eq!(
+            not_landed.payload["payload"]["anomaly"],
+            "mandatory_summary_not_landed"
+        );
+        assert!(
+            not_landed.payload["payload"]["summary"]
+                .as_str()
+                .unwrap_or("")
+                .contains("t1_window_failures=1"),
+            "未落地 ⇒ 升级计数须从 0 推进到 1: {:?}",
+            not_landed.payload["payload"]
+        );
+
+        // ② 升级链不停摆：第二次询问块照常出现（修复前此处无任何后续询问）。
+        let requests = fake.received_requests();
+        let second_ask = requests
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .find(|m| m.content.contains("必定压缩") && m.content.contains("第二次询问"))
+            .expect("未落地后升级链须推进到第二次询问（不停摆）");
+        assert!(
+            second_ask.content.contains("上下文质量已严重衰减"),
+            "{}",
+            second_ask.content
+        );
+
+        // ③ 链收敛：不再需 700K 兜底——第三次机械截断照常达成。
+        let cut = audit_events(&dir)
+            .into_iter()
+            .find(|e| e.payload["payload"]["key"] == "context_scale:hard_truncate")
+            .expect("第三步截断须达成（链收敛）");
+        assert_eq!(
+            cut.payload["payload"]["anomaly"],
+            "hard_context_truncated_blocks"
+        );
+
+        // ④ 0bk 未识别告知在场：未落地路径对模型的既有如实告知面不回退。
+        assert!(
+            requests
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .any(|m| m.content.contains("区间未识别")),
+            "未识别区间须如实告知模型"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// **v8 块号幂等**（设计 §12「块表状态幂等；同一块不重复计数」）：同一块被
@@ -8061,6 +8767,113 @@ mod tests {
             .last()
             .expect("分块表");
         assert!(table.content.contains("已压缩"), "{}", table.content);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0bk S2 钉②＋③（2026-09-24）：区间行解析失败 ⇒ **如实回报**（注入
+    /// 「区间未识别」告知块、给出当前可压区间与正确写法、审计落账），
+    /// **不压缩、不静默退化**；未指定区间 ⇒ 缺省（最旧一块）照常执行且回执
+    /// （marker 区间说明行）如实标注缺省行为。
+    #[tokio::test]
+    async fn block_compaction_reports_unrecognized_range_and_default_honestly() {
+        let illegal = "[SEMANTIC_SUMMARY]\n压缩块: 全部\n目标: 接线\n已完成: 一遍\n\
+                       [/SEMANTIC_SUMMARY]";
+        let default_summary = "[SEMANTIC_SUMMARY]\n目标: 接线\n已完成: 一遍\n[/SEMANTIC_SUMMARY]";
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            // 区间行非法 ⇒ 不压缩＋「区间未识别」告知块（曾静默退化为最旧一块）。
+            ScriptedResponse {
+                text: Some(illegal.to_string()),
+                ..ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+            }
+            .with_prompt_tokens(100),
+            // 未指定区间 ⇒ 缺省（最旧一块），回执如实标注。
+            ScriptedResponse {
+                text: Some(default_summary.to_string()),
+                ..ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r3")])
+            }
+            .with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
+            .with_session_id(Some("SESSION-0BK".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "B".repeat(6_000),
+                ..ok_result()
+            }),
+        };
+        controller
+            .run_turn(
+                &host,
+                "区间解析如实回报测试",
+                "RUN-0BK",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // ① 区间未识别：告知块如实引用原行＋给出可压区间与正确写法；审计落账。
+        let requests = fake.received_requests();
+        let notice = requests
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .find(|m| m.content.contains("区间未识别"))
+            .expect("区间未识别告知块");
+        assert!(
+            notice.content.contains("压缩块: 全部"),
+            "{}",
+            notice.content
+        );
+        assert!(
+            notice.content.contains("当前可压区间"),
+            "{}",
+            notice.content
+        );
+        assert!(notice.content.contains("正确写法"), "{}", notice.content);
+        assert!(
+            notice
+                .content
+                .contains(crate::model_face::MODEL_FACE_DECLARATION),
+            "{}",
+            notice.content
+        );
+        let audits = audit_events(&dir);
+        assert!(
+            audits.iter().any(
+                |e| e.payload["payload"]["key"] == "context_scale:block_selection_unrecognized"
+            ),
+            "区间未识别须落账: {audits:?}"
+        );
+
+        // ② 未指定区间 ⇒ 缺省压缩照常执行，且 marker 回执带缺省标注；
+        // 全 run 恰一次压缩（非法区间那轮未被静默兜底成第二次压缩）。
+        let compact: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(compact.len(), 1, "非法区间轮不得静默压缩: {compact:?}");
+        assert_eq!(compact[0]["mode"], "model_summary");
+        let marker = requests
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .find(|m| m.content.contains("区间说明: 缺省"))
+            .expect("缺省行为回执标注");
+        assert!(marker.content.contains("最旧一块"), "{}", marker.content);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

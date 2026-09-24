@@ -556,8 +556,8 @@ mod tests {
             }),
         };
         let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
-            // run 1：首轮纯文本（无工具批次）→ 反例门 → 终答。顺延。
-            ScriptedResponse::text("完成"),
+            // run 1：首轮纯文本（无工具批次）。0bi ⑩：无执行事实不再触发
+            // 反例门 ⇒ 单轮直接终答（不消耗门轮）。顺延。
             ScriptedResponse::text("完成"),
             // run 2：首个动作批次 → 初始轮问询 → 回答被软消费 → 反例门 → 终答。
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-0")]),

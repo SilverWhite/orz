@@ -131,6 +131,9 @@ impl AgentLoopController {
                 // assistant-layer execution — never a direct-mode stamp.
                 None,
                 timeout,
+                // 0bl 审查修复（2026-09-24）：console 发放面无 per-run 取消
+                // 令牌（发放发生在模型轮结束后）——取消臂不参与本调用面。
+                None,
             )
             .await
         {
@@ -933,7 +936,10 @@ impl AgentLoopController {
             }
         };
         let actual_sha256 = sha256_hex(&bytes);
-        if actual_sha256 != expected_sha256 {
+        // 0bl 审查修复（2026-09-24）：sha 比较大小写不敏感
+        // （`eq_ignore_ascii_case`，兼容大小写混排的 hex 回抄）——与工具层
+        // orz-tools `search_replace` 的锚点比对口径一致。
+        if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
             return Some(Self::anchor_verify_error(
                 label,
                 file_path,

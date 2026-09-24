@@ -519,6 +519,10 @@ pub struct AgentLoopController {
     /// **上一轮请求实测**（v8 实现批，审查 R-9）；`Some(0)` ＝ 测试缝隙
     /// （小刻度钉子按「只量会话面」的既有语义驱动）。
     pub(crate) model_face_static_overhead_pin: Option<u64>,
+    /// 必定压缩三步升级（2026-09-24）测试缝隙：种子化「强制窗收口未产出」
+    /// 连续计数（生产恒 0 起步；`2` ＝ 直达第三步机械截断，供 T1 截断钉以
+    /// 旧时序驱动新语义）。
+    pub(crate) t1_window_failures_seed: u32,
     /// IP5 pre-mutation snapshot store (session-scoped). `None` disables
     /// snapshotting (tests / hosts that opted out).
     pub(crate) snapshot_store: Option<Arc<SnapshotStore>>,
@@ -904,6 +908,7 @@ impl AgentLoopController {
             max_inject_tokens_per_round: max_inject_tokens_per_round_override()
                 .unwrap_or(DEFAULT_MAX_INJECT_TOKENS_PER_ROUND),
             model_face_static_overhead_pin: None,
+            t1_window_failures_seed: 0,
             snapshot_store: None,
             blackboard_archive_dir: None,
             epoch_archive_errors: Mutex::new(Vec::new()),
@@ -1551,6 +1556,7 @@ impl AgentLoopController {
             candidate_cap: DEFAULT_WEB_FETCH_CANDIDATE_CAP,
             max_inject_tokens_per_round: DEFAULT_MAX_INJECT_TOKENS_PER_ROUND,
             model_face_static_overhead_pin: None,
+            t1_window_failures_seed: 0,
             snapshot_store: None,
             blackboard_archive_dir: None,
             epoch_archive_errors: Mutex::new(Vec::new()),
@@ -1817,8 +1823,7 @@ impl AgentLoopController {
     /// **只回该事件的机械字段摘要（≤512 B）＋指针回显**（不整行灌 journal）；
     /// 错误三态如实文本（指针不存在／属于其他 run 或已归档／已过期）。
     pub(crate) fn resolve_journal_anchor(events_path: &Path, anchor: &str) -> String {
-        let bounded =
-            |s: String| orz_assurance::tool_envelope::enforce_bound(s, 512);
+        let bounded = |s: String| orz_assurance::tool_envelope::enforce_bound(s, 512);
         let (ptr, sha) = match anchor.split_once('#') {
             Some((p, s)) => (p.trim(), Some(s.trim().to_ascii_lowercase())),
             None => (anchor.trim(), None),
@@ -1827,7 +1832,11 @@ impl AgentLoopController {
             part?.trim().strip_prefix(tag)?.trim().parse().ok()
         }
         let mut parts = ptr.split('·');
-        let (r, b, s) = (num(parts.next(), 'r'), num(parts.next(), 'b'), num(parts.next(), 's'));
+        let (r, b, s) = (
+            num(parts.next(), 'r'),
+            num(parts.next(), 'b'),
+            num(parts.next(), 's'),
+        );
         let extra = parts.next();
         let (Some(r), Some(b), Some(s)) = (r, b, s) else {
             return bounded(format!(
@@ -1873,8 +1882,7 @@ impl AgentLoopController {
             ));
         };
         let line = lines[i];
-        let v: serde_json::Value =
-            serde_json::from_str(line).unwrap_or(serde_json::Value::Null);
+        let v: serde_json::Value = serde_json::from_str(line).unwrap_or(serde_json::Value::Null);
         let current = sha256_hex(line.as_bytes());
         let cur8: String = current.chars().take(8).collect();
         if let Some(expected) = sha.as_deref().filter(|e| !e.is_empty())
@@ -3168,7 +3176,12 @@ impl AgentLoopController {
     /// ——只记不发模型；逐次历史由 journal 可离线复算。
     pub(crate) fn take_new_lif_migrations(
         &self,
-    ) -> Vec<(orz_assurance::lif::Domain, orz_assurance::lif::Domain, u64, u64)> {
+    ) -> Vec<(
+        orz_assurance::lif::Domain,
+        orz_assurance::lif::Domain,
+        u64,
+        u64,
+    )> {
         let lif = self.lif.lock().unwrap();
         let t = lif.temporal();
         let total = t.migration_count();
@@ -5112,7 +5125,11 @@ mod tests {
             "RUN-STOP-PAUSE",
         )
         .await;
-        assert_eq!(paused["status"], serde_json::json!("completed"), "旧字段不动");
+        assert_eq!(
+            paused["status"],
+            serde_json::json!("completed"),
+            "旧字段不动"
+        );
         assert_eq!(paused["intent"], serde_json::json!("pause"));
         assert_eq!(paused["reason"], serde_json::json!("awaiting_response"));
         assert!(
@@ -5302,10 +5319,18 @@ mod tests {
 
         // Two scripted texts — the first is intercepted by the counterexample
         // gate (§4.6: the final-answer gate fires once before the conclusion);
-        // the second is the post-gate final answer.
+        // the second is the post-gate final answer. 0bi ⑩（ADR-0010 §14.76）：
+        // answer 门收窄为「有执行事实或未完成 plan 才触发」——本轮以未完成
+        // plan 作为执行事实保持全门序列（纯文本短答跳过门的钉子见
+        // `counterexample_gate_skipped_for_text_only_short_run`）。
         let gateway: Arc<dyn ModelGateway> =
             Arc::new(FakeProvider::from_texts(vec!["结果：完成", "结果：完成"]));
-        let controller = AgentLoopController::with_gateway(gateway);
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-GATE-SEQ".to_string(),
+            1,
+            "任务".to_string(),
+            vec!["步骤一".to_string()],
+        );
         let result = controller
             .run_turn(
                 &host,
@@ -5737,11 +5762,18 @@ mod tests {
             tool_result: None,
         };
 
-        // First text-only round is the final-answer candidate → the gate
-        // fires ONCE and the post-gate round produces the actual final answer.
+        // First no-tool round is the final-answer candidate → the gate fires
+        // ONCE and the post-gate round produces the actual final answer.
+        // 0bi ⑩（ADR-0010 §14.76）：answer 门收窄后，纯文本短答需有执行事实
+        // 或未完成 plan 才触发——本钉子以未完成 plan 作为执行事实。
         let fake = Arc::new(FakeProvider::from_texts(vec!["草稿", "终答"]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway);
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-GATE-ONCE".to_string(),
+            1,
+            "任务".to_string(),
+            vec!["步骤一".to_string()],
+        );
         let (response, _, _) = controller
             .run_turn(&host, "hello", "RUN-GATE", MANIFEST, 0, None, None, None)
             .await
@@ -5801,6 +5833,58 @@ mod tests {
             "{:?}",
             requests[1].messages
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0bi ⑩（ADR-0010 §14.76）：answer 门收窄——纯文本短答（无工具轮、
+    /// 无编辑记录、无未完成 plan）跳过反例门：首轮文本即终答，不再多花
+    /// 一轮模型调用，也不注入 [COUNTEREXAMPLE_GATE]。
+    #[tokio::test]
+    async fn counterexample_gate_skipped_for_text_only_short_run() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let fake = Arc::new(FakeProvider::from_texts(vec!["直接回答"]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "hello",
+                "RUN-GATE-SKIP",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, "直接回答");
+
+        let types = event_types(&dir);
+        assert_eq!(
+            types
+                .iter()
+                .filter(|t| **t == EventType::CounterexampleGate)
+                .count(),
+            0,
+            "text-only short answers must skip the gate: {types:?}"
+        );
+        assert_eq!(
+            types
+                .iter()
+                .filter(|t| **t == EventType::ModelOutput)
+                .count(),
+            1,
+            "{types:?}"
+        );
+        assert_eq!(fake.received_requests().len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -6051,6 +6135,157 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 0bl 审查修复（2026-09-24）：取消打断在途工具——取消落在**真实长活
+    /// 子进程**工具执行中时，取消臂即刻杀树（全局进程作用域 `kill_active`），
+    /// 工具调用快速返回（不等满子进程自然时长），run 以 `run_cancelled`
+    /// 终态收口。宿主 call_tool 经全局作用域派生 999s 级子进程并等其退出
+    /// ——杀树后 `wait()` 返回即是「子进程死 ⇒ 工具调用快速返回」的机制
+    /// 通路。时序用 mpsc 握手钉死：spawn 成功后宿主发「已派发」信号，主
+    /// 测试收到信号即取消——取消必然落在工具在 flight 中（无猜测性延时）。
+    /// 对照 `cancel_mid_multi_tool_round_skips_unstarted_tools`：那里的工具
+    /// 阻塞在 channel 上（无子进程，kill 无目标），合作语义不变。
+    #[tokio::test]
+    async fn cancel_kills_in_flight_tool_process_and_returns_quickly() {
+        struct SpawnToolHost {
+            journal: JournalRecorder,
+            dispatched: std::sync::Mutex<Option<tokio::sync::mpsc::Sender<()>>>,
+        }
+
+        #[async_trait]
+        impl LoopHost for SpawnToolHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _args: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+            async fn call_tool(
+                &self,
+                name: &str,
+                _args: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                if name == "bash" {
+                    // 经全局进程作用域派生长活子进程（999s 级）并等其退出
+                    // ——作用域 kill_active 后 wait 返回，模拟真实命令工具
+                    // 「子进程死 ⇒ 工具返回」的通路。
+                    #[cfg(windows)]
+                    let cmd = {
+                        let mut c = tokio::process::Command::new("ping");
+                        c.args(["-n", "999", "127.0.0.1"]);
+                        c
+                    };
+                    #[cfg(not(windows))]
+                    let cmd = {
+                        let mut c = tokio::process::Command::new("sleep");
+                        c.arg("999");
+                        c
+                    };
+                    let (mut child, _group) = orz_tools::util::global_process_scope()
+                        .spawn(cmd)
+                        .expect("long-lived child spawns and enrolls");
+                    // spawn 成功即通知主测试「取消可以落了」——子进程此刻
+                    // 存活且在 flight。`_group`（作用域强引用）存活到本
+                    // future 结束；wait 等子进程自然退出（999s）或被取消臂
+                    // 杀树（即刻）。
+                    let dispatch_signal = self.dispatched.lock().unwrap().take();
+                    if let Some(tx) = dispatch_signal {
+                        let _ = tx.send(()).await;
+                    }
+                    let _status = child.wait().await.expect("child waitable");
+                    return Ok(ToolResult {
+                        output: "child_process_ended".to_string(),
+                        exit_code: None,
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    });
+                }
+                Ok(ToolResult {
+                    output: "ok".to_string(),
+                    exit_code: None,
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                })
+            }
+        }
+
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let (dispatched_tx, mut dispatched_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let host = SpawnToolHost {
+            journal,
+            dispatched: std::sync::Mutex::new(Some(dispatched_tx)),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("bash", "call-1")]),
+            ScriptedResponse::text("结果：完成"),
+            ScriptedResponse::text("结果：完成"),
+        ]));
+        let controller = Arc::new(AgentLoopController::with_gateway(gateway));
+        let token = tokio_util::sync::CancellationToken::new();
+
+        let c = controller.clone();
+        let t = token.clone();
+        let started = std::time::Instant::now();
+        let run = tokio::task::spawn(async move {
+            c.run_turn_with_cancel(
+                &host,
+                "执行命令",
+                "RUN-CANCEL-5",
+                MANIFEST,
+                0,
+                None,
+                Some(&t),
+                None,
+                None,
+            )
+            .await
+        });
+
+        // 子进程 spawn 成功（宿主发信号）后立刻取消——取消必然落在工具
+        // 在 flight 中。
+        dispatched_rx
+            .recv()
+            .await
+            .expect("tool dispatch signals readiness");
+        token.cancel();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(30), run)
+            .await
+            .expect("run must terminate promptly once cancelled (child holds 999s)")
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert!(
+            matches!(result, Err(AgentLoopError::Cancelled)),
+            "run ends cancelled: {result:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(60),
+            "cancel must kill the in-flight tool promptly (took {elapsed:?}; \
+             without the fix the child holds the run for its natural lifetime)"
+        );
+
+        let replay = orz_assurance::replay_journal(
+            &dir.join("events.jsonl"),
+            Some("RUN-CANCEL-5"),
+            None,
+            true,
+        );
+        assert!(replay.valid, "journal invalid: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_cancelled"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A host whose permission await is gated on an external oneshot: a
     /// cancel during the permission prompt does NOT interrupt it (cooperative
     /// semantics — the permission manager is session-scoped and shared; a
@@ -6232,10 +6467,7 @@ mod tests {
             journal,
             tool_result: None,
         };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::text("收到"),
-            ScriptedResponse::text("收到"),
-        ]));
+        let fake = Arc::new(FakeProvider::new(vec![ScriptedResponse::text("收到")]));
         let controller = AgentLoopController::with_gateway(fake.clone());
         let mut conversation = vec![
             conv_message(Role::User, "第一问"),
@@ -6263,8 +6495,14 @@ mod tests {
             .unwrap();
         assert_eq!(response.0, "收到");
         // The model request carried the full history + the new prompt.
+        // 0bi ⑩（ADR-0010 §14.76）：纯文本短答无执行事实 ⇒ answer 门跳过，
+        // 单轮即终答（该轮模型请求同时是终答轮）。
         let reqs = fake.received_requests();
-        assert_eq!(reqs.len(), 2, "model call + final answer round");
+        assert_eq!(
+            reqs.len(),
+            1,
+            "single model call; text-only run skips the gate"
+        );
         let msgs = &reqs[0].messages;
         assert_eq!(msgs[0].content, "第一问", "{msgs:?}");
         assert_eq!(msgs[1].content, "第一答");
@@ -6334,6 +6572,7 @@ mod tests {
             .with_slider_window_tokens(1_000)
             .with_model_face_block_tokens(500)
             .with_context_scale_ladder(ladder)
+            .with_t1_window_failures(2)
             .with_session_id(Some("SESSION-RESTORE".to_string()));
         let mut conversation = vec![conv_message(Role::User, "第一问")];
         conversation.extend(tool_round("call-r1", &fat));
@@ -6441,14 +6680,19 @@ mod tests {
             journal,
             tool_result: None,
         };
-        let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+        let fake = Arc::new(FakeProvider::from_texts(vec!["完成"]));
         let controller = AgentLoopController::with_gateway(fake.clone());
         controller
             .run_turn(&host, "hi", "RUN-NONE", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
         let reqs = fake.received_requests();
-        assert_eq!(reqs.len(), 2, "model call + final answer round");
+        // 0bi ⑩（ADR-0010 §14.76）：纯文本短答无执行事实 ⇒ answer 门跳过（单轮）。
+        assert_eq!(
+            reqs.len(),
+            1,
+            "single model call; text-only run skips the gate"
+        );
         let first = &reqs[0].messages;
         assert_eq!(first.len(), 1, "{first:?}");
         assert_eq!(first[0].content, "hi");
@@ -7039,7 +7283,10 @@ body"
         assert_eq!(migrations[0].2, 6, "at_round");
         assert_eq!(migrations[0].3, 4, "累计序数");
         assert_eq!(migrations[1].3, 5, "累计序数");
-        assert!(controller.take_new_lif_migrations().is_empty(), "游标已推进");
+        assert!(
+            controller.take_new_lif_migrations().is_empty(),
+            "游标已推进"
+        );
         let quiet2 = controller.attach_pull_delta("temporal", "body".to_string(), 0, None);
         assert!(
             quiet2.starts_with("[黑板 增量 水位【0.0M/10M】]") && quiet2.ends_with("\nbody"),

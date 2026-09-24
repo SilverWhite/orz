@@ -136,7 +136,15 @@ mod tests {
             "草稿",
             "结论 [来源: SRC-999]",
         ]));
-        let controller = AgentLoopController::with_gateway(gateway);
+        // 0bi ⑩（ADR-0010 §14.76）：纯文本短答不再触发门——以未完成 plan
+        // 作为执行事实，保持「草稿 → 门 → 终答」序列（本钉子要验证的是
+        // 终答原样交付）。
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-CITE-GONE".to_string(),
+            1,
+            "任务".to_string(),
+            vec!["步骤一".to_string()],
+        );
         let (response, _, _) = controller
             .run_turn(
                 &host,

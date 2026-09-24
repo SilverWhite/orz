@@ -486,6 +486,25 @@ impl OrzHost {
         let _ = handle;
     }
 
+    /// 0bl 审查修复（2026-09-24）：超时杀树的定向原语——对本次调用登记的
+    /// duplicated job 句柄做 `TerminateJobObject`（调用级拆树，含孙进程）。
+    /// 与 `close_job_handle` 同款平台门：非 Windows（句柄恒 0）为 no-op。
+    /// 只终止、不关闭句柄——关闭仍由 `DispatchGuard::drop` 统一做
+    /// （KILL_ON_JOB_CLOSE 语义不受影响）。
+    fn terminate_job_handle(handle: isize) {
+        #[cfg(windows)]
+        if handle != 0 {
+            unsafe {
+                let _ = windows::Win32::System::JobObjects::TerminateJobObject(
+                    windows::Win32::Foundation::HANDLE(handle as _),
+                    1,
+                );
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = handle;
+    }
+
     /// Drain the accumulated resource facts (journal face, loop side).
     pub fn drain_resource_facts(&self) -> Vec<serde_json::Value> {
         std::mem::take(
@@ -1266,7 +1285,42 @@ impl OrzHost {
                 // spawn on the spot (terminal.rs ignores `register`'s
                 // return), so one tool timeout would poison all subsequent
                 // bash calls for the whole session.
-                orz_tools::util::global_process_scope().kill_active();
+                // 0bl 审查修复（2026-09-24）：杀树**定向化**——优先用本次
+                // 派发登记的 per-call job 句柄（spawn sink 挂到
+                // `live_call_jobs[token=dispatch_token]`）做
+                // `TerminateJobObject`，只拆本调用的进程树（含孙进程），
+                // 不再波及同进程内并发派发的无关工具进程（全局
+                // `kill_active` 会误杀并发工具——见上方 P3-1 注释的自认）。
+                // 兜底：句柄不可得（spawn sink 未及登记 / 未接
+                // process_trees / 非 Windows 句柄恒 0）时保留全局
+                // `kill_active`——杀不到比误杀更糟（孤儿进程握管道）。
+                // 残余取舍（0bm 复审补记，双向如实）：① 漏杀方向——定向命中
+                // 依赖 sink 登记，存在「已 spawn 未登记」的竞窗（进程树清扫
+                // finalize sweep 另行兜底）；② **误杀方向**——定向性以 sink
+                // 归因正确为前提，而 spawn sink 现为**全局单槽**（每次
+                // call_tool_inner 覆盖安装），并发下 B 的 sink 可能以 B 的
+                // token 登记 A 的子进程 job ⇒ B 超时定向杀到 A 的树（杀伤
+                // 半径不大于旧全局杀，KILL_ON_JOB_CLOSE 幂等兜底）；根治随
+                // 0bm ③（spawn sink per-dispatch 归因）——届时须保留全局
+                // 可见杀伤面或把 per-dispatch scope 接入本杀路径（依赖声明
+                // 已入 0bm 实施约束）。
+                let per_call_handles: Vec<isize> = {
+                    let jobs = self
+                        .live_call_jobs
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    jobs.iter()
+                        .filter(|entry| entry.token == dispatch_token)
+                        .map(|entry| entry.job_handle)
+                        .collect()
+                };
+                if per_call_handles.iter().any(|handle| *handle != 0) {
+                    for handle in &per_call_handles {
+                        Self::terminate_job_handle(*handle);
+                    }
+                } else {
+                    orz_tools::util::global_process_scope().kill_active();
+                }
                 return Err(ToolError::Timeout(format!(
                     "tool '{name}' TIMED OUT after {timeout:?} wall-clock budget — \
                      process tree killed; the tool did not complete",
@@ -1917,7 +1971,9 @@ impl LoopHost for OrzHost {
 
     /// P0-C S4 (2026-08-16): script step deadlines — a per-call override
     /// bounded by the configured host budget (`min`). The host still owns
-    /// process-tree reclamation on expiry (`kill_active`), exactly like the
+    /// process-tree reclamation on expiry (0bl 审查修复 2026-09-24：per-call
+    /// job 句柄定向 `TerminateJobObject`，句柄不可得时回退全局
+    /// `kill_active`——见 `call_tool_inner` 超时臂），exactly like the
     /// default path.
     async fn call_tool_with_timeout(
         &self,

@@ -97,6 +97,10 @@ impl AgentLoopController {
             probe_writeback,
             None,
             None,
+            // 0bl 审查修复（2026-09-24）：本形态＝测试／控制台直呼——无
+            // per-run 取消令牌可传（None ⇒ 取消臂永不触发，行为与修复前
+            // 一致）。
+            None,
         )
         .await
     }
@@ -128,6 +132,10 @@ impl AgentLoopController {
         probe_writeback: bool,
         plan_gate_attempt: Option<u32>,
         console_direct: Option<&crate::console_mode::DirectStamp>,
+        // 0bl 审查修复（2026-09-24）：per-run 取消令牌——在途工具的取消臂
+        // （见 `run_host_tool_with_timeout` 的 select 段注释）。None ＝ 该
+        // 调用面无取消语义（测试/控制台/检索派发车道）。
+        cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
         self.run_host_tool_with_timeout(
             host,
@@ -147,6 +155,7 @@ impl AgentLoopController {
             plan_gate_attempt,
             console_direct,
             None,
+            cancel,
         )
         .await
     }
@@ -182,6 +191,8 @@ impl AgentLoopController {
         // console 发放链（assistant 层）与普通路径传 None。
         console_direct: Option<&crate::console_mode::DirectStamp>,
         timeout: Option<std::time::Duration>,
+        // 0bl 审查修复（2026-09-24）：per-run 取消令牌——None ＝ 无取消语义。
+        cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
         // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): direct 模式
         // 直接动作事件盖章——所有 ToolStarted/ToolCompleted 携带
@@ -2093,24 +2104,23 @@ impl AgentLoopController {
             // 0bh ⑮ 组合纪律（2026-09-22，设计 §4.2）：anchor＝单事件点读面
             // ——仅与 section=journal 组合，且与其余过滤/展开参数互斥；
             // 显式文本错误（绝不静默忽略 anchor）。
-            let anchor_combo_error: Option<String> =
-                if anchor.is_some()
-                    && (section != "journal"
-                        || since.is_some()
-                        || epoch.is_some()
-                        || receipt_id.is_some()
-                        || expand.is_some()
-                        || failures_only.is_some()
-                        || search.is_some())
-                {
-                    Some(format!(
-                        "blackboard_read anchor 仅与 section=journal 组合有效，且与 \
+            let anchor_combo_error: Option<String> = if anchor.is_some()
+                && (section != "journal"
+                    || since.is_some()
+                    || epoch.is_some()
+                    || receipt_id.is_some()
+                    || expand.is_some()
+                    || failures_only.is_some()
+                    || search.is_some())
+            {
+                Some(format!(
+                    "blackboard_read anchor 仅与 section=journal 组合有效，且与 \
                          since_timestamp/epoch/receipt_id/expand/failures_only/search 互斥\
                          ——anchor 是单事件点读（≤512 B）；省略其余参数后重试（section={section}）"
-                    ))
-                } else {
-                    None
-                };
+                ))
+            } else {
+                None
+            };
             let content = if section == "temporal" {
                 // P2-10 F2 §3.3 (I3): temporal 分区查询面——selector
                 // now|recent|history|feature（+ k ≤ 20 / name）；fires 不
@@ -2547,9 +2557,9 @@ impl AgentLoopController {
                         &dir.join("events.jsonl"),
                         a,
                     ),
-                    None => format!(
-                        "该指针属于其他 run 或已归档：{a}（grill 丢弃模式无 run journal）"
-                    ),
+                    None => {
+                        format!("该指针属于其他 run 或已归档：{a}（grill 丢弃模式无 run journal）")
+                    }
                 }
             } else if section == "journal" {
                 "blackboard_read section=journal 需带 anchor=r<轮>·b<块>·s<seq>[#sha8]\
@@ -3694,9 +3704,43 @@ impl AgentLoopController {
             60_000
         };
         let mut progress_tick: u64 = 0;
+        // 0bl 审查修复（2026-09-24）：取消打断在途工具。原 select 只有 call
+        // 与心跳 sleep 两臂，取消只在 loop-top／批间 checkpoint 轮询
+        // （agent_loop）——已取消的 run 仍要等在途工具自然返回（最长可达
+        // 工具超时上限）才能收口。现增补**取消臂**：取消信号一到即终止在途
+        // 工具子进程，让 call 尽快以错误返回；随后的既有工具间 checkpoint
+        // （串行路径每工具前 `cancel.is_cancelled()`、并行批次提交后
+        // loop-top）照常把已取消的 run 收口为 `run_cancelled` 终态。
+        // 杀进程面取舍（如实记录）：loop 侧够不到 host 内部的 per-call job
+        // 句柄登记（`LiveCallJob` 属 orz-host 私有，超时杀树的定向化在
+        // host 侧单独落地），只能用全局兜底
+        // `orz_tools::util::global_process_scope().kill_active()`——误杀面
+        // ＝同进程内其他并发派发的在途工具子进程：同 run 的并行批次本就要
+        // 随取消收摊，代价可接受；ACP 多会话同进程时会波及无关会话的在途
+        // 工具（残余风险，host 侧 `DispatchGuard` 的 KILL_ON_JOB_CLOSE
+        // 调用级拆树不受影响）。调用若**无子进程**（进程内 HTTP／CDP 等
+        // 面向面的阻塞，非「纯内存计算」），kill 无目标、call 仍按自然时长
+        // 返回——与修复前行为一致，取消语义不变；即本修复的取消延迟解耦
+        // 只覆盖**子进程族**，其余调用面的取消响应仍与工具超时耦合（如实
+        // 记录，0bm 复审更正措辞）。
+        let mut cancel_kill_done = false;
         let call_result = loop {
             tokio::select! {
                 r = &mut call => break r,
+                // 取消臂：`cancelled()` 电平触发（取消后恒就绪）——首触杀树
+                // 后用前置条件关掉本臂，避免空转；此后仅等 call 返回（子
+                // 进程已死 ⇒ 工具调用快速返回）。检查在臂上而非心跳 tick
+                // 里：tick 节奏默认 60s，会把取消响应推迟到下个心跳（评审
+                // 指出的「延迟可达工具超时上限」）——专用臂即刻响应。
+                _ = async {
+                    match cancel {
+                        Some(c) => c.cancelled().await,
+                        None => std::future::pending().await,
+                    }
+                }, if !cancel_kill_done => {
+                    cancel_kill_done = true;
+                    orz_tools::util::global_process_scope().kill_active();
+                }
                 _ = tokio::time::sleep(std::time::Duration::from_millis(heartbeat_ms)) => {
                     if tick_ms > 0 {
                         progress_tick += 1;
@@ -3962,8 +4006,13 @@ impl AgentLoopController {
                 // （见上臂）。模型面零改动。
                 if res.policy_denial.is_none() && matches!(res.exit_code, Some(code) if code != 0) {
                     completed_payload["status"] = serde_json::json!("error");
-                    completed_payload["error"] =
-                        serde_json::json!(format!("exit_{}", res.exit_code.unwrap()));
+                    // 0bl 审查修复（2026-09-24）：上方 matches! 已保证 exit_code
+                    // 为 Some ——expect 显式声明该不变量，替代裸 unwrap。
+                    completed_payload["error"] = serde_json::json!(format!(
+                        "exit_{}",
+                        res.exit_code
+                            .expect("exit_code is Some (matched non-zero above)")
+                    ));
                 }
                 // 0q（ADR-0010 §14.63）：单一漏斗在事件发出前过一次——
                 // Ok 臂命令级失败盖章（写点 ②，原 0p S1 复审 F-C 散布
@@ -4355,9 +4404,16 @@ mod tests {
         };
         // CJK chunks across both gate rounds — the first text is intercepted
         // by the counterexample gate, the second is the final answer.
+        // 0bi ⑩（ADR-0010 §14.76）：answer 门收窄后，纯文本短答需有执行
+        // 事实或未完成 plan 才触发——本测试以未完成 plan 保持两轮门序列。
         let gateway: Arc<dyn ModelGateway> =
             Arc::new(FakeProvider::from_texts(vec!["你好世界", "你好世界"]).with_chunk_size(2));
-        let controller = AgentLoopController::with_gateway(gateway);
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-DELTA".to_string(),
+            1,
+            "任务".to_string(),
+            vec!["步骤一".to_string()],
+        );
         let result = controller
             .run_turn(
                 &host,

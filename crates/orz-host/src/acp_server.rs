@@ -1456,7 +1456,9 @@ impl AcpServer {
     pub fn new() -> Self {
         // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27, 实际使用裁决)：
         // plan 门已普适摘除——canned provider 不再应答 plan_write，首轮
-        // 直接产出正文；反例自查门（§4.6）仍在终答前加一轮。
+        // 直接产出正文；反例自查门（§4.6/§14.76，0bi ⑩ 收窄后）仅在
+        // 「有执行事实或未完成 plan」时于终答前加一轮——纯文本短答不再
+        // 加轮（0bm 复审更正注释；下方第二条脚本为带工具轮场景备用）。
         Self::with_gateway(Arc::new(FakeProvider::new(vec![
             orz_loop::gateway::fake::ScriptedResponse::text("(fake) 已收到请求。"),
             orz_loop::gateway::fake::ScriptedResponse::text("(fake) 已收到请求。"),
@@ -2931,23 +2933,21 @@ mod tests {
                 );
                 // Full phase chain + §4.6: preflight + started +
                 // prompt_submitted + tool_availability + model_output +
-                // counterexample_gate + model_output + finished.
+                // finished.
                 // GAP-INQUIRY-SPLIT: no per-turn orientation event (fires
                 // only on the session-level 7-round trigger).
                 // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27): plan 门
                 // 普适摘除——不再有 plan 轮（原 18 → 9，与无门轮次一致）。
-                // 0ac S3①-b 收尾批（2026-09-15，基线 worktree 实测回填）：
-                // 9 → 11——已提交批带入的三件合法事件在旧期望落笔之后：
-                // ① 检索族探针（`tool_availability_check`
-                // probe_scope=retrieval_family，run 起始无条件 +1，
-                // 4c892951）；② `request_header_change`（请求头指纹首次
-                // journal，ORZ-CACHE-CONTEXT-COST）；③
-                // `host_resource_snapshot`（run 起始档位读数，0z S2
-                // F-EV-7）。实测序列：preflight / availability×2 /
-                // started / prompt_submitted / header_change /
-                // model_output / counterexample_gate / model_output /
+                // 0ac S3①-b 收尾批（2026-09-15）：9 → 11——已提交批带入的
+                // 三件合法事件（检索族探针 / `request_header_change` 请求头
+                // 指纹 / `host_resource_snapshot` 资源档位快照）。
+                // 0bi ⑩（ADR-0010 §14.76，2026-09-23）：answer 反例门收窄
+                // ——纯文本短答（无工具轮、无未完成 plan）跳过门省一轮模型
+                // 调用，`counterexample_gate` + 第二个 `model_output` 消失：
+                // 11 → 9。实测序列：preflight / availability×2 / started /
+                // prompt_submitted / header_change / model_output /
                 // snapshot / finished。
-                assert_eq!(replay.event_count, 11);
+                assert_eq!(replay.event_count, 9);
                 assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -2968,12 +2968,12 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
 
-                // Four scripted responses — two per prompt turn (draft +
-                // final; the counterexample gate adds one round).
+                // Two scripted responses — one per prompt turn. 0bi ⑩
+                // (2026-09-23): the counterexample gate is skipped for
+                // text-only short answers (no tool rounds, no open plan),
+                // so each prompt costs a single model round.
                 let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
-                    ScriptedResponse::text("(fake) 第一轮。"),
                     ScriptedResponse::text("(fake) 第一轮终答。"),
-                    ScriptedResponse::text("(fake) 第二轮。"),
                     ScriptedResponse::text("(fake) 第二轮终答。"),
                 ])));
                 server
@@ -3014,8 +3014,10 @@ mod tests {
                     // 门普适摘除——两个 prompt 均为无门轮次（9 事件）。
                     // 0ac S3①-b 收尾批（2026-09-15）：9 → 11，同上三件
                     // 已提交批合法事件（检索族探针 / 请求头指纹 /
-                    // 资源档位快照）。
-                    assert_eq!(replay.event_count, 11, "preflight + turn events");
+                    // 资源档位快照）。0bi ⑩（2026-09-23）：纯文本短答跳过
+                    // 反例门省一轮——`counterexample_gate` + 第二个
+                    // `model_output` 消失：11 → 9。
+                    assert_eq!(replay.event_count, 9, "preflight + turn events");
                     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
                 }
 
@@ -5390,10 +5392,9 @@ mod tests {
                 let base = test_dir();
                 let fake = Arc::new(FakeProvider::new(vec![
                     // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27): 无
-                    // plan 门——每个 prompt 两轮（草稿 + 终答）。
+                    // plan 门。0bi ⑩（2026-09-23）：纯文本短答跳过反例门
+                    // ——每个 prompt 一轮模型调用，本轮文本即终答。
                     ScriptedResponse::text("第一答"),
-                    ScriptedResponse::text("第一答"),
-                    ScriptedResponse::text("第二答"),
                     ScriptedResponse::text("第二答"),
                 ]));
                 let server = shadow_server_with_gateway(fake.clone());
@@ -5431,12 +5432,12 @@ mod tests {
                 assert_eq!(r2["response"], "第二答");
 
                 // The second prompt's first model request opened with the
-                // first turn (two model calls per prompt — the
-                // counterexample gate adds one round; the plan gate is
-                // removed universally).
+                // first turn (one model call per prompt — 0bi ⑩ skips the
+                // counterexample gate for text-only short answers; the plan
+                // gate is removed universally).
                 let reqs = fake.received_requests();
-                assert_eq!(reqs.len(), 4, "two model calls per prompt");
-                let msgs = &reqs[2].messages;
+                assert_eq!(reqs.len(), 2, "one model call per prompt");
+                let msgs = &reqs[1].messages;
                 assert!(
                     msgs.iter().any(|m| m.content == "第一问"),
                     "first prompt in history: {msgs:?}"
@@ -5570,11 +5571,10 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                // Process 1: one successful prompt lands the sidecar.
-                let fake1 = Arc::new(FakeProvider::new(vec![
-                    ScriptedResponse::text("第一答"),
-                    ScriptedResponse::text("第一答"),
-                ]));
+                // Process 1: one successful prompt lands the sidecar
+                // (one model round per prompt — 0bi ⑩ skips the
+                // counterexample gate for text-only short answers).
+                let fake1 = Arc::new(FakeProvider::new(vec![ScriptedResponse::text("第一答")]));
                 let server1 = shadow_server_with_gateway(fake1.clone());
                 server1
                     .handle_session_new(
@@ -5591,10 +5591,7 @@ mod tests {
                 // (server1 dropped — process restart.)
 
                 // Process 2: a NEW server re-creates the session.
-                let fake2 = Arc::new(FakeProvider::new(vec![
-                    ScriptedResponse::text("第二答"),
-                    ScriptedResponse::text("第二答"),
-                ]));
+                let fake2 = Arc::new(FakeProvider::new(vec![ScriptedResponse::text("第二答")]));
                 let server2 = shadow_server_with_gateway(fake2.clone());
                 server2
                     .handle_session_new(
@@ -5611,7 +5608,7 @@ mod tests {
 
                 // The new process's first request carried the old history.
                 let reqs = fake2.received_requests();
-                assert_eq!(reqs.len(), 2, "two model calls per prompt");
+                assert_eq!(reqs.len(), 1, "one model call per prompt");
                 let msgs = &reqs[0].messages;
                 assert!(
                     msgs.iter().any(|m| m.content == "重启前的问题"),
@@ -5635,10 +5632,11 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                // One successful prompt consumes the scripted replies; the
+                // One successful prompt consumes the single scripted reply
+                // (one model round per prompt — 0bi ⑩ skips the
+                // counterexample gate for text-only short answers); the
                 // second prompt hits an empty script → model failure.
                 let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
-                    ScriptedResponse::text("第一答"),
                     ScriptedResponse::text("第一答"),
                 ])));
                 server
