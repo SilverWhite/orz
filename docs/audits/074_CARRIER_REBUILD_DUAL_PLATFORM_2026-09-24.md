@@ -190,7 +190,20 @@
 
 ### 8.1 上传面核证补记（本档提交后回读）
 
-（本小节由随后的补记提交填写：资产 digest 回读结果、远端 size 与本地 size 对照。）
+- **创建读数**：`gh release create v0.6.12 --target e35fa775…` ⇒
+  `https://github.com/SilverWhite/CLI/releases/tag/v0.6.12`；`gh api git/ref/tags/v0.6.12`
+  回读 `object.sha = e35fa775e463d7c070130730d7870980c0743bdc` ⇒ **tag 指向本批父仓提交**。
+- **资产 digest 回读**（`gh api repos/SilverWhite/CLI/releases/tags/v0.6.12`）：
+
+| 资产 | 远端 size | 远端 digest | 本地 size／SHA256 | 判读 |
+|---|---:|---|---|---|
+| `orz-0.6.12-windows-x86_64.zip` | 27,815,042 | `sha256:1a48f33c32a013c9808528cc3ce6d9f357e6c6009e47f3e9fd8c6dacd4815927` | 27,815,042／同值 | **逐位一致** |
+| `orz-0.6.12-linux-x86_64.tar.gz` | 36,042,724 | `sha256:5bd2af6e695e800445f89dc685e0dadc07370b138a547b1d15013e8db0094b8a` | 36,042,724／同值 | **逐位一致** |
+
+⇒ 远端字节＝本地包字节（两资产 `state=uploaded`）。
+- **回下载核验未完成（如实登记）**：`gh release download v0.6.12` 两次各创建 **0 字节**文件后
+  阻塞（与 [`066 §8`](066_CARRIER_REBUILD_DUAL_PLATFORM_2026-09-21.md) 同形，属本机网络面），
+  进程已终止；**改以上述 API `digest` 核证为准**（服务端按其收到字节计算的摘要）。
 
 ## 9. 记账面（pin、清单、索引、计数）
 
