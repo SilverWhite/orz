@@ -20,7 +20,7 @@
 | 4. 设置启动环境 | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
 | 5. 运行 | `.\orz.exe`（交互 TUI）<br>`.\orz.exe -p "你的任务" --real`（无头模式） | `./orz`（交互 TUI）<br>`./orz -p "你的任务" --real`（无头模式） |
 
-发布包说明与完整性校验见 GitHub Release（最新 [v0.6.2](https://github.com/SilverWhite/CLI/releases/tag/v0.6.2)，双平台包＋`SHA256SUMS`）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
+发布包说明与完整性校验见 GitHub Release（最新 [v0.6.12](https://github.com/SilverWhite/CLI/releases/tag/v0.6.12)，双平台包＋`SHA256SUMS`）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
 
 ### 从源码运行
 
@@ -108,7 +108,7 @@ orz 为本地优先、保障优先的终端 AI 编程 Agent/harness，制作全�
 
 - **设计**：ADR-0010 是唯一自然语言设计权威，`accepted / frozen`。
 - **实现**：Rust production workspace 可运行，当前整体 `partial`；未闭合差距集中登记在 [`CLI_PROJECT_INDEX.md` §3.1](CLI_PROJECT_INDEX.md#31-已登记实现差距)，不在本 README 展开。
-- **发布**：0.1.0–0.5.1 试用发布包入口在 [`releases/`](releases/)；0.5.4 起双平台安装包发布于 [GitHub Releases](https://github.com/SilverWhite/CLI/releases)（当前最新 v0.6.2，Windows zip／Linux tar.gz＋`SHA256SUMS`）；当前未提供 macOS 原生包。
+- **发布**：0.1.0–0.5.1 试用发布包入口在 [`releases/`](releases/)；0.5.4 起双平台安装包发布于 [GitHub Releases](https://github.com/SilverWhite/CLI/releases)（当前最新 v0.6.12，Windows zip／Linux tar.gz＋`SHA256SUMS`）；当前未提供 macOS 原生包。
 - 测试全绿或单次跑分不构成架构符合性结论；符合性状态以索引与审计为准。
 
 ## License
