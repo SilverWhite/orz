@@ -60,7 +60,7 @@ cargo run -p orz-bin -- --fake-provider               # TUI
 orz 为本地优先、保障优先的终端 AI 编程 Agent/harness，制作全程使用 AI coding。其中，控制面、Agent loop 与保障体系为自研内容，直接复用部分 Grok Build 中已成熟的工具与工作区组件，参考 Codex 的代码设计语言，执行侧服务调用形态大量借鉴 Home Assistant（`domain.service + target + data`），并少量参考 DeepSeek Harness 与其他成熟产品。
 
 整体架构可主要分为两大块两小块。
-两大块为** Agent 层**与**机械层**，两小块为作为核心面板的**黑板**和外挂的**时间与动作域判断组件**。
+两大块为**Agent 层**与**机械层**，两小块为作为核心面板的**黑板**和外挂的**时间与动作域判断组件**。
 
 ### Agent 层
 
