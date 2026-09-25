@@ -58,7 +58,7 @@ cargo run -p orz-bin -- --fake-provider               # TUI
 
 ## 框架介绍
 
-orz 为本地优先、保障优先、直接进入真机非沙箱环境的终端 AI 编程 Agent/harness，制作全程使用 AI coding。
+orz 为**本地优先**、**保障优先**、**直接进入真机而非沙箱环境**的终端 AI 编程 Agent/harness，制作全程使用 AI coding。
 
 其中，控制面、Agent loop 与保障体系为自研内容，除此之外，框架内直接复用了部分 [`grok-build`](https://github.com/xai-org/grok-build) 中已成熟的工具与工作区组件，参考了 [`codex`](https://github.com/openai/codex) 的代码设计语言。执行侧服务调用形态大量借鉴了 Home Assistant (https://github.com/home-assistant) （`domain.service + target + data`），并少量参考了 [`deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness) 与其他成熟产品。Web 工作台UI形态取自本仓三份 UI 设计稿；但外观实现直接照搬旧时代桌面主题 [`98.css`](https://github.com/jdan/98.css) 与 [`XP.css`](https://github.com/botoxparty/XP.css)；Markdown 渲染实现照搬 [`marked`](https://github.com/markedjs/marked)。
 
