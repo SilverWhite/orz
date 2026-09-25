@@ -237,7 +237,11 @@
 
 `.tmp-b075-windows-build.log`／`.tmp-b075-linux-build.log`／`.tmp-b075-literals.py`／
 `.tmp-b075-package.ps1`／`.tmp-b075-win-web-probe.ps1`／`.tmp-b075-index.py`／
-`.tmp-b075-ledger.py`／`.tmp-b075-readme.py`／`.tmp-b075-release-notes.md`；
+`.tmp-b075-ledger.py`／`.tmp-b075-ledger2.py`／`.tmp-b075-readme.py`／
+`.tmp-b075-release-notes.md`／`.tmp-b075-win-web-probe.log`；
+**回下载核验副本** `.tmp-b075-dl-SHA256SUMS`／`.tmp-b075-dl-SHA256SUMS-api`／
+`.tmp-b075-dl-orz-0.6.13-windows-x86_64.zip`／`.tmp-b075-dl-orz-0.6.13-linux-x86_64.tar.gz`
+（认证 API 回读件，§8.1；删除动作被本机策略拦截，**保留作证据**）；
 两平台 `.0.6.12-bak` 备份链与 `signer-manifest.json.bak-20260925-075` 保留；
 发布包暂存 `D:\tb-eval\rel-075-stage\`（含 `_verify_zip`／`_verify_tar` 回读目录）。
 
