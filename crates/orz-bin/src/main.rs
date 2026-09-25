@@ -184,6 +184,25 @@ fn main() {
             std::env::set_var("ORZ_RETRIEVAL_MODE", mode);
         }
     }
+    // 0br S2 (`orz web`): Web workbench bridge — loopback server serving the
+    // static three-draft UI and pumping ACP over WebSocket to a spawned
+    // `orz --stdio` child (crates/orz-web). Dispatch BEFORE the global
+    // `--stdio` match below (review R-4: `orz web --stdio` must reach the
+    // web subcommand, whose argv parser rejects `--stdio` explicitly, not
+    // silently fall into stdio mode); env flags set above (--real etc.)
+    // propagate to the child.
+    if args.get(1).map(String::as_str) == Some("web") {
+        run_web(&args[2..]);
+        return;
+    }
+    // 0br S3 (`orz archive <session8>`): on-demand session archive for the
+    // Web workbench "archive active session" action — one-shot packaging of
+    // an existing sidecar via the SAME close-archive primitive the agent
+    // uses (orz-host `archive_session_on_demand`); no second implementation.
+    if args.get(1).map(String::as_str) == Some("archive") {
+        run_archive(&args[2..]);
+        return;
+    }
     if args.iter().any(|a| a == "--stdio") {
         run_stdio();
         return;
@@ -486,6 +505,74 @@ fn run_stdio() {
             .map_err(|e| e.to_string())
     });
     if let Err(e) = result {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+}
+
+/// 0br S3 (`orz archive <session8>`): on-demand session archive entry.
+/// Runs in the current working directory (the bridge spawns it with the
+/// workspace cwd); stdout carries the human-readable result, exit code
+/// carries success. Tracing posture matches `run_web` so failures land in
+/// the bridge log.
+fn run_archive(rest: &[String]) {
+    let _guard = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+    let Some(session8) = rest.first().filter(|s| !s.starts_with('-')) else {
+        eprintln!("error: 用法: orz archive <session8>");
+        std::process::exit(2);
+    };
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("error: failed to start async runtime: {e}");
+            std::process::exit(1);
+        }
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match rt.block_on(orz_host::acp_server::archive_session_on_demand(
+        &cwd, session8,
+    )) {
+        Ok(msg) => println!("已归档 {session8}: {msg}"),
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// 0br S2 (`orz web`): Web workbench bridge entry (crates/orz-web). Same
+/// stderr tracing posture as run_stdio so bridge/agent events stay visible;
+/// serves on the validated loopback address until Ctrl+C (the spawned
+/// `orz --stdio` child dies with the process via kill-on-drop).
+fn run_web(rest: &[String]) {
+    let _guard = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+    let config = match orz_web::parse_args(rest) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(2);
+        }
+    };
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("error: failed to start async runtime: {e}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = rt.block_on(orz_web::run(config)) {
         eprintln!("error: {e}");
         std::process::exit(1);
     }

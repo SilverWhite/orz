@@ -16673,6 +16673,72 @@ Additional requirements / notices:
 
 
 ================================================================================
+PART I (continued) — BUNDLED WEB FRONTEND ASSETS (orz-web)
+================================================================================
+
+Vendored static assets served by the Web workbench bridge (crates/orz-web,
+0br S2). Not crates.io/npm dependencies at runtime — served verbatim from
+crates/orz-web/assets/vendor/. Digests: crates/orz-web/assets/vendor/
+MANIFEST.sha256.txt. License texts in Part II.
+
+
+--------------------------------------------------------------------------------
+98.css 0.1.21
+--------------------------------------------------------------------------------
+Source:  https://github.com/jdan/98.css
+License: MIT
+Upstream paths: dist/98.css, dist/ms_sans_serif.woff, dist/ms_sans_serif.woff2
+
+Copyright notice:
+  Copyright 2020 Jordan Scales
+
+License text: see Part II — MIT
+
+Additional requirements / notices:
+  Windows 98 desktop appearance for the Web workbench (design authority:
+  docs/UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md §4). Vendored unmodified;
+  the upstream copyright header is retained in the file.
+
+
+--------------------------------------------------------------------------------
+XP.css 0.2.6
+--------------------------------------------------------------------------------
+Source:  https://github.com/botoxparty/XP.css
+License: MIT
+Upstream paths: dist/XP.css, dist/ms_sans_serif.woff, dist/ms_sans_serif.woff2,
+  dist/ms_sans_serif_bold.woff, dist/ms_sans_serif_bold.woff2
+
+Copyright notice:
+  Copyright 2020 Adam Hammad, Jordan Scales
+
+License text: see Part II — MIT
+
+Additional requirements / notices:
+  Optional XP-era theme (extension of 98.css) vendored alongside the fonts
+  both themes reference. Unmodified; upstream headers retained.
+
+
+--------------------------------------------------------------------------------
+marked 18.0.14
+--------------------------------------------------------------------------------
+Source:  https://github.com/markedjs/marked
+License: MIT
+Upstream paths: lib/marked.umd.js
+
+Copyright notice:
+  Copyright (c) 2018+, MarkedJS (https://github.com/markedjs/marked)
+  Copyright (c) 2011-2018, Christopher Jeffrey
+
+License text: see Part II — MIT
+
+Additional requirements / notices:
+  Markdown rendering for the Web workbench ContentPane (0br S1 §4.2 R-1:
+  replaces the ratatui-based orz-markdown on the Web side; orz-markdown
+  remains the TUI-side component). Vendored unmodified with its upstream
+  license header.
+
+
+================================================================================
 PART II — LICENSE TEXTS
 ================================================================================
 

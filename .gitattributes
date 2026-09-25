@@ -9,3 +9,13 @@
 *.md text eol=lf
 *.rs text eol=lf
 *.toml text eol=lf
+
+# 0br Web 形态 UI — 前端件同为 LF 字节稳定（沿本仓 CI 矩阵口径）
+*.css text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+
+# 照搬的第三方 UI 资产：字节即事实（MANIFEST.sha256.txt 的摘要按原始字节计算，
+# 构建期经 include_bytes! 嵌入并逐件校验）——禁止任何行尾转换。
+crates/orz-web/assets/vendor/* -text

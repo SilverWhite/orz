@@ -218,6 +218,14 @@ impl TrustStore {
             .contains_key(canonical.to_string_lossy().as_ref())
     }
 
+    /// Enumerate the recorded decisions (folder key as stored, plus the
+    /// record). Read-only display/audit consumers (e.g. the 0br Web
+    /// workbench "trusted workspaces" listing); authority for trust
+    /// questions stays [`Self::is_trusted`].
+    pub fn decisions(&self) -> impl Iterator<Item = (&str, &FolderTrust)> {
+        self.doc.folders.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
     // ── Internal ──────────────────────────────────────────────────────
 
     /// Shared write path for [`Self::set_trusted`] / [`Self::set_untrusted`].
@@ -711,6 +719,30 @@ mod tests {
         let store = TrustStore::load_from(tmp.path().join(TRUST_FILE_NAME));
         assert!(store.is_empty());
         assert!(!store.is_trusted(tmp.path()));
+    }
+
+    #[test]
+    fn decisions_enumerates_grants_and_denies_for_display() {
+        // 0br S3 (Web workbench "trusted workspaces" listing): the read-only
+        // enumeration must surface both decision kinds with their records —
+        // the consumer filters `trusted == true`; deny entries stay visible
+        // so a display can be honest about recorded decisions.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = TrustStore::load_from(tmp.path().join(TRUST_FILE_NAME));
+        let granted = tmp.path().join("repo-a");
+        std::fs::create_dir_all(&granted).unwrap();
+        store.set_trusted(&granted).unwrap();
+        let decisions: Vec<(String, bool)> = store
+            .decisions()
+            .map(|(k, v)| (k.to_string(), v.trusted))
+            .collect();
+        assert_eq!(decisions.len(), 1, "exactly the grant is recorded");
+        assert!(
+            decisions[0].0.replace('/', "\\").ends_with("repo-a"),
+            "granted key enumerated: {:?}",
+            decisions
+        );
+        assert!(decisions[0].1, "grant records trusted=true");
     }
 
     #[test]

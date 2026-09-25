@@ -19,7 +19,7 @@ use orz_loop::AgentLoopController;
 use orz_loop::acaf::AcafClient;
 use orz_loop::blackboard::{Blackboard, ExternalRetSection, InternalRetSection};
 use orz_loop::controller::RetrievalMode;
-use orz_loop::gateway::model::{Message, Role};
+use orz_loop::gateway::model::{Message, Role, ToolCall};
 use orz_loop::orientation::OrientationSessionState;
 use orz_workspace::permission::PermissionHookTransport;
 
@@ -743,15 +743,43 @@ async fn archive_session_package(
     incremental: bool,
     explicit_runs: &[String],
 ) -> Option<PackagedSessionArchive> {
+    // 侧车缺失 ⇒ None（无可归档内容，与既有语义一致）；重构路径走
+    // `archive_raw_session_package`（0br S3 按需归档）。
+    let raw = std::fs::read(conversation_sidecar_path(base_dir, session_id)).ok()?;
+    archive_raw_session_package(
+        base_dir,
+        session_id,
+        raw,
+        prompt_count,
+        trust_policy,
+        incremental,
+        explicit_runs,
+    )
+    .await
+}
+
+/// 打包任意「原始 sidecar 字节」的共享包装：同步打包 → 里程碑水位 →
+/// ARC journal 事件。`archive_session_package`（磁盘侧车）与按需归档的
+/// journal 重构路径共用，禁两套实现。
+async fn archive_raw_session_package(
+    base_dir: &Path,
+    session_id: &str,
+    raw: Vec<u8>,
+    prompt_count: u64,
+    trust_policy: crate::session::TrustPolicy,
+    incremental: bool,
+    explicit_runs: &[String],
+) -> Option<PackagedSessionArchive> {
     let base_dir = base_dir.to_path_buf();
     let session_id = session_id.to_string();
     let package_base_dir = base_dir.clone();
     let package_session_id = session_id.clone();
     let explicit = explicit_runs.to_vec();
     let packaged = tokio::task::spawn_blocking(move || {
-        package_session_archive(
+        package_archive_raw(
             &package_base_dir,
             &package_session_id,
+            &raw,
             prompt_count,
             &explicit,
         )
@@ -815,23 +843,223 @@ async fn archive_session_package(
     Some(pkg)
 }
 
-/// 同步打包阶段：读 sidecar → 校验 → gzip → digest（tmp + rename）。
-fn package_session_archive(
+/// 0br S3（2026-09-25 用户令：Web 工作台「归档活跃会话」动作）：对既有会话
+/// 侧车执行一次即时归档。与关闭/里程碑归档共用同一原语
+/// （`archive_session_package`：gzip 信封＋三键段＋里程碑水位＋ARC
+/// journal 事件），禁第二套实现。`session8` 沿会话 id 前 8 字符口径
+/// （sidecar／包名同尺，见 `conversation_sidecar_path`）。无侧车 ⇒
+/// Err（无可归档内容）；侧车损坏/写盘失败 ⇒ Err（桥如实回传，不静默）。
+/// 成功消息＝归档路径＋digest 前缀＋会话 token 读数。
+pub async fn archive_session_on_demand(base_dir: &Path, session8: &str) -> Result<String, String> {
+    // 批三（2026-09-25 用户令「归档当前全部会话」）：侧车缺失时回退
+    // journal 重构——无头 `-p` 会话按 §14.68 未跨里程碑不落侧车，但其
+    // 对话事实完整在 run journal（prompt_submitted／model_output）；机械
+    // 重构为对话包并注入 reconstructed_from_journal 标记（如实标注，
+    // 非零变换侧车拷贝）。黑板/LIF 该类会话本就没有，零损失。
+    let (raw, reconstructed_runs) = match std::fs::read(conversation_sidecar_path(
+        base_dir, session8,
+    )) {
+        Ok(bytes) => (bytes, None),
+        Err(_) => {
+            let (conv, runs) = reconstruct_conversation_from_journal(base_dir, session8)
+                    .ok_or_else(|| {
+                        format!(
+                            "会话 {session8} 无侧车且 journal 无可重构对话事实（无 prompt/输出）——无可归档内容"
+                        )
+                    })?;
+            let mut conv_value =
+                serde_json::to_value(&conv).map_err(|e| format!("重构序列化失败: {e}"))?;
+            // 如实标注：本包对话源自 journal 重构，非零变换侧车拷贝。
+            conv_value["reconstructed_from_journal"] = serde_json::Value::Bool(true);
+            let raw = serde_json::to_string(&conv_value)
+                .map_err(|e| format!("重构序列化失败: {e}"))?
+                .into_bytes();
+            (raw, Some(runs))
+        }
+    };
+    // 重构路径把纳入的 run 显式传给三键段（无头 run id `RUN-CLI-{s8}` 不
+    // 携带 `RUN-{s8}-` 会话段，前缀扫描不中——与 0ak 显式注入同口径）。
+    let explicit: Vec<String> = reconstructed_runs.clone().unwrap_or_default();
+    let Some(pkg) = archive_raw_session_package(
+        base_dir,
+        session8,
+        raw,
+        1,
+        crate::session::TrustPolicy::Enforce,
+        false,
+        &explicit,
+    )
+    .await
+    else {
+        return Err(format!("会话 {session8} 归档失败：内容无法解析"));
+    };
+    if pkg.status != "completed" {
+        return Err(format!(
+            "会话 {session8} 归档写盘失败（{attempts} 次尝试）",
+            attempts = pkg.attempts
+        ));
+    }
+    let recon_note = match reconstructed_runs {
+        Some(runs) => format!("；journal 重构（{} 次运行）", runs.len()),
+        None => String::new(),
+    };
+    Ok(format!(
+        "{}（sha256:{}…，tokens={}{}）",
+        pkg.path.display(),
+        &pkg.digest[..pkg.digest.len().min(16)],
+        pkg.conversation_tokens,
+        recon_note
+    ))
+}
+
+/// 从 run journal 机械重构会话对话（0br S3 批三，仅按需归档的无侧车
+/// 回退路径）：`prompt_submitted` → 用户消息、`model_output`（有正文或
+/// 工具调用）→ 助手消息。run 面＝`RUN-{s8}-*` 前缀 ∪ `RUN-CLI-{s8}` 精确
+/// （与三键段 journal 键同一口径），按 run id 排序、run 内 sequence 序。
+/// 零对话事实 ⇒ `None`。产出即「重构事实」，非零变换侧车拷贝——调用方
+/// 在包内保留 `reconstructed_from_journal` 标记。
+fn reconstruct_conversation_from_journal(
+    base_dir: &Path,
+    session8: &str,
+) -> Option<(StoredConversation, Vec<String>)> {
+    let runs_dir = base_dir.join(".gsa").join("runs");
+    let mut ids: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&runs_dir) {
+        ids.extend(
+            entries
+                .flatten()
+                .filter(|e| e.path().is_dir())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|name| {
+                    name.starts_with(&format!("RUN-{session8}-"))
+                        || name == &format!("RUN-CLI-{session8}")
+                }),
+        );
+    }
+    ids.sort();
+    if ids.is_empty() {
+        return None;
+    }
+
+    let mut messages: Vec<Message> = Vec::new();
+    let mut assistant_rounds = 0u64;
+    let mut any_success = false;
+    let mut started_at: Option<f64> = None;
+    for run_id in &ids {
+        let Ok(text) = std::fs::read_to_string(runs_dir.join(run_id).join("events.jsonl")) else {
+            continue;
+        };
+        for line in text.lines() {
+            let Ok(ev) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if started_at.is_none() {
+                started_at = ev
+                    .get("timestamp")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                    .map(|t| t.timestamp() as f64);
+            }
+            match ev.get("event_type").and_then(serde_json::Value::as_str) {
+                Some("run_finished") => any_success = true,
+                Some("prompt_submitted") => {
+                    let prompt = ev
+                        .get("payload")
+                        .and_then(|p| p.get("prompt"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
+                    if !prompt.trim().is_empty() {
+                        messages.push(Message {
+                            role: Role::User,
+                            content: prompt.to_string(),
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                            round: None,
+                        });
+                    }
+                }
+                Some("model_output") => {
+                    let payload = ev.get("payload");
+                    let content = payload
+                        .and_then(|p| p.get("text"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let tool_calls: Vec<ToolCall> = payload
+                        .and_then(|p| p.get("tool_calls"))
+                        .and_then(serde_json::Value::as_array)
+                        .map(|calls| {
+                            calls
+                                .iter()
+                                .filter_map(|c| {
+                                    Some(ToolCall {
+                                        name: c.get("name")?.as_str()?.to_string(),
+                                        arguments: c.get("arguments").cloned().unwrap_or_default(),
+                                        call_id: c
+                                            .get("call_id")
+                                            .and_then(serde_json::Value::as_str)
+                                            .unwrap_or_default()
+                                            .to_string(),
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if !content.trim().is_empty() || !tool_calls.is_empty() {
+                        assistant_rounds += 1;
+                        messages.push(Message {
+                            role: Role::Assistant,
+                            content,
+                            tool_call_id: None,
+                            tool_calls,
+                            reasoning_content: None,
+                            round: None,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if messages.is_empty() {
+        return None;
+    }
+    let snapshot = TemporalSessionSnapshot {
+        round: assistant_rounds,
+        has_success: any_success,
+        current_domain: orz_assurance::lif::Domain::Normal,
+        entry_round: 0,
+        spikes: Vec::new(),
+        rli_shadow: None,
+    };
+    let mut conversation = StoredConversation::full(
+        session8,
+        messages,
+        &snapshot,
+        started_at,
+        &Blackboard::default(),
+    );
+    conversation.blackboard = None; // 重构面无黑板事实，不落默认空黑板
+    Some((conversation, ids))
+}
+
+/// 同步打包阶段：校验原始 sidecar 字节 → gzip → digest（tmp + rename）。
+/// 0br S3 拆分：读文件由调用方负责（磁盘侧车或 journal 重构字节同一入口）。
+fn package_archive_raw(
     base_dir: &Path,
     session_id: &str,
+    raw_sidecar: &[u8],
     prompt_count: u64,
     explicit_runs: &[String],
 ) -> Option<PackagedSessionArchive> {
-    let sidecar_path = conversation_sidecar_path(base_dir, session_id);
-    // 纯打包 = 对磁盘上的既有 sidecar 原样压缩；无文件（从未有成功
-    // prompt）→ 无可存档内容。
-    let raw_sidecar = std::fs::read(&sidecar_path).ok()?;
-    let parsed = match serde_json::from_slice::<StoredConversation>(&raw_sidecar) {
+    // 纯打包 = 对既有内容原样压缩；空内容 → 无可存档。
+    let parsed = match serde_json::from_slice::<StoredConversation>(raw_sidecar) {
         Ok(parsed) => parsed,
         Err(_) => {
             tracing::warn!(
                 "session archive skipped: corrupt sidecar {}",
-                sidecar_path.display()
+                conversation_sidecar_path(base_dir, session_id).display()
             );
             return None;
         }
@@ -849,10 +1077,10 @@ fn package_session_archive(
     // journal run+sequence，外加窗口轮跨度临时键与 A 类压缩存档清单）。
     let archive_keys = build_archive_keys(base_dir, session_id, &parsed, explicit_runs);
     let conversation_tokens = estimate_conversation_tokens(&parsed);
-    let Some(package_bytes) = build_archive_envelope(&raw_sidecar, &archive_keys) else {
+    let Some(package_bytes) = build_archive_envelope(raw_sidecar, &archive_keys) else {
         tracing::warn!(
             "session archive skipped: sidecar is not valid UTF-8 ({})",
-            sidecar_path.display()
+            conversation_sidecar_path(base_dir, session_id).display()
         );
         return None;
     };
@@ -3724,13 +3952,184 @@ mod tests {
         assert!(result.archive_path.is_none());
         assert!(result.conversation_tokens.is_none());
         assert!(
-            !base.join(".gsa").join("conversations").exists(),
-            "阈值下不得产生 conversations 产物"
-        );
-        assert!(
             !base.join(".gsa").join("archives").exists(),
             "阈值下不得产生 archives 产物"
         );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0br S3 钉子（Web「归档活跃会话」动作）：按需归档复用同一打包原语
+    /// ——包落盘＋ARC journal 事件＋里程碑水位一次到位；无侧车/空会话
+    /// 如实报错不静默。
+    #[tokio::test]
+    async fn archive_on_demand_reuses_the_close_archive_primitive() {
+        let base = test_dir();
+        let session_id = "6ab7dem0-cli";
+        let snapshot = TemporalSessionSnapshot {
+            round: 4,
+            has_success: true,
+            current_domain: orz_assurance::lif::Domain::Normal,
+            entry_round: 1,
+            spikes: Vec::new(),
+            rli_shadow: None,
+        };
+        let conversation = StoredConversation::full(
+            session_id,
+            vec![Message {
+                role: Role::User,
+                content: "问题正文".to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            }],
+            &snapshot,
+            Some(1_700_000_000.0),
+            &Blackboard::default(),
+        );
+        let sidecar_dir = base.join(".gsa").join("conversations");
+        std::fs::create_dir_all(&sidecar_dir).unwrap();
+        std::fs::write(
+            sidecar_dir.join("6ab7dem0.json"),
+            serde_json::to_vec(&conversation).unwrap(),
+        )
+        .unwrap();
+
+        let report = archive_session_on_demand(&base, "6ab7dem0")
+            .await
+            .expect("archives");
+        assert!(report.contains("6ab7dem0.json.gz"), "{report}");
+        assert!(report.contains("tokens="), "{report}");
+        let gz = base.join(".gsa").join("archives").join("6ab7dem0.json.gz");
+        assert!(gz.is_file());
+        // ARC 审计 journal（增量标记不得出现——按需归档是关闭同口径）。
+        let events = std::fs::read_to_string(base.join(".gsa/runs/ARC-6ab7dem0-1/events.jsonl"))
+            .expect("ARC journal");
+        assert!(
+            events.contains("\"event_type\":\"session_archive\""),
+            "{events}"
+        );
+        assert!(!events.contains("incremental"), "{events}");
+        // 水位随包落盘（后续里程碑判定的锚点）。
+        assert!(last_archived_tokens(&base, session_id).is_some());
+
+        // 幂等：第二次按需归档再次打包成功（覆盖写，水位只进不退）。
+        archive_session_on_demand(&base, "6ab7dem0")
+            .await
+            .expect("re-archives");
+
+        // 无侧车会话 ⇒ 显式错误。
+        let err = archive_session_on_demand(&base, "0000dead")
+            .await
+            .unwrap_err();
+        assert!(err.contains("无侧车"), "{err}");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0br S3 批三钉子：无侧车会话（§14.68 未跨里程碑的无头 `-p` run）
+    /// 经 journal 重构归档——prompt/输出事实成包、`reconstructed_from_journal`
+    /// 标记在位、三键段显式纳入无头 run。
+    #[tokio::test]
+    async fn archive_on_demand_reconstructs_sidecarless_sessions_from_journal() {
+        use std::io::Write as _;
+        let base = test_dir();
+        let session8 = "6aabf5eb";
+        let run_dir = base
+            .join(".gsa")
+            .join("runs")
+            .join(format!("RUN-CLI-{session8}"));
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)
+            .open(run_dir.join("events.jsonl"))
+            .unwrap();
+        let event = |seq: u64, ty: &str, payload: serde_json::Value| {
+            serde_json::json!({
+                "schema_version": "0.2.0-draft",
+                "run_id": format!("RUN-CLI-{session8}"),
+                "sequence": seq,
+                "timestamp": "2026-09-17T14:15:08.303424100+00:00",
+                "event_type": ty,
+                "payload": payload,
+            })
+        };
+        for ev in [
+            event(0, "run_preflight", serde_json::json!({})),
+            event(
+                1,
+                "prompt_submitted",
+                serde_json::json!({"prompt": "处理摩擦项", "character_count": 6}),
+            ),
+            event(
+                2,
+                "model_output",
+                serde_json::json!({"text": null, "tool_calls": [
+                    {"name": "read_file", "arguments": {"target_file": "a.md"}, "call_id": "c1"}
+                ]}),
+            ),
+            event(
+                3,
+                "model_output",
+                serde_json::json!({"text": "完成报告", "tool_calls": []}),
+            ),
+            event(
+                4,
+                "run_finished",
+                serde_json::json!({"status": "completed"}),
+            ),
+        ] {
+            writeln!(f, "{ev}").unwrap();
+        }
+        drop(f);
+
+        let report = archive_session_on_demand(&base, session8)
+            .await
+            .expect("reconstructed archive");
+        assert!(report.contains("journal 重构"), "{report}");
+        let gz = base
+            .join(".gsa")
+            .join("archives")
+            .join(format!("{session8}.json.gz"));
+        assert!(gz.is_file());
+        let mut decoder = flate2::read::GzDecoder::new(std::fs::File::open(&gz).unwrap());
+        let mut decoded = Vec::new();
+        std::io::Read::read_to_end(&mut decoder, &mut decoded).unwrap();
+        let envelope: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+        assert_eq!(envelope["schema"], "session-archive-package-v0.2");
+        let conversation = envelope["conversation"].as_object().unwrap();
+        assert_eq!(
+            conversation
+                .get("reconstructed_from_journal")
+                .and_then(|v| v.as_bool()),
+            Some(true),
+            "重构标记必须在包内"
+        );
+        let messages = conversation["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3, "用户＋工具轮助手＋正文助手");
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "处理摩擦项");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["tool_calls"][0]["name"], "read_file");
+        assert_eq!(messages[2]["content"], "完成报告");
+        // 三键段 journal 键显式纳入无头 run（前缀扫描不中）。
+        let runs = envelope["archive_keys"]["journal"]["runs"]
+            .as_array()
+            .unwrap();
+        assert!(
+            runs.iter()
+                .any(|r| r["run_id"] == format!("RUN-CLI-{session8}")),
+            "{runs:?}"
+        );
+
+        // 零对话事实 ⇒ 如实报错。
+        let err = archive_session_on_demand(&base, "ffffffff")
+            .await
+            .unwrap_err();
+        assert!(err.contains("无可重构"), "{err}");
 
         let _ = std::fs::remove_dir_all(&base);
     }

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<!--
+  orz Web 工作台（0br S2）—— 形态权威＝三份 UI 设计稿（2026-09-24 解冻）
+  ＋综合稿 docs/UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md。
+  每区块来源标注（照搬判据，综合稿 §4 / S1 勘定 §4.1）：
+    全局窗体/按钮/输入/下拉/选项卡 …… 照搬 98.css v0.1.21 (MIT, jdan/98.css)（vendor/98.css）
+    两行顶栏/工具栏/查找/状态栏/Help …… 自研（S1 §4.2 R-3；交互语义移植 orz-tui app.rs/widgets.rs）
+    AddressBar 对象历史 ………………………… 自研（R-4；移植 orz-tui nav_back/nav_forward）
+    Explorer/ContentPane/Marker 投影 …… 自研（R-5；移植 orz-tui projection.rs/view_model.rs）
+    Markdown 渲染 …………………………………… 照搬 marked v18.0.14 (MIT)（vendor/marked.umd.js；R-1 代换登记）
+    权限弹窗（session/request_permission 对接）… 自研（R-6；呈现层，判定在 permission gate）
+  入口令牌来自启动控制台打印的 URL fragment（#token=…，orz-web/src/lib.rs 同格式）。
+  窗钮 aria-label 保持英文：98.css 以 [aria-label="Minimize"] 等属性选择器
+  锚定样式（vendor 未修改），中文提示由 title 提供（审查处理批登记）。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>orz 工作台</title>
+  <link rel="stylesheet" href="/assets/vendor/98.css">
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <div class="window workbench" id="workbench">
+    <div class="title-bar">
+      <div class="title-bar-text">orz 工作台</div>
+      <div class="title-bar-controls">
+        <button aria-label="Minimize" title="最小化" disabled></button>
+        <button aria-label="Maximize" title="最大化" disabled></button>
+        <button aria-label="Close" id="btnQuit" title="退出（结束桥接会话）"></button>
+      </div>
+    </div>
+    <div class="window-body">
+      <!-- 行1：全局菜单（MenuBar，冻结词表照 orz-tui view_model.rs） -->
+      <div id="menubar" class="region-menubar" role="menubar" aria-label="全局菜单"></div>
+      <!-- 行2：即时操作＋短命令＋状态摘要（两行顶栏第二行，补充稿 §4） -->
+      <div id="toolbar" class="region-toolbar" role="toolbar" aria-label="即时操作"></div>
+      <!-- 主区：Explorer | ContentPane | Marker -->
+      <div id="main" class="region-main">
+        <div id="explorer" class="region-explorer fieldset-borderless" aria-label="探索器"></div>
+        <div id="content" class="region-content" aria-label="内容区">
+          <!-- pin-to-top 工具展开清单（CONTENT_PANE_CONVERSATION_RENDERING_v0.1 §3.3） -->
+          <div id="toolPin" class="tool-pin" hidden></div>
+          <div id="contentScroll" class="content-scroll"></div>
+        </div>
+        <div id="marker" class="region-marker" aria-label="内容标记"></div>
+      </div>
+      <!-- 输入行 -->
+      <div id="inputRow" class="region-input">
+        <textarea id="chatInput" placeholder="输入问题开始对话...（Enter 提交，Shift+Enter 换行）" rows="2"></textarea>
+        <div class="input-buttons">
+          <button id="sendBtn" class="wide">发送</button>
+        </div>
+      </div>
+      <!-- 状态栏（StatusBar 冻结六段，照 orz-tui view_model.rs） -->
+      <div id="statusbar" class="region-status status-bar" aria-label="状态栏"></div>
+    </div>
+  </div>
+  <!-- 模态层：权限弹窗 / Help / 查找 / 属性 / 命令（dialogs.js 挂载） -->
+  <div id="modalLayer"></div>
+  <div id="connBanner" class="conn-banner" hidden></div>
+
+  <script src="/assets/vendor/marked.umd.js"></script>
+  <script type="module" src="/assets/app/main.js"></script>
+</body>
+</html>

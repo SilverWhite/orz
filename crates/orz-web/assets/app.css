@@ -1,0 +1,391 @@
+/*
+ * orz Web 工作台布局（0br S2）—— 自研（S1 §4.2 R-3/R-5 登记）：
+ * 本文件只承载三稿特有的布局与对话/机器动作视觉分界
+ * （CONTENT_PANE_CONVERSATION_RENDERING_v0.1 §2「有边框＝对话、无边框＝机器动作」）；
+ * 控件质感一律来自照搬件 98.css（vendor/98.css，MIT）。
+ */
+
+:root {
+  --orz-font: "Pixelated MS Sans Serif", "MS Sans Serif", Tahoma, "Microsoft YaHei", sans-serif;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: #008080; /* 经典桌面青绿（98.css 同族色面） */
+  font-family: var(--orz-font);
+}
+
+.workbench {
+  position: absolute;
+  inset: 8px;
+  display: flex;
+  flex-direction: column;
+}
+.workbench .window-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  overflow: hidden;
+}
+
+/* ── 两行顶栏（补充稿 §4：行1 全局菜单／行2 即时操作＋状态摘要） ── */
+.region-menubar {
+  display: flex;
+  gap: 2px;
+  padding: 1px 2px;
+  background: #c0c0c0;
+  border-bottom: 1px solid #808080;
+  user-select: none;
+  position: relative;
+}
+.region-menubar .menu-item {
+  padding: 2px 8px;
+  cursor: default;
+  font-size: 12px;
+}
+.region-menubar .menu-item:hover,
+.region-menubar .menu-item.open {
+  background: #000080;
+  color: #fff;
+}
+.menu-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 180px;
+  z-index: 60;
+}
+.menu-dropdown .menu-entry {
+  padding: 3px 16px 3px 20px;
+  font-size: 12px;
+  cursor: default;
+  white-space: nowrap;
+}
+.menu-dropdown .menu-entry:hover { background: #000080; color: #fff; }
+.menu-dropdown .menu-entry.disabled { color: #808080; }
+.menu-dropdown .menu-entry.disabled:hover { background: inherit; color: #808080; }
+.menu-dropdown .menu-sep {
+  height: 0;
+  border-top: 1px solid #808080;
+  border-bottom: 1px solid #fff;
+  margin: 2px 2px;
+}
+
+.region-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  background: #c0c0c0;
+  border-bottom: 1px solid #808080;
+}
+.region-toolbar .spacer { flex: 1; }
+.region-toolbar .summary {
+  font-size: 12px;
+  color: #000;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+.region-toolbar button { font-size: 12px; min-width: 0; padding: 2px 8px; }
+.region-toolbar button:disabled { color: #808080; }
+
+/* ── 主区三栏（Explorer | ContentPane | Marker；大主窗＝两侧各由菜单开关收起） ── */
+.region-main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  gap: 2px;
+  padding: 2px;
+  background: #c0c0c0;
+}
+.region-explorer {
+  width: 220px;
+  flex: none;
+  overflow: auto;
+  background: #fff;
+  border: 2px inset #dfdfdf;
+  font-size: 12px;
+  padding: 4px;
+}
+.region-explorer.hidden { display: none; }
+.region-marker {
+  width: 120px;
+  flex: none;
+  overflow: auto;
+  background: #fff;
+  border: 2px inset #dfdfdf;
+  font-size: 12px;
+  padding: 4px;
+}
+.region-marker.hidden { display: none; }
+.marker-entry {
+  padding: 1px 2px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.marker-entry:hover { background: #000080; color: #fff !important; }
+/* 锚点配色（走查反馈二/三 2026-09-25）：统一界面主色深蓝（98.css 同族），
+ * ▸ 输入／◆ 最终输出 同色异符号；● 搜索命中 保持橙 */
+.marker-entry.mk-user { color: #000080; }
+.marker-entry.mk-model { color: #000080; }
+.marker-entry.mk-hit { color: #b25000; }
+
+/* 探索器分组表头（可折叠，走查反馈 2026-09-25） */
+.explorer-group {
+  font-weight: bold;
+  margin-top: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.explorer-group:hover { background: #ececec; }
+
+/* 会话组行「◆归档」跳转标记（0br S3 新增面）：组行点击＝整段会话合并
+ * 视图；标记点击（stopPropagation）＝归档动作。 */
+.archive-jump {
+  float: right;
+  color: #000080;
+  font-weight: bold;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.archive-jump:hover { text-decoration: underline; }
+.marker-entry:hover .archive-jump { color: #fff; }
+.archive-jump.disabled { color: #999; cursor: default; }
+.archive-jump.disabled:hover { text-decoration: none; }
+
+/* 探索器子级（用户令 2026-09-25：工作区组两级子级＝当前工作区＋
+ * 已信任工作区）：子行缩进，弱化色。 */
+.explorer-sub {
+  padding: 1px 2px 1px 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.explorer-subgroup {
+  padding: 1px 2px 1px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.explorer-subgroup:hover { background: #ececec; }
+.muted { color: #555; }
+
+/* 会话列表双列等宽对齐（批四补 2026-09-25）：ID 恒 8 字符、时间恒定长
+ * 格式，等宽字体下行行严格对齐。 */
+.session-id {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+}
+.session-when {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  color: #555;
+}
+
+/* ContentPane：pin 展开区在上、对话流在下（三稿 §3.3/§5） */
+.region-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 2px inset #dfdfdf;
+  background: #fff;
+}
+.tool-pin {
+  flex: none;
+  max-height: 45%;
+  overflow: auto;
+  border-bottom: 2px inset #dfdfdf;
+  background: #fff;
+  padding: 4px;
+  font-size: 12px;
+}
+.content-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 8px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* ── ContentPane 渲染规则（三稿 §2 一条分界线） ── */
+/* 有边框＝自然语言对话（用户/模型同框异标签，Markdown 在框内展开） */
+.msg-card {
+  border: 1px solid #808080;
+  box-shadow: 1px 1px 0 #000 inset, -1px -1px 0 #fff inset;
+  margin: 0 0 10px 0;
+  padding: 0;
+  background: #fff;
+}
+.msg-card .msg-head {
+  font-size: 12px;
+  padding: 1px 6px;
+  border-bottom: 1px solid #c0c0c0;
+  background: #ececec;
+  color: #444;
+  user-select: none;
+}
+.msg-card .msg-body { padding: 6px 8px; overflow-wrap: anywhere; }
+.msg-card.warning .msg-head { background: #ffd2d2; color: #7a0000; }
+.msg-card .msg-body p { margin: 0 0 8px 0; }
+.msg-card .msg-body p:last-child { margin-bottom: 0; }
+.msg-card .msg-body pre {
+  background: #f4f4f4;
+  border: 1px solid #c0c0c0;
+  padding: 6px;
+  overflow-x: auto;
+  font-size: 12px;
+}
+.msg-card .msg-body code { background: #f4f4f4; padding: 0 3px; font-size: 12px; }
+.msg-card .msg-body pre code { padding: 0; background: none; }
+.msg-card .msg-body blockquote {
+  margin: 4px 0;
+  border-left: 3px solid #c0c0c0;
+  padding-left: 8px;
+  color: #444;
+}
+.msg-card .msg-body table { border-collapse: collapse; font-size: 12px; }
+.msg-card .msg-body td, .msg-card .msg-body th { border: 1px solid #808080; padding: 2px 6px; }
+/* 表格窗口适配（走查反馈三 2026-09-25）：单元格内换行为主——表宽锁 100%，
+ * 长内容在格内折行，整个表格装进当前窗口；.table-wrap 横向滚动只作极端兜底。
+ * white-space:normal 覆盖 98.css 表格原语的 nowrap（vendor 不改，本层覆盖） */
+.msg-card .msg-body .table-wrap { overflow-x: auto; max-width: 100%; }
+.msg-card .msg-body .table-wrap table { width: 100%; }
+.msg-card .msg-body .table-wrap td, .msg-card .msg-body .table-wrap th {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.msg-card .msg-body h1, .msg-card .msg-body h2, .msg-card .msg-body h3,
+.msg-card .msg-body h4, .msg-card .msg-body h5 { margin: 6px 0 4px; font-size: 13px; }
+.msg-card .msg-body a { color: #000080; }
+/* 内容折叠（run_finished 收折，补充稿 §11；阻塞错误不折叠） */
+.msg-card.collapsed .msg-body { display: none; }
+.msg-card.collapsed .msg-head::after { content: "（已折叠，点击标题展开）"; color: #808080; margin-left: 8px; }
+
+/* 无边框＝机器动作（工具调用行 / 展开清单） */
+.tool-line {
+  margin: 0 0 4px 0;
+  padding: 0 0 0 2px;
+  font-size: 12px;
+  color: #222;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tool-line .tool-tag { font-weight: bold; }
+.tool-line .tool-expand {
+  float: right;
+  cursor: pointer;
+  color: #000080;
+  user-select: none;
+}
+.tool-pin .tool-pin-title { font-weight: bold; margin-bottom: 2px; }
+.tool-pin .tool-pin-close { float: right; cursor: pointer; color: #000080; user-select: none; }
+.tool-pin ol { margin: 0 0 0 26px; padding: 0; }
+.tool-pin li { white-space: nowrap; }
+
+.system-line {
+  font-size: 12px;
+  color: #555;
+  margin: 0 0 6px 0;
+}
+.system-line.warning { color: #a00000; }
+.system-gap { height: 8px; } /* 消息之间空行（三稿 §3.1） */
+
+/* ── 输入行 ── */
+.region-input {
+  display: flex;
+  gap: 6px;
+  padding: 4px 2px;
+  background: #c0c0c0;
+  align-items: flex-end;
+}
+.region-input textarea {
+  flex: 1;
+  resize: none;
+  font-family: var(--orz-font);
+  font-size: 13px;
+  background: #fff;
+  border: 2px inset #dfdfdf;
+  padding: 4px;
+}
+.region-input textarea:focus { outline: none; }
+.region-input .input-buttons { display: flex; flex-direction: column; gap: 4px; }
+.region-input button.wide { min-width: 64px; font-size: 12px; }
+
+/* ── 状态栏（StatusBar） ── */
+.region-status {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  background: #c0c0c0;
+  border-top: 1px solid #fff;
+  padding: 2px 4px;
+  user-select: none;
+}
+.region-status .status-item.bad { color: #a00000; font-weight: bold; }
+
+/* ── 模态层（98.css window 原语承载；Esc 关闭，补充稿 §12） ── */
+#modalLayer {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.18);
+  z-index: 100;
+}
+#modalLayer.open { display: flex; }
+.modal-window {
+  /* 走查反馈四（2026-09-25）：四周灰色遮罩边收窄到原来的约 1/3
+   * （560px→80vw、82vh→94vh；1440×900 下边宽 440px→144px / 81px→27px） */
+  width: 80vw;
+  max-height: 94vh;
+  display: flex;
+  flex-direction: column;
+}
+.modal-window .title-bar { flex: none; }
+.modal-window .window-body { overflow: auto; padding: 8px; font-size: 12px; }
+.modal-tabs { display: flex; gap: 2px; padding: 4px 8px 0; background: #c0c0c0; }
+.modal-tabs button { font-size: 12px; padding: 2px 10px; }
+.modal-tabs button.active { font-weight: bold; }
+.modal-actions { display: flex; gap: 6px; justify-content: flex-end; padding: 8px; }
+.modal-actions button { min-width: 88px; font-size: 12px; }
+.permission-body { font-size: 12px; }
+.permission-body .perm-tool { font-weight: bold; }
+.permission-body .perm-raw {
+  margin-top: 6px;
+  background: #f4f4f4;
+  border: 1px solid #c0c0c0;
+  padding: 4px;
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.props-table { width: 100%; border-collapse: collapse; }
+.props-table td { border: 1px solid #c0c0c0; padding: 3px 6px; vertical-align: top; }
+.props-table td:first-child { width: 40%; background: #ececec; }
+/* Help 六页表格（走查反馈四补）：首列（键/命令名）随内容自适应，
+ * 不用属性弹窗的 40% 定宽 */
+.help-table td:first-child { width: auto; white-space: nowrap; }
+
+/* ── 连接横幅（无令牌/断开提示） ── */
+.conn-banner {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  background: #ffd2d2;
+  border: 2px outset #fff;
+  color: #7a0000;
+  font-size: 12px;
+  padding: 4px 12px;
+  z-index: 200;
+}
+
+/* 焦点循环（F6）可视提示 */
+.focus-ring { outline: 2px solid #000080 !important; outline-offset: 1px; }

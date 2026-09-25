@@ -14,6 +14,7 @@ orz-assurance = { path = "../orz-assurance" }
 orz-loop = { path = "../orz-loop" }
 orz-host = { path = "../orz-host" }
 orz-tui = { path = "../orz-tui" }
+orz-web = { path = "../orz-web" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

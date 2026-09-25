@@ -57,6 +57,7 @@ members = [
     "crates/orz-assurance",
     "crates/orz-tui",
     "crates/orz-host",
+    "crates/orz-web",
     "crates/orz-codex",
 ]
 

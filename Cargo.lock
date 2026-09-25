@@ -5604,6 +5604,7 @@ dependencies = [
  "orz-host",
  "orz-loop",
  "orz-tui",
+ "orz-web",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -6048,6 +6049,23 @@ name = "orz-version"
 version = "0.2.114"
 dependencies = [
  "semver",
+]
+
+[[package]]
+name = "orz-web"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "flate2",
+ "futures",
+ "orz-workspace",
+ "rand 0.9.2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tower",
+ "tracing",
 ]
 
 [[package]]
