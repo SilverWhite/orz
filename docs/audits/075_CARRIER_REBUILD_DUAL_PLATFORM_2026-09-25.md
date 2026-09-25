@@ -187,7 +187,28 @@
 
 ### 8.1 上传面核证补记（本档提交后回读）
 
-（见同批回读节：tag 指向、两资产远端 size／digest 与本地逐位对照、回下载核验状态。）
+- **创建读数**：`gh release create v0.6.13 --target a3df39ed…` ⇒
+  <https://github.com/SilverWhite/CLI/releases/tag/v0.6.13>；
+  `gh api repos/SilverWhite/CLI/git/ref/tags/v0.6.13` 回读
+  `object.sha = a3df39ede3f606f7ea447c454c21ab4ab0963756` ⇒ **tag 指向本批父仓提交**。
+- **资产 digest 回读**（`gh api repos/SilverWhite/CLI/releases/tags/v0.6.13`）：
+
+| 资产 | 远端 size | 远端 digest | 本地 size／SHA256 | 判读 |
+|---|---:|---|---|---|
+| `orz-0.6.13-windows-x86_64.zip` | 27,713,322 | `sha256:1230585986a25afcd38f3e955a0990f567c3dee164aa97a5b0027791d156f097` | 27,713,322／同值 | **逐位一致** |
+| `orz-0.6.13-linux-x86_64.tar.gz` | 36,814,163 | `sha256:cbffd6587c86d3e1c066ca441cfb93bf5b9fed015203ba576e4244a415afd279` | 36,814,163／同值 | **逐位一致** |
+| `SHA256SUMS`（顶层） | 193 | `sha256:b94ff2f74c15014828a2fcfe5928ccbefdbe05d60a32cbd67ea02be84ebfe44e` | 193／同值 | **逐位一致** |
+
+- **回下载核验（本批达成，074 未竟项收口）**：三资产经**认证 API 资产面**完整回下载——
+  `gh api repos/SilverWhite/CLI/releases/assets/{id} -H "Accept: application/octet-stream"`：
+  zip 回读 27,713,322 B（SHA256 与本地**逐位一致**）、tar.gz 回读 36,814,163 B（**同值**）、
+  `SHA256SUMS` 回读 193 B（**同值**，其内两行与本地包哈希逐行相符）。
+- **074 摩擦根因补记（本条为口径澄清，非新摩擦）**：本仓为**私有仓**（`gh repo view` ⇒
+  `isPrivate: true`）⇒ 匿名路径 `https://github.com/…/releases/download/vX/…`
+  一律返回 **404**（回读体 `Not Found`，9 B），这解释了 074 §8.1「`gh release download`
+  两次各创建 **0 字节**文件后阻塞」的现象族——**属私有面＋本机网络面的组合，非上传失败**；
+  资产面核证应以**认证 API 路径**为准（`releases/tags/{tag}` 的 `digest` 字段＋
+  `releases/assets/{id}` 下载回读）。
 
 ## 9. 记账面（pin、清单、索引、计数）
 
