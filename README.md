@@ -6,7 +6,7 @@
 - DeepSeek API Key。
 （注：目前 Linux 仅提供构建产物，未做专门体验适配与优化）
 
-发布包包含三个程序：`orz`（主程序）、`orz-signer`（安全签发器）、`orz-acaf-provision`（一次性初始化工具），需要放在同一目录。
+发布包包含三个程序：`orz`（主程序）、`orz-signer`（安全签发器）、`orz-acaf-provision`（一次性初始化工具），需要放在同一目录。Web 工作台（0.6.13 起）的静态前端内嵌在 `orz` 二进制内，`orz web` 只监听回环地址、需启动时打印的令牌访问。
 
 ## 配置方式
 
@@ -14,13 +14,13 @@
 
 | 步骤 | Windows（PowerShell） | Linux（sh） |
 |---|---|---|
-| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.6.2-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
+| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.6.13-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
 | 2. 配置 API Key | 存入 Windows 凭据管理器（Generic，目标名 `orz-deepseek/agent`；一次即可）：<br>`cmdkey /generic:orz-deepseek/agent /user:agent /pass:你的DeepSeek_API_Key` | 用环境变量（Windows 凭据管理器通道的显式例外）：<br>`export ORZ_DEEPSEEK_API_KEY=你的DeepSeek_API_Key` |
 | 3. 初始化安全签发（一次性） | `.\orz-acaf-provision.exe "$env:USERPROFILE\.orz-acaf\keystore" "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br><br>ACAF 默认 fail-closed，未配置会拒绝启动。 | `./orz-acaf-provision "$HOME/.orz-acaf/keystore" "$HOME/.orz-acaf/signer-manifest.json"` |
 | 4. 设置启动环境 | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
-| 5. 运行 | `.\orz.exe`（交互 TUI）<br>`.\orz.exe -p "你的任务" --real`（无头模式） | `./orz`（交互 TUI）<br>`./orz -p "你的任务" --real`（无头模式） |
+| 5. 运行 | `.\orz.exe`（交互 TUI）<br>`.\orz.exe -p "你的任务" --real`（无头模式）<br>`.\orz.exe web`（Web 工作台，打印本地带令牌地址） | `./orz`（交互 TUI）<br>`./orz -p "你的任务" --real`（无头模式）<br>`./orz web`（Web 工作台，打印本地带令牌地址） |
 
-发布包说明与完整性校验见 GitHub Release（最新 [v0.6.12](https://github.com/SilverWhite/CLI/releases/tag/v0.6.12)，双平台包＋`SHA256SUMS`）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
+发布包说明与完整性校验见 GitHub Release（最新 [v0.6.13](https://github.com/SilverWhite/CLI/releases/tag/v0.6.13)，双平台包＋`SHA256SUMS`）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
 
 ### 从源码运行
 
@@ -108,7 +108,7 @@ orz 为本地优先、保障优先的终端 AI 编程 Agent/harness，制作全�
 
 - **设计**：ADR-0010 是唯一自然语言设计权威，`accepted / frozen`。
 - **实现**：Rust production workspace 可运行，当前整体 `partial`；未闭合差距集中登记在 [`CLI_PROJECT_INDEX.md` §3.1](CLI_PROJECT_INDEX.md#31-已登记实现差距)，不在本 README 展开。
-- **发布**：0.1.0–0.5.1 试用发布包入口在 [`releases/`](releases/)；0.5.4 起双平台安装包发布于 [GitHub Releases](https://github.com/SilverWhite/CLI/releases)（当前最新 v0.6.12，Windows zip／Linux tar.gz＋`SHA256SUMS`）；当前未提供 macOS 原生包。
+- **发布**：0.1.0–0.5.1 试用发布包入口在 [`releases/`](releases/)；0.5.4 起双平台安装包发布于 [GitHub Releases](https://github.com/SilverWhite/CLI/releases)（当前最新 v0.6.13，Windows zip／Linux tar.gz＋`SHA256SUMS`；0.6.13 起载体内嵌 Web 工作台，`orz web` 即起本地回环界面）；当前未提供 macOS 原生包。
 - 测试全绿或单次跑分不构成架构符合性结论；符合性状态以索引与审计为准。
 
 ## License
