@@ -8,7 +8,7 @@
 - **形态权威（2026-09-24 解冻）**：三份 UI 设计稿——[`CLI_UI_INTERACTION_MODEL_v0.1`](../architecture/CLI_UI_INTERACTION_MODEL_v0.1.md)（工作台空间语言与全局区域）、[`CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1`](../architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md)（两行顶栏／大主窗优先／默认中文／Help 弹窗）、[`CONTENT_PANE_CONVERSATION_RENDERING_v0.1`](../architecture/CONTENT_PANE_CONVERSATION_RENDERING_v0.1.md)（ContentPane 对话与机器动作的渲染规则）。
 - **定位权威**：[`ADR-0010 §2.4 条 8`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（UI 是投影层；主 UI 为 `orz-tui` assurance workbench；Codex TUI/app-server 可作 fallback；两者必须消费同一 host/loop/journal 事实，不建第二套产品 runtime）与 [`§2.6`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（Toolbar 与只读 session/run-history 投影为 presentation baseline；UI 不拥有执行事实、permission、session persistence 或 restore）。
 - **复用权威**：`FUS-CORE`（成熟组件优先）＋ 本稿 §4 映射表（"能照搬就照搬"）。
-- **本次用户裁决（2026-09-24 原文口径）**：① UI 的具体形态就用那三份设计稿；② 三份稿子从冻结状态里拽回来；③ 搬 xai 并以 xai 作为基础就是为了复用成熟组件，能复用的当然直接复用，遵守开源协议；④ 先做 Web、后补 TUI 形式。
+- **本次用户裁决（2026-09-24；五句逐字转录以 [`ADR-0010 §14.78`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) 为准）**：① UI 的具体形态就用那三份设计稿；② 三份稿子从冻结状态里拽回来；③ 搬 xai 并以 xai 作为基础就是为了复用成熟组件，能复用的当然直接复用，遵守开源协议；④ 先做 Web、后补 TUI 形式。
 
 ## 2. 形态摘要（引自三稿，细节以原文为准）
 
@@ -60,10 +60,15 @@
 
 ## 7. 自研理由登记（无复用件的区块）
 
+> 2026-09-25 审查处置批增补 R-7 与两处形态选择登记（承接 S1 §4.2 R-1…R-6，编号续延）。
+
 - **两行顶栏与全局区域布局**：三稿特有形态，上游 TUI 为自家布局，无可复用件。
 - **AddressBar 的 `command://` 语义＋对象历史栈**：三稿特有语义，无上游对应物。
 - **Explorer／Markers／StatusBar 与 orz 对象的映射**：数据源是 orz 的 session/journal／黑板／证据账，需自研投影映射（消费面复用 `orz-tui/projection`）。
 - **审批弹窗与 ACP `session/request_permission` 的对接**：协议语义我方已有（`xai-acp-lib`／`orz-host`），呈现层自研。
+- **R-7（语法高亮／LaTeX／mermaid 后置）**：ContentPane 稿 §3.1 将「语法高亮」列于框内渲染规则，Web v1 后置属对该形态权威条款的**显式豁免**（LaTeX／mermaid 系本稿行文自带、三稿原文未要求，不构成冲突）；S4 后补盘点时评估照搬件（如 highlight.js）。判据本身不能自我授权偏离形态权威，故在此登记。
+- **形态选择·AddressBar／FindBar 弹窗化（Web v1）**：两栏无常驻区块，以行2 状态摘要＋「命令/位置」「查找」弹窗承载（补充稿 §5 弹窗化口径）；对象 URI 路由仅 `run://`／`workspace://live` 有投影，`conversation://` 给只读说明，`source://`／`claim://`／`adapter://`／`artifact://` 显式答复「v1 无投影面」不静默。S3 真机对照后如判形态不足再立补码批。
+- **形态选择·快照选择器**：`restore_snapshot` 非 ACP 协议面（`AcpServer` 进程内方法），Web v1 为提示性横幅（「恢复未接线」），不建选择器面板；与 §14.78 条 5 一致，接线与否随 S3/S4 裁决。
 
 ## 8. 风险与边界
 
@@ -71,6 +76,11 @@
 - **终端内体验让位**：Web 先行意味着终端内形态暂缓；TUI 后补时保持同一套形态与复用件，不另起设计。
 - **与过渡面的关系**：外部 ACP 客户端（现 VS Code `formulahendry.acp-client`）仍是过渡面，本 Web 形态属**产品面**候选；与 `FUS-UI-BOUNDARY` 的边界在 S1 一并复核。
 - **三稿正文年代**：三稿属早期基线，凡与本 ADR-0010 冲突处以 ADR 为准；本稿只解冻其**形态**效力。
+- **三稿豁免清单（2026-09-25 处置批点名，替代 S1 §9 的「等」字兜底）**：① 补充稿 §1「不复刻老 IE 或 Win98 视觉外观」条款——与 §14.78 条 3 照搬 `98.css`/`XP.css` 的裁决冲突，**按 ADR 为准不适用**；② 交互模型稿 Windows-only/Windows Terminal 优先、100×30 最小视口、box-drawing 字符与中文宽度计算、alternate screen 等 TUI/终端约束——**不约束 Web 形态**；③ 补充稿 §13 冻结项「`Edit` 转为「编辑模式」」**已落码**（菜单词表用「编辑模式」），顶部中文菜单最终词汇仍在 §13 延期面，S3 词汇定稿收口；④ 历史实现决策（`prompt_toolkit`/Python `widgets.py`）沿用 S1 §9 豁免。
+- **刷新/断线语义（v1 已知限制）**：桥为单会话且连接关闭即结束 `orz --stdio` 子进程 ⇒ 页面刷新＝活动 run 中断、ACP 会话上下文丢失（restore 非 ACP 面）；前端已有 `beforeunload` 确认守卫，重连/恢复路径留 S3/S4 裁决。
+- **marked 供应链策略**：唯一解析不可信模型输出的 vendored 件（pin 18.0.14＋MANIFEST sha256 钉子＋嵌入表 digest 校验测试）；上游安全公告触发重 vendored 评估；前端净空（scheme 白名单/图片剥离）不依赖库默认行为。
+- **投影双实现同步纪律**：`orz-tui/projection.rs`（TUI）与 `orz-web/assets/app/projection.js`（Web）为同一 journal 事件面的两份投影实现——journal 事件语义变更时**同批同步两处**，审查面＝双文件对照；长期单一语义源（如共享 schema 派生）留 S4 盘点。
+- **渲染内存上限（形态豁免）**：ContentPane「不设展开高度限制」指卡片内容不截断；Web v1 另设条目数上限（3000 条/单工具清单 2000 条，超出裁最旧并计数提示）防长会话 DOM 无界——属性能边界而非渲染截断，完整事实恒在 journal（可 `run://` 回放）。
 
 ## 9. 入口
 

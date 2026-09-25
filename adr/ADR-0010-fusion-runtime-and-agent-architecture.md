@@ -108,6 +108,11 @@
    - 冻结版本补记（2026-09-24 追加 v1.79）：**T1 必定压缩三步升级（滑块 v8 补足）＋
      0bk 解析偏差修正**——见 §14.77；v1.80（2026-09-24 复审补记）＝§14.77 两边缘
      澄清（复位点精确化＋强制窗块自带模板；立项 0bn）——见 §14.77 复审补记。
+   - 冻结版本补记（2026-09-25 追加 v1.81）：**§14.78 条 4 措辞勘误**——MIT 件
+     声明落点「父仓 `THIRD-PARTY-NOTICES`」更正为「分发仓（orz 子仓）
+     `orz/THIRD-PARTY-NOTICES`」（父仓根无该文件；许可声明随分发单元落位）；
+     0br S2 全面审查（设计/实现/符合性三面）的处置登记见
+     `docs/audits/0BR_S2_REVIEW_HANDLING_2026-09-25.md`。
    - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -5915,6 +5920,6 @@ RLI 影子默认关、生产 1D 不动）。选型出处按用户裁决**脱敏�
 1. **形态权威解冻**：三份 UI 设计稿——[`CLI_UI_INTERACTION_MODEL_v0.1`](../architecture/CLI_UI_INTERACTION_MODEL_v0.1.md)、[`CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1`](../architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md)、[`CONTENT_PANE_CONVERSATION_RENDERING_v0.1`](../architecture/CONTENT_PANE_CONVERSATION_RENDERING_v0.1.md)——自 2026-09-24 批「pre-ADR-0010 就地冻结」状态**解除冻结**，与综合稿 [`UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md`](../docs/UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md) 共同构成 orz UI 的**形态设计权威**。三稿正文不回改；凡与本 ADR（含 §2.4 条 8、§2.6）冲突处以本 ADR 为准。
 2. **执行形态＝Web 优先、TUI 形式后补**：先落 Web 形态（本地服务承载 ACP-over-WebSocket 桥 ＋ 静态前端），TUI 形式随后补齐；两者共用同一套形态（同三稿）与同一套复用映射（综合稿 §4），不得另起设计。
 3. **复用原则＝能照搬就照搬**：搬 xai 上游成熟组件的既有政策在本主题内细化——**每个 UI 区块必须标注来源件**；有来源件而不照搬者视为偏离，须在设计稿登记理由。旧时代桌面外观语言在 Web 侧直接照搬 `98.css`／`XP.css`（均 MIT）。
-4. **协议合规为照搬前置**：Apache-2.0 件保留 `LICENSE`／`NOTICE`／`THIRD-PARTY-NOTICES` 与单 crate 来源标注；MIT 件保留版权与许可文本并纳入父仓 `THIRD-PARTY-NOTICES`；新搬件随搬随登记进 [`fusion-component-register-v0.1.yaml`](../upstream/fusion-component-register-v0.1.yaml)。
+4. **协议合规为照搬前置**：Apache-2.0 件保留 `LICENSE`／`NOTICE`／`THIRD-PARTY-NOTICES` 与单 crate 来源标注；MIT 件保留版权与许可文本并纳入**分发仓** `THIRD-PARTY-NOTICES`（**2026-09-25 勘误，v1.81**：原「父仓」措辞不准——父仓根无该文件，许可声明应随分发单元落位 orz 子仓 `orz/THIRD-PARTY-NOTICES`；勘误处置见 [`0BR_S2_REVIEW_HANDLING_2026-09-25`](../docs/audits/0BR_S2_REVIEW_HANDLING_2026-09-25.md)）；新搬件随搬随登记进 [`fusion-component-register-v0.1.yaml`](../upstream/fusion-component-register-v0.1.yaml)。
 5. **投影纪律不变**：Web／TUI 均只消费 host/loop/journal 事实，不拥有执行事实、permission、session persistence 或 restore（§2.4 条 8、§2.6）；不得建立第二套产品 runtime。
 6. **登记**：立项 `0br`（P1，执行形态＝Web 优先，随本批）；索引条目 `DESIGN-UI-FORM-CONSOLIDATED`（`current-design`）；`FUS-UI-BOUNDARY` 加 2026-09-24 补记（Web 形态属产品面候选，过渡面仍为外部 ACP 客户端）。

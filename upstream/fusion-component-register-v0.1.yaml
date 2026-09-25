@@ -8,6 +8,22 @@ schema_version: 0.1.0
 frozen_at: "2026-08-09"
 audit_status: not_started
 components:
+- id: 98css
+  capability_group: UI
+  code_path: orz/crates/orz-web/assets/vendor/98.css
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: vendored, project: jdan/98.css, version: "0.1.21", license: MIT}
+  notes: "Web workbench desktop appearance (0br S2 vendored; digests MANIFEST.sha256.txt; origin facts recorded at adoption, adoption tier pending per-crate audit)"
+- id: xpcss
+  capability_group: UI
+  code_path: orz/crates/orz-web/assets/vendor/XP.css
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: vendored, project: botoxparty/XP.css, version: "0.2.6", license: MIT}
+  notes: "Optional XP-era theme + shared Pixelated MS Sans Serif fonts (0br S2 vendored; extends 98.css)"
 - id: xai-proto-build
   capability_group: build/support
   code_path: orz/crates/build/xai-proto-build
@@ -104,6 +120,14 @@ components:
   ownership: not_assessed
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
+- id: marked
+  capability_group: UI
+  code_path: orz/crates/orz-web/assets/vendor/marked.umd.js
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: vendored, project: markedjs/marked, version: "18.0.14", license: MIT}
+  notes: "Web ContentPane markdown rendering (0br S2 vendored; S1 §4.2 R-1 substitution for the ratatui-side orz-markdown)"
 - id: orz-mcp
   capability_group: ACP/MCP
   code_path: orz/crates/codegen/orz-mcp
@@ -512,6 +536,14 @@ components:
   ownership: not_assessed
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
+- id: orz-web
+  capability_group: UI
+  code_path: orz/crates/orz-web
+  status: audit_required
+  adoption_tier: not_assessed
+  ownership: not_assessed
+  origin: {kind: local}
+  notes: "first-party Web workbench bridge — ACP-over-WebSocket pump + read-only .gsa projection API + embedded static UI (0br S2); UI 零执行事实 per ADR-0010 §2.4 条 8/§2.6"
 - id: cli-chat-proxy-types
   capability_group: codegen-support
   code_path: orz/prod/mc/cli-chat-proxy-types
