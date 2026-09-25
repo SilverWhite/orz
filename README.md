@@ -38,6 +38,7 @@ cargo run -p orz-bin -- --fake-provider               # TUI
 | 场景 | 命令 |
 |---|---|
 | 交互 TUI | `orz` |
+| Web 工作台（本地回环，启动时打印带令牌地址） | `orz web` |
 | 无头执行 | `orz -p "<任务>" --real` |
 | 计划模式（先记录计划再执行） | `orz --plan -p "<任务>" --real` |
 | ACP stdio server | `orz --stdio` |
@@ -58,6 +59,8 @@ cargo run -p orz-bin -- --fake-provider               # TUI
 ## 框架介绍
 
 orz 为本地优先、保障优先的终端 AI 编程 Agent/harness，制作全程使用 AI coding。其中，控制面、Agent loop 与保障体系为自研内容，直接复用部分 Grok Build 中已成熟的工具与工作区组件，参考 Codex 的代码设计语言，执行侧服务调用形态大量借鉴 Home Assistant（`domain.service + target + data`），并少量参考 DeepSeek Harness 与其他成熟产品。
+
+**Web 工作台（0.6.13 起内嵌）的直接借鉴面（逐件标注）**：形态取自本仓三份 UI 设计稿＋[`综合稿`](docs/UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md)；**外观照搬**旧时代桌面主题 [`98.css`](https://github.com/jdan/98.css)（在役，MIT）与 [`XP.css`](https://github.com/botoxparty/XP.css)（可选主题，MIT，随其一并分发的 Pixelated MS Sans Serif 字体）；**Markdown 渲染照搬** [`marked`](https://github.com/markedjs/marked)（MIT，代换 TUI 侧 `orz-markdown`）。三件均为**未修改 vendored**，摘要见 [`vendor/MANIFEST.sha256.txt`](orz/crates/orz-web/assets/vendor/MANIFEST.sha256.txt)、登记见 [`orz/THIRD-PARTY-NOTICES`](orz/THIRD-PARTY-NOTICES)（BUNDLED WEB FRONTEND ASSETS 节）与 [`组件册`](upstream/fusion-component-register-v0.1.yaml)；前端[每区块来源标注](orz/crates/orz-web/assets/index.html)随代码同址可查（照搬判据：每区块标注来源件，有来源而不照搬须登记理由）。
 
 整体架构可主要分为两大块两小块。
 两大块为**Agent 层**与**机械层**，两小块为作为核心面板的**黑板**和外挂的**时间与动作域判断组件**。
@@ -87,7 +90,7 @@ orz 为本地优先、保障优先的终端 AI 编程 Agent/harness，制作全�
 ### 载体与组件
 
 - 入口：`orz` 一个程序承载 TUI、`-p` 无头、`--plan`、`--stdio`（ACP）与 `--replay`；`orz-signer`/`orz-acaf-provision` 只用于安全层初始化（见上方配置）。
-- Rust 生产 workspace（`orz/`）：`orz-loop`（Agent loop、黑板与守卫）、`orz-host`（工具执行、权限桥、凭据、本地浏览器）、`orz-assurance`（journal、事件、ACAF、verifier）、`orz-bin`（CLI 入口）、`orz-tui`（终端工作台）。
+- Rust 生产 workspace（`orz/`）：`orz-loop`（Agent loop、黑板与守卫）、`orz-host`（工具执行、权限桥、凭据、本地浏览器）、`orz-assurance`（journal、事件、ACAF、verifier）、`orz-bin`（CLI 入口）、`orz-tui`（终端工作台）、`orz-web`（Web 工作台：回环桥＋内嵌静态前端，`orz web` 入口）。
 - 支撑体系：`assurance/` 为 Python reference/conformance 参考；`runtime/` 为事件 Schema；`protocol/` 为结构化操作协议草案。
 
 一次运行的路径大致是：入口 → 会话与 journal 初始化 → 主 Agent 轮次（近零提示 + 冻结 10 工具面）→ 工具直接调用执行 → 机械层权限/票据门 → 执行与检索 → 结果与事件回流 → submit 两阶段交付 → journal 收尾。之后可以 `--replay` 回放或恢复会话复查。
@@ -114,3 +117,5 @@ orz 为本地优先、保障优先的终端 AI 编程 Agent/harness，制作全�
 ## License
 
 Apache License 2.0。见 [`LICENSE`](LICENSE) 与 [`NOTICE`](NOTICE)。
+
+第三方与 vendored 件的许可与来源另见：[`orz/THIRD-PARTY-NOTICES`](orz/THIRD-PARTY-NOTICES)（crate 依赖、vendored 源码移植，以及 **Web 工作台内嵌静态件** 98.css／XP.css／marked 与 Pixelated MS Sans Serif 字体）、[`组件册`](upstream/fusion-component-register-v0.1.yaml)、以及内嵌前端资产的逐件摘要 [`vendor/MANIFEST.sha256.txt`](orz/crates/orz-web/assets/vendor/MANIFEST.sha256.txt)。
