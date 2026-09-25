@@ -12,6 +12,9 @@
   0bd 增补（2026-09-22）：⑤⑧ RLI 开关显式入装配清单（缺省 on＝常开；-RliOff
   置 kill switch）；⑭ 题面按显式 UTF-8 读取（PS 5.1 缺省按 ANSI 读无 BOM
   题面 ⇒ 整篇乱码，0be 轮实测）。
+  0bs ②（2026-09-25）：⑮ 控制台输出编码显式钉 UTF-8（[Console]::OutputEncoding
+  ＋$OutputEncoding）——Tee/捕获管道下原生输出按 ANSI 解码呈 GBK 乱码
+  （0bm F6 一族；修复后日志中文与机械文案可读）。
 .PARAMETER TaskFile
   题面文件路径（相对 $Workspace 或绝对路径；惯例 .tmp-*-task.txt）。
 .PARAMETER RliOff
@@ -36,7 +39,19 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+# ②（0bs，2026-09-25）：**控制台输出编码链显式钉 UTF-8**——`Tee-Object`／
+# 重定向捕获下，PS 5.1 按 ANSI（本机 GB2312）解码原生应用输出，中文与机械面
+# 文案呈 GBK 乱码（0bm F6 一族、本会话 git diff 同族实读）。消费者侧口径：
+# `[Console]::OutputEncoding`＝读原生输出所用编码；`$OutputEncoding`＝管道
+# 发给原生命令所用的编码。载体侧 orz 已自钉 SetConsoleOutputCP(65001)，
+# 本处补的是**捕获链**（launcher 是固定的消费入口）。
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
 function Assert-True($cond, $msg) { if (-not $cond) { throw "断言失败：$msg" } }
+
+# ②（0bs）自检钉：控制台输出编码必须是 UTF-8（见文件头 ⑮ 注；失败即抛）。
+Assert-True ([Console]::OutputEncoding.WebName -eq 'utf-8') "控制台输出编码须为 UTF-8（实得 $([Console]::OutputEncoding.WebName)）"
 
 # ① cwd 断言（M-1 预防；启动前 pwd 入 checklist）
 $ws = (Resolve-Path -LiteralPath $Workspace).Path
