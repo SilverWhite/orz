@@ -93,6 +93,134 @@ pub(crate) fn replace_using_positions(
     (new_text, new_positions)
 }
 
+// ============================================================================
+// 行尾逐行保真（0bm ⑤，2026-09-25）
+// ============================================================================
+
+/// 行尾形态（CRLF 逐行行尾保真的唯一表征）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LineEnding {
+    Lf,
+    Crlf,
+}
+
+impl LineEnding {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            LineEnding::Lf => "\n",
+            LineEnding::Crlf => "\r\n",
+        }
+    }
+}
+
+/// 逐行收集原始文本的行尾：`ends[i]` = 第 i 行（0 基，按 `\n` 划分）的行尾；
+/// `None` = 该行是**文件末行且无终结换行**。空文本返回空表。
+///
+/// 0bm ⑤（2026-09-25）：只认 `\n` 为行分隔（与全工具口径一致）——单独的
+/// `\r`（无 `\n` 跟随时）视作行内容，不构成行尾。CRLF/LF 混排文件据此
+/// **逐行**保真，替换不再把整文件统一成一种行尾。
+pub(crate) fn line_endings(raw: &str) -> Vec<Option<LineEnding>> {
+    let mut ends = Vec::new();
+    for piece in raw.split_inclusive('\n') {
+        match piece.strip_suffix('\n') {
+            Some(body) => ends.push(Some(if body.ends_with('\r') {
+                LineEnding::Crlf
+            } else {
+                LineEnding::Lf
+            })),
+            None => ends.push(None),
+        }
+    }
+    ends
+}
+
+/// 文件主调行尾（首个有行尾的行）；全无行尾（空文件／单行无终结）⇒ LF。
+pub(crate) fn prevailing_ending(ends: &[Option<LineEnding>]) -> LineEnding {
+    ends.iter()
+        .flatten()
+        .next()
+        .copied()
+        .unwrap_or(LineEnding::Lf)
+}
+
+/// 追加一段「LF 空间」文本，其中的 `\n` 渲染为 `ending`；串内既有的
+/// `\r\n` 先归一为 `\n`（插入内容以本文件局部行尾为准，避免 `\r\r\n`；
+/// 单独 `\r` 属内容，原样保留）。
+pub(crate) fn push_lf_text_rendered(out: &mut String, text: &str, ending: LineEnding) {
+    let normalized;
+    let text = if text.contains("\r\n") {
+        normalized = text.replace("\r\n", "\n");
+        normalized.as_str()
+    } else {
+        text
+    };
+    for (index, piece) in text.split('\n').enumerate() {
+        if index > 0 {
+            out.push_str(ending.as_str());
+        }
+        out.push_str(piece);
+    }
+}
+
+/// 把「LF 空间」的替换结果按原文件**逐行行尾**渲染写出（0bm ⑤ 单一实现点）。
+///
+/// - **未触碰的段**：逐行按其**原行尾**输出（`ends` 由 [`line_endings`] 收集）；
+/// - **替换串内部换行**（及与后文的衔接换行）：继承**替换起点行**的原行尾；
+///   起点行为文件末无终结行时依次回退 前一行 → 后一行 → 文件主调 → LF；
+/// - `replacements` = `(起点字节偏移, 原区段字节长, 新串)`，按起点升序且不重叠
+///   （与 [`replace_using_positions`]／[`replace_normalized_matches`] 的调用面
+///   同构）；未触碰段的终结换行（含文件末行缺失终结换行）保持原样。
+pub(crate) fn splice_with_line_endings(
+    text: &str,
+    replacements: &[(usize, usize, &str)],
+    ends: &[Option<LineEnding>],
+) -> String {
+    let default = prevailing_ending(ends);
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut cursor = 0usize;
+    // `line` = 已消费的原文中 '\n' 的计数 = 当前写入位置所在的原行索引。
+    let mut line = 0usize;
+    let emit_unchanged = |from: usize, to: usize, line: &mut usize, out: &mut String| {
+        for piece in text[from..to].split_inclusive('\n') {
+            match piece.strip_suffix('\n') {
+                Some(body) => {
+                    out.push_str(body);
+                    out.push_str(
+                        ends.get(*line)
+                            .copied()
+                            .flatten()
+                            .unwrap_or(default)
+                            .as_str(),
+                    );
+                    *line += 1;
+                }
+                None => out.push_str(piece),
+            }
+        }
+    };
+    for &(pos, old_len, new_text) in replacements {
+        emit_unchanged(cursor, pos, &mut line, &mut out);
+        let start_line = line;
+        let ending = ends
+            .get(start_line)
+            .copied()
+            .flatten()
+            .or_else(|| {
+                start_line
+                    .checked_sub(1)
+                    .and_then(|index| ends.get(index).copied().flatten())
+            })
+            .or_else(|| ends.get(start_line + 1).copied().flatten())
+            .unwrap_or(default);
+        push_lf_text_rendered(&mut out, new_text, ending);
+        let old_end = pos + old_len;
+        line += text[pos..old_end].matches('\n').count();
+        cursor = old_end;
+    }
+    emit_unchanged(cursor, text.len(), &mut line, &mut out);
+    out
+}
+
 /// Build edit details for each replacement.
 pub(crate) fn build_edit_details(
     new_text: &str,

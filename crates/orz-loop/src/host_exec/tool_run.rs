@@ -318,15 +318,16 @@ impl AgentLoopController {
         }
         // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24, ADR-0010 §14.39 /
         // FUS-READ-ANCHOR-WRITE-GUARD)：read-anchor 写前核证的 direct 面
-        // 落点——`search_replace` 直接调用携带 `expected_anchor`（read_file
-        // 返回的 {size, mtime, sha256}）时，执行前机械核证目标文件内容锚点
+        // 落点——编辑直接调用携带 `expected_anchor`（read_file 返回的
+        // {size, mtime, sha256}）时，执行前机械核证目标文件内容锚点
         // （复用订单链 `verify_content_anchor`：stat 快筛 size/mtime +
         // sha256 权威；目标不存在=新建路径跳过；其余 I/O 错误 fail-closed）。
         // 不匹配返回结构化 `content_anchor_mismatch` 拒绝、不执行、无
         // ToolStarted（与既有发放前拒绝同形）；审计层按该结构化字段记录
         // 锚点拒单异常事实。
-        if tc.name == "search_replace"
-            && let Some(anchor) = tc.arguments.get("expected_anchor")
+        // 0bm ⑥（2026-09-25）：去 `search_replace` 名字特判——按
+        // `expected_anchor` 在场**结构触发**（任何编辑工具携带锚点同规）。
+        if let Some(anchor) = tc.arguments.get("expected_anchor")
             && let Some(file_path) = tc
                 .arguments
                 .get("file_path")

@@ -210,9 +210,9 @@ fn to_search_replace(
     }
 }
 
-/// 0bl 审查修复（2026-09-24）：把机械 emoji 剥离告知行尾附到成功编辑的
-/// 工具输出（两个 prompt 字段；与 search_replace 的同名辅助函数同形）；
-/// 失败面不改动（告知只在写入成功后随行）。
+/// 0bl 审查修复（2026-09-24）＋0bm ⑥（2026-09-25）：把机械 emoji 剥离告知行
+/// 尾附到成功编辑的工具输出；尾附实现收敛到写路径公共层
+/// （`write_face::attach_notice_line`，与 search_replace 同一实现）。
 fn attach_emoji_strip_notice(
     result: crate::types::output::SearchReplaceOutput,
     notice: Option<&crate::util::emoji_strip::StripNotice>,
@@ -220,19 +220,7 @@ fn attach_emoji_strip_notice(
     let Some(notice) = notice else {
         return result;
     };
-    match result {
-        crate::types::output::SearchReplaceOutput::EditsApplied(mut applied) => {
-            let line = notice.render();
-            applied.tool_output_for_prompt.push('\n');
-            applied.tool_output_for_prompt.push_str(&line);
-            if let Some(concise) = applied.tool_output_for_prompt_concise.as_mut() {
-                concise.push('\n');
-                concise.push_str(&line);
-            }
-            crate::types::output::SearchReplaceOutput::EditsApplied(applied)
-        }
-        other => other,
-    }
+    crate::util::write_face::attach_notice_line(result, &notice.render())
 }
 
 impl crate::types::tool_metadata::ToolMetadata for HashlineEditTool {
@@ -449,21 +437,28 @@ impl xai_tool_runtime::Tool for HashlineEditTool {
                 });
             }
         };
-        // 0bm 复审补口（2026-09-24）：编辑入口 UTF-16 fail-closed 门——与
-        // search_replace 同一单点（`util::encoding::utf16_shaped_input`）。
-        // 0bl ③ 修洞时只设了 search_replace 双路径；hashline 既有文件路径
-        // 同样「解码后写回」，不设门即保留同一静默乱码洞。新建文件路径
-        // 不设门（old 内容不流入写回），口径与 search_replace 一致。
-        if crate::util::encoding::utf16_shaped_input(&file_bytes) {
+        // 0bm ④⑥（2026-09-25）：编辑入口公共层——大小门＋读入单点（UTF-16
+        // fail-closed 门在 `decode_for_edit` 内；与 search_replace 同一实现）。
+        // 新建文件路径不设门（old 内容不流入写回），口径与 search_replace 一致。
+        if let Some(message) =
+            crate::util::write_face::check_edit_size(&input.file_path, file_bytes.len() as u64)
+        {
             return Ok(crate::types::output::SearchReplaceOutput::InvalidInput(
-                crate::util::encoding::utf16_rejection_message(&input.file_path),
+                message,
             ));
         }
-        // 0bl 审查修复（2026-09-24）：解码标签记录原文件 BOM 形态，写回时
-        // 按同形编码（镜像 search_replace 的 `had_bom` 接法），不再裸写
-        // UTF-8 字节。
-        let (old_content, encoding_label) = crate::util::encoding::decode_text(&file_bytes);
-        let had_bom = crate::util::encoding::label_had_bom(&encoding_label);
+        let decoded = match crate::util::write_face::decode_for_edit(&file_bytes, &input.file_path)
+        {
+            Ok(decoded) => decoded,
+            Err(message) => {
+                return Ok(crate::types::output::SearchReplaceOutput::InvalidInput(
+                    message,
+                ));
+            }
+        };
+        // 0bi ①→0bm ⑥：解码/BOM 形态来自公共层读入单点（`decoded`）。
+        let old_content = decoded.text;
+        let had_bom = decoded.had_bom;
 
         let mut apply_result = apply::apply_edits(&old_content, &input.edits, &path, &*scheme);
 
@@ -484,6 +479,18 @@ impl xai_tool_runtime::Tool for HashlineEditTool {
                 notice
             }
             _ => None,
+        };
+        // 0bm ⑦（2026-09-25）：硬编辑预存回退窗口（原始字节快照；失败不静默；
+        // 无可写内容＝Skipped 无告知行）。
+        let rollback = if apply_result.new_content.is_some() {
+            crate::util::write_face::store_rollback_snapshot(
+                &cwd,
+                &input.file_path,
+                &file_bytes,
+                ctx.call_id.as_str(),
+            )
+        } else {
+            crate::util::write_face::RollbackOutcome::Skipped
         };
         if let Some(ref new_content) = apply_result.new_content {
             // 0bl 审查修复（2026-09-24）：写回按原文件 BOM 形态（`had_bom`
@@ -520,8 +527,10 @@ impl xai_tool_runtime::Tool for HashlineEditTool {
             apply_result.new_content.as_deref(),
             edit_details,
         );
-        // 0bl 审查修复（2026-09-24）：emoji 告知行只随成功（EditsApplied）
-        // 输出尾附；失败面不改动。
+        // 0bl 审查修复（2026-09-24）＋ 0bm ⑦（2026-09-25）：成功面尾附
+        // emoji 剥离告知与回退指针（失败不静默；无前内容＝无回退行）。
+        let output =
+            crate::util::write_face::attach_rollback_notice(output, &rollback, &input.file_path);
         Ok(attach_emoji_strip_notice(
             output,
             emoji_strip_notice.as_ref(),

@@ -1269,14 +1269,17 @@ pub(crate) async fn issue_action_inner<E: ActionExecutor + ?Sized>(
             // 编辑类订单回显 diff（有界截断）；终端/运行类订单 receipt 挂
             // workspace_delta（文件清单 + 增删改 + 大小 + 截断标记，过滤
             // .gsa/缓存目录）。常驻 actions 板只加短计数，完整内容走点读。
-            if target_tool == "search_replace" && result.exit_code == Some(0) {
-                if let Some(diff) = edit_diff_response(&order.arguments) {
-                    response["diff"] = json!(diff);
-                }
-            } else if matches!(target_tool, "run_terminal_cmd" | "run_tests") {
+            // 0bm ⑥（2026-09-25）：去 `search_replace` 名字特判——diff 回显按
+            // 「订单参数可导出 diff（old/new 在场，exit=0）」结构触发；终端／
+            // 运行类仍走 workspace_delta 分支（顺位与既有行为不变）。
+            if matches!(target_tool, "run_terminal_cmd" | "run_tests") {
                 response["workspace_delta"] =
                     serde_json::to_value(&result.workspace_delta).unwrap_or_default();
                 response["workspace_delta_truncated"] = json!(result.workspace_delta_truncated);
+            } else if result.exit_code == Some(0) {
+                if let Some(diff) = edit_diff_response(&order.arguments) {
+                    response["diff"] = json!(diff);
+                }
             }
             // 响应契约强制（2026-08-15 用户裁决）：任何输出必须过机械验证，
             // 不仅是规整性与安全，也是审计的一部分。

@@ -358,31 +358,8 @@ fn attach_emoji_strip_notice(
     let Some(notice) = notice else {
         return result;
     };
-    match result {
-        SearchReplaceOutput::EditsApplied(mut applied) => {
-            let line = notice.render();
-            // 0bm 复审补口（2026-09-24）：仅当输出不以换行收尾时补分隔换行，
-            // 避免在已有尾换行的输出后产生一个空行（纯外观）。
-            if !applied.tool_output_for_prompt.ends_with('\n') {
-                applied.tool_output_for_prompt.push('\n');
-            }
-            applied.tool_output_for_prompt.push_str(&line);
-            if let Some(concise) = applied.tool_output_for_prompt_concise.as_mut() {
-                if !concise.ends_with('\n') {
-                    concise.push('\n');
-                }
-                concise.push_str(&line);
-            }
-            SearchReplaceOutput::EditsApplied(applied)
-        }
-        other => other,
-    }
-}
-
-/// 0bl 审查修复（2026-09-24）：UTF-16 形态文件的统一拒绝输出——判定与文案
-/// 已上移 `util::encoding`（hashline 编辑面共用同一单点），此处保留薄壳。
-fn utf16_rejected_output(file_path: &str) -> SearchReplaceOutput {
-    SearchReplaceOutput::InvalidInput(crate::util::encoding::utf16_rejection_message(file_path))
+    // 0bm ⑥（2026-09-25）：尾附收敛到写路径公共层（hashline 共用同一实现）。
+    crate::util::write_face::attach_notice_line(result, &notice.render())
 }
 
 /// 0bi ⑤（2026-09-23）：锚点行窗编辑——`anchor{sha256,start_line,end_line}`
@@ -440,10 +417,18 @@ async fn handle_anchored_replacement(
             return Ok(output);
         }
     };
-    // 0bl 审查修复（2026-09-24）：编辑入口 UTF-16 fail-closed 门（锚点路径）。
-    if crate::util::encoding::utf16_shaped_input(&bytes) {
-        return Ok(utf16_rejected_output(&input.file_path));
+    // 0bm ④⑥（2026-09-25）：编辑入口公共层——大小门（先于哈希/解码，fail
+    // fast）＋读入单点（UTF-16 fail-closed 门＋解码链＋BOM 形态；经典路径与
+    // hashline 共用同一实现）。
+    if let Some(message) =
+        crate::util::write_face::check_edit_size(&input.file_path, bytes.len() as u64)
+    {
+        return Ok(SearchReplaceOutput::InvalidInput(message));
     }
+    let decoded = match crate::util::write_face::decode_for_edit(&bytes, &input.file_path) {
+        Ok(decoded) => decoded,
+        Err(message) => return Ok(SearchReplaceOutput::InvalidInput(message)),
+    };
     // 0bl 审查修复（2026-09-24）：本工具层 sha 比对大小写不敏感
     // （`eq_ignore_ascii_case`，兼容大小写混排的 hex 回抄）；loop 层
     // `console_exec.rs` 的 `verify_content_anchor` 已同步为同一口径
@@ -457,9 +442,9 @@ async fn handle_anchored_replacement(
             input.file_path, expected_sha256, actual_sha256
         )));
     }
-    // 0bi ①：解码标签记录原文件 BOM 形态，写回时按同形编码。
-    let (old_text, encoding_label) = crate::util::encoding::decode_text(&bytes);
-    let had_bom = crate::util::encoding::label_had_bom(&encoding_label);
+    // 0bi ①→0bm ⑥（2026-09-25）：解码/BOM 形态来自公共层读入单点（`decoded`）。
+    let old_text = decoded.text;
+    let had_bom = decoded.had_bom;
     let has_crlf = old_text.contains("\r\n");
     let normalized: std::borrow::Cow<'_, str> = if has_crlf {
         std::borrow::Cow::Owned(old_text.replace("\r\n", "\n"))
@@ -489,47 +474,97 @@ async fn handle_anchored_replacement(
         )));
     }
     let (start, end) = (anchor.start_line, anchor.end_line);
-    let mut new_text = String::with_capacity(normalized.len() + input.new_string.len());
-    for line in &segments[..start - 1] {
-        new_text.push_str(line);
-        new_text.push('\n');
+    // 0bm ⑤（2026-09-25）：行尾**逐行保真**——替换前逐行记录原文件行尾，
+    // 写回时未触碰行按各自原行尾输出（混排文件不再被统一成一种行尾）；替换窗
+    // 新行的换行继承**窗首行**的原行尾（窗首行为文件末无终结行时依次回退
+    // 窗前一行 → 窗后一行 → 文件主调 → LF）。终结换行沿 0bl ① 四形状语义
+    // （其后缀/非后缀分支判定不变；空文件仍为零字节）。
+    let line_ends = helpers::line_endings(&old_text);
+    let default_ending = helpers::prevailing_ending(&line_ends);
+    let ins_ending = line_ends
+        .get(start - 1)
+        .copied()
+        .flatten()
+        .or_else(|| {
+            start
+                .checked_sub(2)
+                .and_then(|index| line_ends.get(index).copied().flatten())
+        })
+        .or_else(|| line_ends.get(end).copied().flatten())
+        .unwrap_or(default_ending);
+    let mut out_lines: Vec<(String, Option<helpers::LineEnding>)> =
+        Vec::with_capacity(total_lines + 8);
+    for (index, line) in segments[..start - 1].iter().enumerate() {
+        out_lines.push((
+            (*line).to_string(),
+            Some(
+                line_ends
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .unwrap_or(default_ending),
+            ),
+        ));
     }
-    new_text.push_str(&input.new_string);
-    if end < total_lines {
-        // 分隔换行只在 `new_string` 非空且不以换行收尾时补（0bm 复审补口：
-        // 空串＝清空行窗，前缀/后缀行各自行尾已分隔，多补即产生空行）。
-        if !input.new_string.is_empty() && !input.new_string.ends_with('\n') {
-            new_text.push('\n');
-        }
-        for (index, line) in segments[end..total_lines].iter().enumerate() {
-            if index > 0 {
-                new_text.push('\n');
-            }
-            new_text.push_str(line);
+    // 替换窗新行：`new_string` 内的 `\r\n` 先归一为 `\n` 再按行渲染（插入内容
+    // 以本文件局部行尾为准，避免 `\r\r\n`；单独 `\r` 属内容、原样保留）。
+    let ins_normalized = input.new_string.replace("\r\n", "\n");
+    if !ins_normalized.is_empty() {
+        let ends_with_newline = ins_normalized.ends_with('\n');
+        let pieces: Vec<&str> = ins_normalized.split('\n').collect();
+        let complete = if ends_with_newline {
+            pieces.len() - 1
+        } else {
+            pieces.len()
+        };
+        let has_suffix = end < total_lines;
+        for (index, piece) in pieces.iter().enumerate().take(complete) {
+            let terminator = if index + 1 < complete || has_suffix {
+                Some(ins_ending)
+            } else {
+                // 文件末行：终结形态留给下方收尾规则（0bl ① 四形状）。
+                None
+            };
+            out_lines.push(((*piece).to_string(), terminator));
         }
     }
-    // 0bl 审查修复（2026-09-24）：文件终结换行此前用 `ends_with('\n')` 判定，
-    // 但后缀分支（`end < total_lines`）的循环以分隔符 `\n` 拼接后缀行、从不写
-    // 文件终结换行——末行为空行时文本恰好以分隔符收尾，终结换行被静默吞掉
-    // （`"a\nb\n\n"` 的锚点窗编辑产出 `"X\nb\n"` 而非 `"X\nb\n\n"`）。后缀分支
-    // 下终结换行无条件补（循环从不写它，且后缀末行是 split 产物、自身不可能
-    // 以 `\n` 结尾）；非后缀分支维持原判。
-    if trailing_newline {
-        if end < total_lines {
-            new_text.push('\n');
-        } else if !new_text.is_empty() && !new_text.ends_with('\n') {
-            // 0bm 复审补口（2026-09-24）：`new_text` 为空（清空行窗到文件尾
-            // ⇒ 清空整文件）不补终结换行——空文件就是零字节，不应产出一个
-            // 空行；非空前缀已自带换行时同样不补（行为不变）。
-            new_text.push('\n');
-        }
+    for line_index in end..total_lines {
+        out_lines.push((
+            segments[line_index].to_string(),
+            line_ends.get(line_index).copied().flatten(),
+        ));
+    }
+    // 0bl 审查修复（2026-09-24）＋ 0bm ⑤ 行尾化：文件终结换行沿原文件形态——
+    // 后缀分支由后缀末行自身承载（其原行尾即终结换行，末行为空行不再被吞）；
+    // 非后缀分支在末行尚无行尾时补原文件末行行尾（清空整文件 ⇒ 零字节，不补）。
+    if trailing_newline
+        && end >= total_lines
+        && let Some(last) = out_lines.last_mut()
+        && last.1.is_none()
+    {
+        last.1 = Some(
+            line_ends
+                .get(total_lines.saturating_sub(1))
+                .copied()
+                .flatten()
+                .unwrap_or(ins_ending),
+        );
     }
     let removed_text = segments[start - 1..end].join("\n");
-    let write_text = if has_crlf {
-        new_text.replace("\r\n", "\n").replace('\n', "\r\n")
-    } else {
-        new_text.clone()
-    };
+    let mut write_text = String::with_capacity(normalized.len() + input.new_string.len() + 16);
+    for (content, terminator) in &out_lines {
+        write_text.push_str(content);
+        if let Some(terminator) = terminator {
+            write_text.push_str(terminator.as_str());
+        }
+    }
+    // 0bm ⑦（2026-09-25）：硬编辑预存回退窗口（原始字节快照；失败不静默）。
+    let rollback = crate::util::write_face::store_rollback_snapshot(
+        cwd,
+        &input.file_path,
+        &bytes,
+        tool_call_id,
+    );
     // 0bi ①：写回按原文件 BOM 形态（`had_bom` 来自解码标签）。
     let write_bytes = crate::util::encoding::encode_text_preserving_bom(&write_text, had_bom);
     if let Err(e) = fs.write_file(path, &write_bytes).await {
@@ -575,23 +610,27 @@ async fn handle_anchored_replacement(
         context_after,
         line_prefix: String::new(),
     }];
-    Ok(SearchReplaceOutput::EditsApplied(
-        SearchReplaceEditsApplied {
-            old_string: input.old_string.clone(),
-            new_string: input.new_string.clone(),
-            tool_output_for_prompt: format!(
-                "The file {} has been updated successfully.",
-                input.file_path
-            ),
-            tool_output_for_prompt_concise: Some(format!(
-                "The file {} has been updated.",
-                input.file_path
-            )),
-            absolute_path: path.to_path_buf(),
-            edits: SearchReplaceEditContextInformation { details },
-            patch: None,
-            unicode_normalized: false,
-        },
+    let output = SearchReplaceOutput::EditsApplied(SearchReplaceEditsApplied {
+        old_string: input.old_string.clone(),
+        new_string: input.new_string.clone(),
+        tool_output_for_prompt: format!(
+            "The file {} has been updated successfully.",
+            input.file_path
+        ),
+        tool_output_for_prompt_concise: Some(format!(
+            "The file {} has been updated.",
+            input.file_path
+        )),
+        absolute_path: path.to_path_buf(),
+        edits: SearchReplaceEditContextInformation { details },
+        patch: None,
+        unicode_normalized: false,
+    });
+    // 0bm ⑦（2026-09-25）：成功面尾附回退指针（失败不静默；Skipped 无行）。
+    Ok(crate::util::write_face::attach_rollback_notice(
+        output,
+        &rollback,
+        &input.file_path,
     ))
 }
 
@@ -630,21 +669,33 @@ async fn handle_new_file_creation(
     hints_enabled: bool,
     empty_old_string_does_not_override: bool,
 ) -> Result<SearchReplaceOutput, xai_tool_runtime::ToolError> {
-    let file_exists = match fs.read_file(path).await {
-        Ok(bytes) => !bytes.is_empty(),
-        Err(_) => false,
+    // 0bm ④⑦（2026-09-25）：读一次、留原始字节（大小门与回退快照共用；
+    // 覆盖写路径的 UTF-16 门刻意不设——old 内容整体废弃、不流入写回，
+    // 与 0bl 既有口径一致）。
+    let existing_bytes: Option<Vec<u8>> = match fs.read_file(path).await {
+        Ok(bytes) => Some(bytes),
+        Err(_) => None,
     };
+    let file_exists = existing_bytes
+        .as_ref()
+        .is_some_and(|bytes| !bytes.is_empty());
+    if let Some(bytes) = existing_bytes.as_deref()
+        && let Some(message) =
+            crate::util::write_face::check_edit_size(&input.file_path, bytes.len() as u64)
+    {
+        return Ok(SearchReplaceOutput::InvalidInput(message));
+    }
     // 0bi ①（2026-09-23）：写侧 BOM 保真——原来带 UTF-8 BOM 的文件
     // （`utf-8-sig` 标签）在写回时补回 BOM，避免 `.ps1` 等在 PS 5.1 下
     // 被按本地代码页误读（0bh §5 #1 实锤）。
-    let (old_text, had_bom) = match fs.read_file(path).await {
+    let (old_text, had_bom) = match existing_bytes.as_deref() {
         // GAP-ENCODING-GATE: read the target through the fixed decode chain
         // so editing a GB18030 file never mangles the match text.
-        Ok(bytes) => {
-            let (text, label) = crate::util::encoding::decode_text(&bytes);
+        Some(bytes) => {
+            let (text, label) = crate::util::encoding::decode_text(bytes);
             (Some(text), crate::util::encoding::label_had_bom(&label))
         }
-        Err(_) => (None, false),
+        None => (None, false),
     };
     if file_exists && empty_old_string_does_not_override {
         let old_string_name;
@@ -660,6 +711,19 @@ async fn handle_new_file_creation(
             old_string_name
         )));
     }
+    // 0bm ⑦（2026-09-25）：覆盖写＝硬编辑——预存回退窗口（原始字节）；新建
+    // （无前内容／空文件无内容可回退）走 Skipped、不产出告知行。
+    let rollback = match existing_bytes.as_deref() {
+        Some(bytes) if file_exists && !empty_old_string_does_not_override => {
+            crate::util::write_face::store_rollback_snapshot(
+                cwd,
+                &input.file_path,
+                bytes,
+                tool_call_id,
+            )
+        }
+        _ => crate::util::write_face::RollbackOutcome::Skipped,
+    };
     // 0bi ①：写回按原文件 BOM 形态（`had_bom` 来自解码标签）。
     let new_file_bytes =
         crate::util::encoding::encode_text_preserving_bom(&input.new_string, had_bom);
@@ -728,17 +792,21 @@ async fn handle_new_file_creation(
         context_after: String::new(),
         line_prefix: String::new(),
     }];
-    Ok(SearchReplaceOutput::EditsApplied(
-        SearchReplaceEditsApplied {
-            old_string: input.old_string.clone(),
-            new_string: input.new_string.clone(),
-            tool_output_for_prompt,
-            tool_output_for_prompt_concise: Some(tool_output_for_prompt_concise),
-            absolute_path: path.to_path_buf(),
-            edits: SearchReplaceEditContextInformation { details: edits },
-            patch: None,
-            unicode_normalized: false,
-        },
+    let output = SearchReplaceOutput::EditsApplied(SearchReplaceEditsApplied {
+        old_string: input.old_string.clone(),
+        new_string: input.new_string.clone(),
+        tool_output_for_prompt,
+        tool_output_for_prompt_concise: Some(tool_output_for_prompt_concise),
+        absolute_path: path.to_path_buf(),
+        edits: SearchReplaceEditContextInformation { details: edits },
+        patch: None,
+        unicode_normalized: false,
+    });
+    // 0bm ⑦（2026-09-25）：覆盖写成功面尾附回退指针（新建＝Skipped 无行）。
+    Ok(crate::util::write_face::attach_rollback_notice(
+        output,
+        &rollback,
+        &input.file_path,
     ))
 }
 /// Return a short nearest-match hint for a `NoMatchesFound` error message.
@@ -1003,15 +1071,20 @@ async fn handle_replacement(
             return Ok(output);
         }
     };
-    // 0bl 审查修复（2026-09-24）：编辑入口 UTF-16 fail-closed 门（经典
-    // old_string/new_string 路径），避免 GB18030 分支"干净"解码后以 UTF-8
-    // 写回的静默乱码。
-    if crate::util::encoding::utf16_shaped_input(&bytes) {
-        return Ok(utf16_rejected_output(&input.file_path));
+    // 0bm ④⑥（2026-09-25）：编辑入口公共层——大小门＋读入单点（与锚点路径、
+    // hashline 共用同一实现；UTF-16 fail-closed 门在 `decode_for_edit` 内）。
+    if let Some(message) =
+        crate::util::write_face::check_edit_size(&input.file_path, bytes.len() as u64)
+    {
+        return Ok(SearchReplaceOutput::InvalidInput(message));
     }
-    // 0bi ①：解码标签记录原文件 BOM 形态，写回时按同形编码。
-    let (old_text, encoding_label) = crate::util::encoding::decode_text(&bytes);
-    let had_bom = crate::util::encoding::label_had_bom(&encoding_label);
+    let decoded = match crate::util::write_face::decode_for_edit(&bytes, &input.file_path) {
+        Ok(decoded) => decoded,
+        Err(message) => return Ok(SearchReplaceOutput::InvalidInput(message)),
+    };
+    // 0bi ①→0bm ⑥：解码/BOM 形态来自公共层读入单点（`decoded`）。
+    let old_text = decoded.text;
+    let had_bom = decoded.had_bom;
     let has_crlf = old_text.contains("\r\n");
     let match_text: std::borrow::Cow<'_, str> = if has_crlf {
         std::borrow::Cow::Owned(old_text.replace("\r\n", "\n"))
@@ -1126,7 +1199,11 @@ async fn handle_replacement(
             replace_all_name
         )));
     }
-    let (new_text, new_positions) = if used_normalized_fallback {
+    // 0bm ⑤（2026-09-25）：经典路径行尾逐行保真——替换仍在 LF 空间进行
+    // （`match_text`，与匹配/细节面同口径），写回文本另按原文件**逐行行尾**
+    // 渲染：未触碰段按源行原行尾，替换串内部换行继承替换起点行原行尾
+    // （单一实现点 `helpers::splice_with_line_endings`）。
+    let (new_text, new_positions, replacements) = if used_normalized_fallback {
         let normalized_matches =
             match find_normalized_match_positions(&match_text, &input.old_string) {
                 NormalizedMatchResult::Matches(m) => m,
@@ -1142,20 +1219,35 @@ async fn handle_replacement(
                     ));
                 }
             };
-        replace_normalized_matches(&match_text, &normalized_matches, &input.new_string)
+        let replacements: Vec<(usize, usize, &str)> = normalized_matches
+            .iter()
+            .map(|m| (m.original_start, m.original_len, input.new_string.as_str()))
+            .collect();
+        let (replaced_text, new_offsets) =
+            replace_normalized_matches(&match_text, &normalized_matches, &input.new_string);
+        (replaced_text, new_offsets, replacements)
     } else {
-        replace_using_positions(
+        let replacements: Vec<(usize, usize, &str)> = positions
+            .iter()
+            .map(|&position| (position, input.old_string.len(), input.new_string.as_str()))
+            .collect();
+        let (replaced_text, new_offsets) = replace_using_positions(
             &match_text,
             &positions,
             &input.old_string,
             &input.new_string,
-        )
+        );
+        (replaced_text, new_offsets, replacements)
     };
-    let write_text = if has_crlf {
-        new_text.replace("\r\n", "\n").replace('\n', "\r\n")
-    } else {
-        new_text.clone()
-    };
+    let line_ends = helpers::line_endings(&old_text);
+    let write_text = helpers::splice_with_line_endings(&match_text, &replacements, &line_ends);
+    // 0bm ⑦（2026-09-25）：硬编辑预存回退窗口（原始字节快照；失败不静默）。
+    let rollback = crate::util::write_face::store_rollback_snapshot(
+        cwd,
+        &input.file_path,
+        &bytes,
+        tool_call_id,
+    );
     // 0bi ①：写回按原文件 BOM 形态（`had_bom` 来自解码标签）。
     let write_bytes = crate::util::encoding::encode_text_preserving_bom(&write_text, had_bom);
     if let Err(e) = fs.write_file(path, &write_bytes).await {
@@ -1207,17 +1299,21 @@ async fn handle_replacement(
         );
         (default_msg, concise_msg)
     };
-    Ok(SearchReplaceOutput::EditsApplied(
-        SearchReplaceEditsApplied {
-            old_string: input.old_string.clone(),
-            new_string: input.new_string.clone(),
-            tool_output_for_prompt,
-            tool_output_for_prompt_concise: Some(tool_output_for_prompt_concise),
-            absolute_path: path.to_path_buf(),
-            edits: SearchReplaceEditContextInformation { details: edits },
-            patch: None,
-            unicode_normalized: used_normalized_fallback,
-        },
+    let output = SearchReplaceOutput::EditsApplied(SearchReplaceEditsApplied {
+        old_string: input.old_string.clone(),
+        new_string: input.new_string.clone(),
+        tool_output_for_prompt,
+        tool_output_for_prompt_concise: Some(tool_output_for_prompt_concise),
+        absolute_path: path.to_path_buf(),
+        edits: SearchReplaceEditContextInformation { details: edits },
+        patch: None,
+        unicode_normalized: used_normalized_fallback,
+    });
+    // 0bm ⑦（2026-09-25）：成功面尾附回退指针（失败不静默；Skipped 无行）。
+    Ok(crate::util::write_face::attach_rollback_notice(
+        output,
+        &rollback,
+        &input.file_path,
     ))
 }
 impl crate::types::tool_metadata::ToolMetadata for SearchReplaceTool {
@@ -3625,10 +3721,10 @@ neutTest_set);
             other => panic!("Expected EditsApplied, got {:?}", other),
         }
     }
-    /// Mixed line endings (\r\n and \n in the same file): CRLF normalization
-    /// kicks in because the file contains at least one \r\n, so all \n in the
-    /// result are converted to \r\n. This normalizes the file to consistent
-    /// CRLF endings, which is the expected behavior.
+    /// 0bm ⑤（2026-09-25）：混排行尾——**逐行保真**取代旧的「含 CRLF 即整
+    /// 文件 CRLF 化」：未触碰行的行尾各保持原样（line4 的 LF 不再被改成
+    /// CRLF）；被替换区段消耗掉的行尾随内容一并消失，存留的换行沿用其所属
+    /// 源行原行尾（此处 line3 的 CRLF 保留在 REPLACED 之后）。
     #[tokio::test]
     async fn crlf_mixed_line_endings() {
         let tmp = TempDir::new().unwrap();
@@ -3648,7 +3744,7 @@ neutTest_set);
         match result {
             SearchReplaceOutput::EditsApplied(_) => {
                 let written = std::fs::read(tmp.path().join("test.txt")).unwrap();
-                assert_eq!(written, b"line1\r\nREPLACED\r\nline4\r\n");
+                assert_eq!(written, b"line1\r\nREPLACED\r\nline4\n");
             }
             other => panic!("Expected EditsApplied, got {:?}", other),
         }
@@ -3694,5 +3790,179 @@ neutTest_set);
             matches!(ok, SearchReplaceOutput::EditsApplied(_)),
             "workspace write must still work, got {ok:?}"
         );
+    }
+
+    /// 0bm ⑤（2026-09-25）：混排行尾锚点窗编辑——未触碰行按其原行尾逐行
+    /// 保真；替换窗新行继承**窗首行**原行尾（此处窗首行为 LF）。旧实现按
+    /// 「含 CRLF 即整文件 CRLF 化」会把邻行全部改写为 CRLF。
+    #[tokio::test]
+    async fn anchor_window_edit_preserves_mixed_line_endings() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("mixed.txt");
+        std::fs::write(&path, "a\r\nb\nc\r\n").unwrap();
+        let sha = sha256_hex(&std::fs::read(&path).unwrap());
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let mut input = make_input("mixed.txt", "", "X");
+        input.anchor = Some(SearchReplaceAnchor {
+            sha256: sha,
+            start_line: 2,
+            end_line: 2,
+        });
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(_) => {
+                assert_eq!(
+                    std::fs::read(&path).unwrap(),
+                    b"a\r\nX\nc\r\n",
+                    "mixed endings: untouched lines keep their own endings"
+                );
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    /// 0bm ⑤：混排文件锚点窗替换为多行——插入行换行全部继承窗首行行尾
+    /// （窗首行 LF ⇒ 插入行为 LF；邻行 CRLF 不动）。
+    #[tokio::test]
+    async fn anchor_window_insert_lines_inherit_window_first_ending() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("mixed_multi.txt");
+        std::fs::write(&path, "a\r\nb\nc\r\n").unwrap();
+        let sha = sha256_hex(&std::fs::read(&path).unwrap());
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let mut input = make_input("mixed_multi.txt", "", "X\nY");
+        input.anchor = Some(SearchReplaceAnchor {
+            sha256: sha,
+            start_line: 2,
+            end_line: 2,
+        });
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(_) => {
+                assert_eq!(
+                    std::fs::read(&path).unwrap(),
+                    b"a\r\nX\nY\nc\r\n",
+                    "inserted lines inherit the window-first-line ending"
+                );
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    /// 0bm ⑤：混排文件 + 文件末空行——空行自身的行尾（CRLF）保留；旧实现
+    /// 的整文件统一律在此会把首行以外的行尾全部改写。
+    #[tokio::test]
+    async fn anchor_window_mixed_with_trailing_blank_line() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("mixed_blank.txt");
+        std::fs::write(&path, "a\r\nb\n\r\n").unwrap();
+        let sha = sha256_hex(&std::fs::read(&path).unwrap());
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let mut input = make_input("mixed_blank.txt", "", "X");
+        input.anchor = Some(SearchReplaceAnchor {
+            sha256: sha,
+            start_line: 1,
+            end_line: 1,
+        });
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(_) => {
+                assert_eq!(std::fs::read(&path).unwrap(), b"X\r\nb\n\r\n");
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    /// 0bm ⑤：经典路径混排行尾逐行保真（替换只动 b 行；两处邻行行尾各异，
+    /// 各自保持）。
+    #[tokio::test]
+    async fn classic_edit_preserves_mixed_line_endings() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("mixed.txt"), b"a\r\nb\r\nc\n").unwrap();
+        let tool = SearchReplaceTool;
+        let mut resources = test_resources(tmp.path());
+        resources.insert(Params(SearchReplaceParams {
+            skip_read_before_edit: true,
+            empty_old_string_does_not_override: false,
+            ..Default::default()
+        }));
+        let input = make_input("mixed.txt", "b", "B");
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(_) => {
+                assert_eq!(
+                    std::fs::read(tmp.path().join("mixed.txt")).unwrap(),
+                    b"a\r\nB\r\nc\n"
+                );
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    /// 0bm ⑤：经典路径多行替换——替换串内部换行继承替换起点行原行尾
+    /// （此处起点行 CRLF ⇒ 新增行同为 CRLF；其后未触碰段行尾不回归一）。
+    #[tokio::test]
+    async fn classic_multi_line_replacement_inherits_local_ending() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("crlf.txt"), b"a\r\nb\r\nc\n").unwrap();
+        let tool = SearchReplaceTool;
+        let mut resources = test_resources(tmp.path());
+        resources.insert(Params(SearchReplaceParams {
+            skip_read_before_edit: true,
+            empty_old_string_does_not_override: false,
+            ..Default::default()
+        }));
+        let input = make_input("crlf.txt", "b", "B\nB2");
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(_) => {
+                assert_eq!(
+                    std::fs::read(tmp.path().join("crlf.txt")).unwrap(),
+                    b"a\r\nB\r\nB2\r\nc\n"
+                );
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    /// 0bm ⑤：插入串里显式携带 `\r\n` 时按**本文件局部行尾**归一（LF 文件
+    /// 的插入结果不引入 CRLF 混排；单独 `\r` 仍属内容、原样保留）。
+    #[tokio::test]
+    async fn inserted_crlf_normalized_to_local_ending() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("lf.txt"), b"a\nb\n").unwrap();
+        let tool = SearchReplaceTool;
+        let mut resources = test_resources(tmp.path());
+        resources.insert(Params(SearchReplaceParams {
+            skip_read_before_edit: true,
+            empty_old_string_does_not_override: false,
+            ..Default::default()
+        }));
+        let input = make_input("lf.txt", "a", "X\r\nY");
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(_) => {
+                assert_eq!(
+                    std::fs::read(tmp.path().join("lf.txt")).unwrap(),
+                    b"X\nY\nb\n"
+                );
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
     }
 }

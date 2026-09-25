@@ -20,6 +20,7 @@ pub mod shell_env_policy;
 pub mod spawn;
 pub mod truncate;
 pub mod unicode_confusables;
+pub(crate) mod write_face;
 
 pub use command_display::strip_redundant_session_cd;
 #[cfg(unix)]

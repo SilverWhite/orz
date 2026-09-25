@@ -620,12 +620,10 @@ impl AgentLoopController {
         // 不匹配拒单（复用 order_stale 信封形态：phase=pre_issue /
         // step=protocol / code=content_anchor_mismatch），不执行任何编辑；
         // 主 agent 重读后用新锚点重下。目标文件不存在（新建）时跳过。
-        if self
-            .console_registry
-            .get(&order.action)
-            .and_then(|s| s.target_tool.as_deref())
-            == Some("search_replace")
-            && let Some(anchor) = order.arguments.get("expected_anchor")
+        // 0bm ⑥（2026-09-25）：去 `search_replace` 名字特判——按
+        // `expected_anchor` 在场**结构触发**（名字不构成语义；hashline 等
+        // 携带锚点的编辑订单同规核证）。
+        if let Some(anchor) = order.arguments.get("expected_anchor")
             && let Some(file_path) = order
                 .arguments
                 .get("file_path")

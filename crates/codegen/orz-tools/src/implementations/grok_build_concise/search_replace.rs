@@ -161,9 +161,16 @@ mod tests {
             SearchReplaceOutput::EditsApplied(applied) => {
                 let content = std::fs::read_to_string(tmp.path().join("test.txt")).unwrap();
                 assert_eq!(content, "goodbye world\n");
-                assert_eq!(
-                    applied.tool_output_for_prompt,
-                    "The file test.txt has been updated."
+                // 0bm ⑦（2026-09-25）：写路径公共层在成功面尾附回退窗口告知行
+                // （concise 面与全量面共用同一写路径）；主体文案保持不变。
+                let output = &applied.tool_output_for_prompt;
+                assert!(
+                    output.starts_with("The file test.txt has been updated."),
+                    "got: {output}"
+                );
+                assert!(
+                    output.contains("[回退窗口] 编辑前内容已存 .gsa/rollback/"),
+                    "got: {output}"
                 );
             }
             other => panic!("Expected EditsApplied, got {:?}", other),
@@ -193,9 +200,16 @@ mod tests {
             SearchReplaceOutput::EditsApplied(applied) => {
                 let content = std::fs::read_to_string(tmp.path().join("test.txt")).unwrap();
                 assert_eq!(content, "ccc bbb ccc bbb ccc\n");
-                assert_eq!(
-                    applied.tool_output_for_prompt,
-                    "The file test.txt has been updated. All occurrences were replaced."
+                // 0bm ⑦（2026-09-25）：成功面尾附回退窗口告知行（concise 面与
+                // 全量面共用）；主体文案保持不变。
+                let output = &applied.tool_output_for_prompt;
+                assert!(
+                    output.starts_with("The file test.txt has been updated. All occurrences were replaced."),
+                    "got: {output}"
+                );
+                assert!(
+                    output.contains("[回退窗口] 编辑前内容已存 .gsa/rollback/"),
+                    "got: {output}"
                 );
             }
             other => panic!("Expected EditsApplied, got {:?}", other),

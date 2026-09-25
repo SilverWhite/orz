@@ -329,9 +329,11 @@ pub fn hard_reminder_block(
          （≈246K 真实 token）。到 **{t1}K 估算（≈385K 真实 token）** 时，机械层将**强制开压缩窗口**，\
          要求把工作现场以外的全部已闭合分块压缩；两次窗口内仍未产出 ⇒ 第三次机械层将**仅保留工作现场**，\
          把其余已闭合分块移出窗口（逐字原文全量留档，需要前置上下文时按块回查存档）。\n\
-         不足一块的**残段**不参与，留在窗口内。现在就压：{}\n\
+         不足一块的**残段**不参与，留在窗口内。**是否现在压缩、压缩哪些块由你判断**（压缩交给你自选、\
+         可延后；{}）——若决定压缩：{}\n\
          {block_table}\n\
          {declaration}",
+        target_tier_advice(),
         summary_block_guide(),
         declaration = crate::model_face::MODEL_FACE_DECLARATION,
     )
