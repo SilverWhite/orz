@@ -3,7 +3,13 @@
 # Linux targets: x86_64 + aarch64.
 #
 # Bump policy: one minor version at a time, ≥2 weeks after upstream release.
-# Before bumping: cargo check --workspace && cargo clippy --workspace
+# rustfmt（0bs ⑤，2026-09-25 口径定稿）：随本 channel 自带（1.9.0-stable）。
+# fmt 非交付门口径——`cargo fmt` 仅整理本批改动文件；全仓 fmt 只在 rustfmt
+# 版本变更时一次性收编。在案漂移（2026-09-25 实核）：read_file/mod.rs:3531
+# `panic!` 折行、grok_build_concise/search_replace.rs:204 —— 未随批收编；
+# emoji_strip_ranges.rs 尾空行已随 0bs 清掉。`cargo fmt --check` 仅作提示、
+# 不拒绝批次。
+# Before bumping: cargo check --workspace && cargo clippy --workspace && cargo fmt --check --workspace（漂移清单见上）
 channel = "1.97.1"
 components = ["rustfmt", "clippy"]
 profile = "default"

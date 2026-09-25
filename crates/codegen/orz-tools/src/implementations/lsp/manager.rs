@@ -474,36 +474,47 @@ impl LspManager {
 }
 
 /// Drops the lock during the Notify wait so `notify_file_changed` isn't blocked.
+///
+/// 0bs ③（2026-09-25）：**循环等待**（原为单次等待）。`diagnostics_ready`
+/// 是**全客户机共用**的 Notify——restart 场景里被替换客户机的迟到诊断会先
+/// 触发 stray notify，原实现被唤醒后 build=None 即返（预算根本没被用上），
+/// 造成 `e2e_restart_replay_requeues_pending_diagnostics` 偶发假阴性（3 跑
+/// 2 败，15s 预算无关）。改为：醒来即重试 build，直到摘要可建或预算耗尽；
+/// stray notify 只多一次快速重试，绝不提前终止等待。
 pub async fn drain_lsp_diagnostics(
     lsp_manager: &tokio::sync::Mutex<LspManager>,
     timeout: std::time::Duration,
 ) -> Option<DiagnosticsSummary> {
-    let mut lsp = lsp_manager.lock().await;
-    if !lsp.has_pending_diagnostics() {
-        return None;
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let mut lsp = lsp_manager.lock().await;
+        if !lsp.has_pending_diagnostics() {
+            return None;
+        }
+
+        if let Some(summary) = lsp.build_pending_diagnostics_summary() {
+            return Some(summary);
+        }
+
+        // Register waiter before dropping lock so notify_one() isn't lost.
+        let notify = lsp.diagnostics_ready.clone();
+        let notified = notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        drop(lsp);
+
+        if tokio::time::Instant::now() >= deadline {
+            let mut lsp = lsp_manager.lock().await;
+            let result = lsp.build_pending_diagnostics_summary();
+            if result.is_none() {
+                tracing::debug!(
+                    pending_file_count = lsp.pending_file_count(),
+                    timeout_ms = timeout.as_millis() as u64,
+                    "LSP diagnostics not available after timeout, preserving pending state"
+                );
+            }
+            return result;
+        }
+        let _ = tokio::time::timeout_at(deadline, &mut notified).await;
     }
-
-    if let Some(summary) = lsp.build_pending_diagnostics_summary() {
-        return Some(summary);
-    }
-
-    // Register waiter before dropping lock so notify_one() isn't lost.
-    let notify = lsp.diagnostics_ready.clone();
-    let notified = notify.notified();
-    tokio::pin!(notified);
-    notified.as_mut().enable();
-    drop(lsp);
-
-    let _ = tokio::time::timeout(timeout, &mut notified).await;
-
-    let mut lsp = lsp_manager.lock().await;
-    let result = lsp.build_pending_diagnostics_summary();
-    if result.is_none() {
-        tracing::debug!(
-            pending_file_count = lsp.pending_file_count(),
-            timeout_ms = timeout.as_millis() as u64,
-            "LSP diagnostics not available after timeout, preserving pending state"
-        );
-    }
-    result
 }

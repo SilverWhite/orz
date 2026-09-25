@@ -150,6 +150,26 @@ pub fn model_stop_syntax_line() -> String {
     )
 }
 
+/// **0bs ①（2026-09-25）：模型面常驻尾行**——结束自述通道的**告知面收口**。
+/// 单一来源＝本模块；由模型面装配（`model_face::build_model_face`）每轮尾随
+/// 注入（分块表之后）。0bm 轮实证：语法只挂 pull 面 `guide` ⇒ 137 工具轮
+/// 零自述、`run_finished` 仍三键——故改为**常驻**（模型不必先想到去 pull）。
+/// 开关口径同 [`model_stop_syntax_line`]：`ORZ_MODEL_STOP_AWAIT=0` 只关暂停
+/// 广告，不影响声明记录本身。
+pub fn model_stop_resident_line() -> String {
+    let intent = if model_stop_await_enabled() {
+        "`intent: conclude`（或 `pause`＝暂停/待回应——续跑由外部入口发起）"
+    } else {
+        "`intent: conclude`（本装置 `ORZ_MODEL_STOP_AWAIT=0`：暂停广告关闭，声明仍如实记录）"
+    };
+    format!(
+        "【结束自述通道】你可在**收束轮**（不调用工具的那一轮）文本里以 \
+         {MODEL_STOP_PREFIX}] … {MODEL_STOP_END} 声明结束：{intent}、\
+         `reason: completed|partial|blocked|awaiting_response`、\
+         `summary: 一句话（已做／现场／未完／所需）`——机械层如实落账（不判定、不驳回）。"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,5 +235,19 @@ mod tests {
         let syntax = model_stop_syntax_line();
         assert!(syntax.contains("intent: conclude"));
         assert!(syntax.contains(MODEL_STOP_END));
+    }
+
+    /// 0bs ① 钉（2026-09-25）：**常驻尾行**承载同一单源语法（前缀/结束标记/
+    /// 取值枚举均取自本模块常量）；文本有界（常驻成本可核）。
+    #[test]
+    fn resident_line_carries_the_channel_syntax_from_single_source() {
+        let line = model_stop_resident_line();
+        assert!(line.starts_with("【结束自述通道】"));
+        assert!(line.contains(MODEL_STOP_PREFIX));
+        assert!(line.contains(MODEL_STOP_END));
+        assert!(line.contains("conclude"));
+        assert!(line.contains("awaiting_response"));
+        assert!(line.contains("summary"));
+        assert!(line.len() < 400, "常驻行长度应受控：{} 字符", line.len());
     }
 }

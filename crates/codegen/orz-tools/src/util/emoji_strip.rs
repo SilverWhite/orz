@@ -16,10 +16,14 @@
 //! - Whitespace: only when both sides of a run are horizontal whitespace
 //!   (space / tab) is the run folded to a single space; otherwise the run is
 //!   deleted as-is (no new whitespace is introduced; never across lines).
+//! - 0bs ⑦（2026-09-25，F13 用户令）：**状态符号白名单窗口**——报告/交接
+//!   文档表头与状态列常用记号（对勾/叉/警示/时间/红黄绿灯/旗标等，集合见
+//!   [`super::emoji_strip_ranges::STATUS_SYMBOL_WINDOW`]）整体放行（含
+//!   VS15/16 变体、不拆序列），不拦截、不计数告知；其余 emoji 照旧剥离。
 //! - Escape hatch: `ORZ_WRITE_KEEP_EMOJI=1|true` disables stripping so that
 //!   emoji fixtures keep byte-identical writes.
 
-use super::emoji_strip_ranges::WRITE_FACE_STRIP_RANGES;
+use super::emoji_strip_ranges::{STATUS_SYMBOL_WINDOW, WRITE_FACE_STRIP_RANGES};
 
 /// Env var that disables write-face emoji stripping (`1` / `true`).
 pub(crate) const KEEP_EMOJI_ENV: &str = "ORZ_WRITE_KEEP_EMOJI";
@@ -96,6 +100,24 @@ fn is_strip_char(c: char) -> bool {
         .is_ok()
 }
 
+/// 0bs ⑦（F13 用户令定案）：**状态符号白名单窗口**判定——窗口内字符
+/// 整体放行（不拦截、不计数），见
+/// [`super::emoji_strip_ranges::STATUS_SYMBOL_WINDOW`]。
+fn is_status_symbol(c: char) -> bool {
+    let cp = c as u32;
+    STATUS_SYMBOL_WINDOW
+        .binary_search_by(|&(lo, hi)| {
+            if cp < lo {
+                std::cmp::Ordering::Greater
+            } else if cp > hi {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
+}
+
 fn is_keycap_base(c: char) -> bool {
     c.is_ascii_digit() || c == '#' || c == '*'
 }
@@ -113,6 +135,17 @@ pub(crate) fn strip_emoji(text: &str) -> (String, Option<StripNotice>) {
     let mut i = 0usize;
     while i < chars.len() {
         let c = chars[i];
+        // 0bs ⑦（F13 用户令定案）：状态符号白名单窗口——整体放行（VS15/16
+        // 变体随基座，不拆序列）、不拦截、不计数告知。
+        if is_status_symbol(c) {
+            out.push(c);
+            i += 1;
+            while i < chars.len() && matches!(chars[i], '\u{FE0E}' | '\u{FE0F}') {
+                out.push(chars[i]);
+                i += 1;
+            }
+            continue;
+        }
         if !is_strip_char(c) {
             if c == '\n' {
                 line += 1;
@@ -124,7 +157,11 @@ pub(crate) fn strip_emoji(text: &str) -> (String, Option<StripNotice>) {
         // Maximal run of strip-set characters.
         let run_start = i;
         let mut run_end = i;
-        while run_end < chars.len() && is_strip_char(chars[run_end]) {
+        // 0bs ⑦：白名单窗口是运行边界——状态符号不被并入 emoji 运行。
+        while run_end < chars.len()
+            && is_strip_char(chars[run_end])
+            && !is_status_symbol(chars[run_end])
+        {
             run_end += 1;
         }
         // Keycap base absorption: `0-9#*` + optional VS16 + U+20E3.
@@ -283,5 +320,35 @@ mod tests {
         assert!(keep_emoji_requested_value(Some("1")));
         assert!(keep_emoji_requested_value(Some("true")));
         assert!(keep_emoji_requested_value(Some(" TRUE ")));
+    }
+
+    /// 0bs ⑦ 钉（2026-09-25，F13 用户令）：状态符号白名单窗口——整体放行
+    /// （含 VS16 变体）、不拆序列、不拦截、不计数告知。
+    #[test]
+    fn status_symbol_window_passes_with_vs16_and_never_counts() {
+        // 夹具以 `\u{}` 转义承载（免疫写面剥离；0bs ⑦ 实现轮在 0.6.14 载体上
+        // 亲历字面符号被旧剥离面移除——S4 复验：同内容进新载体不再剥离）。
+        let text = "x \u{2705} \u{23F3} \u{26A0}\u{FE0F} \u{26D4} \u{2757} \
+                    \u{274C} \u{2714} \u{2717} \u{1F534} \u{1F7E1} \u{1F7E2} \
+                    \u{1F6A9} \u{1F4CC} y";
+        assert_eq!(strip_emoji(text), (text.to_string(), None));
+        // 与 emoji 混排：只有 emoji 被剥离、状态符号原样留存、计数只算 emoji。
+        let (out, notice) = strip_emoji("a \u{1F389}\u{2705}\u{1F6AB}\u{1F389} b");
+        assert_eq!(out, "a \u{2705}\u{1F6AB} b");
+        let notice = notice.expect("notice");
+        assert_eq!(notice.count, 2, "状态符号不计数");
+        assert_eq!(notice.lines, vec![1]);
+    }
+
+    #[test]
+    fn status_symbol_window_ranges_sorted_and_disjoint() {
+        let mut prev_hi: Option<u32> = None;
+        for &(lo, hi) in STATUS_SYMBOL_WINDOW {
+            assert!(lo <= hi, "empty/descending range {lo:#X}..={hi:#X}");
+            if let Some(prev) = prev_hi {
+                assert!(lo > prev, "overlap at {lo:#X} (previous high {prev:#X})");
+            }
+            prev_hi = Some(hi);
+        }
     }
 }

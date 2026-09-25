@@ -1239,12 +1239,15 @@ async fn compress_blocks_now(
     // （禁止静默退化为缺省兜底——0bi 轮 6/12 次浅压缩的根因即此静默）；
     // **NotSpecified ⇒ 缺省语义**（模型自选窗＝最旧一块；强制窗＝全部已闭合
     // 分块），回执如实标注属缺省行为。
+    // 0bs ⑥（2026-09-25，F12）：可压集合（号列表＋渲染）先于消费点固定——
+    // 未落地回执（区间无命中／台账写失败）与区间未识别告知都要引用它。
+    let compressible_numbers: Vec<u32> = compressible.iter().map(|b| b.number).collect();
+    let compressible_rendered = crate::model_face::render_block_numbers(&compressible_numbers);
     let (range_filter, mut selection_note): (Option<Vec<u32>>, String) = match selection {
         crate::context_scale::BlockSelection::Unrecognized(line) => {
-            let compressible_numbers: Vec<u32> = compressible.iter().map(|b| b.number).collect();
             let notice = crate::context_scale::block_selection_unrecognized_notice(
                 &line,
-                &crate::model_face::render_block_numbers(&compressible_numbers),
+                &compressible_rendered,
             );
             let watermark = blackboard_watermark_label(svc);
             let payload = audit.record(
@@ -1300,6 +1303,41 @@ async fn compress_blocks_now(
         selected.truncate(1);
     }
     if selected.is_empty() {
+        // 0bs ⑥（F12 观测性缺口）：未落地不静默——回执如实告知（与
+        // `block_selection_unrecognized` 同形），动作不阻断。
+        let reason = if range_filter.is_some() {
+            "指定区间在可压集合中无命中"
+        } else {
+            "当前没有「已闭合且仍为原文」的可压分块"
+        };
+        let notice = crate::context_scale::summary_not_landed_notice(reason, &compressible_rendered);
+        let watermark = blackboard_watermark_label(svc);
+        let payload = audit.record(
+            "context_scale:summary_not_landed",
+            tool_rounds,
+            format!(
+                "reason=no_selection_hit compressible_blocks={}",
+                compressible_numbers.len()
+            ),
+            Some("summary_not_landed".to_string()),
+        );
+        writer
+            .record(
+                EventType::MechanicalAuditUpdate,
+                serde_json::json!({
+                    "kind": crate::mechanical_audit::KIND_CONTEXT_SCALE,
+                    "payload": payload,
+                }),
+            )
+            .await?;
+        messages.push(Message {
+            role: Role::User,
+            content: format!("{notice}\n{watermark}"),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        });
         return Ok(None);
     }
     let ranges = crate::action_ledger::round_ranges(messages);
@@ -1325,6 +1363,35 @@ async fn compress_blocks_now(
                     error = %err,
                     "v8 block compaction: external ledger append failed — compaction skipped"
                 );
+                // 0bs ⑥（F12）：未落地不静默（台账写失败）。
+                let notice = crate::context_scale::summary_not_landed_notice(
+                    "外挂台账写入失败（机械层故障，原文未动）",
+                    &compressible_rendered,
+                );
+                let watermark = blackboard_watermark_label(svc);
+                let payload = audit.record(
+                    "context_scale:summary_not_landed",
+                    tool_rounds,
+                    "reason=ledger_write_failed".to_string(),
+                    Some("summary_not_landed".to_string()),
+                );
+                writer
+                    .record(
+                        EventType::MechanicalAuditUpdate,
+                        serde_json::json!({
+                            "kind": crate::mechanical_audit::KIND_CONTEXT_SCALE,
+                            "payload": payload,
+                        }),
+                    )
+                    .await?;
+                messages.push(Message {
+                    role: Role::User,
+                    content: format!("{notice}\n{watermark}"),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
                 return Ok(None);
             }
         },
@@ -1648,7 +1715,6 @@ async fn truncate_model_face_blocks(
                      正文换成指针，逐字原文均已落盘）",
                     replay_reclaimed.replaced, pointerized.replaced
                 ),
-                "- （无已闭合分块：溢出体量在工作现场内）",
                 false,
                 "",
             )
@@ -1850,15 +1916,8 @@ async fn truncate_model_face_blocks(
     // 修复批（0bh ⑯「去判断而非去建议」；见 `context_scale` 的
     // `truncation_notice_block`／`guard_truncation_notice_block`）从注入文本
     // 删除，注释同步更正。
-    let table = crate::model_face::render_block_table(
-        &crate::model_face::blocks_outside_slider(
-            messages,
-            params.slider_tokens,
-            params.block_tokens,
-        ),
-        &crate::model_face::face_markers(messages),
-        params,
-    );
+    // 0bs ④（2026-09-25）：截断告知块不再内嵌整表——分块索引单源＝窗口尾部
+    // 表（逐轮刷新；同一「说明行」在一份请求里只出现一次）。
     let notice = if guard_hit {
         format!(
             "{}{escalation}",
@@ -1879,7 +1938,6 @@ async fn truncate_model_face_blocks(
                 freed_tokens,
                 crate::model_face::estimate_model_face_tokens(messages, params),
                 &replay_text,
-                &table,
                 archive_write_failed || ledger_write_failed,
                 mandatory_window_fact,
             )
@@ -2365,18 +2423,13 @@ pub(crate) async fn run_agent_loop(
                             ))
                         }
                         crate::context_scale::LadderTier::HardReminder => {
-                            let table = crate::model_face::render_block_table(
-                                &face_blocks,
-                                &crate::model_face::face_markers(messages),
-                                &face_params,
-                            );
+                            // 0bs ④：不再内嵌整表（单源＝窗口尾部分块表）。
                             Some(format!(
                                 "{}\n{}",
                                 crate::context_scale::hard_reminder_block(
                                     fire.milestone_tokens,
                                     truncate_tokens,
                                     model_face_tokens,
-                                    &table,
                                 ),
                                 crate::context_scale::compression_window_block(
                                     fire.milestone_tokens
@@ -2390,16 +2443,11 @@ pub(crate) async fn run_agent_loop(
                             if t1_cut {
                                 None
                             } else {
-                                let table = crate::model_face::render_block_table(
-                                    &face_blocks,
-                                    &crate::model_face::face_markers(messages),
-                                    &face_params,
-                                );
+                                // 0bs ④：不再内嵌整表（单源＝窗口尾部分块表）。
                                 Some(crate::context_scale::mandatory_compression_window_block(
                                     fire.milestone_tokens,
                                     t1_window_failures + 1,
                                     model_face_tokens,
-                                    &table,
                                 ))
                             }
                         }

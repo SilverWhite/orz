@@ -10,7 +10,7 @@
 //!   一起打包、无实际上限」的物理前提（设计 §6 §7、不变量 I3）。
 //! - **模型面**（Model）＝真正发往模型商的上下文＝
 //!   `前置 ＋ 固定指针 ＋ D4 机械段 ＋ 各分块（原文｜机械摘要行）＋ 主滑块 x
-//!   ＋ 尾部 ＋ 分块表`。
+//!   ＋ 尾部 ＋ 分块表 ＋ 结束自述通道行（0bs ①，2026-09-25）`。
 //!
 //!   **分块表落尾部（2026-09-16 实现批，前缀纪律优先）**：表里末块那一行每
 //!   新增一轮就变（区间／估算／计数都在长）⇒ 若像 v7 那样挂在固定指针之后
@@ -49,6 +49,12 @@ use std::path::{Path, PathBuf};
 
 /// 分块表注入前缀（注册进 `prompt::is_injected_block_text`，绝不持久化）。
 pub const BLOCK_TABLE_PREFIX: &str = "[上下文分块表";
+
+/// 0bs ④（2026-09-25）：分块表的**单源指向行**——通知块（H1 硬提醒／T1 截断
+/// 告知／必定压缩窗口）不再内嵌整表，只给这一行；表本体在窗口**尾部**逐轮
+/// 刷新（同一「说明行」在一份请求里只出现一次）。
+pub const BLOCK_TABLE_POINTER_LINE: &str =
+    "分块表见**窗口尾部**（逐轮刷新；压缩/回放均按块号指定）。";
 
 /// marker 机器行标签：块号区间（供 `face_markers` 反解分块状态）。
 pub const BLOCK_MARKER_RANGE_LABEL: &str = "已处理分块: ";
@@ -541,10 +547,10 @@ pub fn build_model_face(
     let start = slider_start(messages, params.slider_tokens);
     let hidden = hidden_message_ranges(messages, &ranges, &blocks, &markers, start);
     let preamble_end = blocks[0].msg_start;
-    // 0bc S2④：一次可失败预留（上界＝len＋3：前置＋指针/D4＋尾部消息＋块表），
-    // 此后 push 不再触发不可失败的增长重分配。
+    // 0bc S2④：一次可失败预留（上界＝len＋4：前置＋指针/D4＋尾部消息＋块表
+    // ＋结束自述通道行），此后 push 不再触发不可失败的增长重分配。
     let mut view: Vec<Message> = Vec::new();
-    view.try_reserve_exact(messages.len() + 3)
+    view.try_reserve_exact(messages.len() + 4)
         .map_err(alloc_err_io)?;
     for m in &messages[..preamble_end] {
         view.push(try_clone_message(m)?);
@@ -575,6 +581,14 @@ pub fn build_model_face(
     view.push(mechanical_message(render_block_table(
         &blocks, &markers, params,
     )));
+    // 0bs ①（2026-09-25）：**结束自述通道常驻尾行**——告知面收口。0bm 轮
+    // 实证：`[RUN_END]` 语法只挂 pull 面 `guide`（`blackboard_read section=
+    // guide`）⇒ 137 工具轮零自述、`run_finished` 仍三键。单一来源＝
+    // `model_stop`；每轮尾随（分块表之后＝窗口最末消息）。无分块会话维持
+    // 「早期会话字节形态一致」不变量——不注入（早退分支不动）。
+    view.push(mechanical_message(
+        crate::model_stop::model_stop_resident_line(),
+    ));
     Ok(view)
 }
 
@@ -611,7 +625,8 @@ pub fn model_face_message_count(messages: &[Message], params: &ModelFaceParams) 
         }
         count += 1;
     }
-    count + 1
+    // 0bs ①：尾部追加＝分块表 ＋ 结束自述通道行（与 build_model_face 同口径）。
+    count + 2
 }
 
 // 0bc S2④ 测试缝（`#[cfg(test)]`，线程本地）：构造性注入「装配路径分配
@@ -726,8 +741,10 @@ pub fn estimate_model_face_tokens(messages: &[Message], params: &ModelFaceParams
         total = total.saturating_add(crate::controller::estimate_message_tokens(m));
     }
     let index = injected_estimate(&render_block_table(&blocks, &markers, params));
+    let channel = injected_estimate(&crate::model_stop::model_stop_resident_line());
     total
         .saturating_add(index)
+        .saturating_add(channel)
         .saturating_add(params.static_overhead_tokens)
 }
 
@@ -1409,6 +1426,58 @@ mod tests {
         assert!(table.contains("已截断"));
         assert!(table.contains("原文回放:"));
         assert!(table.contains("run=RUN-TEST"));
+    }
+
+    /// 0bs ① 钉（2026-09-25）：结束自述通道**常驻尾行**——有分块时每轮随
+    /// 分块表进模型面（表之后＝窗口最末消息）；无分块会话不注入（早期会话
+    /// 字节形态不变量保持）；同一面内分块表只出现一次（0bs ④ 单源口径）。
+    #[test]
+    fn end_channel_resident_line_rides_the_face_tail_after_the_block_table() {
+        let messages = conversation(10, 8_000);
+        let params = ModelFaceParams {
+            slider_tokens: 12_000,
+            block_tokens: 12_000,
+            ledger_path: None,
+            archive_tag: Some("sess0001".to_string()),
+            run_id: "RUN-TEST".to_string(),
+            d4_block: None,
+            static_overhead_tokens: 0,
+        };
+        let face = build_model_face(&messages, &params).expect("face");
+        let tail = face.last().expect("非空模型面");
+        assert_eq!(
+            tail.content,
+            crate::model_stop::model_stop_resident_line(),
+            "尾行＝结束自述通道（单一来源）"
+        );
+        let before = &face[face.len() - 2];
+        assert!(
+            before.content.starts_with(BLOCK_TABLE_PREFIX),
+            "通道行紧随分块表之后：{}",
+            before.content
+        );
+        assert_eq!(
+            face.iter()
+                .filter(|m| m.content.starts_with(BLOCK_TABLE_PREFIX))
+                .count(),
+            1,
+            "同一模型面内分块表只出现一次"
+        );
+        // 无分块会话：原样返回（不注入通道行）。
+        let small = conversation(3, 1_000);
+        let small_params = ModelFaceParams {
+            slider_tokens: 160_000,
+            block_tokens: 32_000,
+            ledger_path: None,
+            archive_tag: None,
+            run_id: "RUN-TEST".to_string(),
+            d4_block: None,
+            static_overhead_tokens: 0,
+        };
+        assert_eq!(
+            build_model_face(&small, &small_params).expect("face"),
+            small
+        );
     }
 
     /// **P0 修复钉子（2026-09-16 实现批，审查 R-1）**：未闭合的**残段**

@@ -91,3 +91,39 @@ pub(crate) const WRITE_FACE_STRIP_RANGES: &[(u32, u32)] = &[
     (0xE0020, 0xE007F),
 ];
 
+// 0bs ⑦（2026-09-25，F13 用户令定案）：**状态符号白名单窗口**。
+// 只放行「状态符号」——报告/交接文档的表头与状态列常用记号（对勾/叉、警示、
+// 时间/进度、红黄绿灯、星标/刷新/锁/旗标/图钉等；含 VS15/16 变体，整体放行、
+// 不拆序列）；其余 emoji 照旧拦截。判据（S1 定稿）：集合 = 手选白名单（非自动
+// 推导），经验面＝docs/audits 全量扫描（U+2705×178 / U+26D4×4 / U+2757×1 /
+// U+2714×19 / U+274C×6 / U+23F3 等）。
+// 与 WRITE_FACE_STRIP_RANGES 的交集按「白名单优先」裁决（不拦截、不计数告知）。
+// 维护纪律：新增符号须过 S1 复核并在此登记（排序、互不重叠，同 strip 表纪律）。
+pub(crate) const STATUS_SYMBOL_WINDOW: &[(u32, u32)] = &[
+    (0x231B, 0x231B),   // HOURGLASS
+    (0x23F3, 0x23F3),   // HOURGLASS WITH FLOWING SAND
+    (0x23F8, 0x23FA),   // PAUSE / STOP / RECORD
+    (0x25B6, 0x25B6),   // PLAY
+    (0x26A0, 0x26A0),   // WARNING（+VS16 随基座）
+    (0x26A1, 0x26A1),   // HIGH VOLTAGE
+    (0x26AA, 0x26AB),   // MEDIUM WHITE/BLACK CIRCLE
+    (0x26D4, 0x26D4),   // NO ENTRY
+    (0x2705, 0x2705),   // WHITE HEAVY CHECK MARK
+    (0x2713, 0x2714),   // CHECK / HEAVY CHECK
+    (0x2717, 0x2718),   // BALLOT X / HEAVY BALLOT X
+    (0x274C, 0x274E),   // CROSS MARK / NEGATIVE SQUARED CROSS
+    (0x2753, 0x2755),   // QUESTION / EXCLAMATION ORNAMENTS
+    (0x2757, 0x2757),   // HEAVY EXCLAMATION
+    (0x2B50, 0x2B50),   // STAR
+    (0x1F3C1, 0x1F3C1), // CHEQUERED FLAG
+    (0x1F4CC, 0x1F4CD), // PUSHPIN / ROUND PUSHPIN
+    (0x1F501, 0x1F502), // REPEAT / REPEAT ONE
+    (0x1F504, 0x1F504), // ANTICLOCKWISE ARROWS
+    (0x1F510, 0x1F510), // LOCKED WITH KEY
+    (0x1F512, 0x1F513), // LOCK / OPEN LOCK
+    (0x1F534, 0x1F535), // RED / BLUE CIRCLE
+    (0x1F6A7, 0x1F6A7), // CONSTRUCTION
+    (0x1F6A9, 0x1F6A9), // TRIANGULAR FLAG
+    (0x1F6AB, 0x1F6AB), // NO ENTRY SIGN
+    (0x1F7E0, 0x1F7E3), // ORANGE/YELLOW/GREEN/PURPLE CIRCLE
+];

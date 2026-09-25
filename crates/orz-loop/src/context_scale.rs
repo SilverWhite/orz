@@ -315,11 +315,14 @@ pub fn soft_reminder_block(milestone_tokens: u64, model_face_tokens: u64) -> Str
 /// **H1 硬提醒（打断式，320K 估算 ≈246K 真实）**——宣告 T1 线的必定压缩
 /// 语义（2026-09-24 补足：两次强制窗口 ⇒ 第三次机械截断），给出当前分块表与
 /// 压缩方法（设计 §5＋§5 补足）。
+///
+/// 0bs ④（2026-09-25）：**不再内嵌整张分块表**——表在窗口尾部逐轮刷新，
+/// 提醒块只给**单源指向**（此前内嵌副本与尾部表同渲染 ⇒ 同一「说明行」
+/// 在一份请求里出现两次；判据＝单源一次）。
 pub fn hard_reminder_block(
     milestone_tokens: u64,
     truncate_tokens: u64,
     model_face_tokens: u64,
-    block_table: &str,
 ) -> String {
     let k = milestone_tokens / 1000;
     let t1 = truncate_tokens / 1000;
@@ -331,10 +334,11 @@ pub fn hard_reminder_block(
          把其余已闭合分块移出窗口（逐字原文全量留档，需要前置上下文时按块回查存档）。\n\
          不足一块的**残段**不参与，留在窗口内。**是否现在压缩、压缩哪些块由你判断**（压缩交给你自选、\
          可延后；{}）——若决定压缩：{}\n\
-         {block_table}\n\
+         {}\n\
          {declaration}",
         target_tier_advice(),
         summary_block_guide(),
+        crate::model_face::BLOCK_TABLE_POINTER_LINE,
         declaration = crate::model_face::MODEL_FACE_DECLARATION,
     )
 }
@@ -349,12 +353,13 @@ pub fn hard_reminder_block(
 /// 0bh ⑯ 子项（2026-09-22，用户批准「去判断而非去建议」，处置优先级 删＞保留＞改）：
 /// 删除原③句「任务无需中止：…继续即可」——「该不该继续」是模型的判断，
 /// 机械层只留事实（「工作现场与残段逐字未动」）与回放指引。
+///
+/// 0bs ④（2026-09-25）：不再内嵌整表（同 H1；判据＝单源一次）。
 pub fn truncation_notice_block(
     truncated_blocks: usize,
     freed_tokens: u64,
     model_face_tokens: u64,
     replay: &str,
-    block_table: &str,
     archive_write_failed: bool,
     mandatory_window_fact: &str,
 ) -> String {
@@ -379,9 +384,10 @@ pub fn truncation_notice_block(
          3. 工作现场（最近若干完整轮）与残段逐字未动；**需要前置上下文时请回查存档**\
          ——按上方指针分页读回即可。{failure}\n\
          {fact}\n\
-         {block_table}\n\
+         {}\n\
          {declaration}",
         reading(model_face_tokens),
+        crate::model_face::BLOCK_TABLE_POINTER_LINE,
         declaration = crate::model_face::MODEL_FACE_DECLARATION,
     )
 }
@@ -402,6 +408,30 @@ pub fn block_selection_unrecognized_notice(line: &str, compressible: &str) -> St
          当前可压区间：{compressible}（只含「已闭合且仍为原文」的分块）。\n\
          正确写法：`{MODEL_SUMMARY_BLOCK_LABEL} 1-4, 6`（可带行内说明，\
          如 `{MODEL_SUMMARY_BLOCK_LABEL} 1-62（全部已闭合块）`）。\n\
+         {declaration}",
+        declaration = crate::model_face::MODEL_FACE_DECLARATION,
+    )
+}
+
+/// 0bs ⑥（2026-09-25）：**摘要未落地回执**——F12 观测性缺口：语义摘要被识别、
+/// 机械层尝试落地但**未压缩任何分块**（指定区间无命中／当前无可压分块／台账
+/// 写失败）时，旧行为只在审计与 tracing 落账、模型侧静默——模型无法判断
+/// 「握手是否完成」。本回执把未落地做成与 `block_selection_unrecognized_notice`
+/// 同形的如实告知（不判罚、不改语义、不阻断动作）。落地成功的回执＝压缩
+/// marker（既有告知面），本函数不出。
+pub fn summary_not_landed_notice(reason: &str, compressible: &str) -> String {
+    let compressible = if compressible.is_empty() {
+        "（无）"
+    } else {
+        compressible
+    };
+    format!(
+        "{WINDOW_NOTICE_PREFIX} · 压缩回执] 语义摘要**已收到，但未压缩任何分块**（未落地）：\
+         {reason}。\n\
+         当前可压区间：{compressible}（只含「已闭合且仍为原文」的分块；未闭合的残段\
+         与工作现场不参与）。\n\
+         动作不阻断：照常继续即可；如需压缩，在摘要块里写明可压区间内的块号重投\
+         （等目标块闭合后再投同效）。\n\
          {declaration}",
         declaration = crate::model_face::MODEL_FACE_DECLARATION,
     )
@@ -487,11 +517,13 @@ pub fn compression_window_block(milestone_tokens: u64) -> String {
 /// 0bn R2（2026-09-24 复审补口，v8 §15）：**摘要格式模板自嵌块本体**——
 /// 不再依赖任何早前注入的「见上」指称（H1 块可被移出／单轮暴涨被最高档抑制
 /// ／恢复会话不回放注入块），块随窗口注入即自带说明。
+///
+/// 0bs ④（2026-09-25）：不再内嵌整表——摘要模板仍自嵌（R2 不动），
+/// 分块索引改单源指向窗口尾部表（判据＝单源一次）。
 pub fn mandatory_compression_window_block(
     milestone_tokens: u64,
     attempt: u32,
     model_face_tokens: u64,
-    block_table: &str,
 ) -> String {
     let k = milestone_tokens / 1000;
     let reading = reading(model_face_tokens);
@@ -526,8 +558,9 @@ pub fn mandatory_compression_window_block(
          （{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes；黑板不受上下文窗口影响）。\n\
          {after}\n\
          （读数与再发起可随时调用 {CONTEXT_COMPRESS_TOOL_NAME}：窗口在程中时它只返回当前读数。）\n\
-         {block_table}\n{declaration}",
+         {pointer}\n{declaration}",
         guide = summary_block_guide(),
+        pointer = crate::model_face::BLOCK_TABLE_POINTER_LINE,
         declaration = crate::model_face::MODEL_FACE_DECLARATION,
     )
 }
@@ -793,12 +826,7 @@ mod tests {
         assert!(soft.contains("194321 token"));
         assert!(soft.contains("工作现场"));
         assert!(!soft.contains("已打断"));
-        let hard = hard_reminder_block(
-            320_000,
-            500_000,
-            322_000,
-            "[上下文分块表 v0.1]\n[/上下文分块表]",
-        );
+        let hard = hard_reminder_block(320_000, 500_000, 322_000);
         assert!(hard.contains("320K · 硬提醒"));
         assert!(hard.contains("500K"));
         // 2026-09-24 必定压缩补足：H1 宣告 T1 线的新语义——强制开压缩窗口、
@@ -807,15 +835,7 @@ mod tests {
         assert!(hard.contains("仅保留工作现场"));
         assert!(hard.contains("按块回查存档"));
         assert!(hard.contains(crate::model_face::MODEL_FACE_DECLARATION));
-        let notice = truncation_notice_block(
-            3,
-            41_000,
-            460_000,
-            "- 块#1 …",
-            "[上下文分块表 v0.1]",
-            false,
-            "",
-        );
+        let notice = truncation_notice_block(3, 41_000, 460_000, "- 块#1 …", false, "");
         assert!(notice.contains("已截断 3 块"));
         // 0bh ⑯ 子项：判断句已删——机械层不再替模型断言「该不该继续」，
         // 只留状况陈述（工作现场未动）与回放指引。
@@ -837,13 +857,13 @@ mod tests {
     fn reminder_blocks_are_registered_injected_text() {
         for block in [
             soft_reminder_block(192_000, 192_000),
-            hard_reminder_block(320_000, 500_000, 320_000, "表"),
-            truncation_notice_block(1, 1_000, 460_000, "- 块#1 …", "表", false, ""),
+            hard_reminder_block(320_000, 500_000, 320_000),
+            truncation_notice_block(1, 1_000, 460_000, "- 块#1 …", false, ""),
             guard_truncation_notice_block(1, 1_000, 460_000, 700_000, "- 块#1 …", false),
             first_block_reminder_block(),
             compression_window_block(320_000),
-            mandatory_compression_window_block(500_000, 1, 500_000, "表"),
-            mandatory_compression_window_block(500_000, 2, 500_000, "表"),
+            mandatory_compression_window_block(500_000, 1, 500_000),
+            mandatory_compression_window_block(500_000, 2, 500_000),
             block_selection_unrecognized_notice("压缩块: 全部", "1-3"),
         ] {
             assert!(
@@ -852,14 +872,51 @@ mod tests {
             );
         }
         // 两级询问语义：首问＝规则告知；第二次＝明示质量衰减与最后机会。
-        let first = mandatory_compression_window_block(500_000, 1, 500_000, "表");
-        let second = mandatory_compression_window_block(500_000, 2, 500_000, "表");
+        let first = mandatory_compression_window_block(500_000, 1, 500_000);
+        let second = mandatory_compression_window_block(500_000, 2, 500_000);
         assert!(first.contains("机械层不替你截断"), "{first}");
         assert!(!first.contains("第二次询问"), "{first}");
         assert!(second.contains("第二次询问"), "{second}");
         assert!(second.contains("上下文质量已严重衰减"), "{second}");
         assert!(second.contains("最后一次压缩窗口"), "{second}");
         assert!(second.contains("按块回查存档"), "{second}");
+    }
+
+    /// 0bs ④ 钉（2026-09-25）：**通知块不再内嵌整表**——分块索引单源＝窗口
+    /// 尾部表（逐轮刷新）；H1／截断告知／必定窗口三个通知块不得含表体或
+    /// 「说明行」，但须带单源指向行（同一「说明行」在一份请求里只出现一次）。
+    #[test]
+    fn notices_point_to_the_tail_table_instead_of_embedding_it() {
+        let cases = [
+            hard_reminder_block(320_000, 500_000, 322_000),
+            truncation_notice_block(3, 41_000, 460_000, "- 块#1 …", false, ""),
+            mandatory_compression_window_block(500_000, 1, 500_000),
+            mandatory_compression_window_block(500_000, 2, 500_000),
+        ];
+        for text in &cases {
+            assert!(!text.contains("[上下文分块表"), "{text}");
+            assert!(!text.contains("说明: 工作现场"), "{text}");
+            assert!(
+                text.contains(crate::model_face::BLOCK_TABLE_POINTER_LINE),
+                "{text}"
+            );
+        }
+    }
+
+    /// 0bs ⑥ 钉（2026-09-25）：**未落地回执**——F12：摘要被识别但未压缩任何
+    /// 分块时模型侧不再静默；回执含未落地原因、可压区间与重投指引，且属注册
+    /// 注入文本（不写回持久化会话）；空集合渲染「（无）」而非残句。
+    #[test]
+    fn summary_not_landed_receipt_is_informative_and_registered() {
+        let notice = summary_not_landed_notice("指定区间在可压集合中无命中", "2-3");
+        assert!(notice.starts_with(WINDOW_NOTICE_PREFIX));
+        assert!(notice.contains("未压缩任何分块"), "{notice}");
+        assert!(notice.contains("指定区间在可压集合中无命中"), "{notice}");
+        assert!(notice.contains("2-3"), "{notice}");
+        assert!(notice.contains("重投"), "{notice}");
+        assert!(crate::prompt::is_injected_block_text(&notice));
+        let empty = summary_not_landed_notice("当前没有「已闭合且仍为原文」的可压分块", "");
+        assert!(empty.contains("（无）"), "{empty}");
     }
 
     /// 0bn R2 钉②（2026-09-24 复审补口，v8 §15）：**强制窗块自嵌摘要模板**
@@ -870,8 +927,8 @@ mod tests {
     #[test]
     fn mandatory_window_block_embeds_the_summary_template_self_contained() {
         for ask in [
-            mandatory_compression_window_block(500_000, 1, 500_000, "表"),
-            mandatory_compression_window_block(500_000, 2, 500_000, "表"),
+            mandatory_compression_window_block(500_000, 1, 500_000),
+            mandatory_compression_window_block(500_000, 2, 500_000),
         ] {
             assert!(ask.contains(MODEL_SUMMARY_PREFIX), "{ask}");
             assert!(ask.contains(MODEL_SUMMARY_END), "{ask}");
