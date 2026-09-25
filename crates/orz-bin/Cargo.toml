@@ -1,6 +1,6 @@
 [package]
 name = "orz-bin"
-version = "0.6.12"
+version = "0.6.13"
 edition = "2024"
 license = "Apache-2.0"
 description = "orz — assurance-first CLI agent workbench (Phase 1 scaffold)"
