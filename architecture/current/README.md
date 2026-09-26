@@ -26,7 +26,7 @@ flowchart TD
     ToolRun -->|"结构化信封结果"| HostExec
 
     HostExec --> Blackboard["会话黑板 (单会话作用域 / (domain, round) 盖章)"]
-    HostExec --> Journal["不可篡改审计链 (run-event v0.2 / hash-chained)"]
+    HostExec --> Journal["hash 链审计 journal (run-event v0.2；完整性/损坏检测)"]
 
     Loop --> Guard["生成期健康哨兵 (滚动哈希复读检测 / stall 兜底)"]
     Loop --> Delivery["submit 两阶段交付 (请求 → 确认)"]
@@ -55,6 +55,6 @@ flowchart TD
 - **上下文＝模型自控注意力窗口**（ADR §14.69）：模型面＝主滑块＋主滑块以外分块指针（分块内容不流出模型面）；机械轨按阶梯收窄模型面（软提醒 → 320K 硬打断 → 500K 硬截断），语义轨经压缩窗口由模型产出结构化摘要，`context_compress` 可知情发起（ADR §14.72）；压缩不覆盖本地面，全量留档、按块回放。
 - **会话归档**：交互会话结束时由 `session_archive` 单包原子写入 gzip 归档文件；无头 `-p` run 落会话持久化并按里程碑增量归档（0ak）。
 
-### 2.4 审计与防篡改：Hash-Chained Journal
+### 2.4 审计与完整性：Hash-Chained Journal
 - 每次运行写入事件 journal（schema v0.2），每条记录计算单向哈希链（SHA-256）。
-- 离线可通过 `--replay` 交叉检验完整性，防篡改、防伪造。
+- 离线可通过 `--replay` 交叉校验完整性与检测损坏。**口径＝完整性/损坏检测**：链断／篡改**可被检出**，但 hash 链不提供外部锚定的「防篡改保证」（receipt 链／外部 digest 锚不立项——083 审查裁决③、0bv D-6，2026-09-27）。

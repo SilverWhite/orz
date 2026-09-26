@@ -13,6 +13,21 @@ retention、Windows native sandbox 或 anti-injection hard gate 已达到生产�
 [`ADR-0003`](../adr/ADR-0003-runtime-neutral-assurance-kernel.md) 与
 [`ADR-0004`](../adr/ADR-0004-general-science-profile-layering.md)。
 
+## 冻结宣言（2026-09-27，REV-083-15／0bv D-15）
+
+本目录（assurance/ Python 镜像，约 192 文件）自 2026-09-27 起**冻结**：
+
+1. **禁新增**：不新增事件族、事件字段与校验规则；新功能一律落 Rust 判官
+   （`orz/crates/orz-assurance/`，执法权威）。
+2. **仅契约双写**：唯一合法改动＝P0–P5 契约面变更的 Rust↔Python 双写同步
+   （schema/fixture/冻结镜像对拍），且必须与 Rust 侧同批；逐字同构由对拍测试钉住。
+3. **转归档判据**：发布链双签完成（Rust 判官与 Python 镜像在发布链上双签一致）后，
+   本目录转只读归档（`reference`），届时仅存对拍对照面与 `_WORK_TOOLS` 单源两个
+   合法消费角色。
+
+处置出处：083 全面审查 §6.2＋裁决⑦（2026-09-26）；实施登记见
+[`docs/audits/0BV_CARRYOVER_REV083_0BW_2026-09-27.md`](../docs/audits/0BV_CARRYOVER_REV083_0BW_2026-09-27.md) §2 D-15。
+
 ## 当前合同
 
 - `effective-security-envelope-v0.1.schema.json`：把 conversation、workspace、runtime adapter、
