@@ -16,7 +16,7 @@
 | 父仓 | 本档＋pin → `c5245558`＋README 发布面 → **v0.7.0**＋索引 v4.55＋TODO／BACKLOG 台账 |
 | 打包 | `D:\tb-eval\rel-081-stage\`：zip **28,556,923 B** `d099d9f3…`／tar.gz **37,008,587 B** `78cec631…`／顶层 `SHA256SUMS` **191 B** `f84530c9…` |
 | 包完整性 | 解包回读六件与在役载体 **6/6 MATCH**；容器（`alpine:3.20`）`sha256sum -c` **zip 4/4＋tar 4/4＋顶层 2/2 全 OK** |
-| 发行 | GitHub Release **`v0.7.0`**（非 draft／非 prerelease）；tag 指向本批父仓提交 |
+| 发行 | GitHub Release **`v0.7.0`**（非 draft／非 prerelease，发布于 2026-09-26T10:03:32Z）；tag `object.sha`＝本批父仓提交 `044250df…`；三资产 digest 与回下载**逐位一致**（§2.1） |
 | 计数 | **不变**（**未闭合 57**）：本批为提交推送与发行，不新增／不闭合开放项 |
 
 ## 1. 提交面
@@ -81,7 +81,29 @@
 
 ### 2.1 上传面核证（本档提交后回读）
 
-（见本文件末尾「补记」节——创建与 digest 回读读数在发行落定后补录。）
+- **创建读数**：`gh release create v0.7.0 --target 044250df3d0a182d5aed927b0b60afa8938f80d5 …`
+  ⇒ <https://github.com/SilverWhite/CLI/releases/tag/v0.7.0>；
+  `gh api repos/SilverWhite/CLI/git/ref/tags/v0.7.0` 回读
+  `object.sha = 044250df3d0a182d5aed927b0b60afa8938f80d5`（`type=commit`）⇒ **tag 指向本批父仓提交**；
+  release 读数 `draft=false`／`prerelease=false`／`published_at = 2026-09-26T10:03:32Z`／
+  `target_commitish` 与上同值。
+- **流程摩擦（已解）**：首跑用短 SHA（`--target 044250df`）返回
+  `HTTP 422 … Release.target_commitish is invalid`；同一提交改全 40 位 SHA 即过
+  ——登记为发行操作注记（`gh release create --target` 用全 SHA）。
+- **资产 digest 回读**（`gh api repos/SilverWhite/CLI/releases/tags/v0.7.0`）：
+
+| 资产 | 远端 size | 远端 digest | 本地 size／SHA256 | 判读 |
+|---|---:|---|---|---|
+| `orz-0.7.0-windows-x86_64.zip` | 28,556,923 | `sha256:d099d9f3f9aa317ef3fb228da8be896c93320e7c7033f8499a6e9e6203dbd1c6` | 28,556,923／同值 | **逐位一致** |
+| `orz-0.7.0-linux-x86_64.tar.gz` | 37,008,587 | `sha256:78cec631db5b0d3e404d2b0908e6276cfd960d6f0ee840ff21d1dc57b375693a` | 37,008,587／同值 | **逐位一致** |
+| `SHA256SUMS`（顶层） | 191 | `sha256:f84530c9f452328d183d900f51dd3ce2d1c744b160d451880489ab7def41bb95` | 191／同值 | **逐位一致** |
+
+- **回下载核验（认证 API 资产面完整回下载）**：三资产经
+  `gh api repos/SilverWhite/CLI/releases/assets/{id} -H "Accept: application/octet-stream"`
+  回读（资产 id＝`590410262`／`590410251`／`590410253`）——zip 28,556,923 B、
+  tar.gz 37,008,587 B、`SHA256SUMS` 191 B，SHA256 与本地**逐位一致**。
+- **私有仓口径沿 075 §8.1 不变**：匿名 `https://github.com/…/releases/download/v0.7.0/…`
+  返回 404，资产面核证以**认证 API 路径**为准。
 
 ## 3. 记账面（pin、清单、索引、计数）
 
