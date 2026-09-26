@@ -528,7 +528,7 @@ fn candidate_is_under_raw(base: &std::path::Path, candidate: &std::path::Path) -
 
 /// Containment test with lexical `..` 归一化（覆盖 Windows 大小写/短名等
 /// 拼写差异下 `starts_with` 的盲区）。
-fn candidate_is_under(base: &std::path::Path, candidate: &std::path::Path) -> bool {
+pub(crate) fn candidate_is_under(base: &std::path::Path, candidate: &std::path::Path) -> bool {
     let norm_candidate = orz_paths::normalize_lexically(candidate);
     let norm_base = orz_paths::normalize_lexically(base);
     candidate_is_under_raw(base, candidate) || candidate_is_under_raw(&norm_base, &norm_candidate)

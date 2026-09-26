@@ -340,9 +340,14 @@ impl ProjectDocIndex {
                     Ok(bytes) => {
                         let digest =
                             orz_assurance::sha256_hex(&bytes[..bytes.len().min(max_content_bytes)]);
-                        let text =
-                            String::from_utf8_lossy(&bytes[..bytes.len().min(max_content_bytes)])
-                                .to_string();
+                        // 0bw F7 (B plan): the model-facing preview goes
+                        // through the capture decode ladder — GB18030 docs
+                        // decode cleanly; a cap cut mid-character degrades
+                        // only the boundary line (per-line lossy keeps the
+                        // lines before it).
+                        let (text, _) = orz_tools::util::encoding::decode_text(
+                            &bytes[..bytes.len().min(max_content_bytes)],
+                        );
                         let content = if bytes.len() > max_content_bytes {
                             format!("{text}\n[truncated — {} bytes total]", bytes.len())
                         } else {
@@ -895,7 +900,9 @@ fn extract_headings(path: &Path) -> Vec<String> {
         return Vec::new();
     };
     let head = &bytes[..bytes.len().min(256 * 1024)];
-    let text = String::from_utf8_lossy(head);
+    // 0bw F7 (B plan): headings are model-facing — decode through the
+    // capture ladder so GB18030 docs yield readable titles.
+    let (text, _) = orz_tools::util::encoding::decode_text(head);
     text.lines()
         .filter_map(|l| {
             let t = l.trim_start();
@@ -934,7 +941,7 @@ fn extract_headings_and_hash(path: &Path) -> (Vec<String>, Option<String>) {
             Err(_) => return (Vec::new(), None),
         }
     }
-    let text = String::from_utf8_lossy(&head);
+    let (text, _) = orz_tools::util::encoding::decode_text(&head);
     let headings = text
         .lines()
         .filter_map(|l| {
@@ -1143,6 +1150,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("docs")).unwrap();
         dir
+    }
+
+    #[test]
+    fn gbk_headings_decode_via_capture_ladder() {
+        // 0bw F7 (B plan): GB18030 docs (PS 5.1-era encodings) must yield
+        // readable model-facing headings, not per-byte U+FFFD. "# 中文标题"
+        // in GBK bytes.
+        let dir = test_dir();
+        let p = dir.join("docs").join("gbk.md");
+        std::fs::write(
+            &p,
+            [b'#', b' ', 0xD6, 0xD0, 0xCE, 0xC4, 0xB1, 0xEA, 0xCC, 0xE2, b'\n'],
+        )
+        .unwrap();
+        let headings = extract_headings(&p);
+        assert_eq!(headings, vec!["中文标题".to_string()]);
     }
 
     #[test]

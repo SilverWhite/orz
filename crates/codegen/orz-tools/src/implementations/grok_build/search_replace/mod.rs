@@ -227,24 +227,25 @@ pub(crate) async fn run_search_replace(
             "File path is a directory".to_owned(),
         ));
     }
-    // 0p S2 复审 P2 修复（2026-09-07，ADR-0010 §14.61 设计 B）：会话卷是
-    // 机制所有（mechanism-owned），设计只放开「读」——写保护此前仅靠
-    // gitignore 巧合与权限策略承担，无机械门。写目标词法或 canonical 落
-    // 进 `.gsa` 会话卷域即拒（与 gitignore 拒编同一 InvalidInput 形态；
-    // 与注入资源无关，由 cwd 机械推导，不依赖模型面装配）。
+    // 0bw S2①（2026-09-26，设计档 §3.1）：写面机械门——deny 单一源
+    // （系统核心＋载体自保护：`.gsa` 会话卷／安装目录／三件套／`grok-home`）。
+    // `.gsa` 域判定委派既有窗口函数（语义不重写、文案保持）；安装目录由
+    // `current_exe` 机械推导，不依赖模型面装配；命中即拒（与 gitignore 拒编
+    // 同一 InvalidInput 形态）。
     {
-        let gsa_canonical_root = crate::types::resources::session_volume_canonical_root(&cwd);
-        if crate::types::resources::is_path_in_session_volume_domain(
-            &gsa_canonical_root,
-            &cwd,
-            &resolved,
-            Some(&path),
-        ) {
-            return Ok(SearchReplaceOutput::InvalidInput(format!(
-                "Error: {} is inside the runtime-owned `.gsa` session volume, which is \
-                 not model-writable.",
-                input.file_path
-            )));
+        let install_dir = crate::types::write_control::current_install_dir();
+        let hit = crate::types::write_control::check_write_target(
+            &crate::types::write_control::WriteTargetCtx {
+                cwd: &cwd,
+                joined: &resolved,
+                resolved: Some(&path),
+                install_dir: install_dir.as_deref(),
+            },
+        );
+        if let Some(hit) = hit {
+            return Ok(SearchReplaceOutput::InvalidInput(
+                crate::types::write_control::write_block_message(&input.file_path, &hit),
+            ));
         }
     }
     let is_legacy = SearchReplaceVersion::from_contract(contract_version.as_deref()).is_legacy();
@@ -3790,6 +3791,69 @@ neutTest_set);
             matches!(ok, SearchReplaceOutput::EditsApplied(_)),
             "workspace write must still work, got {ok:?}"
         );
+    }
+
+    /// 0bw S2①（2026-09-26，设计档 §8 判据钉 4）：系统核心目标机械拒绝，
+    /// 且拒绝后目标零存在（未写不建）。
+    #[tokio::test]
+    async fn search_replace_refuses_system_core_targets() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let roots = crate::types::write_control::system_core_roots();
+        let target = roots[0].join("0bw-write-control-must-not-be-created.txt");
+        let target_str = target.to_string_lossy().to_string();
+        let tool = SearchReplaceTool;
+        let output = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(test_resources(&ws).into_shared()),
+            make_input(&target_str, "old text", "new text"),
+        )
+        .await
+        .unwrap();
+        match output {
+            SearchReplaceOutput::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("system-core"),
+                    "system-core write must be refused: {msg}"
+                );
+            }
+            other => panic!("Expected InvalidInput for system-core write, got {other:?}"),
+        }
+        assert!(
+            !target.exists(),
+            "rejection must not create the target: {}",
+            target.display()
+        );
+    }
+
+    /// 0bw S2①（2026-09-26，设计档 §8 判据钉 4）：安装目录（载体自保护）
+    /// 目标机械拒绝，且拒绝后目标零存在。
+    #[tokio::test]
+    async fn search_replace_refuses_install_dir_targets() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let install = crate::types::write_control::current_install_dir()
+            .expect("test binary must have an install dir");
+        let target = install.join("0bw-write-control-must-not-be-created.txt");
+        let target_str = target.to_string_lossy().to_string();
+        let tool = SearchReplaceTool;
+        let output = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(test_resources(&ws).into_shared()),
+            make_input(&target_str, "old text", "new text"),
+        )
+        .await
+        .unwrap();
+        match output {
+            SearchReplaceOutput::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("installation carrier"),
+                    "carrier write must be refused: {msg}"
+                );
+            }
+            other => panic!("Expected InvalidInput for carrier write, got {other:?}"),
+        }
+        assert!(!target.exists(), "rejection must not create the target");
     }
 
     /// 0bm ⑤（2026-09-25）：混排行尾锚点窗编辑——未触碰行按其原行尾逐行

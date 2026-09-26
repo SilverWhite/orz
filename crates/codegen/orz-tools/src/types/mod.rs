@@ -7,6 +7,7 @@ pub mod context;
 pub mod definition;
 pub mod description;
 pub mod error;
+pub mod exec_policy;
 pub mod memory_backend;
 pub mod output;
 pub mod params_validation;
@@ -21,6 +22,7 @@ pub mod tool;
 pub mod tool_index;
 pub mod tool_io;
 pub mod tool_metadata;
+pub mod write_control;
 pub use api_key_provider::{ApiKeyProvider, SharedApiKeyProvider};
 pub use claude_alias::{claude_names_for, grok_names, grok_names_for, kind_for};
 pub use compat::{

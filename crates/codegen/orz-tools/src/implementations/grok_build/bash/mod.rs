@@ -535,7 +535,10 @@ fn is_pure_status_print(trimmed: &str) -> bool {
 /// follows the same switch as every other system reminder.
 pub(crate) fn format_default_prompt(bash: &BashOutput, append_noop_reminder: bool) -> String {
     let output_str = if bash.output_for_prompt.is_empty() {
-        let raw = String::from_utf8_lossy(&bash.output);
+        // 0bw F7 (B plan): the prompt fallback must go through the capture
+        // decode ladder — GB18030 child output (PS 5.1 pipe without a pinned
+        // console encoding) would otherwise degrade to U+FFFD here.
+        let (raw, _) = crate::util::encoding::decode_text(&bash.output);
         strip_ansi_escapes::strip_str(&raw).to_string()
     } else {
         bash.output_for_prompt.clone()
@@ -2208,6 +2211,21 @@ impl xai_tool_runtime::Tool for BashTool {
             ));
         }
 
+        // ─── 0bw S2②（2026-09-26，设计档 §3.2）：L2 命令面机械审查 ───
+        // block＝锁死面/安全机制翻转类命中 → 命令不执行（机械拒绝文案随 tool
+        // 结果入 journal）；warn＝留痕（结果头部 `[写入管控·提示]` 行，不阻断）。
+        // best-effort 闸（设计档 §9 边界）。
+        let write_control_warn =
+            match crate::types::exec_policy::review_command(&cwd, &input.command) {
+                crate::types::exec_policy::CommandReview::Block(finding) => {
+                    return Err(xai_tool_runtime::ToolError::permission_denied(
+                        crate::types::exec_policy::block_message(&finding),
+                    ));
+                }
+                crate::types::exec_policy::CommandReview::Warn(finding) => Some(finding),
+                crate::types::exec_policy::CommandReview::Allow => None,
+            };
+
         // --- Prefix ---
         let command = Self::get_prefixed_command(&params.cmd_prefix, &input.command);
 
@@ -2310,7 +2328,14 @@ impl xai_tool_runtime::Tool for BashTool {
                 output_file: bg_output_file.to_string_lossy().to_string(),
                 status: "running".to_string(),
                 command: input.command,
-                summary: format!("Background task {} started", task_id),
+                summary: {
+                    let mut summary = format!("Background task {} started", task_id);
+                    if let Some(finding) = &write_control_warn {
+                        summary.push(' ');
+                        summary.push_str(&crate::types::exec_policy::warn_line(finding));
+                    }
+                    summary
+                },
                 retrieval_hint,
                 pre_formatted: None,
                 pid: bg_pid,
@@ -2417,7 +2442,7 @@ impl xai_tool_runtime::Tool for BashTool {
                 let retrieval_hint =
                     Self::background_retrieval_hint(&resources, tool_call_id.as_str()).await?;
 
-                let summary = if auto_backgrounded {
+                let mut summary = if auto_backgrounded {
                     format!(
                         "Command \"{}\" exceeded the default timeout and was automatically moved to background. \
                          Process is still running.",
@@ -2429,6 +2454,10 @@ impl xai_tool_runtime::Tool for BashTool {
                         input.command
                     )
                 };
+                if let Some(finding) = &write_control_warn {
+                    summary.push(' ');
+                    summary.push_str(&crate::types::exec_policy::warn_line(finding));
+                }
 
                 // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): the
                 // auto-backgrounded case composes the one-shot mid-run
@@ -2523,6 +2552,20 @@ impl xai_tool_runtime::Tool for BashTool {
                 output_delta: None,
                 was_bare_echo: false,
             };
+            // 0bw S2②（2026-09-26，设计档 §3.2）：warn 留痕——结果头部附一行
+            // `[写入管控·提示]`（模型面经 `output_for_prompt`、journal 随
+            // `output` 字节；total_bytes 同步计入头部行，保持 shown/total 一致）。
+            if let Some(finding) = &write_control_warn {
+                let line = crate::types::exec_policy::warn_line(finding);
+                let added = line.len() + 1;
+                let mut raw = Vec::with_capacity(added + bash.output.len());
+                raw.extend_from_slice(line.as_bytes());
+                raw.push(b'\n');
+                raw.extend_from_slice(&bash.output);
+                bash.output = raw;
+                bash.output_for_prompt = format!("{line}\n{}", bash.output_for_prompt);
+                bash.total_bytes = bash.total_bytes.saturating_add(added);
+            }
             // Gate the no-op end-turn reminder on the same switch as every other
             // system reminder (absent resource => enabled, mirroring
             // `finalize_output`), so toolsets with `system_reminders_enabled=false`
@@ -3839,6 +3882,62 @@ mod tests {
         );
     }
 
+    /// 0bw S2②（2026-09-26，设计档 §8 判据钉 4）：block 命中 → 命令不执行，
+    /// 机械拒绝文案随 `ToolError` 返回。
+    #[tokio::test]
+    async fn write_control_blocks_safety_flip_command() {
+        let resources = make_resources(MockTerminal::success("", 0));
+        let tool = BashTool;
+        let result = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(resources.into_shared()),
+            make_input("Set-MpPreference -EnableControlledFolderAccess AuditMode"),
+        )
+        .await;
+        let err = result
+            .expect_err("must be blocked before execution")
+            .to_string();
+        assert!(
+            err.contains("blocked by the mechanical write control"),
+            "block message expected, got: {err}"
+        );
+        assert!(
+            err.contains("safety-mechanism-flip"),
+            "rule id expected: {err}"
+        );
+    }
+
+    /// 0bw S2②（2026-09-26，设计档 §8 判据钉 4）：warn 命中 → 照常执行，
+    /// 结果头部附 `[写入管控·提示]` 行（`output` 与 `output_for_prompt` 同步）。
+    #[tokio::test]
+    async fn write_control_warn_header_attaches() {
+        let resources = make_resources(MockTerminal::success("hi\n", 0));
+        let tool = BashTool;
+        let result = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(resources.into_shared()),
+            make_input("sudo echo hi"),
+        )
+        .await
+        .expect("warn must not block execution");
+        match result {
+            BashToolOutput::Foreground(bash) => {
+                assert!(
+                    bash.output_for_prompt.contains("[写入管控·提示]"),
+                    "prompt must carry the notice: {}",
+                    bash.output_for_prompt
+                );
+                let raw = String::from_utf8_lossy(&bash.output);
+                assert!(
+                    raw.contains("[写入管控·提示]"),
+                    "raw output must carry the notice"
+                );
+                assert!(raw.contains("elevation"), "rule id expected in notice");
+            }
+            other => panic!("Expected foreground output, got {other:?}"),
+        }
+    }
+
     /// With default params (flag on) a foreground `&` is accepted end-to-end, not
     /// just at the pure-helper level — guards against a second `&` check creeping
     /// into `run()` that the gate-helper tests would miss.
@@ -4072,6 +4171,36 @@ mod tests {
         };
         bash.output_for_prompt = format_default_prompt(&bash, /* append_noop_reminder */ true);
         bash
+    }
+
+    #[test]
+    fn default_prompt_fallback_decodes_gb18030_not_replacement_chars() {
+        // 0bw F7 (B plan): when `output_for_prompt` is empty the prompt falls
+        // back to decoding raw bytes — GB18030 bytes ("中文" in GBK, the PS 5.1
+        // pipe default) must decode cleanly instead of degrading to U+FFFD.
+        let gbk: [u8; 4] = [0xD6, 0xD0, 0xCE, 0xC4];
+        let bash = BashOutput {
+            output: gbk.to_vec(),
+            output_for_prompt: String::new(),
+            output_encoding: Some("gb18030".to_string()),
+            exit_code: 0,
+            command: "cat test".to_string(),
+            truncated: false,
+            signal: None,
+            timed_out: false,
+            description: None,
+            current_dir: "/tmp".to_string(),
+            output_file: String::new(),
+            total_bytes: gbk.len(),
+            output_delta: None,
+            was_bare_echo: false,
+        };
+        let prompt = format_default_prompt(&bash, /* append_noop_reminder */ true);
+        assert!(
+            prompt.contains("中文"),
+            "prompt should decode GBK: {prompt}"
+        );
+        assert!(!prompt.contains('\u{FFFD}'));
     }
 
     #[test]
