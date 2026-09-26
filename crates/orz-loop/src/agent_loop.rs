@@ -468,17 +468,17 @@ mod serp_budget_tests {
         let main_budget = main.serp_budget.clone().expect("main carries a budget");
         let grill_budget = grill.serp_budget.clone().expect("grill carries a budget");
         assert_eq!(
-            main_budget.lock().unwrap().usage(),
+            main_budget.lock().unwrap_or_else(|e| e.into_inner()).usage(),
             (0, MAIN_SERP_NAVIGATION_BUDGET)
         );
-        assert!(main_budget.lock().unwrap().reserve().is_ok());
+        assert!(main_budget.lock().unwrap_or_else(|e| e.into_inner()).reserve().is_ok());
         assert_eq!(
-            grill_budget.lock().unwrap().usage(),
+            grill_budget.lock().unwrap_or_else(|e| e.into_inner()).usage(),
             (0, MAIN_SERP_NAVIGATION_BUDGET),
             "grill budget must not observe the main lane's usage"
         );
         assert_eq!(
-            main_budget.lock().unwrap().usage(),
+            main_budget.lock().unwrap_or_else(|e| e.into_inner()).usage(),
             (1, MAIN_SERP_NAVIGATION_BUDGET)
         );
     }
@@ -1651,7 +1651,7 @@ async fn truncate_model_face_blocks(
         .filter(|b| b.closed && markers.state(b.number) == crate::model_face::BlockState::Live)
         .cloned()
         .collect();
-    // 触发线：T1＝阶梯的硬截断档；守卫＝1.10M 异常保险。
+    // 触发线：T1＝阶梯的硬截断档；守卫＝700K 异常保险。
     let target_line = if guard_hit {
         svc.context_compact.model_face_guard_tokens
     } else {
@@ -2327,7 +2327,7 @@ pub(crate) async fn run_agent_loop(
         //    （打断 ＋ 开压缩窗口）→ **500K 硬截断**（把主滑块以外的全部分块
         //    移出模型面，本地面不动）；
         // ③ 首个分块形成时一次性固化提醒（A4 文案语义保留、触发改锚）；
-        // ④ **1.10M 估算异常保险**：越线＝强制截断到线上（v7 的「不开窗降级」
+        // ④ **700K 估算异常保险**：越线＝强制截断到线上（v7 的「不开窗降级」
         //    随勘误作废）。
         // **减少模型面的动作只有两个**：模型自压（`[SEMANTIC_SUMMARY]` ⇒ 按块
         // 压缩）与 T1 硬截断——机械层不再以「总量超线」为由压缩或截断模型面。
@@ -2564,7 +2564,7 @@ pub(crate) async fn run_agent_loop(
             }
             truncate_now = t1_cut;
         }
-        // T1 硬截断 ＋ 1.10M 异常保险：把**主滑块以外的全部分块**移出模型面
+        // T1 硬截断 ＋ 700K 异常保险：把**主滑块以外的全部分块**移出模型面
         // （设计 §5）：本地面逐字不动、可按块回放；告知块注入的是状况陈述
         // （工作现场与残段逐字未动）。0bl 审查修复（2026-09-24）：原「任务
         // 无需中止」表述随 071 修复批（0bh ⑯「去判断而非去建议」，见
@@ -4077,7 +4077,7 @@ pub(crate) async fn run_agent_loop(
                             &tc.name, &tc, &result,
                         )
                     {
-                        evidence.lock().unwrap().push(record);
+                        evidence.lock().unwrap_or_else(|e| e.into_inner()).push(record);
                     }
                     // 0ar S2：可见倒数行（设计 §3.6）——检索族结果尾部机械
                     // 追加（本批证据快照＋已发起调用数，条目/调用分开报）。
@@ -4086,7 +4086,7 @@ pub(crate) async fn run_agent_loop(
                     {
                         let snapshot = svc
                             .evidence
-                            .map(|e| e.lock().unwrap().clone())
+                            .map(|e| e.lock().unwrap_or_else(|e| e.into_inner()).clone())
                             .unwrap_or_default();
                         let calls = svc
                             .retrieval_calls
@@ -4759,7 +4759,7 @@ pub(crate) async fn run_agent_loop(
                             )
                             .await?;
                         if let Some(slot) = svc.in_flight_tools {
-                            let mut guard = slot.lock().unwrap();
+                            let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
                             if let Some(pos) = guard.iter().position(|(_, id)| id == &tc.call_id) {
                                 guard.remove(pos);
                             }
@@ -4788,7 +4788,7 @@ pub(crate) async fn run_agent_loop(
                                 &tc.name, tc, &result,
                             )
                         {
-                            evidence.lock().unwrap().push(record);
+                            evidence.lock().unwrap_or_else(|e| e.into_inner()).push(record);
                         }
                         // 0ar S2：可见倒数行（设计 §3.6）——检索族结果尾部
                         // 机械追加（本批证据快照＋已发起调用数）。
@@ -4797,7 +4797,7 @@ pub(crate) async fn run_agent_loop(
                         {
                             let snapshot = svc
                                 .evidence
-                                .map(|e| e.lock().unwrap().clone())
+                                .map(|e| e.lock().unwrap_or_else(|e| e.into_inner()).clone())
                                 .unwrap_or_default();
                             let calls = svc
                                 .retrieval_calls
@@ -4984,7 +4984,7 @@ pub(crate) async fn run_agent_loop(
         // at 3 consecutive same-key rounds the breaker message fires once
         // (count restarts).
         {
-            let mut denial = svc.denial_state.lock().unwrap();
+            let mut denial = svc.denial_state.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(tool_name) =
                 aggregate_denial_round(&mut denial, &round_denials, round_had_success)
             {
@@ -5090,7 +5090,7 @@ pub(crate) async fn run_agent_loop(
         {
             let snapshot = svc
                 .evidence
-                .map(|e| e.lock().unwrap().clone())
+                .map(|e| e.lock().unwrap_or_else(|e| e.into_inner()).clone())
                 .unwrap_or_default();
             let usable = crate::retrieval::batch_close::usable_source_count(&snapshot);
             let kind = crate::retrieval::batch_close::should_arm_close(usable);
@@ -8056,7 +8056,7 @@ mod tests {
                 _arguments: serde_json::Value,
                 _call_id: &str,
             ) -> Result<ToolResult, ToolError> {
-                let mut outputs = self.outputs.lock().unwrap();
+                let mut outputs = self.outputs.lock().unwrap_or_else(|e| e.into_inner());
                 if outputs.is_empty() {
                     return Ok(ok_result());
                 }
@@ -8227,7 +8227,7 @@ mod tests {
                 _arguments: serde_json::Value,
                 _call_id: &str,
             ) -> Result<ToolResult, ToolError> {
-                let mut outputs = self.outputs.lock().unwrap();
+                let mut outputs = self.outputs.lock().unwrap_or_else(|e| e.into_inner());
                 if outputs.is_empty() {
                     return Ok(ok_result());
                 }

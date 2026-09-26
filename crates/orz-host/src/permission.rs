@@ -100,7 +100,14 @@ fn is_shell_tool(tool: &str) -> bool {
 
 /// Grok permission manager wrapped for the LoopHost contract.
 pub struct PermissionBridge {    handle: PermissionHandle,
-    /// Session working directory — the scope Read auto-allow is confined to.
+    /// Session working directory.
+    ///
+    /// REV-083-18g (2026-09-27): the retired read-scope mirror was the last
+    /// production reader of this field — the bridge no longer filters on
+    /// cwd (single point lives in the orz-tools sandbox). Kept because the
+    /// scope tests still construct the bridge over a temp cwd and the field
+    /// documents the session identity of the bridge.
+    #[allow(dead_code)]
     cwd: orz_paths::AbsPathBuf,
     /// Policy for this bridge (Interactive by default; ReadOnly for codex
     /// read-only sandbox threads).
@@ -357,121 +364,30 @@ impl PermissionBridge {
         self.policy
     }
 
-    /// P1 scope check for read-class accesses.
+    /// REV-083-18g (2026-09-27)：读范围镜像段删除。
     ///
-    /// The permission manager auto-allows `Read`/`Grep` unconditionally
-    /// (SAFE_COMMAND) and GrokBuild's `read_file` preserves absolute paths.
-    ///
-    /// MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / BACKLOG 0g):
-    /// 读范围放开——cwd 包含性要求删除（通用方向；越权读由权限策略轴与
-    /// ACAF 承担）；唯一保留的硬边界是运行时自己的 `.gsa` 证据面不可见
-    /// （白名单仅 `run_tests_output.txt` 与 `session/terminal/*.log`，
-    /// 见下）——journal/台账/会话状态是 agent-invisible，保持证据链不进入
-    /// 模型的反馈回路。非读访问照常直通。
-    ///
-    /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2):
-    /// terminal truncation receipts point the model at
-    /// `{cwd}/.gsa/session/terminal/<order>.log` and instruct read_file —
-    /// those files are the runtime's own full-output artifacts for terminal
-    /// tools (the model already saw the truncated view), the same class as
-    /// `run_tests_output.txt`. They are whitelisted by the model-addressable
-    /// lexical path AND the canonical target must stay inside the session
-    /// cwd or the session's own `.gsa` volume (a symlink planted inside
-    /// `session/terminal/` cannot escape).
-    ///
-    /// RETIRED-IN-PLACE（P0-0m GSA-SESSION-VOLUME，ADR-0010 §14.56 D5，
-    /// 2026-09-06）：`.gsa` 面可见性语义已单源下沉至 orz-tools 读工具沙箱
-    /// （`resources::is_session_volume_window_path`，SessionVolumeRoot 由
-    /// host 装配期注入）；本方法中的 `.gsa` 白名单段**标记退役、原样保留**
-    /// ——权限层本身不裁撤（用户裁决 2026-09-06），此段作为权限门第一道的
-    /// 等义镜像继续放行/拒绝，但不再演进、不得据此声称第二判定权威
-    /// （语义修订只改 orz-tools 单点）。`.gsa` 豁免观察（会话卷形态下对
-    /// read_file 不可达）随下沉消解；权限双实现整体收敛仍随
-    /// OBS-PERMISSION-DUAL-IMPL 终局治理排期。
-    ///
-    /// **0p S2 修订（2026-09-07，ADR-0010 §14.61 设计 B，P1-1 修复）**：
-    /// 上段「等义镜像继续放行/拒绝」自本批起收窄——内部区读的拒绝臂
-    /// **退役**（镜像让路，见 else 臂注记），两段门在 orz-tools 单点执法；
-    /// 镜像仅保留两窗口的 canonical 逃逸守卫（幽灵白名单形态恒拒）与
-    /// run_tests 精确文件名守卫。
-    fn access_in_scope(&self, access: &AccessKind) -> bool {
-        let path = match access {
-            AccessKind::Read(p) | AccessKind::Grep { path: p, .. } => p.as_deref(),
-            _ => return true,
-        };
-        let Some(path) = path else { return true };
-        let p = Path::new(path);
-        // Resolve relative paths against the toolset cwd — `..` can escape
-        // the cwd, so lexical normalization happens before the comparison.
-        let resolved = if p.is_absolute() {
-            normalize_lexical(p)
-        } else {
-            normalize_lexical(&self.cwd.join(path).to_path_buf())
-        };
-        let canonical = dunce::canonicalize(&resolved).unwrap_or_else(|_| resolved.clone());
-        // RETIRED-IN-PLACE（P0-0m D5，2026-09-06）：以下 `.gsa` 白名单段语义
-        // 已单源下沉 orz-tools 读工具沙箱（resources::is_session_volume_
-        // window_path），此处为等义镜像、保留不演进——见方法级 doc 注记。
-        // canonical 卷根解析消费同一 D1 单源规则
-        // （resources::session_volume_canonical_root；S1 复审处理 P2-2，
-        // 2026-09-07——镜像不自算解析规则，消除双计算漂移面）。
-        let gsa_root = self.cwd.join(".gsa");
-        // `.gsa` may itself be a symlink (eval containers mount a session
-        // volume, e.g. `/orz-gsa/<uuid>`); the canonical root is what the
-        // whitelists must compare against, otherwise the same real file
-        // resolves outside the lexical cwd and every `.gsa` read is denied.
-        let gsa_canon =
-            orz_tools::types::resources::session_volume_canonical_root(self.cwd.as_path());
-        let terminal_dir = gsa_root.join("session").join("terminal");
-        let terminal_log = path_under(terminal_dir.as_path(), &resolved)
-            && resolved
-                .extension()
-                .map(|e| e.eq_ignore_ascii_case("log"))
-                .unwrap_or(false);
-        // GAP-RUN-TESTS (2026-08-11): the run_tests output artifact
-        // (`{cwd}/.gsa/run_tests_output.txt`) is the model's
-        // permission-gated window into the FULL test output —
-        // ADR-0010 §3.8.3 / F-09: "完整输出保存在受控任务 artifact
-        // 中，可按 permission 读取"; the conversation only carries
-        // the 32KB tail. The whitelist is an exact fixed filename —
-        // everything else under `.gsa` (journals, session state,
-        // keystore, snapshots) stays agent-invisible. The canonical-root
-        // comparison is the symlink-aware form (eval containers symlink
-        // `.gsa` onto a session volume).
-        let run_tests = canonical
-            == normalize_lexical(gsa_root.join("run_tests_output.txt").as_path())
-            || canonical == gsa_canon.join("run_tests_output.txt");
-        // OUTPUT-DEGENERATION-GUARD: terminal output logs are readable only
-        // when the model-addressable path sits under `session/terminal/`
-        // AND the canonical target resolves inside the session's own `.gsa`
-        // volume — a symlink planted inside `session/terminal/` cannot
-        // escape to other `.gsa` internals or arbitrary host paths.
-        if terminal_log {
-            path_under(&gsa_canon, &canonical) && path_under(self.cwd.as_path(), &resolved)
-        } else if run_tests {
-            // The exact-filename whitelist pins the real file via canonical
-            // (symlink-aware); only the model-addressable lexical path must
-            // additionally stay under the session cwd.
-            path_under(self.cwd.as_path(), &resolved)
-        } else {
-            // 0p S2 两段门（2026-09-07，ADR-0010 §14.61 设计 B，P1-1 修复）：
-            // `.gsa` 内部区读的判定权**单点归 orz-tools 两段门**——本镜像
-            // 不再在工具执行前恒拒内部区（旧 agent-invisible 镜像退役）。
-            // 若镜像先拒，两段门（首读通知信封/二读放行/凭据区恒拒）在
-            // 所有带桥生产路径不可达，且拒绝走无 ToolCompleted 的
-            // event-less 路径（W2 D-3 原形）。窗口幽灵形态守卫（上方
-            // terminal_log/run_tests 臂的 canonical 双条件）原样保留：
-            // 白名单形态 + canonical 逃逸在桥与工具层双双恒拒。MECHANICAL-
-            // AUDIT-LAYER 的 cwd 外可读基线不变；cwd 外的非 `.gsa` 读照旧
-            // 放行，越权读仍由权限策略轴与 ACAF 承担。
-            true
-        }
+    /// Read-scope semantics were single-sourced to the orz-tools read-tool
+    /// sandbox (`resources::is_session_volume_window_path` / two-stage
+    /// gate) and the cwd-containment requirement was deleted earlier
+    /// (MECHANICAL-AUDIT-LAYER 2026-08-24: cwd 外的读由权限策略轴与 ACAF
+    /// 承担)。What remained here — the RETIRED-IN-PLACE `.gsa` mirror kept
+    /// as a "double deny" for ghost whitelist forms — only duplicated the
+    /// tool layer's verdict and risked drift; it is gone. The bridge now
+    /// performs no read-scope filtering: everything not short-circuited by
+    /// the policy arms above reaches the manager / tool layer, which holds
+    /// the single-point verdict (含幽灵窗口形态恒拒)。
+    fn access_in_scope(&self, _access: &AccessKind) -> bool {
+        true
     }
 }
 
 /// Lexically resolve `.` / `..` components so an escaped relative path
 /// compares as what it would actually touch (a bare `..` component would
 /// otherwise pass `path_under` since it is still a normal component).
+///
+/// REV-083-18g (2026-09-27): the read-scope mirror that consumed this
+/// helper is gone; it survives for the path-comparison tests only.
+#[cfg(test)]
 fn normalize_lexical(p: &Path) -> PathBuf {
     let mut out = std::path::PathBuf::new();
     for c in p.components() {
@@ -497,6 +413,10 @@ pub(crate) fn dead_gateway() -> AcpAgentGatewaySender {
 
 /// Component-wise `path`-starts-with-`base`, case-insensitive on Windows
 /// (canonicalized paths may differ in case from the session cwd).
+///
+/// REV-083-18g (2026-09-27): kept for the path-comparison tests (the
+/// read-scope mirror that used it in production is gone).
+#[cfg(test)]
 fn path_under(base: &Path, path: &Path) -> bool {
     let base_parts = components_lower(&strip_verbatim_prefix(base));
     let path_parts = components_lower(&strip_verbatim_prefix(path));
@@ -507,6 +427,9 @@ fn path_under(base: &Path, path: &Path) -> bool {
 /// for paths it cannot safely simplify (>260 chars, reserved device names) —
 /// strip that prefix so such a canonicalized target compares against the
 /// plain session cwd. `\\?\UNC\server\share` maps back to `\\server\share`.
+///
+/// REV-083-18g (2026-09-27): test-only helper now (see `path_under`).
+#[cfg(test)]
 fn strip_verbatim_prefix(p: &Path) -> PathBuf {
     #[cfg(windows)]
     {
@@ -524,6 +447,8 @@ fn strip_verbatim_prefix(p: &Path) -> PathBuf {
     }
 }
 
+/// REV-083-18g (2026-09-27): test-only helper (see `path_under`).
+#[cfg(test)]
 fn components_lower(p: &Path) -> Vec<String> {
     p.components()
         .map(|c| c.as_os_str().to_string_lossy().to_lowercase())

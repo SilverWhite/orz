@@ -192,7 +192,7 @@ impl AgentLoopController {
         // Take the activation — the temporary guard drops at the end of the
         // let statement, so no guard ever crosses an await (the state is
         // re-inserted on every path below).
-        let act = self.activations.lock().unwrap().states.remove(&role);
+        let act = self.activations.lock().unwrap_or_else(|e| e.into_inner()).states.remove(&role);
         let mut act = match act {
             Some(a) => a,
             None => {
@@ -266,7 +266,7 @@ impl AgentLoopController {
                     }),
                 )
                 .await?;
-            self.activations.lock().unwrap().states.insert(role, act);
+            self.activations.lock().unwrap_or_else(|e| e.into_inner()).states.insert(role, act);
             messages.push(Message {
                 role: Role::Tool,
                 content: output.clone(),
@@ -303,7 +303,7 @@ impl AgentLoopController {
                     }),
                 )
                 .await?;
-            self.activations.lock().unwrap().states.insert(role, act);
+            self.activations.lock().unwrap_or_else(|e| e.into_inner()).states.insert(role, act);
             messages.push(Message {
                 role: Role::Tool,
                 content: msg.clone(),
@@ -432,7 +432,7 @@ impl AgentLoopController {
                     }),
                 )
                 .await?;
-            self.activations.lock().unwrap().states.insert(role, act);
+            self.activations.lock().unwrap_or_else(|e| e.into_inner()).states.insert(role, act);
             messages.push(Message {
                 role: Role::Tool,
                 content: msg.clone(),
@@ -609,7 +609,7 @@ impl AgentLoopController {
 
         // Re-insert the activation on EVERY path (review F7) — before any
         // error leaves, so a failed commit never drops a live activation.
-        self.activations.lock().unwrap().states.insert(role, act);
+        self.activations.lock().unwrap_or_else(|e| e.into_inner()).states.insert(role, act);
         commit?;
 
         writer
@@ -784,7 +784,7 @@ impl AgentLoopController {
         // Capture the identity (short critical section — the guard never
         // crosses an await).
         let snapshot = {
-            let reg = self.activations.lock().unwrap();
+            let reg = self.activations.lock().unwrap_or_else(|e| e.into_inner());
             match reg.states.get(&role) {
                 Some(a) if a.status != ActivationStatus::Closed => Some((
                     a.activation_id.clone(),
@@ -831,7 +831,7 @@ impl AgentLoopController {
             // best-effort (the run itself is already ending).
             return Ok(());
         }
-        let mut reg = self.activations.lock().unwrap();
+        let mut reg = self.activations.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(act) = reg.states.get_mut(&role) {
             act.status = ActivationStatus::Closed;
             act.pending = None;
@@ -849,7 +849,7 @@ impl AgentLoopController {
         terminal_reason: &str,
     ) {
         let roles: Vec<SubagentRole> = {
-            let reg = self.activations.lock().unwrap();
+            let reg = self.activations.lock().unwrap_or_else(|e| e.into_inner());
             reg.states.keys().copied().collect()
         };
         for role in roles {

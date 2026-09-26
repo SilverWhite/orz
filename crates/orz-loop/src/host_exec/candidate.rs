@@ -80,7 +80,7 @@ impl AgentLoopController {
         // （返回计数）。The std MutexGuard must not cross the async
         // refusal below (Send).
         let outcome = {
-            let mut seen = counter.lock().unwrap();
+            let mut seen = counter.lock().unwrap_or_else(|e| e.into_inner());
             let count = seen.len();
             let is_new = !seen.iter().any(|u| u == &url);
             if is_new && count >= cap {

@@ -211,7 +211,7 @@ impl ReclaimLadder {
 
     /// Cumulative bytes deleted in this run so far (observation face).
     pub fn run_total_deleted(&self) -> u64 {
-        *self.run_total_deleted.lock().unwrap()
+        *self.run_total_deleted.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// The configured window (clamped to the 3-round ceiling).
@@ -251,7 +251,7 @@ impl ReclaimLadder {
         if self.run_total_cap_bytes > 0 {
             let headroom = self
                 .run_total_cap_bytes
-                .saturating_sub(*self.run_total_deleted.lock().unwrap());
+                .saturating_sub(*self.run_total_deleted.lock().unwrap_or_else(|e| e.into_inner()));
             remaining = remaining.min(headroom);
         }
         for candidate in candidates {
@@ -288,7 +288,7 @@ impl ReclaimLadder {
                 decisions.push((candidate.clone(), ReclaimDecision::Permanent));
             } else {
                 decisions.push((candidate.clone(), ReclaimDecision::Pending));
-                self.pending.lock().unwrap().push(PendingDeletion {
+                self.pending.lock().unwrap_or_else(|e| e.into_inner()).push(PendingDeletion {
                     path: candidate.path.clone(),
                     size_bytes: candidate.size_bytes,
                     enqueued_round: current_round,
@@ -301,7 +301,7 @@ impl ReclaimLadder {
     /// Expire the pending set: rows whose window has passed become
     /// `Permanent` actions. Pure: returns the paths to delete now.
     pub fn expire_window(&self, current_round: u32) -> Vec<PendingDeletion> {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         let (due, keep): (Vec<_>, Vec<_>) = pending
             .drain(..)
             .partition(|p| current_round.saturating_sub(p.enqueued_round) >= self.window_rounds);
@@ -380,7 +380,7 @@ impl ReclaimLadder {
                 freed += candidate.size_bytes;
             }
         }
-        *self.run_total_deleted.lock().unwrap() += freed;
+        *self.run_total_deleted.lock().unwrap_or_else(|e| e.into_inner()) += freed;
         freed
     }
 
@@ -401,7 +401,7 @@ impl ReclaimLadder {
         let (due, requeued): (Vec<_>, Vec<_>) =
             due.into_iter().partition(|p| !is_in_flight(&p.path));
         if !requeued.is_empty() {
-            let mut pending = self.pending.lock().unwrap();
+            let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
             for row in requeued {
                 pending.push(PendingDeletion {
                     path: row.path,
@@ -434,16 +434,16 @@ impl ReclaimLadder {
 
     /// Drain the accumulated facts for the journal face.
     pub fn drain_facts(&self) -> Vec<ReclaimFact> {
-        std::mem::take(&mut *self.facts.lock().unwrap())
+        std::mem::take(&mut *self.facts.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// Current fact count without draining (the audit-first probe).
     pub fn facts_len_snapshot(&self) -> usize {
-        self.facts.lock().unwrap().len()
+        self.facts.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     fn push_fact(&self, fact: ReclaimFact) {
-        self.facts.lock().unwrap().push(fact);
+        self.facts.lock().unwrap_or_else(|e| e.into_inner()).push(fact);
     }
 }
 
@@ -639,11 +639,11 @@ mod tests {
         }];
         let decisions = ladder.plan(&candidates, true, 1, &[]);
         let freed = ladder.execute("hard", &decisions, &|p| {
-            *capture.lock().unwrap() = Some(ladder.facts_len_snapshot());
+            *capture.lock().unwrap_or_else(|e| e.into_inner()) = Some(ladder.facts_len_snapshot());
             std::fs::remove_dir_all(p).map_err(io::Error::from)
         });
         assert_eq!(freed, size);
-        let snapshot = snapshot_at_delete.lock().unwrap().expect("delete happened");
+        let snapshot = snapshot_at_delete.lock().unwrap_or_else(|e| e.into_inner()).expect("delete happened");
         assert!(
             snapshot >= 1,
             "the permanent fact must exist BEFORE the deletion ran"

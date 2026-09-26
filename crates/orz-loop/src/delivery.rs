@@ -32,7 +32,7 @@ impl AgentLoopController {
     /// `None` baseline (host without snapshot support) reports the change
     /// list as unavailable rather than fabricating one.
     pub(crate) fn compute_delivery_status(&self, host: &dyn LoopHost) -> String {
-        let baseline = self.delivery_baseline.lock().unwrap().clone();
+        let baseline = self.delivery_baseline.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let Some(before) = baseline else {
             // THIN-HARNESS-REDESIGN-V2 §9.3 (2026-08-29)：无计划批准基线
             // ——无 plan 会话（submit 降级为纯状态展示）或计划尚未批准；

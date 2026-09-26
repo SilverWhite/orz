@@ -2365,7 +2365,7 @@ mod tests {
     #[test]
     fn main_agent_model_env_override() {
         static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let original = std::env::var("ORZ_MAIN_AGENT_MODEL").ok();
         // Rust 2024 edition: env mutation is unsafe — serialized by the
         // static lock above (single-threaded env access in this test).
@@ -2417,7 +2417,7 @@ mod tests {
     #[test]
     fn env_thinking_mode_override() {
         static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let original = std::env::var("ORZ_THINKING_MODE").ok();
         unsafe {
             std::env::set_var("ORZ_THINKING_MODE", "high");

@@ -38,7 +38,7 @@ impl AgentLoopController {
     /// (Other). `wall_ms` is None for no-ToolStarted refusals (no execution
     /// time was spent).
     pub(crate) fn feed_lif_deny(&self, wall_ms: Option<u64>) {
-        self.lif.lock().unwrap().on_tool_event(
+        self.lif.lock().unwrap_or_else(|e| e.into_inner()).on_tool_event(
             AgentLoopController::now_epoch_secs(),
             orz_assurance::lif::ToolEvent::deny(wall_ms),
         );
@@ -61,7 +61,7 @@ impl AgentLoopController {
             return;
         };
         let (round, domain, t_rel) = {
-            let mut lif = self.lif.lock().unwrap();
+            let mut lif = self.lif.lock().unwrap_or_else(|e| e.into_inner());
             let now = AgentLoopController::now_epoch_secs();
             lif.ensure_run_origin(now);
             let round = lif.temporal().round();
@@ -769,7 +769,7 @@ mod tests {
             .await
             .unwrap();
 
-        let guard = controller.lif.lock().unwrap();
+        let guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
         assert!(
             guard.deny().u() > 0.0,
             "deny channel must receive the permission denial (u={})",
@@ -828,7 +828,7 @@ mod tests {
             .await
             .unwrap();
 
-        let guard = controller.lif.lock().unwrap();
+        let guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
         assert!(
             guard.deny().u() > 0.0,
             "deny channel must receive the sealed-tool denial (u={})",
@@ -899,7 +899,7 @@ mod tests {
             .await
             .unwrap();
 
-        let guard = controller.lif.lock().unwrap();
+        let guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
         assert!(
             guard.deny().u() > 0.0,
             "deny channel must receive the anchor mismatch (u={})",

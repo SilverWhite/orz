@@ -40,7 +40,7 @@ static DOMAINS_OVERRIDE: Mutex<Option<String>> = Mutex::new(None);
 /// Override the whitelist for tests. `None` restores env-driven behavior.
 #[doc(hidden)]
 pub fn set_domains_override(domains: Option<String>) {
-    *DOMAINS_OVERRIDE.lock().unwrap() = domains;
+    *DOMAINS_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = domains;
 }
 
 /// Split a raw env value into normalized domain entries.

@@ -564,10 +564,27 @@ impl AgentLoopController {
                     }),
                 )
                 .await?;
-            let (d, permit_source) = host
-                .request_permission_with_source(risk, &tc.name, &tc.arguments)
-                .await
-                .map_err(|e| AgentLoopError::Session(e.to_string()))?;
+            // REV-083-18d (2026-09-27): a permission wait is a legitimate
+            // pause — the user / client may take arbitrarily long (bounded
+            // by the prompt timeout) and no tool work happens meanwhile.
+            // Keep stamping the heartbeat while the request is outstanding
+            // so the stall watchdog cannot falsely kill a run that is
+            // waiting on an answer.
+            let (d, permit_source) = {
+                let fut = host.request_permission_with_source(risk, &tc.name, &tc.arguments);
+                tokio::pin!(fut);
+                loop {
+                    tokio::select! {
+                        r = &mut fut => break r,
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                            if let Some(h) = heartbeat {
+                                h.stamp();
+                            }
+                        }
+                    }
+                }
+            }
+            .map_err(|e| AgentLoopError::Session(e.to_string()))?;
             let mut payload = serde_json::json!({
                 "tool": tc.name,
                 "decision": match d {

@@ -395,7 +395,7 @@ impl AgentLoopController {
         writer: &mut EventWriter<'_>,
     ) -> Result<(), AgentLoopError> {
         let restores: Vec<StoredActivation> =
-            std::mem::take(&mut *self.restored_activations.lock().unwrap());
+            std::mem::take(&mut *self.restored_activations.lock().unwrap_or_else(|e| e.into_inner()));
         let session_id = self.session_id.clone().unwrap_or_default();
         // M3 (review 2026-08-10): chars().take(8), not a byte slice — a
         // multi-byte UTF-8 session id would panic on a non-char boundary.
@@ -452,7 +452,7 @@ impl AgentLoopController {
     /// 候选/上限 fact. `None` when no activation carries a candidate
     /// count yet (pure read, never blocks an await).
     pub(crate) fn retrieval_candidate_count(&self) -> Option<(usize, u32)> {
-        let reg = self.activations.lock().unwrap();
+        let reg = self.activations.lock().unwrap_or_else(|e| e.into_inner());
         let total: usize = reg.states.values().map(|a| a.candidate_urls.len()).sum();
         if total == 0 {
             None
@@ -791,7 +791,7 @@ mod tests {
             .unwrap()
             .snapshot_json("RUN-1");
         let c2 = AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
-        let restored = c2.activations.lock().unwrap().seed_from_json(&json);
+        let restored = c2.activations.lock().unwrap_or_else(|e| e.into_inner()).seed_from_json(&json);
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].conversation.len(), 1);
         assert_eq!(restored[0].conversation[0].content, "历史问");
@@ -821,7 +821,7 @@ mod tests {
         });
         let controller =
             AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
-        let mut registry = controller.activations.lock().unwrap();
+        let mut registry = controller.activations.lock().unwrap_or_else(|e| e.into_inner());
         let restored = registry.seed_from_json(&snapshot);
         assert_eq!(restored.len(), 1);
         assert!(restored[0].conversation.is_empty(), "default empty");

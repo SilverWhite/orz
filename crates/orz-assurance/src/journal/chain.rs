@@ -407,4 +407,40 @@ mod tests {
         let result = validate_chain(&events, "RUN-TEST", "abcd1234", true);
         assert!(!result.valid);
     }
+
+    /// REV-083-07 (2026-09-27): field-set guard for `compute_event_hash`.
+    /// The manual projection must cover EVERY serialized `RunEvent` field
+    /// except `event_sha256` — a future schema field that misses the
+    /// projection would silently drop out of the tamper hash (exactly where
+    /// the hash-chain promise must not fail). The reference implementation
+    /// here is list-free: serialize → strip `event_sha256` → canonical hash.
+    /// If the two hashes diverge, the manual projection drifted.
+    #[test]
+    fn compute_event_hash_covers_every_serialized_field() {
+        let event = make_event(
+            "RUN-GUARD",
+            7,
+            EventType::ToolCompleted,
+            "manifest-sha",
+            Some("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
+            serde_json::json!({"tool": "read_file", "status": "ok"}),
+        );
+        let mut full = serde_json::to_value(&event).unwrap();
+        let obj = full.as_object_mut().unwrap();
+        assert!(
+            obj.remove("event_sha256").is_some(),
+            "serialized event must carry an event_sha256 field"
+        );
+        let reference = sha256_hex(&canonical_json(&full).unwrap());
+        assert_eq!(
+            compute_event_hash(&event).unwrap(),
+            reference,
+            "compute_event_hash projection drifted from the serialized field set — \
+             a RunEvent field is missing from (or extra in) the manual projection"
+        );
+        // Sanity: the guard is sensitive — shaking one field moves the hash.
+        let mut shaken = event.clone();
+        shaken.sequence += 1;
+        assert_ne!(compute_event_hash(&shaken).unwrap(), reference);
+    }
 }

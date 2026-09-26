@@ -251,7 +251,7 @@ impl JournalRecorder {
         let (tx, rx) = mpsc::channel::<JournalCmd>(256);
 
         let writer_task = JournalWriterTask::new(journal_dir.join("events.jsonl"), rx);
-        tokio::spawn(writer_task.run());
+        spawn_writer_thread(writer_task);
 
         JournalRecorder { tx, journal_dir }
     }
@@ -270,7 +270,7 @@ impl JournalRecorder {
             partial_bytes: 0,
             alloc_failures_remaining: 0,
         });
-        tokio::spawn(writer_task.run());
+        spawn_writer_thread(writer_task);
 
         JournalRecorder { tx, journal_dir }
     }
@@ -293,7 +293,7 @@ impl JournalRecorder {
             partial_bytes,
             alloc_failures_remaining: 0,
         });
-        tokio::spawn(writer_task.run());
+        spawn_writer_thread(writer_task);
 
         JournalRecorder { tx, journal_dir }
     }
@@ -314,7 +314,7 @@ impl JournalRecorder {
             partial_bytes: 0,
             alloc_failures_remaining: fault_attempts,
         });
-        tokio::spawn(writer_task.run());
+        spawn_writer_thread(writer_task);
 
         JournalRecorder { tx, journal_dir }
     }
@@ -464,6 +464,19 @@ impl Clone for JournalRecorder {
 // a dropped handle does not fsync.
 
 // ── Background writer task ──────────────────────────────────────────────
+
+/// REV-083-10 (2026-09-27): the journal writer owns blocking file IO
+/// (`flush` + `sync_all` per append). It used to run as a `tokio::spawn`ed
+/// task, so a slow disk parked a runtime worker thread mid-fsync; it now
+/// runs on its own named OS thread (`run_blocking`), leaving the async
+/// runtime free. The command channel and oneshot acks are unchanged — a
+/// single writer still serializes appends FIFO, so ordering is identical.
+fn spawn_writer_thread(writer_task: JournalWriterTask) {
+    std::thread::Builder::new()
+        .name("orz-journal-writer".to_string())
+        .spawn(move || writer_task.run_blocking())
+        .expect("spawn orz-journal-writer thread");
+}
 
 struct JournalWriterTask {
     path: PathBuf,
@@ -644,7 +657,7 @@ impl JournalWriterTask {
     /// The storage-full backoff ladder (design §4.3 item 2): 10 / 40 / 160 ms
     /// retries of the same append; every failed attempt is preceded by a
     /// partial-tail repair so retries always start from a clean line boundary.
-    async fn append_with_backoff(&mut self, event: &RunEvent) -> Result<usize, std::io::Error> {
+    fn append_with_backoff(&mut self, event: &RunEvent) -> Result<usize, std::io::Error> {
         let mut attempt = 0;
         loop {
             // 0bc ④ (design §11 item 4): an allocation failure is returned
@@ -686,7 +699,7 @@ impl JournalWriterTask {
                 if attempt > 3 {
                     return Err(e);
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                std::thread::sleep(std::time::Duration::from_millis(1));
                 continue;
             }
             let write_result = match self.ensure_file() {
@@ -705,10 +718,9 @@ impl JournalWriterTask {
                         return Err(e);
                     }
                     // 10 / 40 / 160 ms — the design's ladder.
-                    tokio::time::sleep(std::time::Duration::from_millis(
+                    std::thread::sleep(std::time::Duration::from_millis(
                         10 * 4u64.pow(attempt - 1),
-                    ))
-                    .await;
+                    ));
                 }
                 Err(e) => return Err(e),
             }
@@ -772,9 +784,9 @@ impl JournalWriterTask {
         }
     }
 
-    async fn run(mut self) {
+    fn run_blocking(mut self) {
         use JournalCmd::*;
-        while let Some(cmd) = self.rx.recv().await {
+        while let Some(cmd) = self.rx.blocking_recv() {
             match cmd {
                 WriteEvent { mut event, ack } => {
                     if self.closed {
@@ -816,7 +828,7 @@ impl JournalWriterTask {
                     if self.degraded.is_some() {
                         self.prepare_degraded_terminal(&mut event);
                     }
-                    match self.append_with_backoff(&event).await {
+                    match self.append_with_backoff(&event) {
                         Ok(_) => {
                             if event.is_terminal() {
                                 self.terminal_seen = true;

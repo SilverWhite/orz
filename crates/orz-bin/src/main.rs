@@ -312,10 +312,13 @@ fn main_inner() {
             "       --real selects the real DeepSeek transport (ADR-0006 credential registry)"
         );
         eprintln!(
-            "       --allow-write grants headless local file edits (Benchmark policy; bash/network fail closed unless opened)"
+            "       --allow-write selects the headless Benchmark policy (local edits auto-allow; raw shell/network follow the axes below)"
         );
         eprintln!(
             "       --allow-shell / --allow-network open the Benchmark shell/network axes (headless; require --allow-write)"
+        );
+        eprintln!(
+            "       without --allow-write the session keeps the default auto-approve (yolo) posture; the run banner prints the resolved mode"
         );
         eprintln!(
             "       --max-wallclock <sec> bounds the whole run (model-invisible; run_invalidated on expiry)"
@@ -339,6 +342,13 @@ fn main_inner() {
         eprintln!("error: {e}");
         std::process::exit(2);
     });
+
+    // REV-083-01 (2026-09-27): the `-p`/`--plan` startup face prints the
+    // resolved permission mode. The default posture is auto-approve (yolo),
+    // NOT a fail-closed prompt matrix — the help text above and the bridge
+    // `build_cli_host` are the same story. Echo only (no policy decision
+    // here): the bridge remains the single source of truth.
+    eprintln!("{}", permission_mode_banner());
 
     if args.iter().any(|a| a == "--plan") {
         run_plan(&prompt, wallclock, stall_timeout);
@@ -516,7 +526,20 @@ async fn build_acaf_client() -> Result<
 fn acaf_fail_closed_enabled() -> bool {
     match std::env::var("ORZ_ACAF_FAIL_CLOSED") {
         Ok(v) => match orz_loop::controller::parse_acaf_fail_closed_env(&v) {
-            Ok(enforce) => enforce,
+            Ok(enforce) => {
+                // REV-083-09 (2026-09-27): a *legal* opt-out value (=0 and
+                // friends) must not slip into shadow silently — announce the
+                // posture on the startup face. The value stays honored
+                // (explicit opt-out); only visibility changes. A malformed
+                // value keeps the exit-2 fail-closed path below.
+                if !enforce {
+                    eprintln!(
+                        "warning: ORZ_ACAF_FAIL_CLOSED={v:?} — ACAF shadow mode: \
+                         fail-closed disabled by explicit opt-out (GAP-ACAF-SHADOW-VISIBILITY)"
+                    );
+                }
+                enforce
+            }
             Err(()) => {
                 eprintln!(
                     "error: ORZ_ACAF_FAIL_CLOSED={v:?} is not a valid value \
@@ -526,6 +549,23 @@ fn acaf_fail_closed_enabled() -> bool {
             }
         },
         Err(_) => true,
+    }
+}
+
+/// REV-083-01 (2026-09-27): resolve the permission-mode banner for the
+/// `-p`/`--plan` startup face. `ORZ_ALLOW_WRITE` switches the bridge to the
+/// Benchmark policy (see `build_cli_host`); otherwise the session runs the
+/// default Interactive + initial-yolo (auto-approve) posture. Pure echo of
+/// the same env the bridge consumes — no policy decision lives here.
+fn permission_mode_banner() -> String {
+    if std::env::var("ORZ_ALLOW_WRITE").is_ok() {
+        format!(
+            "[permission] mode=benchmark allow_write=on allow_shell={} allow_network={}",
+            std::env::var("ORZ_ALLOW_SHELL").is_ok(),
+            std::env::var("ORZ_ALLOW_NETWORK").is_ok()
+        )
+    } else {
+        "[permission] mode=interactive-yolo (default auto-approve; benchmark axes off)".to_string()
     }
 }
 

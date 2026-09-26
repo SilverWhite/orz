@@ -433,7 +433,7 @@ pub(crate) fn commit_candidate(
     url: &str,
     cap: usize,
 ) -> (usize, usize) {
-    let mut seen = counter.lock().unwrap();
+    let mut seen = counter.lock().unwrap_or_else(|e| e.into_inner());
     if !seen.iter().any(|u| u == url) {
         seen.push(url.to_string());
     }
@@ -445,7 +445,7 @@ pub(crate) fn commit_candidate(
 /// 保持「被权限/票据拒绝的调用不消耗候选」语义（review fix 2026-08-14
 /// 不变），同时消除并行批次下「决策/提交分离」的硬 cap 竞态。
 pub(crate) fn rollback_candidate(counter: &Mutex<Vec<String>>, url: &str) {
-    let mut seen = counter.lock().unwrap();
+    let mut seen = counter.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(pos) = seen.iter().position(|u| u == url) {
         seen.remove(pos);
     }
@@ -572,6 +572,12 @@ pub struct AgentLoopController {
     /// policy denials in the current run. Mutex since `run_turn_inner` is
     /// `&self` and a turn may run on any thread; reset at turn start.
     pub(crate) denial_state: Mutex<DenialState>,
+    /// REV-083-18c (2026-09-27): memo for `blackboard_watermark_label` —
+    /// the label is rendered on every blackboard read (plus audit paths)
+    /// but only moves when the live byte count moves; cache the formatted
+    /// string keyed on that byte count. The count itself
+    /// (`live_compact_bytes`) stays the single source of truth.
+    pub(crate) watermark_label_cache: Mutex<Option<(usize, String)>>,
     /// A6 explicit context compaction parameters (settleable for tests).
     pub(crate) context_compact: ContextCompactConfig,
     /// 0ap（2026-09-18，设计 §1/§4-1）：`context_compress` 的**窗口请求位**
@@ -767,7 +773,7 @@ pub(crate) struct BoardStampPinGuard<'a> {
 
 impl Drop for BoardStampPinGuard<'_> {
     fn drop(&mut self) {
-        *self.slot.lock().unwrap() = None;
+        *self.slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
@@ -919,10 +925,11 @@ impl AgentLoopController {
             // ACP 会话在 prompt 起始经 `with_context_scale_notified` 注入侧车值）。
             context_scale_notified: Mutex::new(Vec::new()),
             denial_state: Mutex::new(DenialState::default()),
+            watermark_label_cache: Mutex::new(None),
             // 滑块上下文 v8（2026-09-16 勘误批，设计 §2 §3 §8）：生产在构造时
             // 读 `ORZ_MODEL_FACE_SLIDER_TOKENS`（主滑块 x）、
             // `ORZ_MODEL_FACE_BLOCK_TOKENS`（分块 y）、
-            // `ORZ_MODEL_FACE_GUARD_TOKENS`（1.10M 上限守卫＝异常保险）；测试用
+            // `ORZ_MODEL_FACE_GUARD_TOKENS`（700K 上限守卫＝异常保险）；测试用
             // `with_slider_window_tokens` / `with_model_face_block_tokens` /
             // `with_model_face_guard_tokens` / `with_context_scale_ladder`。
             // **v7 五 env 随勘误退役**（`ORZ_SLIDER_WINDOW_TOKENS`／
@@ -1003,7 +1010,7 @@ impl AgentLoopController {
     /// binding (check 4). Called at run start by the loop entry; resets the
     /// revision counter to 0 (a fresh run starts a fresh goal epoch).
     pub(crate) fn set_goal_digest(&self, goal: &str) {
-        *self.goal_context.lock().unwrap() = GoalContext {
+        *self.goal_context.lock().unwrap_or_else(|e| e.into_inner()) = GoalContext {
             digest: Some(Self::goal_digest_of(goal)),
             version: 0,
         };
@@ -1025,7 +1032,7 @@ impl AgentLoopController {
     /// ticket call re-derives `K_session` and old unconsumed tickets die
     /// (ADR-0011 决策 5). Harmless no-op when ACAF is not configured.
     pub(crate) fn update_goal(&self, new_goal: &str) {
-        let mut g = self.goal_context.lock().unwrap();
+        let mut g = self.goal_context.lock().unwrap_or_else(|e| e.into_inner());
         g.digest = Some(Self::goal_digest_of(new_goal));
         g.version += 1;
     }
@@ -1074,7 +1081,7 @@ impl AgentLoopController {
     /// pre-run_started snapshot — the loop's first per-round probe then
     /// emits only on an actual flip.
     pub(crate) fn probe_state_seed(&self, snapshot: &crate::tool_probe::ToolProbeSnapshot) {
-        *self.probe_state.lock().unwrap() =
+        *self.probe_state.lock().unwrap_or_else(|e| e.into_inner()) =
             crate::tool_probe::MinimalProbeMap::from_snapshot(snapshot);
     }
 
@@ -1082,7 +1089,7 @@ impl AgentLoopController {
     /// previous-round map; on a flip, replace the map and return `true`
     /// (the caller journals the event with the fresh snapshot).
     pub(crate) fn probe_flip(&self, snapshot: &crate::tool_probe::ToolProbeSnapshot) -> bool {
-        let mut map = self.probe_state.lock().unwrap();
+        let mut map = self.probe_state.lock().unwrap_or_else(|e| e.into_inner());
         if map.differs_from(snapshot) {
             *map = crate::tool_probe::MinimalProbeMap::from_snapshot(snapshot);
             true
@@ -1096,7 +1103,7 @@ impl AgentLoopController {
     /// incomplete so the next probe compares against the corrected state.
     /// Non-work tools are ignored (their declaration rules are unchanged).
     pub(crate) fn note_probe_call_failure(&self, tool: &str) {
-        self.probe_state.lock().unwrap().mark_incomplete(tool);
+        self.probe_state.lock().unwrap_or_else(|e| e.into_inner()).mark_incomplete(tool);
     }
 
     /// P0-A step 5 review fix (2026-08-13): 调用即探针, lane-gated — only
@@ -1115,14 +1122,14 @@ impl AgentLoopController {
     /// (`todo_write` / `update_goal` probe chain). Pinned at run start by
     /// `set_goal_digest`.
     pub(crate) fn goal_context_present(&self) -> bool {
-        self.goal_context.lock().unwrap().digest.is_some()
+        self.goal_context.lock().unwrap_or_else(|e| e.into_inner()).digest.is_some()
     }
 
     /// FUS-TOOL-PROBE P0-A-2 (审查复核 2026-08-13): whether an activation
     /// carries an undisposed pending assessment — the only state in which
     /// `retrieval_disposition` can be submitted.
     pub(crate) fn has_live_activation(&self) -> bool {
-        self.activations.lock().unwrap().has_live()
+        self.activations.lock().unwrap_or_else(|e| e.into_inner()).has_live()
     }
 
     /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 v1.3): 独立检索启用门——
@@ -1183,10 +1190,10 @@ impl AgentLoopController {
     pub fn with_activation_snapshot(self, snapshot: Option<&serde_json::Value>) -> Self {
         if let Some(value) = snapshot {
             let restored = {
-                let mut reg = self.activations.lock().unwrap();
+                let mut reg = self.activations.lock().unwrap_or_else(|e| e.into_inner());
                 reg.seed_from_json(value)
             };
-            *self.restored_activations.lock().unwrap() = restored;
+            *self.restored_activations.lock().unwrap_or_else(|e| e.into_inner()) = restored;
         }
         self
     }
@@ -1464,7 +1471,7 @@ impl AgentLoopController {
         &self,
         writer: &mut EventWriter<'_>,
     ) -> Result<(), AgentLoopError> {
-        let pending = std::mem::take(&mut *self.epoch_archive_errors.lock().unwrap());
+        let pending = std::mem::take(&mut *self.epoch_archive_errors.lock().unwrap_or_else(|e| e.into_inner()));
         for (plan_epoch, kind) in pending {
             let archive_dir = self
                 .blackboard_archive_dir
@@ -1517,7 +1524,7 @@ impl AgentLoopController {
     /// 变化轮仅小段状态行作为新尾随消息计费。无计划（None）不追加。
     pub(crate) fn sync_status_line_message(&self, messages: &mut Vec<Message>) {
         let line = self.render_status_line();
-        let mut last = self.status_line_appended.lock().unwrap();
+        let mut last = self.status_line_appended.lock().unwrap_or_else(|e| e.into_inner());
         if line != *last {
             if let Some(text) = line.clone() {
                 messages.push(Message {
@@ -1566,6 +1573,7 @@ impl AgentLoopController {
             // v7（S1 修订批）：会话级提醒水位（构造时空）。
             context_scale_notified: Mutex::new(Vec::new()),
             denial_state: Mutex::new(DenialState::default()),
+            watermark_label_cache: Mutex::new(None),
             context_compact: ContextCompactConfig::default(),
             whitelist: Mutex::new(Vec::new()),
             whitelist_cap: DEFAULT_WHITELIST_CAP,
@@ -1620,14 +1628,14 @@ impl AgentLoopController {
         policy: crate::host::ToolPolicy,
         snapshot: crate::tool_probe::ToolProbeSnapshot,
     ) {
-        *self.console_probe_source.lock().unwrap() = Some((policy, snapshot));
+        *self.console_probe_source.lock().unwrap_or_else(|e| e.into_inner()) = Some((policy, snapshot));
     }
 
     /// PLAN-FIRST 阶段 B 审查收口 (2026-08-16): 探针源随 run 复位——与
     /// `probe_state` 同纪律（run 起始清空，本 run 首个有探针轮重新记录；
     /// 不跨 run 沿用）。复位后无探针源时，注册板块沿用既有内容、不派生。
     pub(crate) fn reset_console_probe_source(&self) {
-        *self.console_probe_source.lock().unwrap() = None;
+        *self.console_probe_source.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     /// PLAN-FIRST 阶段 B (2026-08-16): 注册板块派生并持久化——由最近探针源
@@ -1635,7 +1643,7 @@ impl AgentLoopController {
     /// 源时不改写（checkpoint 轮/无探针轮次沿用既有内容，替代 bundle-only
     /// 静态刷新中间态）。
     pub(crate) fn sync_console_registrations(&self) {
-        let Some((policy, probe)) = self.console_probe_source.lock().unwrap().clone() else {
+        let Some((policy, probe)) = self.console_probe_source.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
             return;
         };
         let registrations = self.console_registrations(policy, Some(&probe));
@@ -1703,24 +1711,24 @@ impl AgentLoopController {
     }
 
     pub(crate) fn console_mode(&self) -> crate::console_mode::ConsoleMode {
-        self.console_mode_state.lock().unwrap().mode
+        self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner()).mode
     }
 
     /// run 起始复位（与 `reset_console_probe_source` 同一点调用）：
     /// 模式回 console、连败清零、询问标记清空、direct 证据面清空。
     pub(crate) fn reset_console_mode(&self) {
-        *self.console_mode_state.lock().unwrap() =
+        *self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner()) =
             crate::console_mode::ConsoleModeState::start(Self::console_fallback_threshold());
     }
 
     /// 询问触发检查（§7.2/§7.3）：console 态 + 连续故障 ≥ 阈值 + 未问。
     pub(crate) fn console_inquiry_due(&self) -> bool {
-        self.console_default_enabled && self.console_mode_state.lock().unwrap().inquiry_due()
+        self.console_default_enabled && self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner()).inquiry_due()
     }
 
     /// 询问轮触发的快照：当前连败计数 + 构成连败的订单 id。
     pub(crate) fn console_streak_snapshot(&self) -> (u32, Vec<String>) {
-        let state = self.console_mode_state.lock().unwrap();
+        let state = self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner());
         (state.streak, state.streak_order_ids.clone())
     }
 
@@ -1731,7 +1739,7 @@ impl AgentLoopController {
         &self,
         call_id: &str,
     ) -> Option<(crate::console_mode::DirectStamp, crate::console::Trace)> {
-        let state = self.console_mode_state.lock().unwrap();
+        let state = self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner());
         if !state.is_direct() {
             return None;
         }
@@ -1766,7 +1774,7 @@ impl AgentLoopController {
             Some(detail.unwrap_or_default().to_string()),
             None,
         );
-        self.console_traces.lock().unwrap().commit(&trace);
+        self.console_traces.lock().unwrap_or_else(|e| e.into_inner()).commit(&trace);
         self.console_mode_state
             .lock()
             .unwrap()
@@ -2198,7 +2206,7 @@ impl AgentLoopController {
     /// TER T1.8: run 相对墙钟 elapsed——读 LIF 时间轴原点（只读、无
     /// side-effect 锚定）；未锚定按 0 呈现。
     fn run_elapsed_wallclock_secs(&self) -> u64 {
-        let lif = self.lif.lock().unwrap();
+        let lif = self.lif.lock().unwrap_or_else(|e| e.into_inner());
         match lif.run_origin_secs() {
             Some(t0) => (Self::now_epoch_secs() - t0).max(0.0) as u64,
             None => 0,
@@ -2215,7 +2223,7 @@ impl AgentLoopController {
     pub(crate) fn wallclock_rounds_line(&self) -> Option<String> {
         let limit_secs = main_wallclock_limit_secs_override()?;
         let remaining_secs = limit_secs.saturating_sub(self.run_elapsed_wallclock_secs());
-        let t_hat_secs = self.lif.lock().unwrap().estimator().estimate_opt()?;
+        let t_hat_secs = self.lif.lock().unwrap_or_else(|e| e.into_inner()).estimator().estimate_opt()?;
         crate::prompt::wallclock_rounds_line(remaining_secs, t_hat_secs)
     }
 
@@ -2239,7 +2247,7 @@ impl AgentLoopController {
         };
         let remaining_secs = limit_secs.saturating_sub(self.run_elapsed_wallclock_secs());
         let threshold_secs = {
-            let mut crossed = self.f6_push_crossed.lock().unwrap();
+            let mut crossed = self.f6_push_crossed.lock().unwrap_or_else(|e| e.into_inner());
             crate::prompt::f6_push_cue_for_remaining(remaining_secs, &mut crossed)
         };
         let Some(threshold_secs) = threshold_secs else {
@@ -2341,7 +2349,7 @@ impl AgentLoopController {
         k: Option<u64>,
         name: Option<&str>,
     ) -> Result<String, String> {
-        let lif = self.lif.lock().unwrap();
+        let lif = self.lif.lock().unwrap_or_else(|e| e.into_inner());
         if lif.temporal().round() == 0 {
             return Ok("temporal: 尚无决策轮（run 尚未产生决策输出）".to_string());
         }
@@ -2560,7 +2568,7 @@ impl AgentLoopController {
         k: Option<u64>,
         name: Option<&str>,
     ) -> Result<String, String> {
-        let lif = self.lif.lock().unwrap();
+        let lif = self.lif.lock().unwrap_or_else(|e| e.into_inner());
         let Some(shadow) = lif.rli_shadow() else {
             return Ok(
                 "rli: RLI 未启用（kill switch：env ORZ_LIF_RLI_SHADOW=0/off/\
@@ -2870,14 +2878,30 @@ impl AgentLoopController {
     /// 0ae D0：水位状态标读数——`【3.2M/10M】` 形态（live 字节 /
     /// 10MiB 软上限；env `ORZ_BLACKBOARD_LIVE_BUDGET_BYTES` 改配时
     /// 分母随之）。复用 fatigue 的预算口径，不设第二把尺。
+    ///
+    /// REV-083-18c (2026-09-27): the label is rendered on every blackboard
+    /// read (and several audit paths) while the value only moves with the
+    /// compact byte count — memoize the formatted string keyed on that
+    /// count instead of re-formatting per call.
     pub(crate) fn blackboard_watermark_label(&self) -> String {
         let bytes = self.blackboard.read().live_compact_bytes();
+        let mut cache = self
+            .watermark_label_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some((cached_bytes, label)) = cache.as_ref()
+            && *cached_bytes == bytes
+        {
+            return label.clone();
+        }
         let budget = crate::fatigue::live_budget_bytes();
-        format!(
+        let label = format!(
             "【{:.1}M/{}M】",
             bytes as f64 / 1_000_000.0,
             budget / 1_000_000
-        )
+        );
+        *cache = Some((bytes, label.clone()));
+        label
     }
 
     // ── 0ap：压缩窗口请求位 / 在程位（原子；跨 loop-top 派发段通信）──────
@@ -2968,7 +2992,7 @@ impl AgentLoopController {
         // 双迁移定案后模型面不再渲染该徽章（迁移事实改走机械记录，见
         // `take_new_lif_migrations`），此处只取 round 与 RLI 面读数。
         let (temporal_round, rli_steps, rli_pending_notices) = {
-            let lif = self.lif.lock().unwrap();
+            let lif = self.lif.lock().unwrap_or_else(|e| e.into_inner());
             let t = lif.temporal();
             (
                 t.round(),
@@ -2993,7 +3017,7 @@ impl AgentLoopController {
             items.push(("rli", steps));
         }
 
-        let mut cursors = self.blackboard_read_cursors.lock().unwrap();
+        let mut cursors = self.blackboard_read_cursors.lock().unwrap_or_else(|e| e.into_inner());
         // 0ap（2026-09-18，设计 §3 主面）：水位标旁增**滑块读数段**——主
         // 滑块以外未压缩分块数 N＋估算 token（「滑块外可压缩 N 块 ≈ est K」）。
         // 读时现算：分段文本由调用方在工具执行点现算传入（messages 在握、
@@ -3126,7 +3150,7 @@ impl AgentLoopController {
         // 索引口径与装配循环严格一致）；投递/暂存计数与头段余量入影子
         // （「delivered 计数化」＋余量可核；随侧车持久）。
         if attached_notices > 0 || deferred_notices > 0 {
-            if let Some(shadow) = self.lif.lock().unwrap().rli_shadow_mut() {
+            if let Some(shadow) = self.lif.lock().unwrap_or_else(|e| e.into_inner()).rli_shadow_mut() {
                 shadow.mark_notices_delivered_at(&attached_indices);
                 shadow.record_notice_delivery_accounting(
                     deferred_notices,
@@ -3182,10 +3206,10 @@ impl AgentLoopController {
         u64,
         u64,
     )> {
-        let lif = self.lif.lock().unwrap();
+        let lif = self.lif.lock().unwrap_or_else(|e| e.into_inner());
         let t = lif.temporal();
         let total = t.migration_count();
-        let mut recorded = self.lif_migration_recorded.lock().unwrap();
+        let mut recorded = self.lif_migration_recorded.lock().unwrap_or_else(|e| e.into_inner());
         if total <= *recorded {
             return Vec::new();
         }
@@ -3208,7 +3232,7 @@ impl AgentLoopController {
 
     /// P2-10 F2 §3.5 (I4): the current domain spikes (sidecar persistence).
     pub fn temporal_spikes(&self) -> Vec<orz_assurance::lif::DomainSpike> {
-        self.lif.lock().unwrap().temporal().spikes().to_vec()
+        self.lif.lock().unwrap_or_else(|e| e.into_inner()).temporal().spikes().to_vec()
     }
 
     /// 0be 四项④（2026-09-21）：RLI 繁杂度读数（影子未启用 = `None`——
@@ -3226,7 +3250,7 @@ impl AgentLoopController {
     /// 持久化；下一 prompt 恢复后轮号与域驻留精确续接（取代 I4
     /// restore_spikes 的近似口径）。
     pub fn lif_session_snapshot(&self) -> TemporalSessionSnapshot {
-        self.lif.lock().unwrap().temporal_session_snapshot()
+        self.lif.lock().unwrap_or_else(|e| e.into_inner()).temporal_session_snapshot()
     }
 
     /// B1：从会话侧车快照续接轮号与域机器；`axis_origin_wall` = 会话
@@ -3246,7 +3270,7 @@ impl AgentLoopController {
     /// B1：仅预置会话时间轴原点（无快照可续的 legacy/全新会话也保证
     /// temporal `t` 与会话相对）。引擎尚未观测任何事件时生效。
     pub fn preset_lif_session_axis(&self, session_started_at: f64) {
-        self.lif.lock().unwrap().set_axis_origin(session_started_at);
+        self.lif.lock().unwrap_or_else(|e| e.into_inner()).set_axis_origin(session_started_at);
     }
 
     /// B1 写时盖章：黑板各分区（exec / edits / tool_actions / actions
@@ -3255,7 +3279,7 @@ impl AgentLoopController {
     /// temporal 行/failure_agg 段同刻度；P2-12 note_failure_agg 先例）。
     /// ts 由各写入点独立取墙钟（chrono_utc_now）。
     pub(crate) fn blackboard_stamp(&self) -> (u64, Domain) {
-        let lif = self.lif.lock().unwrap();
+        let lif = self.lif.lock().unwrap_or_else(|e| e.into_inner());
         let temporal = lif.temporal();
         (temporal.round(), temporal.current_domain())
     }
@@ -3277,7 +3301,7 @@ impl AgentLoopController {
     /// 绝不跨模型请求残留。
     pub(crate) fn pin_main_board_stamp(&self) -> BoardStampPinGuard<'_> {
         let stamp = self.blackboard_stamp();
-        *self.board_stamp_pin.lock().unwrap() = Some(stamp);
+        *self.board_stamp_pin.lock().unwrap_or_else(|e| e.into_inner()) = Some(stamp);
         BoardStampPinGuard {
             slot: &self.board_stamp_pin,
         }
@@ -3604,7 +3628,7 @@ impl AgentLoopController {
         );
         // IP2a: the denial circuit breaker is per-run — a fresh turn starts
         // clean (D-3: "连续拒绝 3 次/轮" — the window is one run).
-        *self.denial_state.lock().unwrap() = DenialState::default();
+        *self.denial_state.lock().unwrap_or_else(|e| e.into_inner()) = DenialState::default();
         // GAP-DENIAL-POLICY-REVISION (2026-08-12): policy revision is also
         // per-run — a fresh run starts at 0 (same window as the breaker).
         self.policy_revision
@@ -3613,7 +3637,7 @@ impl AgentLoopController {
         // per-run too — a fresh run starts with no previous state (the
         // pre-run_started probe below seeds it; never persisted across
         // runs, design §8).
-        *self.probe_state.lock().unwrap() = crate::tool_probe::MinimalProbeMap::default();
+        *self.probe_state.lock().unwrap_or_else(|e| e.into_inner()) = crate::tool_probe::MinimalProbeMap::default();
         // PLAN-FIRST 阶段 B 审查收口 (2026-08-16): 注册板块探针源同样随
         // run 复位——与 `probe_state` 同纪律，本 run 首个有探针轮重新记录，
         // 不跨 run 沿用（此前依赖「首个有探针轮必先覆盖」才能保证无泄漏）。
@@ -3625,18 +3649,18 @@ impl AgentLoopController {
         // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the final-answer
         // citation verifier's evidence is per-run — the main lane's read
         // evidence and the committed retrieval ledgers start empty.
-        *self.main_evidence.lock().unwrap() = Vec::new();
-        *self.run_source_ledgers.lock().unwrap() = Vec::new();
-        *self.next_source_seq.lock().unwrap() = 0;
+        *self.main_evidence.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
+        *self.run_source_ledgers.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
+        *self.next_source_seq.lock().unwrap_or_else(|e| e.into_inner()) = 0;
         // 0ar S2：连续提前交付 streak 随 run 复位（run 内观测语义）。
         self.retrieval_early_delivery_streak
             .store(0, std::sync::atomic::Ordering::Relaxed);
         // PULL 自描述 (2026-08-31, P2-11 第 1 项 / 设计 §3): 读取游标随
         // run 复位——「自上次读取以来」增量是 run 内语义（LIF 参考系同
         // 纪律：每独立 run 从头确定）。
-        *self.blackboard_read_cursors.lock().unwrap() = std::collections::HashMap::new();
+        *self.blackboard_read_cursors.lock().unwrap_or_else(|e| e.into_inner()) = std::collections::HashMap::new();
         // TER T1.9：F6 push 跨阈值记账随 run 复位（每 run ≤3 档注入）。
-        *self.f6_push_crossed.lock().unwrap() = [false; 3];
+        *self.f6_push_crossed.lock().unwrap_or_else(|e| e.into_inner()) = [false; 3];
         // ACAF Slice 1 (ADR-0011 §4.2): the run's task goal is the ticket
         // goal binding (check 4) — pinned before any control event can fire.
         self.set_goal_digest(prompt);
@@ -6048,7 +6072,7 @@ mod tests {
                 if name == "bash" {
                     // Block until the test releases — the cancel lands while
                     // tool #1 is in flight.
-                    let mut rx = self.release.lock().unwrap().take().unwrap();
+                    let mut rx = self.release.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap();
                     let _ = rx.recv().await;
                 }
                 Ok(ToolResult {
@@ -6196,7 +6220,7 @@ mod tests {
                     // 存活且在 flight。`_group`（作用域强引用）存活到本
                     // future 结束；wait 等子进程自然退出（999s）或被取消臂
                     // 杀树（即刻）。
-                    let dispatch_signal = self.dispatched.lock().unwrap().take();
+                    let dispatch_signal = self.dispatched.lock().unwrap_or_else(|e| e.into_inner()).take();
                     if let Some(tx) = dispatch_signal {
                         let _ = tx.send(()).await;
                     }
@@ -6313,7 +6337,7 @@ mod tests {
                 _args: &serde_json::Value,
             ) -> Result<PermitDecision, PermitError> {
                 // Block until the test sends the release, then deny.
-                let mut rx = self.release.lock().unwrap().take().unwrap();
+                let mut rx = self.release.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap();
                 let _ = rx.recv().await;
                 Ok(PermitDecision::Deny)
             }
@@ -6730,7 +6754,7 @@ mod tests {
         });
         let controller =
             AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
-        let mut registry = controller.activations.lock().unwrap();
+        let mut registry = controller.activations.lock().unwrap_or_else(|e| e.into_inner());
         let restored = registry.seed_from_json(&snapshot);
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].conversation.len(), 3);
@@ -6760,7 +6784,7 @@ mod tests {
         let controller =
             AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
         {
-            let mut guard = controller.lif.lock().unwrap();
+            let mut guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
             let temporal = guard.temporal_mut();
             temporal.observe_tool_outcome(orz_assurance::lif::ToolOutcome::Success);
             for i in 0..40u64 {
@@ -6794,7 +6818,7 @@ mod tests {
             AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
         // Build a session with Normal → Stuck spikes (has_success=true).
         {
-            let mut guard = controller.lif.lock().unwrap();
+            let mut guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
             let temporal = guard.temporal_mut();
             temporal.observe_tool_outcome(orz_assurance::lif::ToolOutcome::Success);
             temporal.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
@@ -6809,20 +6833,20 @@ mod tests {
             AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
         restored.restore_temporal_spikes(spikes);
         assert_eq!(
-            restored.lif.lock().unwrap().temporal().current_domain(),
+            restored.lif.lock().unwrap_or_else(|e| e.into_inner()).temporal().current_domain(),
             orz_assurance::lif::Domain::Stuck
         );
-        assert!(restored.lif.lock().unwrap().temporal().has_success());
+        assert!(restored.lif.lock().unwrap_or_else(|e| e.into_inner()).temporal().has_success());
 
         // First decision round after restore must stay Stuck (same features),
         // not regress to Start with a fake migration/spike.
-        let migrations_before = restored.lif.lock().unwrap().temporal().history().len();
-        let spikes_before = restored.lif.lock().unwrap().temporal().spikes().len();
+        let migrations_before = restored.lif.lock().unwrap_or_else(|e| e.into_inner()).temporal().history().len();
+        let spikes_before = restored.lif.lock().unwrap_or_else(|e| e.into_inner()).temporal().spikes().len();
         {
-            let mut guard = restored.lif.lock().unwrap();
+            let mut guard = restored.lif.lock().unwrap_or_else(|e| e.into_inner());
             guard.temporal_mut().record_round(3.0, 8.0, 0.2, 2.5, 5.0); // still Stuck
         }
-        let guard = restored.lif.lock().unwrap();
+        let guard = restored.lif.lock().unwrap_or_else(|e| e.into_inner());
         let temporal = guard.temporal();
         assert_eq!(temporal.current_domain(), orz_assurance::lif::Domain::Stuck);
         assert_eq!(temporal.history().len(), migrations_before);
@@ -7012,7 +7036,7 @@ body"
         let controller =
             AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
         {
-            let mut guard = controller.lif.lock().unwrap();
+            let mut guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
             let temporal = guard.temporal_mut();
             temporal.observe_tool_outcome(orz_assurance::lif::ToolOutcome::Success);
             temporal.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
@@ -7040,7 +7064,7 @@ body"
         let controller =
             AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
         {
-            let mut guard = controller.lif.lock().unwrap();
+            let mut guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
             let temporal = guard.temporal_mut();
             temporal.observe_tool_outcome(orz_assurance::lif::ToolOutcome::Success);
             temporal.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
@@ -7071,7 +7095,7 @@ body"
         let controller =
             AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
         {
-            let mut guard = controller.lif.lock().unwrap();
+            let mut guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
             let temporal = guard.temporal_mut();
             temporal.observe_tool_outcome(orz_assurance::lif::ToolOutcome::Success);
             for i in 0..40u64 {
@@ -7103,14 +7127,14 @@ body"
         // 0bf ①（2026-09-22）：缺省常开——"off" 面由显式 disable 构造
         // （kill switch 的引擎侧等效动作；env 判定 `0/off/false/no`）。
         {
-            let mut guard = controller.lif.lock().unwrap();
+            let mut guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
             guard.disable_rli_shadow();
         }
         let off = controller.render_rli_section(None, None, None).unwrap();
         assert!(off.contains("RLI 未启用"), "{off}");
 
         {
-            let mut guard = controller.lif.lock().unwrap();
+            let mut guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
             guard.enable_rli_shadow();
             let mut t = 0.0f64;
             for i in 0..6u32 {
@@ -7218,7 +7242,7 @@ body"
         let out = controller.attach_pull_delta("plan", "body".to_string(), 0, None);
         assert!(!out.contains("rli+"), "shadow off ⇒ no rli badge: {out}");
         {
-            let mut guard = controller.lif.lock().unwrap();
+            let mut guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
             guard.enable_rli_shadow();
             guard.on_tool_event(1.0, orz_assurance::lif::ToolEvent::success(Some(10)));
             guard.on_decision_round(2.0);
@@ -7241,7 +7265,7 @@ body"
             AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
         // round=5、migration=3（r2/r3/r4 各迁移一次，r5 保持 Stuck）。
         {
-            let mut guard = controller.lif.lock().unwrap();
+            let mut guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
             let temporal = guard.temporal_mut();
             temporal.observe_tool_outcome(orz_assurance::lif::ToolOutcome::Success);
             temporal.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
@@ -7269,7 +7293,7 @@ body"
         // temporal+2（round 徽章照旧）；**迁移不再进模型面**（机械记录消费
         // 见 `take_new_lif_migrations`——计数器准确推进、逐次可核）。
         {
-            let mut guard = controller.lif.lock().unwrap();
+            let mut guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
             let temporal = guard.temporal_mut();
             temporal.record_round(6.0, 8.0, 0.9, 0.5, 0.1); // Normal → 迁移 4
             temporal.record_round(7.0, 8.0, 0.2, 2.5, 5.0); // Stuck → 迁移 5
@@ -7321,7 +7345,7 @@ body"
             );
         }
         {
-            let mut guard = controller.lif.lock().unwrap();
+            let mut guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
             let temporal = guard.temporal_mut();
             temporal.observe_tool_outcome(orz_assurance::lif::ToolOutcome::Success);
             temporal.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
@@ -7490,7 +7514,7 @@ body"
         let controller =
             AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
         {
-            let mut guard = controller.lif.lock().unwrap();
+            let mut guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
             // 缺省常开（0bf ①）：连续错误工具事件 → err 通道持续越线，
             // 连续 5 个采样点触发（θ 自适应上抬，给 7 个事件余量）。
             let mut t = 0.0f64;
@@ -7510,7 +7534,7 @@ body"
         let again = controller.attach_pull_delta("rli", body, 0, None);
         assert!(!again.contains("RLI提醒:"), "{again}");
         // kill switch：无影子 = 零投递。
-        controller.lif.lock().unwrap().disable_rli_shadow();
+        controller.lif.lock().unwrap_or_else(|e| e.into_inner()).disable_rli_shadow();
         let off = controller.attach_pull_delta("rli", "rli: x".to_string(), 0, None);
         assert!(!off.contains("RLI提醒:"), "{off}");
     }
@@ -7544,7 +7568,7 @@ body"
             );
         }
         {
-            let mut guard = controller.lif.lock().unwrap();
+            let mut guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
             let mut t = 0.0f64;
             for _ in 0..7u32 {
                 t += 1.0;

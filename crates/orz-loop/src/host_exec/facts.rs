@@ -145,7 +145,7 @@ impl AgentLoopController {
             return Ok(());
         }
         let eligible = {
-            let guard = self.mid_run_call_ids.lock().unwrap();
+            let guard = self.mid_run_call_ids.lock().unwrap_or_else(|e| e.into_inner());
             facts
                 .into_iter()
                 .filter(|f| guard.get(&f.task_id).map(String::as_str) == Some(run_id.as_str()))
@@ -429,7 +429,7 @@ mod tests {
                 Ok(PermitDecision::AllowOnce)
             }
             async fn drain_terminal_idle_kills(&self) -> Vec<crate::host::TerminalIdleKillFact> {
-                std::mem::take(&mut *self.idle_facts.lock().unwrap())
+                std::mem::take(&mut *self.idle_facts.lock().unwrap_or_else(|e| e.into_inner()))
             }
         }
         let dir = test_dir();

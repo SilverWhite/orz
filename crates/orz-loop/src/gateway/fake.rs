@@ -112,12 +112,12 @@ impl FakeProvider {
 
     /// Requests received so far (for assertions). Cloned to avoid lock issues.
     pub fn received_requests(&self) -> Vec<ModelRequest> {
-        self.received.lock().unwrap().clone()
+        self.received.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Remaining scripted steps.
     pub fn remaining(&self) -> usize {
-        self.script.lock().unwrap().len()
+        self.script.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 }
 
@@ -133,7 +133,7 @@ impl ModelGateway for FakeProvider {
     }
 
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError> {
-        self.received.lock().unwrap().push(request);
+        self.received.lock().unwrap_or_else(|e| e.into_inner()).push(request);
         let next = self
             .script
             .lock()
@@ -161,7 +161,7 @@ impl ModelGateway for FakeProvider {
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<ModelResponse, GatewayError> {
-        self.received.lock().unwrap().push(request);
+        self.received.lock().unwrap_or_else(|e| e.into_inner()).push(request);
         let next = self
             .script
             .lock()

@@ -767,7 +767,7 @@ impl ResourceHint {
 
     /// The most recent binding reading this face took.
     pub fn last_snapshot(&self) -> Option<HostCapacitySnapshot> {
-        *self.last.lock().unwrap()
+        *self.last.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Read **every** volume the action would write to (design §4.1 "目标卷";
@@ -793,7 +793,7 @@ impl ResourceHint {
             })
             .map(|(index, _)| index)
             .unwrap_or(0);
-        *self.last.lock().unwrap() = Some(readings[binding].snapshot);
+        *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(readings[binding].snapshot);
         readings
     }
 
@@ -813,7 +813,7 @@ impl ResourceHint {
         if short.is_empty() {
             return None;
         }
-        let mut hinted = self.hinted.lock().unwrap();
+        let mut hinted = self.hinted.lock().unwrap_or_else(|e| e.into_inner());
         let fresh: Vec<&&VolumeReading> = short
             .iter()
             .filter(|reading| hinted.insert(volume_hint_key(&reading.path)))

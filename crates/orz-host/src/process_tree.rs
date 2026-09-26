@@ -445,11 +445,11 @@ impl ProcessTreeRegistry {
     /// Drain the accumulated sweep facts for the journal face
     /// (`process_tree_reaped` events). Drain semantics like the idle-kill face.
     pub fn drain_facts(&self) -> Vec<SweepFact> {
-        std::mem::take(&mut *self.pending_facts.lock().unwrap())
+        std::mem::take(&mut *self.pending_facts.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     fn push_fact(&self, fact: SweepFact) {
-        self.pending_facts.lock().unwrap().push(fact);
+        self.pending_facts.lock().unwrap_or_else(|e| e.into_inner()).push(fact);
     }
 
     /// Append one audit row to `sweep-log.jsonl` — the registry-side audit

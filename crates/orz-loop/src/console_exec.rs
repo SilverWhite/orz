@@ -36,7 +36,7 @@ impl AgentLoopController {
         let plan_epoch = self.blackboard.read().plan.plan_epoch;
         let transition_id = format!("CONSMODE-{}-{:04}", writer.run_id(), writer.seq());
         let (streak, order_ids) = {
-            let state = self.console_mode_state.lock().unwrap();
+            let state = self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner());
             (state.streak, state.streak_order_ids.clone())
         };
         self.record_console_transition(
@@ -821,7 +821,7 @@ impl AgentLoopController {
         // 不清零），且未执行的订单不得把目标步骤置 failed；步骤状态只随
         // 执行 receipt 迁移（设计 §6：done/failed 来自发放后执行结果）。
         {
-            let mut state = self.console_mode_state.lock().unwrap();
+            let mut state = self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner());
             state.record_receipt(false, err.step, err.upstream.as_ref());
         }
         let mut trace = self
@@ -1033,7 +1033,7 @@ impl AgentLoopController {
     }
 
     fn commit_console_trace(&self, trace: &crate::console::Trace) {
-        self.console_traces.lock().unwrap().commit(trace);
+        self.console_traces.lock().unwrap_or_else(|e| e.into_inner()).commit(trace);
     }
 
     /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §6/§7.2):
@@ -1052,7 +1052,7 @@ impl AgentLoopController {
     ) {
         let fault = !ok && crate::console_mode::counts_as_assistant_fault(step, upstream);
         {
-            let mut state = self.console_mode_state.lock().unwrap();
+            let mut state = self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner());
             state.record_receipt(ok, step, upstream);
             if fault {
                 state.push_streak_order(&order.order_id);
@@ -1147,7 +1147,7 @@ impl AgentLoopController {
         let plan_epoch = self.blackboard.read().plan.plan_epoch;
         let transition_id = format!("CONSMODE-{}-{:04}", writer.run_id(), writer.seq());
         let (streak, order_ids) = {
-            let state = self.console_mode_state.lock().unwrap();
+            let state = self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner());
             (state.streak, state.streak_order_ids.clone())
         };
         self.record_console_transition(
@@ -1165,7 +1165,7 @@ impl AgentLoopController {
             None,
         )
         .await?;
-        self.console_mode_state.lock().unwrap().stay_in_console();
+        self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner()).stay_in_console();
         Ok(())
     }
 
@@ -1180,7 +1180,7 @@ impl AgentLoopController {
     ) -> Result<(), AgentLoopError> {
         let plan_epoch = self.blackboard.read().plan.plan_epoch;
         let (transition_id, direct_transition) = {
-            let state = self.console_mode_state.lock().unwrap();
+            let state = self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner());
             (
                 format!("CONSMODE-{}-{:04}", writer.run_id(), writer.seq()),
                 state.transition_id.clone(),
@@ -1201,7 +1201,7 @@ impl AgentLoopController {
             direct_transition.as_deref(),
         )
         .await?;
-        self.console_mode_state.lock().unwrap().return_to_console();
+        self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner()).return_to_console();
         Ok(())
     }
 }
@@ -1558,7 +1558,7 @@ mod tests {
             r.tool_actions
         );
         // 过期订单的失败 trace 已 commit。
-        let traces = controller.console_traces.lock().unwrap();
+        let traces = controller.console_traces.lock().unwrap_or_else(|e| e.into_inner());
         let trace = traces
             .get(&receipt.trace_id)
             .expect("stale trace committed");
@@ -2162,7 +2162,7 @@ mod tests {
             r.tool_actions
         );
         // trace：失败 trace 已 commit，末事件 protocol/content_anchor_mismatch。
-        let traces = controller.console_traces.lock().unwrap();
+        let traces = controller.console_traces.lock().unwrap_or_else(|e| e.into_inner());
         let trace = traces
             .get(&receipt.trace_id)
             .expect("anchor rejection trace committed");
@@ -3229,7 +3229,7 @@ mod tests {
             );
         }
         // 零副作用：whitelist 空、goal digest 未变（仍为任务 prompt 摘要）。
-        let w = controller.whitelist.lock().unwrap();
+        let w = controller.whitelist.lock().unwrap_or_else(|e| e.into_inner());
         assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
         drop(w);
 

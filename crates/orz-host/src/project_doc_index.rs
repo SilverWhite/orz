@@ -982,7 +982,7 @@ fn run_git_cmd(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
         // 把 Child 从共享槽位 take 出来再 wait（wait_with_output 内部
         // 并发读取 stdout/stderr，不会因管道写满死锁）；超时分支可能
         // 取不到（线程已持有）——该次 git 仍会被线程回收，query 不阻塞。
-        let taken = runner.lock().unwrap().take();
+        let taken = runner.lock().unwrap_or_else(|e| e.into_inner()).take();
         let out = taken.map(|c| c.wait_with_output());
         let _ = tx.send(out);
     });

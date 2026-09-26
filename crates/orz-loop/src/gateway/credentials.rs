@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn windows_env_channel_short_circuits_credreadw() {
         static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var(API_KEY_ENV, "sk-test-appcontainer-inject-2026");
         }

@@ -73,7 +73,7 @@ fn scrub_audit() -> &'static Mutex<Vec<ScrubRecord>> {
 
 /// All scrub lifecycle records (for test inspection).
 pub fn get_scrub_audit() -> Vec<ScrubRecord> {
-    scrub_audit().lock().unwrap().clone()
+    scrub_audit().lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 fn utc_now_iso() -> String {
@@ -150,7 +150,7 @@ impl CredentialGuard {
             Err(error) => {
                 record.scrub_succeeded = true; // nothing acquired, nothing to scrub
                 record.released_at = utc_now_iso();
-                scrub_audit().lock().unwrap().push(record);
+                scrub_audit().lock().unwrap_or_else(|e| e.into_inner()).push(record);
                 return Err(error);
             }
         };
@@ -196,7 +196,7 @@ impl CredentialGuard {
                     "credential must be zeroed before release"
                 );
             }
-            scrub_audit().lock().unwrap().push(self.record.clone());
+            scrub_audit().lock().unwrap_or_else(|e| e.into_inner()).push(self.record.clone());
         }
     }
 

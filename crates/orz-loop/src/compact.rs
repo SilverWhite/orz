@@ -128,7 +128,7 @@ impl AgentLoopController {
     }
 
     /// 滑块上下文 v8：pin **上限守卫**（异常保险；生产读
-    /// `ORZ_MODEL_FACE_GUARD_TOKENS`，默认 1.10M）。越线 ⇒ 强制截断到线上。
+    /// `ORZ_MODEL_FACE_GUARD_TOKENS`，默认 700K）。越线 ⇒ 强制截断到线上。
     pub fn with_model_face_guard_tokens(mut self, tokens: u64) -> Self {
         self.context_compact.model_face_guard_tokens = tokens.max(1);
         self
@@ -187,7 +187,7 @@ impl AgentLoopController {
     /// re-injected at compaction time). New entries update the existing
     /// whitelist message in place.
     pub(crate) fn upsert_whitelist_message(&self, messages: &mut Vec<Message>) {
-        let entries = self.whitelist.lock().unwrap();
+        let entries = self.whitelist.lock().unwrap_or_else(|e| e.into_inner());
         if entries.is_empty() {
             return;
         }
@@ -498,7 +498,7 @@ mod tests {
             "sealed tool must never reach ToolStarted"
         );
         // 白名单恒空、无存档文件。
-        let w = controller.whitelist.lock().unwrap();
+        let w = controller.whitelist.lock().unwrap_or_else(|e| e.into_inner());
         assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
         drop(w);
         let archive = dir.join("whitelist.jsonl");
@@ -585,7 +585,7 @@ mod tests {
             "both writes sealed-journaled: {failed_tool_completed:?}"
         );
         // 白名单恒空。
-        let w = controller.whitelist.lock().unwrap();
+        let w = controller.whitelist.lock().unwrap_or_else(|e| e.into_inner());
         assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
         drop(w);
 
@@ -686,7 +686,7 @@ mod tests {
             })
             .collect();
         assert_eq!(failed.len(), 1, "sealed refusal journaled");
-        let w = controller.whitelist.lock().unwrap();
+        let w = controller.whitelist.lock().unwrap_or_else(|e| e.into_inner());
         assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
         drop(w);
 
@@ -735,7 +735,7 @@ mod tests {
         assert_eq!(cc.len(), 1, "{cc:?}");
         assert_eq!(cc[0].payload["exit_code"], 0);
         // ② 内存白名单 = 仅首条（空/超限条目未落地）。
-        let w = controller.whitelist.lock().unwrap().clone();
+        let w = controller.whitelist.lock().unwrap_or_else(|e| e.into_inner()).clone();
         assert_eq!(w, vec!["任务背景：甲".to_string()], "{w:?}");
         // ③ 存档：whitelist.jsonl 恰一行（best-effort JSONL append）。
         let archive = dir.join("whitelist.jsonl");
@@ -945,7 +945,7 @@ mod tests {
             "{:?}",
             wl.payload
         );
-        let w = controller.whitelist.lock().unwrap();
+        let w = controller.whitelist.lock().unwrap_or_else(|e| e.into_inner());
         assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
         drop(w);
         let _ = std::fs::remove_dir_all(&dir);

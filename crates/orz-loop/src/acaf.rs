@@ -144,6 +144,15 @@ pub struct AcafClient {
     /// ledger — the ACP server shares one client across sessions and
     /// interleaves them.
     sessions: HashMap<String, ClientSession>,
+    /// REV-083-08 (2026-09-27): per-session "issuer generation restart"
+    /// cutoff (unix secs). Set whenever the signer process restarts (or a
+    /// session is freshly initialised against a restarted signer): tickets
+    /// whose `issued_at` predates the cutoff belong to the previous issuer
+    /// generation and are rejected. Closes the replay window that the
+    /// ledger reset would otherwise open — the reset re-opens one-shot
+    /// accounting while a pre-restart ticket's HMAC still verifies under
+    /// the deterministic same-epoch `K_session`.
+    stale_ticket_cutoff: HashMap<String, i64>,
     /// e2e-only seam (2026-08-13 review fix): when set, the next
     /// `verify_and_consume` for the matching kind fails BEFORE any signer
     /// RPC — simulates the signer dying between sign and verify (the
@@ -203,6 +212,7 @@ impl AcafClient {
             ledger: TicketLedger::new(),
             session: None,
             sessions: HashMap::new(),
+            stale_ticket_cutoff: HashMap::new(),
             injected_verify_failure: std::sync::Mutex::new(None),
         })
     }
@@ -214,7 +224,7 @@ impl AcafClient {
     /// journal) and the D-16 GoalRevisionV1 rejection branch.
     #[doc(hidden)]
     pub fn inject_verify_failure(&self, kind: TicketKind, detail: &str) {
-        *self.injected_verify_failure.lock().unwrap() = Some((kind, detail.to_string()));
+        *self.injected_verify_failure.lock().unwrap_or_else(|e| e.into_inner()) = Some((kind, detail.to_string()));
     }
 
     /// e2e-only seam (2026-08-16 review fix): kill the signer child WITHOUT
@@ -287,8 +297,9 @@ impl AcafClient {
                 &result,
             )?;
             // Signer process restarted → its sequence restarted → the
-            // session's one-shot high-water resets with it.
-            self.ledger.reset(&session_id);
+            // session's one-shot high-water resets with it; the restart
+            // cutoff keeps pre-restart tickets out (REV-083-08).
+            self.note_issuer_generation_restart(&session_id);
         }
         // Drop every cached session that is NOT the freshly re-initialised
         // one — they no longer exist on the new signer process.
@@ -336,8 +347,10 @@ impl AcafClient {
         }
         // A new session or a context change re-derives K_session (new epoch)
         // — the signer-side sequence restarts, so the ledger's per-session
-        // high-water resets with it.
-        self.ledger.reset(session_id);
+        // high-water resets with it (and the restart cutoff is stamped,
+        // REV-083-08 — a fresh init against a restarted signer keeps
+        // pre-restart tickets out).
+        self.note_issuer_generation_restart(session_id);
         let result = self
             .call(
                 "initialize_session",
@@ -491,10 +504,10 @@ impl AcafClient {
         // The snapshot is taken in its own statement so the std Mutex guard
         // is dropped before the body may lock again (a guard held across
         // the if-let body would deadlock on the inner clear).
-        let injected = self.injected_verify_failure.lock().unwrap().clone();
+        let injected = self.injected_verify_failure.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some((fail_kind, detail)) = injected {
             if fail_kind.as_str() == ticket.ticket_kind {
-                *self.injected_verify_failure.lock().unwrap() = None;
+                *self.injected_verify_failure.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 return Err(AcafClientError::Closed(format!(
                     "injected verify failure for {} (e2e seam): {detail}",
                     ticket.ticket_kind,
@@ -554,6 +567,23 @@ impl AcafClient {
             }
         };
         if verification.valid {
+            // REV-083-08: a ticket minted before the last issuer-generation
+            // restart is stale material — the ledger reset re-opened its
+            // one-shot accounting, so reject it here (replay class; the
+            // detail carries the cutoff for the journal).
+            if let Some(&cutoff) = self.stale_ticket_cutoff.get(&session.session_id)
+                && predates_restart_cutoff(&ticket.issued_at, cutoff)
+            {
+                return Ok(TicketOutcome::Rejected {
+                    ticket_id: Some(ticket.ticket_id.clone()),
+                    kind,
+                    code: RejectCode::ReplayDetected,
+                    detail: format!(
+                        "ticket issued_at {} predates signer restart cutoff {cutoff}",
+                        ticket.issued_at
+                    ),
+                });
+            }
             match self
                 .ledger
                 .consume(&session.session_id, &ticket.nonce, ticket.sequence)
@@ -582,6 +612,19 @@ impl AcafClient {
                 detail: verification.errors.first().cloned().unwrap_or_default(),
             })
         }
+    }
+
+    /// REV-083-08 (2026-09-27): sequence-restart bookkeeping shared by the
+    /// respawn path and a fresh `ensure_initialized`. The ledger reset
+    /// re-opens one-shot accounting for the session; the issued-at cutoff
+    /// closes the complementary replay window — a ticket minted by the
+    /// PREVIOUS issuer generation (`issued_at` < the restart moment) must
+    /// not be consumable against the new generation even though its HMAC
+    /// still verifies under the deterministic same-epoch `K_session`.
+    fn note_issuer_generation_restart(&mut self, session_id: &str) {
+        self.ledger.reset(session_id);
+        self.stale_ticket_cutoff
+            .insert(session_id.to_string(), chrono::Utc::now().timestamp());
     }
 
     /// Close the signer session and terminate the child process.
@@ -898,6 +941,17 @@ pub fn network_canonical_args(tool: &str, canonical_url: &str) -> Value {
     })
 }
 
+/// REV-083-08 (2026-09-27): issuer-generation predicate — true when
+/// `issued_at` (RFC 3339) predates the restart cutoff. An unparseable
+/// timestamp returns false here: by the time this predicate runs the ticket
+/// already passed the crypto checks, and an unparseable stamp is a signer
+/// protocol anomaly surfaced elsewhere — this predicate is about time only.
+fn predates_restart_cutoff(issued_at: &str, cutoff: i64) -> bool {
+    chrono::DateTime::parse_from_rfc3339(issued_at)
+        .map(|t| t.timestamp() < cutoff)
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1159,5 +1213,24 @@ mod tests {
         let browser = network_canonical_args("browser_read", "https://example.com/b");
         assert_eq!(browser["tool"], "browser_read");
         assert_ne!(args["url"], browser["url"]);
+    }
+
+    /// REV-083-08 (2026-09-27): the issuer-generation cutoff predicate —
+    /// strictly-before is stale, equal/after passes; an unparseable stamp
+    /// is not treated as stale (time-only predicate; crypto checks own the
+    /// malformed shapes).
+    #[test]
+    fn restart_cutoff_predicate_is_strict_and_time_only() {
+        let cutoff = 1_700_000_100i64;
+        // 40s before the cutoff → stale.
+        assert!(predates_restart_cutoff("2023-11-14T22:14:20Z", cutoff));
+        // Exactly the cutoff second → NOT stale (strictly-before only; a
+        // same-second mint race must not kill a fresh ticket).
+        let at = chrono::DateTime::<chrono::Utc>::from_timestamp(cutoff, 0).unwrap();
+        assert!(!predates_restart_cutoff(&at.to_rfc3339(), cutoff));
+        // After the cutoff → live.
+        assert!(!predates_restart_cutoff("2023-11-14T22:15:00Z", cutoff));
+        // Unparseable → not stale by this predicate.
+        assert!(!predates_restart_cutoff("not-a-timestamp", cutoff));
     }
 }

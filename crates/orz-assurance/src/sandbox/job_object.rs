@@ -101,7 +101,7 @@ impl JobObjectSupervisor {
     pub fn is_active(&self) -> bool {
         #[cfg(windows)]
         {
-            self.job.lock().unwrap().is_some()
+            self.job.lock().unwrap_or_else(|e| e.into_inner()).is_some()
         }
         #[cfg(not(windows))]
         {
@@ -205,7 +205,7 @@ impl JobObjectSupervisor {
     pub fn close(&mut self) {
         #[cfg(windows)]
         {
-            let mut guard = self.job.lock().unwrap();
+            let mut guard = self.job.lock().unwrap_or_else(|e| e.into_inner());
             guard.take();
         }
     }

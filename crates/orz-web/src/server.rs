@@ -220,6 +220,22 @@ fn serve_asset(path: &str) -> Response {
                 // a cache policy the browser heuristic-caches them and serves
                 // a stale UI after an upgrade (observed live 2026-09-25).
                 (axum::http::header::CACHE_CONTROL, "no-store"),
+                // REV-083-18f (2026-09-27): defensive header set on the
+                // static face. The UI is fully embedded (no remote origins),
+                // so scripts/styles/fonts are pinned to `'self'`; inline
+                // style attributes stay allowed (the theme switches a few
+                // inline styles), eval does not. Frame-ancestors + the
+                // legacy X-Frame-Options close clickjacking, no-referrer
+                // keeps the tokenized URL out of third-party logs.
+                (
+                    axum::http::header::CONTENT_SECURITY_POLICY,
+                    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+                     img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; \
+                     base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+                ),
+                (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                (axum::http::header::REFERRER_POLICY, "no-referrer"),
+                (axum::http::header::X_FRAME_OPTIONS, "DENY"),
             ],
             asset.bytes,
         )

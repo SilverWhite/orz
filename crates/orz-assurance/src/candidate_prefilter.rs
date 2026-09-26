@@ -803,7 +803,7 @@ mod tests {
         );
 
         static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var(
                 "ORZ_CANDIDATE_PREFILTER_CONFIG",

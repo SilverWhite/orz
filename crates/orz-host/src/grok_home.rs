@@ -177,7 +177,7 @@ mod tests {
     }
 
     fn with_lock(f: impl FnOnce()) {
-        let _guard = GROK_HOME_ENV_LOCK.lock().unwrap();
+        let _guard = GROK_HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         f();
     }
 

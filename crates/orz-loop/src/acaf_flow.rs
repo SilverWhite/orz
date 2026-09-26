@@ -261,7 +261,7 @@ impl AgentLoopController {
     /// missing-goal-context refusal journals (awaits) and the guard is not
     /// `Send` (review D-15 2026-08-13, tokio::spawn test compile).
     fn goal_binding_snapshot(&self) -> Option<(String, u64)> {
-        let g = self.goal_context.lock().unwrap();
+        let g = self.goal_context.lock().unwrap_or_else(|e| e.into_inner());
         g.digest.clone().map(|digest| (digest, g.version))
     }
 

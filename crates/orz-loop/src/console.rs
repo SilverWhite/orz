@@ -1373,7 +1373,7 @@ pub(crate) async fn issue_action_inner<E: ActionExecutor + ?Sized>(
                 .unwrap_or(TRACE_TAIL_DEFAULT);
             // 同步短锁取回快照，锁不跨 await（发放链可保持 Send）。
             let (request_id, events, truncated) = {
-                let guard = store.lock().unwrap();
+                let guard = store.lock().unwrap_or_else(|e| e.into_inner());
                 // 2026-08-16 定案：trace 查无此 id 发生在执行阶段（服务已
                 // 解析、契约已过、存储查询失败），归 `step=execute` ——
                 // 与 `step=registry`（服务解析失败/unknown_service）区分；
@@ -2327,7 +2327,7 @@ mod tests {
             call_id: &str,
             _timeout: Option<Duration>,
         ) -> Result<ToolResult, ExecuteError> {
-            self.seen.lock().unwrap().push((
+            self.seen.lock().unwrap_or_else(|e| e.into_inner()).push((
                 target_tool.to_string(),
                 arguments.clone(),
                 call_id.to_string(),
@@ -2440,7 +2440,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(response, json!({"output": "hello"}));
-        let calls = seen.lock().unwrap();
+        let calls = seen.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "read_file");
         assert_eq!(calls[0].2, "call-1");
@@ -2487,7 +2487,7 @@ mod tests {
                 .is_some_and(|s| s.contains("Command still running after 300s")),
             "response must carry the mid-run report: {response}"
         );
-        let calls = seen.lock().unwrap();
+        let calls = seen.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "run_terminal_cmd");
         assert_eq!(calls[0].2, "call-mid-1");
@@ -2552,7 +2552,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.step, STEP_CONTRACT);
         assert_eq!(err.code, CODE_INVALID_ARGUMENTS);
-        assert!(seen.lock().unwrap().is_empty());
+        assert!(seen.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
         assert_eq!(trace.events.len(), 2);
         assert_eq!(trace.events[0].step, STEP_REGISTRY);
         assert_eq!(trace.events[1].step, STEP_TARGET);
@@ -3031,7 +3031,7 @@ mod tests {
         let (executor, _) = FakeExecutor::ok();
         let store = std::sync::Mutex::new(TraceStore::new());
         {
-            let mut guard = store.lock().unwrap();
+            let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
             let mut target = guard.new_trace(Some("ORD-000001".to_string()));
             for i in 0..30 {
                 target.add(
@@ -3193,7 +3193,7 @@ mod tests {
         .unwrap();
         assert_eq!(response["steps"].as_array().unwrap().len(), 3);
         assert_eq!(response["result"]["content"], "hello");
-        let calls = executor.seen.lock().unwrap();
+        let calls = executor.seen.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(calls.len(), 3);
         // 第二/三步的 $ref 已被替换为先序输出字段。
         assert_eq!(calls[1].1, json!({"path": "a.txt"}));
@@ -3348,7 +3348,7 @@ mod tests {
             assert_eq!(err.code, expected_code, "{arguments}");
         }
         assert!(
-            executor.seen.lock().unwrap().is_empty(),
+            executor.seen.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
             "static validation must fail before any execution"
         );
     }
@@ -3382,7 +3382,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.step, STEP_CONTRACT);
         assert_eq!(err.code, CODE_INVALID_SCRIPT);
-        assert!(executor.seen.lock().unwrap().is_empty());
+        assert!(executor.seen.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
     }
 
     /// P0-C S3 审查收口（2026-08-16）：注册不变式补齐——内部动作携带
@@ -3498,7 +3498,7 @@ mod tests {
         let (executor, _) = FakeExecutor::ok();
         let store = std::sync::Mutex::new(TraceStore::new());
         {
-            let mut guard = store.lock().unwrap();
+            let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
             let mut target = guard.new_trace(Some("ORD-T".to_string()));
             for i in 0..3 {
                 target.add(
@@ -3653,7 +3653,7 @@ mod tests {
             MAX_SCRIPT_STEPS_PER_ORDER
         );
         assert_eq!(
-            executor.seen.lock().unwrap().len(),
+            executor.seen.lock().unwrap_or_else(|e| e.into_inner()).len(),
             MAX_SCRIPT_STEPS_PER_ORDER * 2
         );
     }
@@ -3723,7 +3723,7 @@ mod tests {
             "workspace.read_file"
         );
         // 第三步未执行。
-        assert_eq!(executor.seen.lock().unwrap().len(), 2);
+        assert_eq!(executor.seen.lock().unwrap_or_else(|e| e.into_inner()).len(), 2);
         // trace 含 script 失败事件（code 保留内层）。
         let failed: Vec<&TraceEvent> = trace
             .events
@@ -3790,7 +3790,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.step, STEP_EXECUTE);
         assert_eq!(err.code, CODE_SCRIPT_RESPONSE_LIMIT);
-        assert_eq!(executor.seen.lock().unwrap().len(), 1);
+        assert_eq!(executor.seen.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
     }
 
     /// P0-C S4 (2026-08-16)：单步 host 截止（结构化 `timed_out` 信号）→
@@ -3859,12 +3859,12 @@ mod tests {
         assert_eq!(upstream["action"], "workspace.read_file");
         // P0-C S4 审查收口（2026-08-16 二次）：脚本不再传收缩剩余——
         // 每步由 host 配置预算独立约束（None = host 默认超时）。
-        let timeouts = executor.timeouts.lock().unwrap();
+        let timeouts = executor.timeouts.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(timeouts.len(), 1);
         assert!(timeouts[0].is_none());
         drop(timeouts);
         // 第二步未执行。
-        assert_eq!(executor.seen.lock().unwrap().len(), 1);
+        assert_eq!(executor.seen.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
         assert_eq!(consumed, 1);
     }
 
@@ -3934,7 +3934,7 @@ mod tests {
         assert_eq!(err.upstream.as_ref().unwrap()["script_step"], 2);
         // 第 1、2 步都越过了执行边界 → 2 单位；第 3 步未执行。
         assert_eq!(consumed, 2);
-        assert_eq!(executor.seen.lock().unwrap().len(), 2);
+        assert_eq!(executor.seen.lock().unwrap_or_else(|e| e.into_inner()).len(), 2);
     }
 
     /// R2 全面审查处理补测：PTC 脚本步骤的 `target` 与参数路径同样走
@@ -3971,7 +3971,7 @@ mod tests {
         )
         .await
         .expect("script with entity-level targets");
-        let calls = seen.lock().unwrap();
+        let calls = seen.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].1, json!({"target_file": "src/main.rs"}));
         assert_eq!(calls[1].1, json!({"target_file": "other.rs"}));
@@ -4118,12 +4118,12 @@ mod tests {
             call_id: &str,
             timeout: Option<Duration>,
         ) -> Result<ToolResult, ExecuteError> {
-            self.seen.lock().unwrap().push((
+            self.seen.lock().unwrap_or_else(|e| e.into_inner()).push((
                 target_tool.to_string(),
                 arguments.clone(),
                 call_id.to_string(),
             ));
-            self.timeouts.lock().unwrap().push(timeout);
+            self.timeouts.lock().unwrap_or_else(|e| e.into_inner()).push(timeout);
             self.results
                 .lock()
                 .unwrap()
@@ -4266,7 +4266,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(response["steps"].as_array().unwrap().len(), 2);
-        let calls = executor.seen.lock().unwrap();
+        let calls = executor.seen.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[1].1, json!({"path": "alpha"}));
         assert_eq!(calls[1].2, "call-s.s2");
@@ -4411,7 +4411,7 @@ mod tests {
         .await
         .expect("target-only order must pass with injected path");
         assert_eq!(response, json!({"output": "hello"}));
-        let calls = seen.lock().unwrap();
+        let calls = seen.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(calls[0].1, json!({"target_file": "src/main.rs"}));
     }
 
@@ -4443,7 +4443,7 @@ mod tests {
         )
         .await
         .expect("path-only order must pass with auto-generated target");
-        let calls = seen.lock().unwrap();
+        let calls = seen.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(calls[0].1, json!({"target_file": "a.txt"}));
         assert!(
             trace
@@ -4583,7 +4583,7 @@ mod tests {
         )
         .await
         .expect("workspace-wide grep without target must pass");
-        assert_eq!(seen.lock().unwrap()[0].1, json!({"pattern": "foo"}));
+        assert_eq!(seen.lock().unwrap_or_else(|e| e.into_inner())[0].1, json!({"pattern": "foo"}));
         // 带 target 无 path → 注入 path。
         issue_action(
             &registry,
@@ -4600,7 +4600,7 @@ mod tests {
         .await
         .expect("grep with target must inject path");
         assert_eq!(
-            seen.lock().unwrap()[1].1,
+            seen.lock().unwrap_or_else(|e| e.into_inner())[1].1,
             json!({"pattern": "foo", "path": "a.txt"})
         );
     }

@@ -108,7 +108,7 @@ impl AgentLoopController {
         // = 主车道/grill，false = 外部检索车道）；无预算面（测试/legacy
         // 形态）记 null。
         let lane = serp_budget.map(|b| {
-            if b.lock().unwrap().reserves_session_floor() {
+            if b.lock().unwrap_or_else(|e| e.into_inner()).reserves_session_floor() {
                 "main"
             } else {
                 "external"
@@ -116,7 +116,7 @@ impl AgentLoopController {
         });
         // 结算后读数（含本次调用消耗）。
         let lane_budget = serp_budget.map(|b| {
-            let (used, cap) = b.lock().unwrap().usage();
+            let (used, cap) = b.lock().unwrap_or_else(|e| e.into_inner()).usage();
             serde_json::json!({ "used": used, "cap": cap })
         });
         let session = host.serp_session_facts().await.map(|facts| {

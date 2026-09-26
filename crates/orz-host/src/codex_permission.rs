@@ -70,7 +70,7 @@ impl CodexPermissionBroker {
     /// Register a pending approval request and return its JSON-RPC id.
     fn register(&self, respond: oneshot::Sender<Value>) -> Value {
         let id = json!(self.next_id.fetch_add(1, Ordering::Relaxed));
-        self.pending.lock().unwrap().insert(id.clone(), respond);
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), respond);
         id
     }
 
@@ -78,14 +78,14 @@ impl CodexPermissionBroker {
     /// ids (a response arriving after the transport timed out) are a silent
     /// no-op.
     pub fn resolve(&self, id: &Value, result: Value) {
-        if let Some(respond) = self.pending.lock().unwrap().remove(id) {
+        if let Some(respond) = self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(id) {
             let _ = respond.send(result);
         }
     }
 
     /// Drop a pending entry without delivering (transport timeout path).
     fn forget(&self, id: &Value) {
-        self.pending.lock().unwrap().remove(id);
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
     }
 }
 
@@ -305,7 +305,7 @@ mod tests {
             "returned before the injected timeout window"
         );
         // The pending entry was cleaned — a late response is a silent no-op.
-        assert!(broker.pending.lock().unwrap().is_empty());
+        assert!(broker.pending.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
     }
 
     #[tokio::test]

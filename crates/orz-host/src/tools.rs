@@ -50,11 +50,41 @@ pub fn web_search_config(reader: &dyn CredentialReader) -> WebSearchConfig {
 /// gets its **own** deadline (`ORZ_RETRIEVAL_SEMAPHORE_WAIT_MS`, default
 /// 10_000 ms; `0` disables the bound). A bounded acquire failure is a
 /// self-describing `retrieval_lane_busy` cause, not a bare timeout.
+///
+/// REV-083-18e (2026-09-27): a malformed value is no longer swallowed into
+/// the default silently — the parse is strict and the fallback announces
+/// itself (`tracing::warn!` with the raw string), matching the house rule
+/// that a typo must never silently change a gate/tuning bound. (The CLI's
+/// exit-2 contract stays with the guards resolved in `main.rs`.)
+const DEFAULT_RETRIEVAL_LANE_WAIT_MS: u64 = 10_000;
+
+/// Pure parse rule (tested without env mutation): trimmed integer, `0` means
+/// "no bound". Garbage is an explicit error carrying the raw text.
+fn parse_retrieval_lane_wait_ms(raw: &str) -> Result<u64, String> {
+    raw.trim()
+        .parse::<u64>()
+        .map_err(|_| raw.trim().to_string())
+}
+
 pub fn retrieval_lane_wait_budget() -> Option<std::time::Duration> {
-    let ms: u64 = std::env::var("ORZ_RETRIEVAL_SEMAPHORE_WAIT_MS")
+    let ms = match std::env::var("ORZ_RETRIEVAL_SEMAPHORE_WAIT_MS")
         .ok()
-        .and_then(|value| value.trim().parse().ok())
-        .unwrap_or(10_000);
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    {
+        None => DEFAULT_RETRIEVAL_LANE_WAIT_MS,
+        Some(raw) => match parse_retrieval_lane_wait_ms(&raw) {
+            Ok(ms) => ms,
+            Err(raw) => {
+                tracing::warn!(
+                    raw,
+                    "ORZ_RETRIEVAL_SEMAPHORE_WAIT_MS is not a number of milliseconds — \
+                     falling back to {DEFAULT_RETRIEVAL_LANE_WAIT_MS} ms"
+                );
+                DEFAULT_RETRIEVAL_LANE_WAIT_MS
+            }
+        },
+    };
     (ms > 0).then(|| std::time::Duration::from_millis(ms))
 }
 
