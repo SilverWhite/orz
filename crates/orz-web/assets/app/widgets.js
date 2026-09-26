@@ -203,11 +203,31 @@ export function renderExplorer() {
     root.appendChild(subHeader(`已信任工作区（${trusted.length}）`, 'trustedCollapsed'));
     if (!state.explorer.trustedCollapsed) {
       if (!trusted.length) root.appendChild(el('div', 'explorer-sub muted', '（无记录）'));
+      /* 0bv ②（B 形态）：已信任工作区行**可点击**＝服务内机械切换（信任
+       * 清单全局共享，来自用户全局 TrustStore 的只读投影）。当前工作区标
+       * 「（当前）」且消隐点击；运行中禁切由 main.js 切换处理器主判
+       * （state.running）——运行中点击会得到一句如实回显、不发请求。 */
+      const norm = (p) =>
+        (p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
       for (const t of trusted) {
-        const row = el('div', 'explorer-sub muted', t.path);
-        row.title = t.decided_at
-          ? `信任于 ${new Date(t.decided_at * 1000).toLocaleString()}（只读展示；本工作台绑定当前工作区）`
-          : '已信任（只读展示；本工作台绑定当前工作区）';
+        const isCurrent = norm(t.path) === norm(state.workspaceCwd);
+        const row = el(
+          'div',
+          'marker-entry explorer-row',
+          isCurrent ? `${t.path}（当前）` : t.path,
+        );
+        if (isCurrent) row.classList.add('explorer-selected');
+        const when = t.decided_at
+          ? `信任于 ${new Date(t.decided_at * 1000).toLocaleString()}`
+          : '已信任';
+        row.title = isCurrent
+          ? `${when} —— 当前工作区`
+          : `${when} —— 点击切换到该工作区（机械切换；运行中禁切）`;
+        if (!isCurrent) {
+          row.addEventListener('click', () =>
+            ui.openUri('workspace://switch/' + encodeURIComponent(t.path)),
+          );
+        }
         root.appendChild(row);
       }
     }

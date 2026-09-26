@@ -656,6 +656,11 @@ pub struct WebSearchOutput {
     /// to produce the exact `Title: / Content: / ---` schema.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pre_formatted: Option<String>,
+    /// 0bv（2026-09-26）：浏览器 SERP 车道的用量事实（`None` = 本次未触及
+    /// 该车道/资源缺席）。机械读数面——loop 据此把车道导航数结进同一 SERP
+    /// 预算账本；模型面文本只由 `content` 承担。
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub browser_serp: Option<crate::types::resources::BrowserSerpFacts>,
 }
 #[derive(Debug, Clone)]
 pub struct WebFetchSourceArtifact {

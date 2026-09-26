@@ -46,6 +46,18 @@ pub(crate) fn serp_navigations_from_output(output: &str) -> u32 {
     navigated.max(1)
 }
 
+/// 0bv（2026-09-26）：`web_search` 浏览器 SERP 车道的**结算读数**——从宿主
+/// `ToolResult.structured` 的 `browser_serp.navigations` 读真实引擎导航数
+/// （宿主 `structured_from_output` 填充；与 `browser_control search` 的信封
+/// 读数是同一口径）。`None` = 本次未触及该车道（资源缺席/浏览器未就绪/零
+/// 导航），不记账、不虚构。
+pub(crate) fn browser_serp_navigations_from_structured(structured: &Option<Value>) -> Option<u32> {
+    let serp = structured.as_ref()?.get("browser_serp")?;
+    serp.get("navigations")
+        .and_then(Value::as_u64)
+        .map(|n| n as u32)
+}
+
 impl AgentLoopController {
     /// 0v-A 引擎级取证面（2026-09-12，0v 第二批 S1；设计 §8.6/§8.7）：
     /// 把一次 `browser_control search` 的**引擎级事实**落盘到

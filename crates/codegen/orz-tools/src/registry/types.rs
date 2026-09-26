@@ -2806,7 +2806,8 @@ mod tests {
             ToolOutput::SearchReplace(SearchReplaceOutput::MultipleMatchesFound(msg)) => {
                 assert_eq!(
                     msg,
-                    "The string to replace was found multiple times in the file. \
+                    "The string to replace was found multiple times in the file \
+                     (candidate lines: 1). \
                      Use replace_all to replace all occurrences, \
                      or include more context to only edit one occurrence.",
                 );

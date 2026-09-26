@@ -8,8 +8,8 @@ import { fetchRuns, fetchRunEvents } from './api.js';
 
 let tailWs = null;
 
-export async function refreshRuns() {
-  const data = await fetchRuns();
+export async function refreshRuns(root) {
+  const data = await fetchRuns(root);
   return data.runs || [];
 }
 
@@ -21,11 +21,11 @@ export async function refreshRuns() {
  */
 export const REPLAY_MAX_BYTES = 64 * 1024 * 1024;
 
-export async function replayRun(runId, onEvent, onProgress) {
+export async function replayRun(runId, onEvent, onProgress, root) {
   let from = 0;
   let total = 0;
   for (;;) {
-    const page = await fetchRunEvents(runId, from);
+    const page = await fetchRunEvents(runId, from, root);
     for (const ev of page.lines || []) {
       total++;
       onEvent(ev);
@@ -42,12 +42,12 @@ export async function replayRun(runId, onEvent, onProgress) {
  * 订阅活动 run 的 journal 尾。onEvent 收到每个完整事件行（对象）；
  * 返回关闭函数。
  */
-export function tailRun(runId, fromOffset, onEvent, onClosed) {
+export function tailRun(runId, fromOffset, onEvent, onClosed, root) {
   closeTail();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const token = new URLSearchParams(location.hash.replace(/^#/, '')).get('token') || '';
   tailWs = new WebSocket(
-    `${proto}//${location.host}/ws/journal/${encodeURIComponent(runId)}?token=${encodeURIComponent(token)}&from=${fromOffset || 0}`,
+    `${proto}//${location.host}/ws/journal/${encodeURIComponent(runId)}?token=${encodeURIComponent(token)}&from=${fromOffset || 0}${root ? `&root=${encodeURIComponent(root)}` : ''}`,
   );
   tailWs.onmessage = (ev) => {
     try {

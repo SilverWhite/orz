@@ -356,6 +356,14 @@ impl SerpSearchBudget {
         self.used = self.used.saturating_add(extra).min(self.cap);
     }
 
+    /// 0bv（2026-09-26）：**无预留的并账式加计**——`web_search` 浏览器 SERP
+    /// 车道的结算路径。该车道不做派发前预留/拒绝（链首是机会性车道：预算
+    /// 用尽只影响其后可用空间，搜索本身仍走本地 HTTP → provider；会话上限/
+    /// 冷却仍是物理兜底），只把宿主回报的**真实引擎导航数**结进同一账本。
+    pub fn merge_used(&mut self, navigations: u32) {
+        self.used = self.used.saturating_add(navigations).min(self.cap);
+    }
+
     /// 调用被权限／模式门拒绝、从未执行时释放预留（候选门 rollback 同义）。
     pub fn rollback(&mut self) {
         self.used = self.used.saturating_sub(1);
@@ -394,6 +402,21 @@ mod serp_budget_tests {
         // 越界结算钳制在 cap，不产生 used > cap 的伪状态。
         budget.settle(9);
         assert_eq!(budget.usage(), (4, 4));
+    }
+
+    #[test]
+    fn merge_used_adds_without_reservation_and_clamps() {
+        // 0bv（2026-09-26）：web_search 浏览器 SERP 车道走**无预留并账**——
+        // 只加真实导航数（0 = 未触及不记账；越界钳制在 cap）。
+        let mut budget = SerpSearchBudget::new(3);
+        budget.merge_used(0);
+        assert_eq!(budget.usage(), (0, 3));
+        budget.merge_used(2);
+        assert_eq!(budget.usage(), (2, 3));
+        budget.merge_used(5);
+        assert_eq!(budget.usage(), (3, 3));
+        // 与 reserve/settle 同账本：已满时 reserve 拒绝（物理兜底仍在）。
+        assert_eq!(budget.reserve(), Err(()));
     }
 
     #[test]
@@ -1310,7 +1333,8 @@ async fn compress_blocks_now(
         } else {
             "当前没有「已闭合且仍为原文」的可压分块"
         };
-        let notice = crate::context_scale::summary_not_landed_notice(reason, &compressible_rendered);
+        let notice =
+            crate::context_scale::summary_not_landed_notice(reason, &compressible_rendered);
         let watermark = blackboard_watermark_label(svc);
         let payload = audit.record(
             "context_scale:summary_not_landed",

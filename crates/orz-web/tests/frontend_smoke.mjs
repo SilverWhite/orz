@@ -311,6 +311,7 @@ assert.equal(typeof api.postArchive, 'function', '归档动作 API 客户端');
 assert.equal(typeof api.unarchiveSession, 'function', '回档动作 API 客户端（批六）');
 assert.equal(typeof api.deleteSession, 'function', '删除动作 API 客户端（批六）');
 assert.equal(typeof api.grantTrust, 'function', '信任授信 API 客户端（批七）');
+assert.equal(typeof api.switchWorkspace, 'function', '工作区切换 API 客户端（0bv ②）');
 
 state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
 state.marker = [];

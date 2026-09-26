@@ -188,11 +188,105 @@ impl WebSearchClient {
 
     /// Returns `(content, citations)` where content is the assistant's text
     /// and citations are unique URLs found in the response annotations.
+    ///
+    /// 0bv（2026-09-26）：等价于不带浏览器 SERP 链首的
+    /// [`Self::search_with_serp`]（资源缺席形态——链＝本地 HTTP → provider）。
     pub async fn search(
         &self,
         query: &str,
         allowed_domains: Option<Vec<String>>,
     ) -> Result<(String, Vec<String>), xai_tool_runtime::ToolError> {
+        let (content, citations, _facts) = self.search_with_serp(query, allowed_domains, None).await?;
+        Ok((content, citations))
+    }
+
+    /// 0bv（2026-09-26）：带**浏览器 SERP 链首**的检索链——浏览器 SERP
+    /// （若可用）→ 本地 HTTP 分段 → provider 合成。
+    ///
+    /// 让渡注记纪律与 0bs ⑧ 同：任一段失败都不静默——注记随内容前缀（后续
+    /// 段交付时）或失败 `details`（全链失败时）如实回传；浏览器车道的**用量
+    /// 事实**经返回值第三项交出（loop 层单账本结算；`None` = 本次未触及该
+    /// 车道）。
+    pub async fn search_with_serp(
+        &self,
+        query: &str,
+        allowed_domains: Option<Vec<String>>,
+        browser_serp: Option<&dyn crate::types::resources::BrowserSerpBackend>,
+    ) -> Result<
+        (
+            String,
+            Vec<String>,
+            Option<crate::types::resources::BrowserSerpFacts>,
+        ),
+        xai_tool_runtime::ToolError,
+    > {
+        // —— 链首：浏览器 SERP（若可用；失败/零命中都让渡、不静默）——
+        let mut serp_facts: Option<crate::types::resources::BrowserSerpFacts> = None;
+        let mut browser_note: Option<String> = None;
+        if let Some(backend) = browser_serp {
+            match backend.search(query).await {
+                Ok(outcome) => {
+                    let mut outcome = outcome;
+                    let delivered = crate::types::resources::BrowserSerpFacts {
+                        navigations: outcome.navigations,
+                        delivered_by_browser: true,
+                        engine: Some(outcome.engine.clone()),
+                        session_used: outcome.session_used,
+                        session_cap: outcome.session_cap,
+                    };
+                    let fell_back = crate::types::resources::BrowserSerpFacts {
+                        navigations: outcome.navigations,
+                        delivered_by_browser: false,
+                        engine: Some(outcome.engine.clone()),
+                        session_used: outcome.session_used,
+                        session_cap: outcome.session_cap,
+                    };
+                    if let Some(domains) = allowed_domains.as_deref().filter(|d| !d.is_empty()) {
+                        outcome
+                            .hits
+                            .retain(|hit| domains.iter().any(|d| host_matches(&hit.url, d)));
+                    }
+                    if outcome.hits.is_empty() {
+                        // 命中被域名过滤耗尽与「零命中」同径让渡（不虚构）。
+                        browser_note = Some(format!(
+                            "[browser_serp] fell back to local_http: cause=empty engine={} \
+                             navigations={} session={}/{} waited={}ms",
+                            outcome.engine,
+                            outcome.navigations,
+                            outcome.session_used,
+                            outcome.session_cap,
+                            outcome.waited_ms
+                        ));
+                        serp_facts = Some(fell_back);
+                    } else {
+                        return Ok((
+                            render_browser_serp_content(&outcome),
+                            browser_serp_citations(&outcome),
+                            Some(delivered),
+                        ));
+                    }
+                }
+                Err(failure) => {
+                    serp_facts = Some(crate::types::resources::BrowserSerpFacts {
+                        navigations: failure.navigations,
+                        delivered_by_browser: false,
+                        engine: failure.engine.clone(),
+                        session_used: failure.session_used,
+                        session_cap: failure.session_cap,
+                    });
+                    browser_note = Some(format!(
+                        "[browser_serp] fell back to local_http: cause={} engine={} \
+                         navigations={} session={}/{} detail={}",
+                        failure.cause,
+                        failure.engine.as_deref().unwrap_or("-"),
+                        failure.navigations,
+                        failure.session_used,
+                        failure.session_cap,
+                        failure.detail
+                    ));
+                }
+            }
+        }
         // 0bs ⑧（2026-09-26 裁决）：本地分段车道由"**整条短路**"改为
         // **链中的一段**——`ORZ_WEB_SEARCH_LOCAL` 语义＝"允许本地 HTTP 车道
         // 进入链路"，不再独占。成功即交付（原语义不变）；失败时**让渡**给
@@ -210,10 +304,12 @@ impl WebSearchClient {
                             .hits
                             .retain(|hit| domains.iter().any(|d| host_matches(&hit.url, d)));
                     }
-                    return Ok((
-                        local_segmented::render_content(&outcome),
-                        local_segmented::citations(&outcome),
-                    ));
+                    // 链序注记：浏览器段让渡（若有）随本段内容前缀如实回传。
+                    let mut content = local_segmented::render_content(&outcome);
+                    if let Some(note) = &browser_note {
+                        content = format!("{note}\n{content}");
+                    }
+                    return Ok((content, local_segmented::citations(&outcome), serp_facts));
                 }
                 Err(local_error) => {
                     local_note = Some(format!(
@@ -310,13 +406,29 @@ impl WebSearchClient {
         Ok((content, citations))
         }
         .await;
-        match (provider, local_note) {
-            (Ok((content, citations)), Some(note)) => Ok((format!("{note}\n{content}"), citations)),
-            (Ok(result), None) => Ok(result),
-            (Err(error), Some(note)) => Err(error.with_details(serde_json::json!({
-                "local_segmented_fallback": note,
-            }))),
-            (Err(error), None) => Err(error),
+        // 注记链（链序：浏览器 SERP → 本地 HTTP）：任一存在则随交付/失败如实
+        // 回传（0bs ⑧ 让渡纪律 + 0bv 链首；不静默、不合成）。
+        let notes: Vec<String> = browser_note.into_iter().chain(local_note).collect();
+        match (provider, notes.is_empty()) {
+            (Ok((content, citations)), false) => Ok((
+                format!("{}\n{content}", notes.join("\n")),
+                citations,
+                serp_facts,
+            )),
+            (Ok((content, citations)), true) => Ok((content, citations, serp_facts)),
+            (Err(error), false) => {
+                let mut details = serde_json::Map::new();
+                for note in &notes {
+                    let key = if note.starts_with("[browser_serp]") {
+                        "browser_serp_fallback"
+                    } else {
+                        "local_segmented_fallback"
+                    };
+                    details.insert(key.to_string(), serde_json::Value::String(note.clone()));
+                }
+                Err(error.with_details(serde_json::Value::Object(details)))
+            }
+            (Err(error), true) => Err(error),
         }
     }
     /// Same as [`Self::search`] but also extracts per-citation titles when
@@ -476,6 +588,38 @@ fn host_matches(url: &str, domain: &str) -> bool {
         return false;
     }
     host == domain || host.ends_with(&format!(".{domain}"))
+}
+
+/// 0bv（2026-09-26）：浏览器 SERP 车道的模型面渲染（与本地分段车道同纪律：
+/// 逐条 URL、不合成、不补写；头部携带引擎与用量读数，模型可直接引用）。
+fn render_browser_serp_content(outcome: &crate::types::resources::BrowserSerpOutcome) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "[browser_serp] engine={} hits={} navigations={} session={}/{}\n",
+        outcome.engine,
+        outcome.hits.len(),
+        outcome.navigations,
+        outcome.session_used,
+        outcome.session_cap
+    ));
+    for (index, hit) in outcome.hits.iter().enumerate() {
+        out.push_str(&format!("\n{}. {} — {}\n", index + 1, hit.title, hit.url));
+        if !hit.snippet.is_empty() {
+            out.push_str(&format!("   {}\n", hit.snippet));
+        }
+    }
+    out
+}
+
+/// 浏览器车道的引用池（URL，按命中序，去重）。
+fn browser_serp_citations(outcome: &crate::types::resources::BrowserSerpOutcome) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for hit in &outcome.hits {
+        if !seen.contains(&hit.url) {
+            seen.push(hit.url.clone());
+        }
+    }
+    seen
 }
 
 /// The `output` array of a Responses API payload (as raw JSON).

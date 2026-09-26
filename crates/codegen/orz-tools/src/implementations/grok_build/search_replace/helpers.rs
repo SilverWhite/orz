@@ -71,6 +71,77 @@ pub(crate) fn compute_line_range(text: &str, start_pos: usize, inserted_text: &s
     }
 }
 
+/// f13（0bv，2026-09-26）：歧义失败回执的候选行号渲染——位置为 `text`
+/// 中的字节偏移（LF 空间），输出 1 基行号列表（**去重**：同一行上的多处
+/// 命中只报一次行号；至多 `CAP` 个行号，超出部分如实计数为 `+N more`，
+/// 不虚构、不省略不报）。
+pub(crate) fn format_candidate_lines(text: &str, positions: &[usize]) -> String {
+    const CAP: usize = 10;
+    let mut lines: Vec<usize> = Vec::new();
+    for &pos in positions {
+        let line = text[..pos.min(text.len())].matches('\n').count() + 1;
+        if !lines.contains(&line) {
+            lines.push(line);
+        }
+    }
+    let mut out: Vec<String> = lines.iter().take(CAP).map(usize::to_string).collect();
+    if lines.len() > CAP {
+        out.push(format!("+{} more", lines.len() - CAP));
+    }
+    out.join(", ")
+}
+
+/// f14（0bv，2026-09-26）：替换后版式剧烈变化提示——两条判据与摩擦实证
+/// 对偶：(a) 命中区域由多行折为单行（行内换行被吃掉；`old_lines >= 2`
+/// 且 `new_lines == 1`）；(b) 单行替换后该行字符数至少翻倍且绝对值越过
+/// `LENGTH_BLOWUP_MIN`。只报第一条命中（不喧哗；提示非判决，不改写行为）。
+pub(crate) fn format_shift_notice(
+    match_text: &str,
+    replacements: &[(usize, usize, &str)],
+    new_text: &str,
+) -> Option<String> {
+    const LENGTH_BLOWUP_MIN: usize = 200;
+    for &(start, len, new_str) in replacements {
+        let end = (start + len).min(match_text.len());
+        let old_span = &match_text[start.min(end)..end];
+        let old_lines = old_span.matches('\n').count() + 1;
+        let new_lines = new_str.matches('\n').count() + 1;
+        let old_line_len = line_char_len(match_text, start);
+        let new_line_len = line_char_len(new_text, start);
+        if old_lines >= 2 && new_lines == 1 {
+            return Some(format!(
+                "Formatting notice: this edit folded a multi-line match into a single line \
+                 ({old_lines} lines -> 1 line; the affected line is now {new_line_len} chars, \
+                 was {old_line_len}). Re-read the edited region to verify the formatting \
+                 before continuing (especially when the anchor was a whole line)."
+            ));
+        }
+        if old_lines == 1
+            && new_lines == 1
+            && new_line_len >= LENGTH_BLOWUP_MIN
+            && new_line_len >= old_line_len.saturating_mul(2)
+        {
+            return Some(format!(
+                "Formatting notice: this edit changed the affected line length sharply \
+                 ({old_line_len} -> {new_line_len} chars; at least doubled). Re-read the \
+                 edited region to verify the formatting before continuing."
+            ));
+        }
+    }
+    None
+}
+
+/// 所在行的字符数（`pos` 落在的行；行界按 `\n` 划分，与全工具口径一致）。
+fn line_char_len(text: &str, pos: usize) -> usize {
+    let pos = pos.min(text.len());
+    let line_start = text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_end = text[pos..]
+        .find('\n')
+        .map(|i| pos + i)
+        .unwrap_or(text.len());
+    text[line_start..line_end].chars().count()
+}
+
 /// Replace text at specific positions and return new text with new positions.
 pub(crate) fn replace_using_positions(
     text: &str,

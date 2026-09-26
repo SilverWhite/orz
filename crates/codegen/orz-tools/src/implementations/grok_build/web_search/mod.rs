@@ -82,13 +82,23 @@ impl xai_tool_runtime::Tool for WebSearchTool {
         let resources = shared_resources(&ctx)?;
 
         let client;
+        let browser_serp;
         {
             let res = resources.lock().await;
             client = res.require::<WebSearchClient>()?.clone();
+            // 0bv（2026-09-26）：浏览器 SERP 链首资源（宿主装配期注入；资源
+            // 缺席 = 链首不可用——链退化为「本地 HTTP → provider」现状）。
+            browser_serp = res
+                .get::<std::sync::Arc<dyn crate::types::resources::BrowserSerpBackend>>()
+                .cloned();
         }
 
-        let (content, citations) = client
-            .search(&input.query, input.allowed_domains.clone())
+        let (content, citations, browser_serp_facts) = client
+            .search_with_serp(
+                &input.query,
+                input.allowed_domains.clone(),
+                browser_serp.as_deref(),
+            )
             .await
             .map_err(|e| {
                 xai_tool_runtime::ToolError::execution(
@@ -103,6 +113,7 @@ impl xai_tool_runtime::Tool for WebSearchTool {
             citations,
             allowed_domains: input.allowed_domains.clone(),
             pre_formatted: None,
+            browser_serp: browser_serp_facts,
         })
     }
 }

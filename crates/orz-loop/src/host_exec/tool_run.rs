@@ -2,7 +2,10 @@
 //! `run_host_tool_with_timeout`（超时主循环；含家族权限/预算/快照/run_tests 行为回归测试）。
 //! 0ai (2026-09-16) 拆分自 `host_exec.rs`（机械搬移，行为不变）。
 
-use super::{ToolFailureOutcome, is_serp_search_call, serp_navigations_from_output};
+use super::{
+    ToolFailureOutcome, browser_serp_navigations_from_structured, is_serp_search_call,
+    serp_navigations_from_output,
+};
 use crate::agent_loop::{SERP_SESSION_RETRIEVAL_FLOOR, SerpSearchBudget};
 use crate::blackboard::{ActionOrder, BLACKBOARD_WRITE_TOOL_NAME, EditRecord, ToolActionRecord};
 use crate::console::CODE_CONTENT_ANCHOR_MISMATCH;
@@ -4297,6 +4300,22 @@ impl AgentLoopController {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .settle(navigations);
+        }
+        // 0bv（2026-09-26）：`web_search` 浏览器 SERP 车道的**单账本并账**——
+        // 宿主把车道真实导航数随 `ToolResult.structured` 回传
+        // （`browser_serp.navigations`）；此处结进同一 `SerpSearchBudget`
+        // （`merge_used`：该车道不做派发前预留/拒绝——链首是机会性车道，
+        // 预算用尽只影响其后可用空间，搜索本身仍走本地 HTTP → provider；
+        // 会话上限/冷却仍是物理兜底）。
+        if tc.name == "web_search"
+            && !serp_reserved
+            && let Some(budget) = serp_budget
+            && let Some(navigations) = browser_serp_navigations_from_structured(&result.structured)
+        {
+            budget
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .merge_used(navigations);
         }
 
         // 0v-A（2026-09-12）：引擎级取证面——每次 search 一份引擎级事实

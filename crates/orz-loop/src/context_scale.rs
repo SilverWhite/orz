@@ -290,8 +290,17 @@ fn reading(tokens: u64) -> String {
 fn summary_block_guide() -> String {
     format!(
         "在回复中输出一个语义摘要块，机械层据此把**工作现场之外**的旧分块替换成该摘要\
-         （逐字原文仍全量留档、可按块回放；**至少命中 2 个小节**才被机械层识别）：\n\
-         {MODEL_SUMMARY_PREFIX}]\n\
+         （逐字原文仍全量留档、可按块回放；**至少命中 2 个小节**才被机械层识别）：\n{}",
+        summary_block_skeleton()
+    )
+}
+
+/// f15（0bv，2026-09-26）：语义摘要块**可照抄骨架**——软提醒／硬提醒／窗口块
+/// 与 `context_compress` 压缩回执共用（单一来源）。c 轮实证：回执只教「产出
+/// 摘要块」而没给落点与骨架，前两次投递落空；回执现在直接内嵌本骨架。
+fn summary_block_skeleton() -> String {
+    format!(
+        "{MODEL_SUMMARY_PREFIX}]\n\
          {label} 1-4（可选：不给则由机械层按最旧闭合块优先）\n\
          目标: …\n已完成: …\n关键决策: …\n未决问题: …\n下一步: …\n关键文件: …\n\
          {MODEL_SUMMARY_END}",
@@ -596,17 +605,22 @@ pub fn context_compress_response(
 ) -> String {
     let table = crate::model_face::render_slider_readout_line(readout);
     let total = readout.total_blocks;
+    // f15（0bv，2026-09-26）：回执直接给出**落点与可照抄骨架**——摘要块必须
+    // 写在回复文本里（写黑板/工具参数不触发折叠），c 轮前两次投递落空即此因。
     let head = match state {
         CompressRequestState::Requested => format!(
             "压缩窗口已请求：下一个安全边界将开启模型参与压缩窗口（≤3 轮）。\
              窗口轮请产出语义摘要块（机械层据以折叠主滑块外的已闭合分块），\
-             必要时用 {BLACKBOARD_WRITE_TOOL_NAME} 固化关键结论。{}",
-            target_tier_advice()
+             必要时用 {BLACKBOARD_WRITE_TOOL_NAME} 固化关键结论。{}\
+             落点＝**回复文本**（写黑板或工具参数不会触发折叠）；可照抄骨架：\n{}",
+            target_tier_advice(),
+            summary_block_skeleton()
         ),
-        CompressRequestState::InProgress => {
-            "压缩窗口已在程中（in_progress）：本轮即窗口轮，请直接产出语义摘要块或固化黑板；无需重复发起。"
-                .to_string()
-        }
+        CompressRequestState::InProgress => format!(
+            "压缩窗口已在程中（in_progress）：本轮即窗口轮，请直接产出语义摘要块或固化黑板；无需重复发起。\
+             落点＝**回复文本**（写黑板或工具参数不会触发折叠）；可照抄骨架：\n{}",
+            summary_block_skeleton()
+        ),
         CompressRequestState::NothingToCompress => {
             "主滑块之外没有可压缩分块：无需压缩，未开窗。".to_string()
         }

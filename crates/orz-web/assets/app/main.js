@@ -6,7 +6,7 @@
  */
 
 import { state, vm } from './state.js';
-import { setToken, fetchBoot, fetchConversations, fetchArchives, fetchArchive, postArchive, unarchiveSession, deleteSession, grantTrust } from './api.js';
+import { setToken, fetchBoot, fetchConversations, fetchArchives, fetchArchive, postArchive, unarchiveSession, deleteSession, grantTrust, switchWorkspace } from './api.js';
 import * as acp from './acp.js';
 import { refreshRuns, replayRun, tailRun, closeTail } from './journal.js';
 import { applyJournalEvent, applyAcpUpdate } from './projection.js';
@@ -39,6 +39,11 @@ function flash(msg) {
     connBanner.hidden = true;
   }, 4000);
 }
+/* 0bv ②：路径归一（Windows 大小写/分隔符不敏感比较——信任清单是 canonical
+ * 存储键，前端比较须同口径，否则「当前工作区」判定与切换门会抖动）。 */
+const pathNorm = (p) =>
+  (p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+
 ui.flash = flash;
 
 /* ── 会话与发送 ── */
@@ -60,6 +65,9 @@ async function ensureSession() {
   const result = await acp.sessionNew(cwd);
   acpSessionId = result.sessionId;
   state.sessionId = acpSessionId;
+  // 0bv ②：记录本会话的**归属工作区根**——切换工作区后本会话不迁移
+  // （对话只认初始工作区），其尾/回放按该根解析（旧工作区会话＝回看）。
+  state.sessionRoot = cwd || state.workspaceCwd;
   vm.addSystemMessage(`ACP 会话已创建（${acpSessionId}）`, false);
   renderAll();
   return acpSessionId;
@@ -172,9 +180,24 @@ async function refreshExplorerData() {
 async function syncLiveTail() {
   if (!liveMode) return;
   let wanted = null;
+  let tailRoot;
   if (acpSessionId) {
     const s8 = acpSessionId.slice(0, 8);
-    const mine = state.runs.find((r) => {
+    // 0bv ②：会话只认初始工作区——切换后本会话的 run 列表按其归属根取
+    // （跨工作区投影按归属根解析；防切区后尾断/404）。
+    const ownsOld =
+      state.sessionRoot && pathNorm(state.sessionRoot) !== pathNorm(state.workspaceCwd);
+    tailRoot = ownsOld ? state.sessionRoot : undefined;
+    let runs = state.runs;
+    if (tailRoot) {
+      try {
+        runs = await refreshRuns(tailRoot);
+      } catch {
+        runs = state.runs;
+        tailRoot = undefined;
+      }
+    }
+    const mine = runs.find((r) => {
       const m = /^(?:RUN-CLI-|ARC-|RUN-)([0-9a-f]{8})/.exec(r.run_id);
       return m?.[1] === s8;
     });
@@ -186,10 +209,16 @@ async function syncLiveTail() {
   if (!wanted || wanted === currentRunId) return;
   currentRunId = wanted;
   state.liveRunId = wanted;
-  tailRun(wanted, 0, (ev) => {
-    applyJournalEvent(ev);
-    scheduleRender();
-  });
+  tailRun(
+    wanted,
+    0,
+    (ev) => {
+      applyJournalEvent(ev);
+      scheduleRender();
+    },
+    undefined,
+    tailRoot,
+  );
 }
 
 async function startTail() {
@@ -213,8 +242,19 @@ async function openRunReplay(runId) {
   state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
   state.marker = [];
   state.turnCounter = 0;
+  // 0bv ②：本会话（acpSessionId 的 s8）的 run 按归属根回放——切区后旧会话
+  // 的历史仍可读（跨工作区投影按归属根解析）。
+  const lm = /^(?:RUN-CLI-|ARC-|RUN-)([0-9a-f]{8})/.exec(runId);
+  const replayRoot =
+    acpSessionId &&
+    lm &&
+    lm[1] === acpSessionId.slice(0, 8) &&
+    state.sessionRoot &&
+    pathNorm(state.sessionRoot) !== pathNorm(state.workspaceCwd)
+      ? state.sessionRoot
+      : undefined;
   try {
-    await replayRun(runId, (ev) => applyJournalEvent(ev));
+    await replayRun(runId, (ev) => applyJournalEvent(ev), undefined, replayRoot);
   } catch (e) {
     vm.addSystemMessage(`（运行 ${runId} 读取失败：${e.message}）`, true);
   }
@@ -462,6 +502,39 @@ ui.navAction = async (dir) => {
   }
 };
 
+/* 工作区机械切换（0bv ②，B 形态：服务随启动而立；服务内点击「已信任
+ * 工作区」行）。门禁：运行中禁切＝前端 state.running 主判（活跃 run 不吃
+ * 切换）；桥侧信任门 fail-closed（未信任 403 原样回显）。切换不清场：正
+ * 打开的对话留在窗内（其归属根＝开区时的工作区，从此按该根解析＝「旧
+ * 工作区会话（回看）」）；探索器清单随新 cwd 即时重解析。 */
+async function switchWorkspaceTo(path) {
+  if (pathNorm(path) === pathNorm(state.workspaceCwd)) return; // 已在该工作区
+  if (state.running) {
+    flash('运行中禁切：等本轮结束（或 Ctrl+Z 取消）后再切换工作区');
+    return;
+  }
+  try {
+    const b = await switchWorkspace(path);
+    state.workspaceCwd = b.cwd || path;
+    state.trustedWorkspaces = b.trusted_workspaces || state.trustedWorkspaces;
+    if (
+      acpSessionId &&
+      state.sessionRoot &&
+      pathNorm(state.sessionRoot) !== pathNorm(state.workspaceCwd)
+    ) {
+      vm.addSystemMessage(
+        `（旧工作区会话（回看）：本对话归属 ${state.sessionRoot}；工作区已切换——新生话随新工作区，本对话留在原上下文）`,
+        false,
+      );
+    }
+    await refreshExplorerData();
+    flash(`已切换工作区：${state.workspaceCwd}`);
+  } catch (e) {
+    flash(`工作区切换失败：${e.message}`);
+  }
+  renderAll();
+}
+
 // 对象 URI 路由（AddressBar 语义，R-4）。v1 投影面：run://（单运行回放）、
 // conversation://（会话合并视图，走查反馈六）、archive://（归档只读浏览，
 // 0br S3 新增面）、workspace://live；其余 scheme 显式给出「无投影」答复，
@@ -473,6 +546,9 @@ ui.openUri = async (uri) => {
   } else if (uri === 'workspace://live') {
     vm.navGo(uri);
     await returnToLive();
+  } else if (uri.startsWith('workspace://switch/')) {
+    // 0bv ②：工作区机械切换（不是内容导航——不进 nav 栈；运行中禁切回显）。
+    await switchWorkspaceTo(decodeURIComponent(uri.slice('workspace://switch/'.length)));
   } else if (uri.startsWith('conversation://')) {
     vm.navGo(uri);
     await openConversation(uri.slice('conversation://'.length));

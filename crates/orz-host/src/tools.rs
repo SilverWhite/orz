@@ -577,12 +577,23 @@ pub fn exit_code_from_output(output: &orz_tools::types::output::ToolOutput) -> O
 /// its citation URLs (the candidate pool for the mechanical prefilter).
 /// Everything else stays `None`, so no structured data leaves the
 /// model-visible text contract except the designed web_search channel.
+///
+/// 0bv（2026-09-26）：同一 `web_search` 通道增加**浏览器 SERP 车道用量事实**
+/// （`browser_serp`）——loop 层据此把车道真实导航数结进同一 SERP 预算账本
+/// （单账本并账）。`citations` 空但车道有事实时同样回传（读数是独立面）。
 pub fn structured_from_output(
     output: &orz_tools::types::output::ToolOutput,
 ) -> Option<serde_json::Value> {
     match output {
-        orz_tools::types::output::ToolOutput::WebSearch(ws) if !ws.citations.is_empty() => {
-            Some(serde_json::json!({ "citations": ws.citations }))
+        orz_tools::types::output::ToolOutput::WebSearch(ws)
+            if !ws.citations.is_empty() || ws.browser_serp.is_some() =>
+        {
+            let mut payload = serde_json::json!({ "citations": ws.citations });
+            if let Some(facts) = &ws.browser_serp {
+                payload["browser_serp"] = serde_json::to_value(facts)
+                    .unwrap_or(serde_json::Value::Null);
+            }
+            Some(payload)
         }
         _ => None,
     }
@@ -750,10 +761,12 @@ mod tests {
             citations: vec!["https://a.example".into(), "https://b.example".into()],
             allowed_domains: None,
             pre_formatted: None,
+            browser_serp: None,
         });
         let structured = structured_from_output(&ws).expect("citations payload");
         assert_eq!(structured["citations"][0], "https://a.example");
         assert_eq!(structured["citations"][1], "https://b.example");
+        assert!(structured.get("browser_serp").is_none());
 
         let empty = ToolOutput::WebSearch(WebSearchOutput {
             query: "q".into(),
@@ -761,8 +774,30 @@ mod tests {
             citations: vec![],
             allowed_domains: None,
             pre_formatted: None,
+            browser_serp: None,
         });
         assert!(structured_from_output(&empty).is_none());
+
+        // 0bv（2026-09-26）：车道用量事实独立于引用池——citations 空但事实
+        // 在场时照传（loop 单账本结算的读数面）。
+        let facts_only = ToolOutput::WebSearch(WebSearchOutput {
+            query: "q".into(),
+            content: "browser lane".into(),
+            citations: vec![],
+            allowed_domains: None,
+            pre_formatted: None,
+            browser_serp: Some(orz_tools::types::resources::BrowserSerpFacts {
+                navigations: 2,
+                delivered_by_browser: true,
+                engine: Some("bing".into()),
+                session_used: 3,
+                session_cap: 40,
+            }),
+        });
+        let structured = structured_from_output(&facts_only).expect("lane facts");
+        assert_eq!(structured["browser_serp"]["navigations"], 2);
+        assert_eq!(structured["browser_serp"]["delivered_by_browser"], true);
+        assert_eq!(structured["citations"].as_array().map(Vec::len), Some(0));
 
         let other = ToolOutput::Text(TextOutput {
             text: "x".into(),

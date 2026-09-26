@@ -172,29 +172,32 @@ async fn spawn_agent(agent_binary: &PathBuf, cwd: &PathBuf) -> std::io::Result<C
         .spawn()
 }
 
-/// Single-session guard: held while a connection is active.
+/// Per-workspace session guard（0bv ②，2026-09-26，B 形态）：每个工作区各自
+/// 一条活动会话槽——切换工作区不清场、不杀旧对话子进程；新区可在其自身 cwd
+/// 下开新会话。旧形态为全局单槽（跨工作区互斥），与「切换留下旧对话」语义
+/// 冲突，故按区隔离（键＝连接时点 cwd 的 canonical display 串）。
 #[derive(Clone, Default)]
-pub struct SessionSlot(Arc<Mutex<bool>>);
+pub struct SessionSlot(Arc<Mutex<std::collections::HashSet<String>>>);
 
 impl SessionSlot {
-    /// Try to claim the single session; `false` when already held.
-    pub async fn try_acquire(&self) -> bool {
+    /// Try to claim the session for `key`; `false` when already held.
+    pub async fn try_acquire(&self, key: &str) -> bool {
         let mut guard = self.0.lock().await;
-        if *guard {
-            false
-        } else {
-            *guard = true;
-            true
-        }
+        guard.insert(key.to_string())
     }
 
     /// Peek without claiming (pre-upgrade 409 answer).
-    pub async fn is_held(&self) -> bool {
-        *self.0.lock().await
+    pub async fn is_held(&self, key: &str) -> bool {
+        self.0.lock().await.contains(key)
     }
 
-    pub async fn release(&self) {
-        *self.0.lock().await = false;
+    /// 任一工作区持有活动会话（观测读数；不作门禁）。
+    pub async fn any_held(&self) -> bool {
+        !self.0.lock().await.is_empty()
+    }
+
+    pub async fn release(&self, key: &str) {
+        self.0.lock().await.remove(key);
     }
 }
 
@@ -204,19 +207,22 @@ impl SessionSlot {
 /// The explicit [`SlotGuard::releaser`] hook stays idempotent with `Drop`.
 pub struct SlotGuard {
     slot: SessionSlot,
+    key: String,
 }
 
 impl SlotGuard {
-    pub fn new(slot: SessionSlot) -> Self {
-        Self { slot }
+    pub fn new(slot: SessionSlot, key: String) -> Self {
+        Self { slot, key }
     }
 
     /// Early-release hook handed to the pump (idempotent with `Drop`).
     pub fn releaser(&self) -> Arc<dyn Fn() + Send + Sync> {
         let slot = self.slot.clone();
+        let key = self.key.clone();
         Arc::new(move || {
             let slot = slot.clone();
-            tokio::spawn(async move { slot.release().await });
+            let key = key.clone();
+            tokio::spawn(async move { slot.release(&key).await });
         })
     }
 }
@@ -224,7 +230,8 @@ impl SlotGuard {
 impl Drop for SlotGuard {
     fn drop(&mut self) {
         let slot = self.slot.clone();
-        tokio::spawn(async move { slot.release().await });
+        let key = self.key.clone();
+        tokio::spawn(async move { slot.release(&key).await });
     }
 }
 
@@ -233,12 +240,21 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn session_slot_is_single() {
+    async fn session_slot_is_per_workspace() {
         let slot = SessionSlot::default();
-        assert!(slot.try_acquire().await, "first acquire must win");
-        assert!(!slot.try_acquire().await, "second acquire must be refused");
-        slot.release().await;
-        assert!(slot.try_acquire().await, "release must reopen the slot");
+        assert!(slot.try_acquire("w1").await, "first acquire must win");
+        assert!(
+            !slot.try_acquire("w1").await,
+            "second acquire on the same workspace must be refused"
+        );
+        assert!(
+            slot.try_acquire("w2").await,
+            "a different workspace may hold its own session (0bv ② B 形态)"
+        );
+        slot.release("w1").await;
+        assert!(slot.try_acquire("w1").await, "release must reopen the slot");
+        assert!(slot.is_held("w2").await, "other workspace untouched");
+        assert!(slot.any_held().await, "observability: some workspace is held");
     }
 
     #[tokio::test]
@@ -285,13 +301,13 @@ mod tests {
     #[tokio::test]
     async fn slot_guard_releases_on_drop() {
         let slot = SessionSlot::default();
-        let guard = SlotGuard::new(slot.clone());
-        assert!(slot.try_acquire().await, "guard must hold the slot first");
+        let guard = SlotGuard::new(slot.clone(), "w1".to_string());
+        assert!(slot.try_acquire("w1").await, "guard must hold the slot first");
         drop(guard);
         // Drop spawns the async release; yield until it lands.
         for _ in 0..50 {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            if !slot.is_held().await {
+            if !slot.is_held("w1").await {
                 return;
             }
         }

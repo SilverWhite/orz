@@ -1366,14 +1366,15 @@ mod tests {
         use orz_tools::implementations::web_search::local_segmented::{
             self as ls, LocalSegmentedConfig,
         };
-        // 无代理（缺省直连 bing_cn 单引擎）：proxy=off。
+        // 无代理（缺省直连 360search,baidu 双引擎；0bs c 轮 Bing 出集）：
+        // proxy=off。
         let direct = LocalSegmentedConfig::from_env_with(|_| None);
         let detail = AgentLoopController::search_engine_probe_detail("web_search", Some(&direct));
         assert_eq!(
-            detail, "web_search local_segmented=off chain_detail=\"bing_cn; proxy=off\"",
+            detail, "web_search local_segmented=off chain_detail=\"360search,baidu; proxy=off\"",
             "无代理快照读数：{detail}"
         );
-        // 有代理（开关开 + 代理四链）：proxy=on + 脱敏端点（scheme/凭据剥除）。
+        // 有代理（开关开 + 代理三链）：proxy=on + 脱敏端点（scheme/凭据剥除）。
         let proxied = LocalSegmentedConfig::from_env_with(|key| match key {
             ls::ENV_SWITCH => Some("on".to_string()),
             ls::ENV_PROXY => Some("http://user:pass@127.0.0.1:7890".to_string()),
@@ -1382,8 +1383,8 @@ mod tests {
         let detail = AgentLoopController::search_engine_probe_detail("web_search", Some(&proxied));
         assert_eq!(
             detail,
-            "web_search local_segmented=on chain_detail=\"bing_cn,bing_global,duckduckgo,\
-             google; proxy=on 127.0.0.1:7890\"",
+            "web_search local_segmented=on chain_detail=\"360search,baidu,duckduckgo; \
+             proxy=on 127.0.0.1:7890\"",
             "有代理快照读数带 proxy=on 与脱敏端点：{detail}"
         );
     }

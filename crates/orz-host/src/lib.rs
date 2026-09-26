@@ -9,6 +9,7 @@
 
 pub mod acp_server;
 pub mod approval;
+pub mod browser_serp;
 pub mod codex_app;
 pub mod codex_permission;
 pub mod credentials;
@@ -314,6 +315,22 @@ impl OrzHost {
             "web_search client configured: {:?}",
             web_search_config.redacted()
         );
+        // 0bv（2026-09-26）：浏览器 SERP 链首资源——装配期注入（与字段同一
+        // 句柄槽：之后 `swap_browser_session` 换入的真实会话对适配器同样可
+        // 见）。`try_lock` 在构造期无竞争；拿不到则**不注入**——链退化为
+        // 「本地 HTTP → provider」（fail-safe，无静默改写）。适配器不自动
+        // 拉起浏览器（裁决 D-f）：未就绪即让渡。
+        let browser: Arc<std::sync::Mutex<crate::local_browser::SharedBrowser>> =
+            Arc::new(std::sync::Mutex::new(Arc::new(
+                crate::local_browser::UnavailableBrowserSession::new(
+                    "no browser handle injected".to_string(),
+                ),
+            )));
+        if let Ok(mut resources) = toolset.resources.try_lock() {
+            resources.insert(Arc::new(crate::browser_serp::HostBrowserSerp::new(
+                browser.clone(),
+            )) as Arc<dyn orz_tools::types::resources::BrowserSerpBackend>);
+        }
         Ok(Self {
             journal,
             registry: ToolsetRegistry::new(toolset),

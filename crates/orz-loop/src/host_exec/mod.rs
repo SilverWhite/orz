@@ -21,4 +21,6 @@ mod serp;
 mod tool_run;
 
 pub(crate) use failure::ToolFailureOutcome;
-pub(crate) use serp::{is_serp_search_call, serp_navigations_from_output};
+pub(crate) use serp::{
+    browser_serp_navigations_from_structured, is_serp_search_call, serp_navigations_from_output,
+};

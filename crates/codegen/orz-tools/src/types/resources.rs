@@ -1609,6 +1609,93 @@ impl std::fmt::Debug for McpResourceAccess {
         f.debug_struct("McpResourceAccess").finish()
     }
 }
+
+// ============================================================================
+// 0bv（2026-09-26）：浏览器 SERP 链首能力（web_search 车道接缝）
+// ============================================================================
+//
+// 语义：`web_search` 的检索链为「浏览器 SERP（若可用）→ 本地 HTTP 分段 →
+// provider 合成」。浏览器车道是宿主侧能力（真 Chromium TLS 指纹 + CDP 纪律，
+// 与 `browser_control search` 走同一条实现路径与同一浏览器会话状态），经本
+// 资源缝从宿主注入工具侧；资源缺席（未装配）或浏览器未就绪 = 链首不可用，
+// 链退化为「本地 HTTP → provider」（等价接缝前现状，无静默改写）。
+
+/// 浏览器 SERP 车道的能力句柄（session-scoped resource；宿主实现并注册）。
+///
+/// 计数语义：一次调用内含引擎链（Google → Bing → DDG，失败者置队尾——与
+/// `browser_control search` 同一会话状态）、会话冷却与引擎导航上限。返回值
+/// 携带本次真实引擎导航数（[`BrowserSerpOutcome::navigations`]），loop 层据
+/// 此把浏览器车道用量结进同一 SERP 预算账本（单账本并账；不另设第二本账）。
+#[async_trait::async_trait]
+pub trait BrowserSerpBackend: Send + Sync + 'static {
+    /// 执行一次浏览器 SERP 搜索。`query` 由调用方保证非空；长度纪律
+    /// （宿主侧 `SERP_MAX_SEARCH_QUERY_CHARS`）由实现施加。
+    async fn search(&self, query: &str) -> Result<BrowserSerpOutcome, BrowserSerpFailure>;
+}
+
+/// 一次浏览器 SERP 调用的成功面（字段 caps 由宿主侧实现施加，不含未定界
+/// 原文）。
+#[derive(Debug, Clone)]
+pub struct BrowserSerpOutcome {
+    /// 本次成功交付结果的引擎（链在首个成功引擎即停；失败引擎的导航仍计入
+    /// [`Self::navigations`]）。
+    pub engine: String,
+    pub hits: Vec<BrowserSerpHit>,
+    /// 本次调用真实发生的引擎导航数（含失败引擎的导航；预算结算读数）。
+    pub navigations: u32,
+    /// 会话级已用导航次数（如实读数；随注记并入模型面/details）。
+    pub session_used: u32,
+    /// 会话物理上限（与宿主 `SERP_MAX_NAVIGATIONS_PER_SESSION` 同口径）。
+    pub session_cap: u32,
+    /// 本调用墙钟毫秒（引擎链总耗时，失败引擎也计入）。
+    pub waited_ms: u64,
+}
+
+/// 单条命中（已按共享来源质量裁决加权；`tier`/`weight`/`reason` 与
+/// `browser_control search` 信封同口径、同标签集）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct BrowserSerpHit {
+    pub title: String,
+    pub url: String,
+    pub snippet: String,
+    pub tier: String,
+    pub weight: f64,
+    pub reason: String,
+}
+
+/// 浏览器车道失败（链上退让的注记源；`cause` 是机器可读小集，`detail` 供诊断
+/// ——与 `local_segmented` 的 cause/detail 注记纪律同形）。
+#[derive(Debug, Clone)]
+pub struct BrowserSerpFailure {
+    /// 机器可读因由：`browser_unavailable` / `ceiling` / `all_engines_failed`
+    /// / `empty` / `invalid_arguments` / `host_error`（需要时增补，不复用文本
+    /// 判定）。
+    pub cause: String,
+    /// 最后尝试（或拒绝时 will-be 首）的引擎；无则 `None`。
+    pub engine: Option<String>,
+    pub detail: String,
+    /// 失败前真实发生的引擎导航数（预算结算读数；未导航记 0）。
+    pub navigations: u32,
+    pub session_used: u32,
+    pub session_cap: u32,
+}
+
+/// 浏览器 SERP 车道的**用量事实**（随 `web_search` 输出与宿主
+/// `ToolResult.structured` 回传 loop：`navigations` 并入 SERP 预算单账本；
+/// 其余字段是如实读数面）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct BrowserSerpFacts {
+    /// 本次 web_search 中浏览器车道真实发生的引擎导航数（0 = 车道未触及/
+    /// 不可用；结算只加计实数，不虚构）。
+    pub navigations: u32,
+    /// true = 本次结果由浏览器车道交付；false = 尝试后让渡（或未触及）。
+    pub delivered_by_browser: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub engine: Option<String>,
+    pub session_used: u32,
+    pub session_cap: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

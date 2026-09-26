@@ -92,7 +92,7 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
 
     let state = server::ServerState {
         token: Arc::new(token),
-        cwd: Arc::new(config.cwd),
+        cwd: Arc::new(std::sync::RwLock::new(config.cwd)),
         agent_binary: Arc::new(agent_binary),
         session: acp_pump::SessionSlot::default(),
     };

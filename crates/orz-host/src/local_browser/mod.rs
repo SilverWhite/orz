@@ -49,7 +49,9 @@ pub use cdp::{CdpBrowserSession, CdpConfig, CdpError, PageReadOutcome};
 pub use discovery::{
     BrowserBinary, DiscoveryError, DiscoveryOrigin, ORZ_BROWSER_PATH_ENV, find_browser,
 };
-pub use serp::{SERP_MAX_SEARCH_QUERY_CHARS, SerpEngineAttempt, SerpResult};
+pub use serp::{
+    SERP_MAX_NAVIGATIONS_PER_SESSION, SERP_MAX_SEARCH_QUERY_CHARS, SerpEngineAttempt, SerpResult,
+};
 pub use url_gate::{UrlGateError, check_navigation_url, check_navigation_url_sync};
 
 /// `browser_read` read-scope values (P0-B step 4, 2026-08-14).

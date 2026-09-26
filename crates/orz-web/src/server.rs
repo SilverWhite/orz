@@ -50,9 +50,69 @@ const ARCHIVE_CHILD_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 #[derive(Clone)]
 pub struct ServerState {
     pub token: Arc<String>,
-    pub cwd: Arc<PathBuf>,
+    /// 0bv ②（2026-09-26，B 形态）：桥内**可切换**的当前工作区（内部锁）。
+    /// 切换＝机械层动作（模型零感知）；读取方一律经 [`ServerState::cwd`] 取
+    /// 一致快照——切换后 `.gsa` 根重解析（runs／conversations／archives 清单
+    /// 即时刷新）＋新会话在新 cwd spawn；已打开旧会话按其**归属工作区根**
+    /// 解析（`?root=`，见 [`ServerState::resolve_root`]）。
+    pub cwd: Arc<std::sync::RwLock<PathBuf>>,
     pub agent_binary: Arc<PathBuf>,
     pub session: SessionSlot,
+}
+
+impl ServerState {
+    /// 当前工作区快照（短临界区；不在持锁期间 await）。
+    pub fn cwd(&self) -> PathBuf {
+        self.cwd
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// 机械切换当前工作区（调用方须先过门禁：已信任 + canonical 目录）。
+    pub fn set_cwd(&self, next: PathBuf) {
+        *self
+            .cwd
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = next;
+    }
+
+    /// 归属工作区根解析（0bv ② S1 要点④）：`root=None` → 当前 cwd；否则仅
+    /// 接受「当前 cwd ∪ 已信任工作区集」内的 canonical 目录
+    /// （fail-closed——未知根一律 `None`，调用方按 4xx 拒绝）。
+    pub fn resolve_root(&self, root: Option<&str>) -> Option<PathBuf> {
+        let current = self.cwd();
+        let Some(root) = root.filter(|r| !r.trim().is_empty()) else {
+            return Some(current);
+        };
+        let canon = std::fs::canonicalize(root).ok()?;
+        if !canon.is_dir() {
+            return None;
+        }
+        if path_eq(&canon, &current) {
+            return Some(canon);
+        }
+        let trusted = crate::trust::list_trusted_workspaces();
+        if trusted
+            .iter()
+            .any(|t| path_eq(std::path::Path::new(&t.path), &canon))
+        {
+            Some(canon)
+        } else {
+            None
+        }
+    }
+}
+
+/// 路径等值（Windows 大小写不敏感；分隔符归一；两侧尽力 canonical 化）。
+fn path_eq(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let norm = |p: &std::path::Path| {
+        p.to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    };
+    norm(a) == norm(b)
 }
 
 pub struct BindError(pub String);
@@ -171,6 +231,9 @@ fn serve_asset(path: &str) -> Response {
 #[derive(serde::Deserialize)]
 struct TokenQuery {
     token: Option<String>,
+    /// 0bv ②：归属工作区根（可选项；见 `ServerState::resolve_root`）。
+    #[serde(default)]
+    root: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -178,6 +241,8 @@ struct TailQuery {
     token: Option<String>,
     #[serde(default)]
     from: Option<u64>,
+    #[serde(default)]
+    root: Option<String>,
 }
 
 async fn ws_acp(
@@ -195,10 +260,15 @@ async fn ws_acp(
     let upgrade = upgrade
         .max_message_size(ACP_WS_MAX_MESSAGE_BYTES)
         .max_frame_size(ACP_WS_MAX_MESSAGE_BYTES);
-    if state.session.is_held().await {
+    // 0bv ②（2026-09-26，B 形态）：单会话槽改为**每工作区一槽**——切换工作区
+    // 不清场、不杀旧对话子进程；新区可在自身 cwd 下开新会话。新连接按**连接
+    // 时点**的当前 cwd spawn（旧会话占的是它自己的工作区槽）。
+    let cwd = state.cwd();
+    let key = cwd.display().to_string();
+    if state.session.is_held(&key).await {
         return (
             StatusCode::CONFLICT,
-            Json(json!({"error": {"code": 409, "message": "此桥为单会话：已有活动连接（关闭该页后重试）"}})),
+            Json(json!({"error": {"code": 409, "message": "该工作区已有活动连接（关闭该页后重试）"}})),
         )
             .into_response();
     }
@@ -206,23 +276,23 @@ async fn ws_acp(
     upgrade.on_upgrade(move |socket| async move {
         // Acquire inside the upgrade so a failed upgrade never leaks the
         // slot; a race loser gets its socket closed with an explanation.
-        if !slot.try_acquire().await {
+        if !slot.try_acquire(&key).await {
             // Inherent WebSocket::send + drop-close (axum semantics).
             let mut socket = socket;
             let _ = socket
                 .send(axum::extract::ws::Message::text(
-                    r#"{"error":{"code":409,"message":"此桥为单会话：已有活动连接"}}"#,
+                    r#"{"error":{"code":409,"message":"该工作区已有活动连接"}}"#,
                 ))
                 .await;
             return;
         }
         // RAII release: the slot frees on every exit path of `pump`,
         // including an unexpected panic unwinding through this future.
-        let guard = crate::acp_pump::SlotGuard::new(slot.clone());
+        let guard = crate::acp_pump::SlotGuard::new(slot.clone(), key.clone());
         crate::acp_pump::pump(
             socket,
             (*state.agent_binary).clone(),
-            (*state.cwd).clone(),
+            cwd,
             guard.releaser(),
         )
         .await;
@@ -241,7 +311,14 @@ async fn ws_journal(
         return resp;
     }
     let upgrade = upgrade.max_message_size(1 << 20).max_frame_size(1 << 20);
-    let Some(path) = crate::journal_tail::resolve(&state.cwd, &run_id) else {
+    // 0bv ②：归属根解析（旧会话的实时尾按其归属工作区根；未信任根拒绝）。
+    let Some(cwd) = state.resolve_root(q.root.as_deref()) else {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "工作区根不可用（须为当前或已信任工作区）",
+        );
+    };
+    let Some(path) = crate::journal_tail::resolve(&cwd, &run_id) else {
         return (StatusCode::BAD_REQUEST, "invalid run id").into_response();
     };
     let from = q.from.unwrap_or(0);
@@ -256,7 +333,13 @@ async fn api_runs(
     if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
         return resp;
     }
-    Json(json!({ "runs": crate::runs::list_runs(&state.cwd) })).into_response()
+    let Some(cwd) = state.resolve_root(q.root.as_deref()) else {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "工作区根不可用（须为当前或已信任工作区）",
+        );
+    };
+    Json(json!({ "runs": crate::runs::list_runs(&cwd) })).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -266,6 +349,9 @@ struct EventsQuery {
     from: Option<u64>,
     #[serde(default)]
     max: Option<u64>,
+    /// 0bv ②：归属工作区根（旧会话回放按其归属根解析）。
+    #[serde(default)]
+    root: Option<String>,
 }
 
 async fn api_run_events(
@@ -277,8 +363,14 @@ async fn api_run_events(
     if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
         return resp;
     }
+    let Some(cwd) = state.resolve_root(q.root.as_deref()) else {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "工作区根不可用（须为当前或已信任工作区）",
+        );
+    };
     let from = q.from.unwrap_or(0);
-    match crate::runs::slice_events(&state.cwd, &run_id, from, q.max.unwrap_or(u64::MAX)) {
+    match crate::runs::slice_events(&cwd, &run_id, from, q.max.unwrap_or(u64::MAX)) {
         Some((lines, next_offset)) => Json(json!({
             "run_id": run_id,
             "from": from,
@@ -298,7 +390,13 @@ async fn api_conversations(
     if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
         return resp;
     }
-    Json(json!({ "conversations": crate::runs::list_conversations(&state.cwd) })).into_response()
+    let Some(cwd) = state.resolve_root(q.root.as_deref()) else {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "工作区根不可用（须为当前或已信任工作区）",
+        );
+    };
+    Json(json!({ "conversations": crate::runs::list_conversations(&cwd) })).into_response()
 }
 
 /// Session-archive listing (0br S3 新增面): `.gsa/archives/{s8}.json.gz`
@@ -311,7 +409,13 @@ async fn api_archives(
     if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
         return resp;
     }
-    Json(json!({ "archives": crate::archives::list_archives(&state.cwd) })).into_response()
+    let Some(cwd) = state.resolve_root(q.root.as_deref()) else {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "工作区根不可用（须为当前或已信任工作区）",
+        );
+    };
+    Json(json!({ "archives": crate::archives::list_archives(&cwd) })).into_response()
 }
 
 /// In-gzip summary of one archive package: conversation facts +
@@ -326,7 +430,13 @@ async fn api_archive_detail(
     if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
         return resp;
     }
-    match crate::archives::archive_detail(&state.cwd, &session8) {
+    let Some(cwd) = state.resolve_root(q.root.as_deref()) else {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "工作区根不可用（须为当前或已信任工作区）",
+        );
+    };
+    match crate::archives::archive_detail(&cwd, &session8) {
         Ok(detail) => Json(detail).into_response(),
         Err(e) => match e {
             crate::archives::ArchiveReadError::InvalidId => {
@@ -428,7 +538,7 @@ async fn api_trust(
     if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
         return resp;
     }
-    let cwd = state.cwd.display().to_string();
+    let cwd = state.cwd().display().to_string();
     match run_agent_session_tool(&state, "trust", &cwd).await {
         Ok(message) => Json(json!({ "ok": true, "cwd": cwd, "message": message })).into_response(),
         Err((status, message)) => error_response(status, &message),
@@ -457,7 +567,7 @@ async fn run_agent_session_tool(
     child
         .arg(subcommand)
         .arg(arg)
-        .current_dir((*state.cwd).clone())
+        .current_dir(state.cwd())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
@@ -502,11 +612,63 @@ async fn api_boot(
         return resp;
     }
     Json(json!({
-        "cwd": state.cwd.display().to_string(),
+        "cwd": state.cwd().display().to_string(),
         "agent": state.agent_binary.display().to_string(),
         // 用户全局信任存储（~/.grok/trusted_folders.toml）的授予清单——
         // 探索器「工作区 → 已信任工作区」子级的数据源（0br S3）。
         "trusted_workspaces": crate::trust::list_trusted_workspaces(),
+    }))
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct WorkspaceSwitchBody {
+    path: String,
+}
+
+/// 0bv ②（2026-09-26，B 形态：服务随启动而立＋信任清单全局共享＋服务内点击
+/// 切换）：工作区**机械切换**——模型零感知。切换 = 桥 cwd 换值（内部锁）⇒
+/// runs／conversations／archives 清单随之即时重解析；新会话在新 cwd spawn
+/// （旧对话子进程不杀；同会话不迁移——对话只认初始工作区；旧会话读面经
+/// `?root=` 按归属工作区根解析）。
+///
+/// 门禁（fail-closed）：① 目标须为**已信任工作区**（TrustStore 用户级单源；
+/// 未信任 ⇒ 403＋引导「信任」按钮；浏览器零路径执行）；② 目标须存在且为
+/// canonical 目录；③「运行中禁切」由前端 `state.running` 主判（桥侧无活跃
+/// run 读数，不虚设判定——裁决 D-e）。
+async fn api_workspace_switch(
+    State(state): State<ServerState>,
+    Query(q): Query<TokenQuery>,
+    headers: HeaderMap,
+    Json(body): Json<WorkspaceSwitchBody>,
+) -> Response {
+    if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
+        return resp;
+    }
+    let Ok(target) = std::fs::canonicalize(body.path.trim()) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "工作区路径不存在或不可读取（canonicalize 失败）",
+        );
+    };
+    if !target.is_dir() {
+        return error_response(StatusCode::BAD_REQUEST, "目标不是目录");
+    }
+    let trusted = crate::trust::list_trusted_workspaces();
+    if !trusted
+        .iter()
+        .any(|t| path_eq(std::path::Path::new(&t.path), &target))
+    {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "未信任工作区：请先在该工作区启动 orz 并点「信任」（fail-closed）",
+        );
+    }
+    state.set_cwd(target.clone());
+    Json(json!({
+        "ok": true,
+        "cwd": target.display().to_string(),
+        "trusted_workspaces": trusted,
     }))
     .into_response()
 }
@@ -532,6 +694,8 @@ pub fn router(state: ServerState) -> Router {
         .route("/api/sessions/{session8}", delete(api_session_delete))
         .route("/api/trust", post(api_trust))
         .route("/api/boot", get(api_boot))
+        // 0bv ②：B 形态工作区切换（机械切换；信任门 fail-closed）。
+        .route("/api/workspace/switch", post(api_workspace_switch))
         .with_state(state)
 }
 
@@ -563,7 +727,7 @@ mod tests {
     fn test_state() -> ServerState {
         ServerState {
             token: Arc::new("tok-123".into()),
-            cwd: Arc::new(std::env::temp_dir()),
+            cwd: Arc::new(std::sync::RwLock::new(std::env::temp_dir())),
             agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
             session: SessionSlot::default(),
         }
@@ -745,7 +909,7 @@ mod tests {
         }
         let state = ServerState {
             token: Arc::new("tok-123".into()),
-            cwd: Arc::new(root.clone()),
+            cwd: Arc::new(std::sync::RwLock::new(root.clone())),
             agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
             session: SessionSlot::default(),
         };

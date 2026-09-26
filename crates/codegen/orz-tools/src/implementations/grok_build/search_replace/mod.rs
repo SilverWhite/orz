@@ -1110,9 +1110,16 @@ async fn handle_replacement(
                         let replace_all_name =
                             TemplateRenderer::resolve(&resources, "${{ params.edit.replace_all }}")
                                 .await?;
+                        // f13（0bv，2026-09-26）：同上，归一化命中面也附候选行号。
+                        let norm_positions: Vec<usize> = normalized_matches
+                            .iter()
+                            .map(|m| m.original_start)
+                            .collect();
+                        let candidate_lines =
+                            helpers::format_candidate_lines(&match_text, &norm_positions);
                         return Ok(SearchReplaceOutput::MultipleMatchesFound(format!(
                             "The string to replace was found multiple times in the file \
-                             (via Unicode normalization). Use {} to replace all occurrences, \
+                             (via Unicode normalization; candidate lines: {candidate_lines}). Use {} to replace all occurrences, \
                              or include more context to only edit one occurrence.",
                             replace_all_name
                         )));
@@ -1195,8 +1202,13 @@ async fn handle_replacement(
     if positions.len() > 1 && !input.replace_all {
         let replace_all_name =
             TemplateRenderer::resolve(&resources, "${{ params.edit.replace_all }}").await?;
+        // f13（0bv，2026-09-26）：歧义回执附候选行号——同形多处出现时不再
+        // 只报「多处」，直接给出候选位置（c 轮摩擦：靠回读人工定位）。
+        let candidate_lines = helpers::format_candidate_lines(&match_text, &positions);
         return Ok(SearchReplaceOutput::MultipleMatchesFound(format!(
-            "The string to replace was found multiple times in the file. Use {} to replace all occurrences, or include more context to only edit one occurrence.",
+            "The string to replace was found multiple times in the file \
+             (candidate lines: {candidate_lines}). Use {} to replace all occurrences, \
+             or include more context to only edit one occurrence.",
             replace_all_name
         )));
     }
@@ -1299,6 +1311,20 @@ async fn handle_replacement(
             input.file_path,
         );
         (default_msg, concise_msg)
+    };
+    // f14（0bv，2026-09-26）：替换后**版式剧烈变化**提示（多行折单行／行长
+    // 翻倍越线——c 轮实证：整行锚替换吃掉行内换行须回读核版式）。提示非
+    // 判决：只附注、不改写行为；legacy 契约面不加（历史串保真）。
+    let (tool_output_for_prompt, tool_output_for_prompt_concise) = if is_legacy {
+        (tool_output_for_prompt, tool_output_for_prompt_concise)
+    } else {
+        match helpers::format_shift_notice(&match_text, &replacements, &new_text) {
+            Some(notice) => (
+                format!("{tool_output_for_prompt}\n{notice}"),
+                format!("{tool_output_for_prompt_concise}\n{notice}"),
+            ),
+            None => (tool_output_for_prompt, tool_output_for_prompt_concise),
+        }
     };
     let output = SearchReplaceOutput::EditsApplied(SearchReplaceEditsApplied {
         old_string: input.old_string.clone(),
@@ -2668,12 +2694,123 @@ mod tests {
             SearchReplaceOutput::MultipleMatchesFound(msg) => {
                 assert_eq!(
                     msg,
-                    "The string to replace was found multiple times in the file. \
+                    "The string to replace was found multiple times in the file \
+                     (candidate lines: 1). \
                      Use replaceEverything to replace all occurrences, \
                      or include more context to only edit one occurrence."
                 );
             }
             other => panic!("Expected MultipleMatchesFound, got {:?}", other),
+        }
+    }
+
+    /// f13 钉（0bv，2026-09-26）：歧义失败回执给出**候选行号**——同形
+    /// 多处落在不同行时逐条列出 1 基行号（c 轮摩擦：靠回读人工定位）。
+    #[tokio::test]
+    async fn multiple_matches_error_carries_candidate_line_numbers() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "aaa\nbbb\naaa\n").unwrap();
+        let tool = SearchReplaceTool;
+        let mut resources = test_resources(tmp.path());
+        resources.insert(Params(SearchReplaceParams {
+            skip_read_before_edit: true,
+            ..Default::default()
+        }));
+        let input = make_input("test.txt", "aaa", "ccc");
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::MultipleMatchesFound(msg) => {
+                assert!(
+                    msg.contains("candidate lines: 1, 3"),
+                    "候选行号必须逐条给出: {msg}"
+                );
+            }
+            other => panic!("Expected MultipleMatchesFound, got {:?}", other),
+        }
+    }
+
+    /// f14 钉一（0bv，2026-09-26）：多行命中折为单行 ⇒ 成功面附版式提示。
+    #[tokio::test]
+    async fn fold_to_single_line_attaches_formatting_notice() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "fn f() {\n    body();\n}\n").unwrap();
+        let tool = SearchReplaceTool;
+        let mut resources = test_resources(tmp.path());
+        resources.insert(Params(SearchReplaceParams {
+            skip_read_before_edit: true,
+            ..Default::default()
+        }));
+        let input = make_input("test.txt", "{\n    body();\n}", "{}");
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(applied) => {
+                assert!(
+                    applied
+                        .tool_output_for_prompt
+                        .contains("folded a multi-line match into a single line"),
+                    "折行提示缺失: {}",
+                    applied.tool_output_for_prompt
+                );
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    /// f14 钉二（0bv，2026-09-26）：单行替换后行长至少翻倍且越 200 字符 ⇒
+    /// 提示；常规小改（未翻倍）不得触发（防噪音）。
+    #[tokio::test]
+    async fn sharp_line_length_growth_attaches_notice_but_small_edit_does_not() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "abc\n").unwrap();
+        let tool = SearchReplaceTool;
+        let mut resources = test_resources(tmp.path());
+        resources.insert(Params(SearchReplaceParams {
+            skip_read_before_edit: true,
+            ..Default::default()
+        }));
+        let long = "x".repeat(250);
+        let input = make_input("test.txt", "abc", &long);
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(applied) => {
+                assert!(
+                    applied
+                        .tool_output_for_prompt
+                        .contains("changed the affected line length sharply"),
+                    "行长剧变提示缺失: {}",
+                    applied.tool_output_for_prompt
+                );
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+
+        // 常规小改：无提示（不得对普通编辑喧哗）。
+        let tmp2 = TempDir::new().unwrap();
+        std::fs::write(tmp2.path().join("test.txt"), "let x = 1;\n").unwrap();
+        let mut resources2 = test_resources(tmp2.path());
+        resources2.insert(Params(SearchReplaceParams {
+            skip_read_before_edit: true,
+            ..Default::default()
+        }));
+        let input2 = make_input("test.txt", "let x = 1;", "let x = 2;");
+        let result2 = xai_tool_runtime::Tool::run(&tool, test_ctx(resources2.into_shared()), input2)
+            .await
+            .unwrap();
+        match result2 {
+            SearchReplaceOutput::EditsApplied(applied) => {
+                assert!(
+                    !applied.tool_output_for_prompt.contains("Formatting notice"),
+                    "常规小改不得附版式提示: {}",
+                    applied.tool_output_for_prompt
+                );
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
         }
     }
     #[tokio::test]
