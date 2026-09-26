@@ -15,6 +15,8 @@
   0bs ②（2026-09-25）：⑮ 控制台输出编码显式钉 UTF-8（[Console]::OutputEncoding
   ＋$OutputEncoding）——Tee/捕获管道下原生输出按 ANSI 解码呈 GBK 乱码
   （0bm F6 一族；修复后日志中文与机械文案可读）。
+  0bt②（2026-09-26）：⑯ 版本旁路——carrier 版本读载体自带 `--build-info`
+  （打包面单一源；Rust 载体无 Win32 VersionInfo，不再显示 unknown）。
 .PARAMETER TaskFile
   题面文件路径（相对 $Workspace 或绝对路径；惯例 .tmp-*-task.txt）。
 .PARAMETER RliOff
@@ -90,10 +92,17 @@ $orz       = Join-Path $BinDir 'orz.exe'
 $signer    = Join-Path $BinDir 'orz-signer.exe'
 $provision = Join-Path $BinDir 'orz-acaf-provision.exe'
 foreach ($f in @($orz, $signer, $provision)) { Assert-True (Test-Path -LiteralPath $f) "载体缺件：$f" }
-# Rust 载体不带 VersionInfo ⇒ ProductVersion 常为空串（DryRun 显示「v；」）；
-# 空时回落 bump 记录口径的「unknown」（主会话复核补，2026-09-18）。
-$ver = (Get-Item $orz).VersionInfo.ProductVersion
-if ([string]::IsNullOrWhiteSpace($ver)) { $ver = 'unknown' }
+# 0bt②（2026-09-26）：版本改读**载体自带旁路** `--build-info`——Rust 载体不带
+# Win32 VersionInfo（ProductVersion 常为空串，DryRun 曾显示 carrier=unknown；
+# 2026-09-18 主会话复核补）。载体自报＝打包面版本（单一源＝CARGO_PKG_VERSION）；
+# 老载体不支持该旗标时回落「unknown」（如实回落，不伪造 bump 记录口径）。
+$ver = 'unknown'
+try {
+    $buildInfo = (& $orz --build-info 2>$null | Select-Object -First 1)
+    if ($LASTEXITCODE -eq 0 -and $buildInfo -match 'version=([^\s]+)') { $ver = $Matches[1] }
+} catch {
+    $ver = 'unknown'
+}
 $sha = (Get-FileHash -LiteralPath $orz -Algorithm SHA256).Hash
 
 # ③ ACAF：manifest 在册则复用，否则现场 provision（与 orz_acaf_run.ps1 同形）

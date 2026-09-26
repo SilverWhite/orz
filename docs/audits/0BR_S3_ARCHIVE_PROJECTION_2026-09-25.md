@@ -150,3 +150,114 @@
 - 本批仍未提交／未推送／未重建载体。
 
 关键词：批四、归档标记栏、▸ 输入锚、◆ 最终输出锚、scrollToItem。
+
+---
+
+# 批五（同日 2026-09-25 第七用户令）：归档收尾流程三件——ARC 水位分组修复 ＋ 工具栏「新建会话」＋ 实时尾随随 run 切换
+
+> 用户令：「当前归档实质不可用，刷新后也没有将活跃会话归档，而且需要一个明确的新建会话按键才可以，放在"后退"的前面吧」
+
+## 15. 根因（「归档实质不可用」＝两件叠加）
+
+- **归档后不进归档组（刷新依旧活跃）**：批三分组规则「包 mtime ≥ 最新运行 mtime ⇒ 归档组」把 **ARC 审计 journal** 计入活动水位——归档动作自身的落盘序＝包 → 里程碑水位 → ARC journal（`archive_raw_session_package` 内 bootstrap_session 晚于打包），ARC journal 恒晚于包 1–3 秒 ⇒ 每次新归档 `isArchived` 恒 false。真实工作区实证：`6ab6275c`/`6ab6570c`（0bm/0bs 轮会话，包 mtime 1790342264/1790342302，含 ARC 的最新运行 1790342267/1790342303）→ 双双误判活跃。批三验证时「归档全部」把 19 个包 mtime 整体重刷、掩盖了该结构缺陷。
+- **流程无法收尾**：桥为单 ACP 会话绑定（`ensureSession` 终身复用首个会话），无任何换会话入口——即便分组正确，归档后下一条 prompt 立即产生新 run（mtime ＞ 包）⇒ 会话弹回活跃组，对活跃会话而言归档动作等于无效。这就是用户令「需要一个明确的新建会话按键才可以」的语义。
+
+## 16. 实现面（批五）
+
+- **分组修复**（widgets.js）：活动水位计算排除 `ARC-` 前缀 run（归档审计记录，非对话活动）；归档后真实新 run 仍如实回活跃组，批三口径其余不变。
+- **工具栏「新建会话」**（state.js／widgets.js／main.js）：`{id:'new', label:'新建会话'}` 居首位（用户令指定「放在后退的前面」）；`ui.newSession`＝运行中拒绝（flash 提示）→ 清内容/标记/轮次、导航栈归零（「后退」不得回到旧会话回放）、解绑旧 ACP 会话（`acpSessionId=null`；ACP 无 `session/close`，旧会话对象就地闲置、事实已留 `.gsa`，探索器可回看）→ 复位状态栏「空闲」→ 立即 `ensureSession()` 建新会话并在内容区显示新会话 id。
+- **实时尾随随 run 切换**（main.js `syncLiveTail`，既有缺陷一并修复）：每轮 prompt 一个新 run 目录（`RUN-{s8}-{n}`），而尾随此前只在 boot 挂到当时 `runs[0]` 且永不切换——新 run 的事实（工具行/门控/终态）永不流入实时窗。现口径：已建会话只跟**本会话**最新 run（新建会话后不再灌旧会话内容）；无会话时跟全局最新（boot 连续性保留）；切换从 offset 0 重灌（journal_tail 自文件头补发，事实不丢）。挂点＝5s 探索器刷新＋运行期 1s 跟随轮（`submitPrompt` 内自停 interval）＋boot/returnToLive。
+- **状态栏残留复位**（main.js）：`submitPrompt` catch 与 `newSession` 就地回「空闲」——走查实证引导期失败的 run 只有 `run_preflight` 无终态事件，标签残留「预检/完成」。
+
+## 17. 验证读数（批五）
+
+- 冒烟门 `node tests/frontend_smoke.mjs` 全绿（**＋5 钉**：工具栏顺序〔新建会话首位、后退次位〕／ARC journal 不得把新归档顶回活跃组／真实新 run 仍回活跃组／newSession 复位导航清后退栈／桥不可达不残留旧会话绑定）；orz-web Rust **41/41**；`cargo build -p orz-bin` 过（前端资产 `include_bytes!` 内嵌，随构建进位）。
+- **真机走查**（`orz web` 合成工作区：bug 场景 `6aab1234`〔RUN mtime −1h、包 −30min、ARC −30s〕／仅活跃 `6aab5678`／仅归档 `6aabdead`）：分组正确（活跃（1）＝6aab5678 带 ◆归档；归档（2）＝6aabdead＋**6aab1234**——修复前该场景恒判活跃）；「新建会话」点击＝内容清空＋「ACP 会话已创建（uuid）」＋横幅＋导航/状态栏复位；归档浏览 6aab1234 事实行＋转写可读、「后退」回实时＝**空实时窗**（当前会话无 run 的正确形态，不再灌旧会话内容）；新会话发 prompt（临时目录未信任 ⇒ 信任门 fail-closed 拒绝，符合预期）⇒ 探索器秒级出现新 run「69422736（1 次运行 · 未完成）」＋journal 尾自动切换回灌 `run_preflight`——**尾随切换与跟随轮实证**。
+- **走查方法教训（登记）**：`goto` 仅变 URL hash（新令牌）不重载页面——陈旧页面（旧构建 JS＋已死 WS＋旧令牌）会伪装成回归（flash 可见但消息/复位全不生效）；以 `about:blank` → 目标 URL 强制真实重载后全量复验通过。
+
+## 18. 批五边界
+
+- 本批仍未提交／未推送／未重建载体；索引无召回路由变化、不 bump（§0.5）。
+- 历史误判会话（6ab6275c/6ab6570c 等）无需数据迁移——前端纯投影修复，刷新即自行归位归档组。
+- 「进行中/未完成」语义、信任门 fail-closed 拒绝面均为既有口径如实呈现，本批不改。
+
+关键词：批五、ARC 审计 journal、活动水位、新建会话、实时尾随随 run 切换、journal_tail offset 0 重灌、goto hash 不重载。
+
+---
+
+# 批六（同日 2026-09-25 第八用户令）：旧归档"消失"诊断 ＋ 归档 UI 逻辑重构（组级功能键/选中/回档/删除）＋ orz 免全路径
+
+> 用户令：「原本旧的归档消失了／话说归档的会话需要能够被删除/还原才可以，我想改一下UI逻辑，"归档"键和"活跃会话"这一栏同行，想要归档会话需要选中会话再点击"活跃会话"这一栏中的总"归档"功能键，然后弹弹窗确认／同理，将"回档"和"删除"放在"归档会话"的这一行，先选中目标对话再点击功能键，随后再弹弹窗确认／话说现在的orz web指令需要使用全路径才行，能不能绑成最起码当前安装文件夹内部全局的，直接"orz web"就可以？」
+
+## 19. 「旧的归档消失了」诊断＝扫错工作区（非数据丢失）
+
+- 用户从 orz 仓根（`D:\CLI\orz`）启动 `orz web`，桥按**启动时 cwd** 定 `.gsa` 根——该目录的 `.gsa` 只有 1 个运行、**零归档包**，探索器于是显示「归档会话（0）」。真实工作区（`D:\CLI`）的 21 个归档包逐包复算批五新口径全部 `归档OK`，**无一丢失**。
+- 处置：`orz web` 启动台面新增**工作区行**（`工作区: <cwd>（探索器/运行/归档均按此目录的 .gsa 投影；不符请用 --cwd 指向工作区根）`），错目录启动一眼可辨。
+
+## 20. 归档 UI 逻辑重构（组级功能键＋选中模型）
+
+- **选中模型**（state.js `selected: {group:'active'|'archived', s8}`）：会话行**单击＝选中**（再次单击取消；深蓝底白字高亮），**双击＝打开**（会话合并视图/归档只读浏览；Enter 同义）。
+- **组级功能键**（widgets.js `groupHeader` 扩展 actions）：「归档」与「活跃会话」组头同行、「回档」「删除」与「归档会话」组头同行；**未选中时可见但禁用**（title 提示操作流程），选中本组会话才点亮；组头本体折叠开关语义不变（功能键 stopPropagation）。行内「◆归档」动作键退役（CSS 同步清除）。
+- **三动作**（main.js，确认弹窗均为原生 confirm，文案如实告知后果）：
+  - 归档（既有）：打包＋ARC 审计 journal；运行中的实时会话拒绝归档（守卫移入动作内）。
+  - **回档**＝`DELETE /api/archives/{s8}` → 桥 spawn **`orz unarchive <s8>`**（新子命令）→ orz-host `unarchive_session_on_demand`：移除归档包＋里程碑水位，会话回活跃组；运行/侧车数据全保留。
+  - **删除**＝`DELETE /api/sessions/{s8}` → 桥 spawn **`orz delete-session <s8>`**（新子命令）→ orz-host `delete_session_on_demand`：彻底移除归档包＋水位＋对话侧车＋会话名下全部运行 journal（`RUN-{s8}-*` ∪ `ARC-{s8}-*` ∪ `RUN-CLI-{s8}` 精确），**不可恢复**。
+  - 动作完成清选中并刷新探索器；桥侧三路由共享同一 spawn 助手（`run_agent_session_tool`：单子进程形态/单超时/单错误映射，禁每路由第二套）。
+
+## 21. 数据安全面
+
+- **会话段门**：回档/删除取**最严口径**——严格 8 位小写十六进制（会话 id＝UUID 前 8 字符），其余形态拒绝且不触文件系统。
+- **前缀误吞缺陷被钉子逮住**：`RUN-CLI-{s8}` 无尾分隔符，前缀匹配会误删近似会话（`RUN-CLI-6ab7de01` 吞 `RUN-CLI-6ab7de011`）——钉子实证后改为精确匹配（与重构归档同口径）；`RUN-{s8}-`/`ARC-{s8}-` 前缀天然带分隔符无碰撞。
+- 边界登记：删除为本地 `.gsa` 梳理动作，不落 journal 审计事件（确认弹窗即用户授权面）；对正在运行进程持有的会话不设跨进程锁（UI 只对归档组会话提供删除，活跃会话不可达此动作）。
+
+## 22. orz 免全路径（用户令③）
+
+- 本机无独立安装目录（"安装"＝本仓构建/载体），取**用户级 PATH 绑定**：`%LOCALAPPDATA%\orz\bin\orz.exe`（当前 debug 构建拷贝）＋ 该目录写入用户 PATH（注册表安全写法，无 setx 截断风险）——**新开终端任意目录 `orz web` 即用**。刷新方式＝构建后重拷；发行载体落地后可整目录替换。
+- 配套可见性：启动台面工作区行（§19）。
+
+## 23. 验证读数（批六）
+
+- 冒烟门全绿（组级功能键/选中模型 **＋6 断言**：行内 ◆归档 退役、三键与组头同行、未选中全禁、选中点亮对应组、再点取消选中）；orz-web Rust **42/42**（＋1：DELETE 双路由 401/400/子进程失败透传钉）；orz-host 归档面 **12/12**（＋1：回档/删除作用域与门钉——**逮住并修复 RUN-CLI 前缀误吞缺陷**）；clippy 本批文件零新增（余量告警均为既有 local_browser 面）；单跑负载敏感 5 件全过（0aq 已登记类）。
+- **真机走查全链**（合成工作区，confirm 以页内桩自动接受并捕获文案）：选中高亮生效；「归档」→ 弹窗文案正确 → 会话移归档组；「回档」→ 回活跃组、包/水位移除、侧车/运行保留（磁盘核对）；「删除」→「已彻底删除会话 6aab1234（共 5 件）」横幅、磁盘五件全清、邻近近似前缀会话无恙；双击打开＝会话合并视图。走查中两次"失败"均为 fixture 侧车不合 `StoredConversation` schema（schema_version 数字≠字符串、Message 必填 tool_call_id/tool_calls/reasoning_content）——管线如实报错，行为正确。
+- 走查附带修复：横幅 flash 过 `sanitizeText`（子进程 stderr 透传的 ANSI 转义码不再直入横幅）。
+- 本批仍未提交／未推送／未重建载体；索引无召回路由变化不 bump。
+
+关键词：批六、回档、删除、组级功能键、选中模型、unarchive、delete-session、会话段门、RUN-CLI 精确匹配、LOCALAPPDATA PATH、工作区行。
+
+---
+
+# 批七（同日 2026-09-25 第九用户令）：prompt「Internal error」四层根因修复 ＋ 信任窗 Web 化 ＋ `--real` ＋ 大栈 ＋ 单击即开修正
+
+> 用户令：「在使用中存在问题，输入问题并提交后显示[错误] Internal error」＋「是否考虑反向查看，看信任窗口中起进程的过程会注入什么？」＋「现在点击其他对话，主窗口不会切换了」
+
+## 24. 诊断（四层叠加根因，逐层实证）
+
+- **① ACAF 签名器 env 未配置**：`orz --stdio` 子进程 fail-closed 拒跑（`assurance invariant: ACAF fail-closed is enabled but no signer client is configured (ORZ_ACAF_MANIFEST + ORZ_ACAF_KEYSTORE)`）。ACAF 三 env 历来逐次启动内联设置（052 审计命令形态），桥/子进程无继承源。stdio 直接复现实锚。
+- **② 工作区未授信＋Web 链无信任窗**（用户反查提示命中）：orz-bin main 的 L1 写入位置重定向（2026-08-08）把 `$GROK_HOME` 指到安装目录沙盒（`target\debug\grok-home\`，空存储）；`D:\CLI` 带仓库配置（`.grok/roles`）→ `decide()` 非交互（stdio 子进程 `is_interactive=false`）fail-closed `Untrusted`。TUI 车道同一输入因**交互式信任窗**（`persist_trust`→`set_trusted`）授信后通过——Web 链缺这个窗，授信失败只剩裸「Internal error」。
+- **③ 假模型**：桥 spawn `orz --stdio` 未带 `ORZ_REAL`，真实 prompt 拿到 `(fake) 已收到请求`（与 TUI `--real` 显式约定一致，但 Web 面从未接线——S3 真机首读未开工的实测暴露）。
+- **④ 栈溢出崩溃**：真实网关下 `run_agent_loop` 巨型 future（0bt 未竟拆分项②）首 poll 打穿 Windows 主线程默认栈（实锚 `thread 'main' has overflowed its stack`，0xC00000FD，进程静默消失、无终态 journal 事件）。
+- 诊断基建缺口：agent 把真实原因放在 JSON-RPC `error.data`，前端只读 `error.message` ⇒ 一切失败都显示成「Internal error」。
+
+## 25. 修复面（批七）
+
+- **错误细节透出**（acp.js `errorMessage`）：`error.data` 并入错误消息，用户可见真实原因（本批即靠它在浏览器里露出②③）。
+- **ACAF 启动检查**（lib.rs）：`orz web` 启动台面检测三 env 缺失并印警告行（提示从已 provision 终端启动 / `orz-acaf-provision` 回显）。
+- **信任窗 Web 化**：`POST /api/trust` → 桥 spawn **`orz trust <cwd>`**（新子命令）→ orz-host `grant_workspace_trust(_with)`：授信写入与 prompt 子进程同一 GROK_HOME 下的信任存储（redirect 链由 orz-bin main 统一注入、子进程继承同值——同链同存储）；前端 `submitPrompt` 捕获 `workspace not trusted` → 确认弹窗 → 授信 → **自动重发一次**；授信为用户决定（弹窗在先），桥自带工作区路径（浏览器零路径输入）。
+- **`orz web --real`**（lib.rs）：置位时桥进程设 `ORZ_REAL=1`，子进程 env 继承走真实 DeepSeek 通道（与 TUI `--real` 同一决策点 `build_gateway`）；启动台面新增「模型传输：真实（--real）/真实（继承）/⚠ fake（测试替身）」三态行——fake 回应不再可能被误读为成功。
+- **主线程大栈**（orz-bin main）：整个 main 体搬上 **64 MiB** 显式栈线程，join 透传退出码——④ 的栈溢出实测消除（真实轮「收到」回轮全通过）；长期治本仍＝0bt ② run_agent_loop 拆分。
+- **单击即开修正**（widgets.js，用户报告「点击其他对话，主窗口不会切换了」）：会话行**单击＝打开主窗口＋同时选中**（高亮保持、组级功能键照常可用）——撤销批六「单击仅选中、双击打开」的中间态；Enter 同语义。
+
+## 26. 验证读数（批七）
+
+- 冒烟门全绿（＋api 客户端断言＋单击即开/选中钉，撤「再次单击取消选中」旧钉）；orz-web **42/42**；orz-host session 模块 **7/7**（＋授信翻转/路径门钉）；clippy 本批文件零新增。
+- **真机全链**（真实工作区 D:\CLI，`orz web --real`）：浏览器 prompt → 信任确认弹窗（文案如实）→ 授信落沙盒存储 → **自动重发 → 真实模型回轮「收到」＋运行完成**；探索器「已信任工作区（1）」沙盒授信可见；工具栏/组级功能键/单击即开全链回归通过。
+- 观察项（不修，留观）：真实轮偶发长延迟（首实测 >3 min 后自行完成，复测秒级）——模型排队/推理时长形态，非挂死（journal 事件持续推进可证）；如复现加密观测。
+- 走查方法教训（追加）：goto 仅变 hash 不重载页面（批五已登记）与本批再踩一次——换 token 测试必须换全新标签页。
+
+## 27. 批七边界
+
+- 本批仍未提交／未推送／未重建载体；索引无召回路由变化不 bump。
+- ACAF 三 env 已写入**用户级环境变量**（配合批六 `%LOCALAPPDATA%\orz\bin`＋用户 PATH）——新终端 `orz web --real` 即完整可用；删除该三枚 env 即回退逐次内联形态。
+- `D:\CLI\.gsa` 新增本批验证运行 journal（RUN-CLI-6ab69637 等）属真实狗粮痕迹，如实保留。
+
+关键词：批七、Internal error、error.data 透出、ACAF 启动警告、信任窗 Web 化、orz trust、--real、ORZ_REAL、64 MiB 主线程栈、单击即开、模型传输三态行。

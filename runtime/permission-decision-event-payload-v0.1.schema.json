@@ -10,6 +10,11 @@
   ],
   "properties": {
     "tool": { "type": "string" },
-    "decision": { "enum": ["allow_once", "allow_always", "deny", "defer"] }
+    "decision": { "enum": ["allow_once", "allow_always", "deny", "defer"] },
+    "source": {
+      "type": "string",
+      "enum": ["policy", "scope", "yolo", "user", "timeout", "fail_closed", "classifier"],
+      "description": "0bt④ (2026-09-26): decision provenance — closed set, observation-only. Optional: hosts that do not classify omit it, so old journals replay with zero new errors."
+    }
   }
 }
