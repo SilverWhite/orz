@@ -103,6 +103,7 @@ document.addEventListener('click', () => closeMenus());
 /* ── Toolbar ── */
 
 const TOOLBAR_ACTIONS = {
+  new: () => ui.newSession(),
   back: () => ui.navAction('back'),
   forward: () => ui.navAction('forward'),
   refresh: () => ui.refresh(),
@@ -139,8 +140,22 @@ export function renderExplorer() {
   title.style.fontWeight = 'bold';
   root.appendChild(title);
 
-  const groupHeader = (label, key) => {
-    const head = el('div', 'explorer-group', `${state.explorer[key] ? '▸' : '▾'} ${label}`);
+  const groupHeader = (label, key, actions = []) => {
+    const head = el('div', 'explorer-group');
+    head.appendChild(el('span', null, `${state.explorer[key] ? '▸' : '▾'} ${label}`));
+    // 组级功能键（批六用户令 2026-09-25）：功能键与组头同行——先在组内
+    // 选中一个会话，功能键才生效；未选中时可见但禁用（操作流程自解释）。
+    for (const a of actions) {
+      const btn = el('span', a.enabled ? 'group-action' : 'group-action disabled', a.label);
+      btn.title = a.enabled ? a.title : '先在本组内单击选中一个会话';
+      if (a.enabled) {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation(); // 组头本体是折叠开关，功能键不得触发折叠
+          a.run();
+        });
+      }
+      head.appendChild(btn);
+    }
     head.tabIndex = 0;
     head.setAttribute('role', 'button');
     const toggle = () => {
@@ -213,7 +228,11 @@ export function renderExplorer() {
   }
   const latestRunMs = new Map();
   for (const [s8, runs] of groups) {
-    latestRunMs.set(s8, Math.max(0, ...runs.map((r) => r.modified_ms || 0)));
+    // 活动水位只数真实对话 run——ARC- 审计 journal 由归档动作自身写入
+    // （恒晚于归档包落盘），计入会把每次新归档都判回活跃组（用户令
+    // 2026-09-25「刷新后也没有将活跃会话归档」，实证 6ab6275c/6ab6570c）。
+    const activity = runs.filter((r) => !r.run_id.startsWith('ARC-'));
+    latestRunMs.set(s8, Math.max(0, ...activity.map((r) => r.modified_ms || 0)));
   }
   const archiveFor = new Map((state.archives || []).map((a) => [a.session8, a]));
   const isArchived = (s8) => {
@@ -224,51 +243,95 @@ export function renderExplorer() {
   const lm = /^(?:RUN-CLI-|ARC-|RUN-)([0-9a-f]{8})/.exec(state.liveRunId || '');
   const liveS8 = state.running && lm ? lm[1] : null;
 
+  // 会话行（批六用户令 2026-09-25 组级功能键；批七修正 2026-09-25 用户
+  // 报告「点击其他对话，主窗口不会切换了」）：单击＝打开（主窗口切换）
+  // **同时**选中（高亮、组级功能键的操作对象）——保持旧版单击即开的
+  // 肌肉记忆，选中仅是附加状态，不再有「只选不开」的中间态。
+  const sessionRow = (group, s8, meta, title, openUri) => {
+    const row = el('div', 'marker-entry explorer-row');
+    const selected =
+      state.selected?.group === group && state.selected?.s8 === s8;
+    if (selected) row.classList.add('explorer-selected');
+    row.tabIndex = 0;
+    row.appendChild(el('span', 'session-id', s8));
+    row.appendChild(meta);
+    row.title = `${title} —— 单击打开并选中`;
+    row.addEventListener('click', () => {
+      state.selected = { group, s8 };
+      renderExplorer();
+      void ui.openUri(openUri);
+    });
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        state.selected = { group, s8 };
+        void ui.openUri(openUri);
+      }
+    });
+    root.appendChild(row);
+    return row;
+  };
+
   const activeSessions = [...groups.keys()].filter((s8) => !isArchived(s8));
-  root.appendChild(groupHeader(`活跃会话（${activeSessions.length}）`, 'activeCollapsed'));
+  root.appendChild(
+    groupHeader(`活跃会话（${activeSessions.length}）`, 'activeCollapsed', [
+      {
+        label: '归档',
+        enabled: state.selected?.group === 'active',
+        title: state.selected?.group === 'active'
+          ? `归档选中的会话 ${state.selected.s8}（打包为归档包＋ARC 审计 journal）`
+          : '先在本组内单击选中一个会话',
+        run: () => ui.archiveSession?.(state.selected?.s8),
+      },
+    ]),
+  );
   if (!state.explorer.activeCollapsed) {
     for (const s8 of activeSessions) {
       const runs = groups.get(s8);
       // 「进行中」只属于真正在动作/流式输出的实时窗口；journal 无终态
       // 事件的旧 run 实为中断收场（用户令 2026-09-25），如实标「未完成」。
       const suffix = liveS8 === s8 ? ' · 进行中' : runs.some((r) => r.status === 'running') ? ' · 未完成' : '';
-      const row = el('div', 'marker-entry');
-      // 会话 ID 与时间用等宽字体双列（批四补：比例字体下 hex 宽窄不一
-      // 导致列表参差）；ID 恒 8 字符、时间恒定长格式 ⇒ 两列严格对齐。
-      row.appendChild(el('span', 'session-id', s8));
-      row.appendChild(document.createTextNode(`（${runs.length} 次运行${suffix}）`));
-      row.title = `conversation://${s8} —— 点击打开整段会话`;
-      row.addEventListener('click', () => ui.openUri(`conversation://${s8}`));
-      // ◆归档＝归档动作（打包为 .gsa/archives 归档包；执行在桥 spawn 的
-      // agent 子命令，前端零执行事实）。
-      const jump = el('span', 'archive-jump', '◆归档');
-      if (liveS8 === s8) {
-        jump.classList.add('disabled');
-        jump.title = '运行进行中，暂不能归档';
-      } else {
-        jump.title = `归档会话 ${s8}（打包为归档包＋ARC 审计 journal）`;
-        jump.addEventListener('click', (e) => {
-          e.stopPropagation();
-          ui.archiveSession?.(s8);
-        });
-      }
-      row.appendChild(jump);
-      root.appendChild(row);
+      sessionRow(
+        'active',
+        s8,
+        document.createTextNode(`（${runs.length} 次运行${suffix}）`),
+        `conversation://${s8}`,
+        `conversation://${s8}`,
+      );
     }
   }
 
   const archivedSessions = (state.archives || []).filter((a) => isArchived(a.session8));
-  root.appendChild(groupHeader(`归档会话（${archivedSessions.length}）`, 'archivedCollapsed'));
+  root.appendChild(
+    groupHeader(`归档会话（${archivedSessions.length}）`, 'archivedCollapsed', [
+      {
+        label: '回档',
+        enabled: state.selected?.group === 'archived',
+        title: state.selected?.group === 'archived'
+          ? `回档选中的会话 ${state.selected.s8}（移除归档包，回到活跃组；数据保留）`
+          : '先在本组内单击选中一个会话',
+        run: () => ui.unarchiveSession?.(state.selected?.s8),
+      },
+      {
+        label: '删除',
+        enabled: state.selected?.group === 'archived',
+        title: state.selected?.group === 'archived'
+          ? `彻底删除选中的会话 ${state.selected.s8}（归档包/水位/侧车/运行 journal——不可恢复）`
+          : '先在本组内单击选中一个会话',
+        run: () => ui.deleteSession?.(state.selected?.s8),
+      },
+    ]),
+  );
   if (!state.explorer.archivedCollapsed) {
     if (!archivedSessions.length) root.appendChild(el('div', 'explorer-sub muted', '（无）'));
     for (const a of archivedSessions) {
       const when = a.archived_at ? ` · ${a.archived_at.slice(0, 16).replace('T', ' ')}` : '';
-      const row = el('div', 'marker-entry');
-      row.appendChild(el('span', 'session-id', a.session8));
-      if (when) row.appendChild(el('span', 'session-when', when));
-      row.title = `archive://${a.session8} —— 点击打开归档只读浏览`;
-      row.addEventListener('click', () => ui.openUri(`archive://${a.session8}`));
-      root.appendChild(row);
+      const meta = document.createElement('span');
+      if (when) {
+        meta.className = 'session-when';
+        meta.textContent = when;
+      }
+      sessionRow('archived', a.session8, meta, `archive://${a.session8}`, `archive://${a.session8}`);
     }
   }
 }

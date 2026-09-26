@@ -587,6 +587,60 @@ fn track_of(event: &Value) -> Result<EventTrack, String> {
 mod tests {
     use super::*;
 
+    /// 0bt④（2026-09-26）：`permission_decision` payload schema 的 `source`
+    /// 封闭集钉——旧形状（无 source）与七个合法来源放行；未知值必须拒绝
+    /// （未知值负例）。
+    #[test]
+    fn permission_decision_source_schema_rejects_unknown_values() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let schema_path =
+            repo_root.join("runtime/permission-decision-event-payload-v0.1.schema.json");
+        let schema: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&schema_path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", schema_path.display())),
+        )
+        .expect("schema JSON");
+        let validator = jsonschema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .should_validate_formats(false)
+            .build(&schema)
+            .expect("schema compiles");
+
+        // 旧形状（无 source）——旧 journal 回放零新增报错。
+        validator
+            .validate(&serde_json::json!({"tool": "read_file", "decision": "allow_once"}))
+            .expect("old shape without source stays valid");
+        // 封闭集正例逐值放行。
+        for source in [
+            "policy",
+            "scope",
+            "yolo",
+            "user",
+            "timeout",
+            "fail_closed",
+            "classifier",
+        ] {
+            validator
+                .validate(&serde_json::json!({
+                    "tool": "bash",
+                    "decision": "deny",
+                    "source": source,
+                }))
+                .unwrap_or_else(|e| panic!("source={source} must be valid: {e}"));
+        }
+        // 未知值负例：必须拒绝。
+        assert!(
+            validator
+                .validate(&serde_json::json!({
+                    "tool": "bash",
+                    "decision": "deny",
+                    "source": "grok_said_no",
+                }))
+                .is_err(),
+            "unknown source values must be rejected by the closed-set schema"
+        );
+    }
+
     /// 0z S2 §4.3 item 6 / 判据 7（2026-09-12）：降级卷判 `degraded_complete`
     /// ——链骨架完整 + 盘上降级证据；不得与 `invalid` 混判；历史卷（无标记）
     /// 分类不变（`degraded_complete: false`）。

@@ -354,12 +354,15 @@ pub const MAX_USER_ERROR_BODY_CHARS: usize = 280;
 pub fn status_user_message(status: StatusCode) -> String {
     match status.as_u16() {
         code @ 502..=504 => {
-            format!("Grok is temporarily unavailable. Please try again in a moment. (HTTP {code}).")
+            // ⑯（2026-09-26 用户令「用户层不出现Grok即可」）：用户可见文案去 Grok 化。
+            format!(
+                "The AI is temporarily unavailable. Please try again in a moment. (HTTP {code})."
+            )
         }
         // Cloudflare edge codes (origin down / connect fail / timeout / …).
         code @ 520..=524 => {
             format!(
-                "Connection to Grok timed out or was interrupted. Please try again. (HTTP {code})."
+                "Connection to the AI timed out or was interrupted. Please try again. (HTTP {code})."
             )
         }
         code if status.is_server_error() => {
@@ -613,6 +616,24 @@ mod tests {
             msg_503,
             status_user_message(StatusCode::SERVICE_UNAVAILABLE)
         );
+    }
+
+    /// ⑯（2026-09-26 用户令「用户层不出现Grok即可」）：状态面兜底文案去
+    /// Grok 化后仍保留 HTTP 码与语义；用户可见面不得再出现 `Grok`。
+    #[test]
+    fn status_user_messages_are_de_groked_and_keep_http_code() {
+        for code in [502u16, 503, 504] {
+            let msg = status_user_message(StatusCode::from_u16(code).unwrap());
+            assert!(msg.contains("AI"), "502..=504 must carry the generic AI wording: {msg}");
+            assert!(!msg.contains("Grok"), "user-facing copy must not say Grok: {msg}");
+            assert!(msg.contains(&format!("(HTTP {code})")), "status code must stay visible: {msg}");
+        }
+        for code in [520u16, 521, 522, 523, 524] {
+            let msg = status_user_message(StatusCode::from_u16(code).unwrap());
+            assert!(msg.contains("AI"), "520..=524 must carry the generic AI wording: {msg}");
+            assert!(!msg.contains("Grok"), "user-facing copy must not say Grok: {msg}");
+            assert!(msg.contains(&format!("(HTTP {code})")), "status code must stay visible: {msg}");
+        }
     }
 
     #[test]

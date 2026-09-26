@@ -3,10 +3,14 @@
 //! IP6 (hard-gate @ orz-workspace::permission) is the single allowed
 //! assurance injection into kept Grok providers. This bridge walks public
 //! seams only:
-//! - yolo stays off: headless spawn with `initial_yolo = false`, no auto
-//!   classifier — no way to sneak past the decision point;
-//! - interactive prompting (`PermissionHookTransport`) lands with the TUI
-//!   (Phase 3); headless `Ask` fails closed to `Deny`;
+//! - yolo ON by default (用户令 2026-09-26「直接开auto mode就行」：工作台
+//!   默认自动审批，手动弹窗退役为非默认路径) — the manager starts in
+//!   always-approve; policy denies (ReadOnly/Benchmark) still short-circuit
+//!   BEFORE yolo, and the no-bridge `OrzHost::new` default stays fail-closed
+//!   `Deny` (review P1-1 不动);
+//! - interactive prompting (`PermissionHookTransport`) remains the manual
+//!   path; a non-yolo `Ask` still fails closed to `Deny` (timeout/cancel
+//!   included);
 //! - every decision is journaled here (GateDecision / PermissionDecision
 //!   events are written by the caller/controller).
 //!
@@ -22,7 +26,7 @@ use std::time::Duration;
 use agent_client_protocol as acp;
 use agent_client_protocol::{ToolCallId, ToolCallUpdate, ToolCallUpdateFields};
 use orz_assurance::tool_names::{BLACKBOARD_WRITE_TOOL_NAME, CONTEXT_COMPRESS_TOOL_NAME};
-use orz_loop::host::{PermitDecision, PermitError, RiskClass};
+use orz_loop::host::{PermitDecision, PermitError, PermitSource, RiskClass};
 use orz_workspace::permission::{
     AccessKind, ClientType, Decision, PermissionHandle, PermissionHookTransport,
     spawn_permission_manager_with_hub,
@@ -95,8 +99,7 @@ fn is_shell_tool(tool: &str) -> bool {
 }
 
 /// Grok permission manager wrapped for the LoopHost contract.
-pub struct PermissionBridge {
-    handle: PermissionHandle,
+pub struct PermissionBridge {    handle: PermissionHandle,
     /// Session working directory — the scope Read auto-allow is confined to.
     cwd: orz_paths::AbsPathBuf,
     /// Policy for this bridge (Interactive by default; ReadOnly for codex
@@ -180,12 +183,12 @@ impl PermissionBridge {
             gateway,
             abs_cwd.clone(),
             ClientType::Generic,
-            None,       // no managed rules — prompt policy decides; headless Ask → Deny
+            None,       // no managed rules — prompt policy decides
             Vec::new(), // deny_read_globs — the provider carries these for
             // subagent inheritance only; enforcement lives in
             // `access_in_scope` below (P1).
             Vec::new(), // web_fetch_allowed_domains
-            false,      // initial_yolo — headless: yolo never on (IP6)
+            true,       // initial_yolo — 默认自动审批（用户令 2026-09-26）；policy 短路仍在 yolo 之前
             None,       // client_identifier
             false,      // remember_tool_approvals
             hub,        // interactive prompter — codex app-server (slice #12)
@@ -204,6 +207,20 @@ impl PermissionBridge {
         tool: &str,
         args: &serde_json::Value,
     ) -> Result<PermitDecision, PermitError> {
+        self.request_with_source(risk, tool, args)
+            .await
+            .map(|(decision, _source)| decision)
+    }
+
+    /// 0bt④（2026-09-26；原 0bu 并件）：同 [`request`](Self::request)，另回传
+    /// 判定**来源**（封闭集 [`PermitSource`]）——只加观测面：判定结果与
+    /// 拒绝序逐字不变，来源仅用于 journal 复核。
+    pub async fn request_with_source(
+        &self,
+        risk: RiskClass,
+        tool: &str,
+        args: &serde_json::Value,
+    ) -> Result<(PermitDecision, PermitSource), PermitError> {
         // Read-only sandbox: only read-class accesses may proceed — and they
         // auto-allow below. Anything else (mutation, network, escape, MCP)
         // is denied before the manager sees the request: no prompt, no
@@ -218,7 +235,7 @@ impl PermissionBridge {
         if self.policy == PermissionPolicy::ReadOnly
             && (risk != RiskClass::ReadOnly || tool.contains("__"))
         {
-            return Ok(PermitDecision::Deny);
+            return Ok((PermitDecision::Deny, PermitSource::Policy));
         }
         // Benchmark (2026-08-06): local edits auto-allow (the harness has no
         // client to answer prompts); network and shell-escape fail closed
@@ -245,21 +262,21 @@ impl PermissionBridge {
                 RiskClass::ReadOnly => {}
                 RiskClass::LocalMutation => {
                     if tool.contains("__") || (is_shell_tool(tool) && !allow_shell) {
-                        return Ok(PermitDecision::Deny);
+                        return Ok((PermitDecision::Deny, PermitSource::Policy));
                     }
-                    return Ok(PermitDecision::AllowOnce);
+                    return Ok((PermitDecision::AllowOnce, PermitSource::Policy));
                 }
                 RiskClass::SandboxEscape => {
                     if allow_shell && is_shell_tool(tool) {
-                        return Ok(PermitDecision::AllowOnce);
+                        return Ok((PermitDecision::AllowOnce, PermitSource::Policy));
                     }
-                    return Ok(PermitDecision::Deny);
+                    return Ok((PermitDecision::Deny, PermitSource::Policy));
                 }
                 RiskClass::NetworkCall => {
                     if allow_network {
-                        return Ok(PermitDecision::AllowOnce);
+                        return Ok((PermitDecision::AllowOnce, PermitSource::Policy));
                     }
-                    return Ok(PermitDecision::Deny);
+                    return Ok((PermitDecision::Deny, PermitSource::Policy));
                 }
             }
         }
@@ -268,34 +285,69 @@ impl PermissionBridge {
         // to the session cwd (and away from the runtime's own `.gsa` tree)
         // before the manager sees the request.
         if !self.access_in_scope(&access) {
-            return Ok(PermitDecision::Deny);
+            return Ok((PermitDecision::Deny, PermitSource::Scope));
         }
         let update = ToolCallUpdate::new(
             ToolCallId::new(format!("call-{tool}")),
             ToolCallUpdateFields::new(),
         );
+        // 0bs ⑪（2026-09-26，用户令）：唯二门禁——`browser_control` 的
+        // `download` / `script` 动作须**逐次**经用户明确批准（ApprovalAlways）。
+        // 请求带 `force_prompt` 进管理器：yolo／会话授予／auto 分类器／
+        // policy-allow／sandbox 一切自动放行短路对它失效，直落交互提示；
+        // 无客户端应答 fail-closed（提示路径既有语义）。其余动作面全面放开
+        // （navigate/click/type/scroll/… 照旧自动审批）。
+        let force_prompt = tool == "browser_control" && browser_action_requires_approval(args);
         // A live gateway awaits the client's answer; a silent client must not
         // stall the loop forever — bounded wait, then fail closed (P2-2).
-        let decision = tokio::time::timeout(
-            PERMISSION_PROMPT_TIMEOUT,
-            self.handle.request(access, update, None, None, None),
-        )
-        .await
-        .unwrap_or_else(|_| {
-            tracing::warn!(
-                tool,
-                "permission prompt timed out after {PERMISSION_PROMPT_TIMEOUT:?} — denying"
-            );
-            Decision::Cancelled
-        });
+        let request_fut = async {
+            if force_prompt {
+                self.handle
+                    .request_force_prompt(access, update, None, None, None)
+                    .await
+            } else {
+                self.handle.request(access, update, None, None, None).await
+            }
+        };
+        let decision = match tokio::time::timeout(PERMISSION_PROMPT_TIMEOUT, request_fut).await
+        {
+            Ok(decision) => decision,
+            Err(_) => {
+                tracing::warn!(
+                    tool,
+                    "permission prompt timed out after {PERMISSION_PROMPT_TIMEOUT:?} — denying"
+                );
+                return Ok((PermitDecision::Deny, PermitSource::Timeout));
+            }
+        };
+        // 0bt④: provenance is observation-only — the decision mapping below is
+        // byte-for-byte the historical one (AllowOnce / Deny), only labeled.
+        // 0bs ⑪: a forced-approval request is answered by the user even under
+        // yolo — an allow is a user answer, never a mode artifact.
+        let yolo = self.handle.is_yolo_mode() && !force_prompt;
         Ok(match decision {
-            Decision::Allow => PermitDecision::AllowOnce,
+            // Yolo auto-approve fast path; without yolo an allow is either the
+            // manager's read auto-allow (ReadOnly class) or a client answer.
+            Decision::Allow => (
+                PermitDecision::AllowOnce,
+                if yolo {
+                    PermitSource::Yolo
+                } else if force_prompt || risk != RiskClass::ReadOnly {
+                    PermitSource::User
+                } else {
+                    PermitSource::Policy
+                },
+            ),
             // Headless: an interactive prompt has no client to answer it —
             // fail closed rather than stall or guess.
-            Decision::Ask | Decision::FollowupMessage(_) => PermitDecision::Deny,
-            Decision::Reject(_) | Decision::PolicyDeny(_) | Decision::Cancelled => {
-                PermitDecision::Deny
+            Decision::Ask => (PermitDecision::Deny, PermitSource::FailClosed),
+            // A client answered (reject-with-message / plain reject).
+            Decision::FollowupMessage(_) | Decision::Reject(_) => {
+                (PermitDecision::Deny, PermitSource::User)
             }
+            Decision::PolicyDeny(_) => (PermitDecision::Deny, PermitSource::Policy),
+            // Interaction terminated without an affirmative answer.
+            Decision::Cancelled => (PermitDecision::Deny, PermitSource::FailClosed),
         })
     }
 
@@ -435,7 +487,10 @@ fn normalize_lexical(p: &Path) -> PathBuf {
 }
 
 /// A gateway whose receiver is dropped immediately: the interactive prompt
-/// path fails closed (permission manager's SendFailed → Ask → Deny).
+/// path fails closed when it is ever reached (permission manager's
+/// SendFailed → Ask → Deny; under the default yolo spawn the manager
+/// auto-approves before prompting, so this backstop only binds non-yolo
+/// paths).
 pub(crate) fn dead_gateway() -> AcpAgentGatewaySender {
     AcpAgentGatewaySender::new(tokio::sync::mpsc::unbounded_channel().0)
 }
@@ -571,8 +626,7 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
             ) => AccessKind::Read(None),
             _ => AccessKind::Edit(format!("{tool}: {args}")),
         }
-    } else if tool == "compaction_whitelist_add"
-        || tool == "blackboard_read"
+    } else if tool == "compaction_whitelist_add"        || tool == "blackboard_read"
         // P0-C orz 内嵌集成 S2 (2026-08-15): `blackboard_action_write`
         // writes ONLY the in-memory action-bar slot — no external side
         // effect (side effects happen at the mechanical issuance exit) —
@@ -619,6 +673,19 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
     } else {
         AccessKind::Edit(format!("{tool}: {args}"))
     }
+}
+
+/// 0bs ⑪（2026-09-26，用户令）：`browser_control` 的唯二门禁动作——下载与
+/// 脚本执行。二者是整条浏览器车道里仅存的、能改变系统状态或执行模型提供
+/// 的代码的动作面，须**逐次**经用户明确批准（ApprovalAlways：桥把请求带
+/// `force_prompt` 送进管理器，一切自动放行短路对其失效；无客户端应答
+/// fail-closed）。其余动作面（navigate/type/key/click/scroll/…）照旧自动
+/// 审批。判定只按动作名，不看参数——参数校验在 local_browser 工具层。
+fn browser_action_requires_approval(args: &serde_json::Value) -> bool {
+    matches!(
+        args.get("action").and_then(|a| a.as_str()),
+        Some("download") | Some("script")
+    )
 }
 
 #[cfg(test)]
@@ -710,11 +777,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ask_with_no_client_fails_closed() {
-        // Bash (SandboxEscape) has no allow rule and no interactive client →
-        // headless Ask → Deny (fail-closed).
-        let decision = with_bridge(|b| async move {
-            b.request(
+    async fn ask_auto_approves_under_default_yolo() {
+        // 用户令 2026-09-26「直接开auto mode就行」：生产 spawn 初始即 yolo，
+        // Bash（SandboxEscape）等 Ask 类不再等弹窗/超时——manager 在 yolo
+        // 快路径自动放行（policy 短路与无桥 fail-closed 默认不受影响）。
+        // 0bt④：来源观测面同址钉——yolo 快路必须自报 `yolo`。
+        let (decision, source) = with_bridge(|b| async move {
+            b.request_with_source(
                 RiskClass::SandboxEscape,
                 "run_terminal_cmd",
                 &serde_json::json!({"command": "dir"}),
@@ -725,8 +794,13 @@ mod tests {
         .await;
         assert_eq!(
             decision,
-            PermitDecision::Deny,
-            "headless Ask must fail closed"
+            PermitDecision::AllowOnce,
+            "default-yolo spawn must auto-approve Ask-class requests"
+        );
+        assert_eq!(
+            source,
+            PermitSource::Yolo,
+            "0bt④: the auto-approve fast path must report source=yolo"
         );
     }
 
@@ -1276,11 +1350,17 @@ mod tests {
                 serde_json::json!({"path": "a.txt"}),
             ),
         ] {
-            let decision = bridge.request(risk, tool, &args).await.unwrap();
+            let (decision, source) = bridge.request_with_source(risk, tool, &args).await.unwrap();
             assert_eq!(
                 decision,
                 PermitDecision::Deny,
                 "{tool} must be denied under ReadOnly policy"
+            );
+            // 0bt④：策略门短路必须自报来源 `policy`（观测面）。
+            assert_eq!(
+                source,
+                PermitSource::Policy,
+                "{tool}: ReadOnly short-circuit must report source=policy"
             );
         }
 
@@ -1289,8 +1369,8 @@ mod tests {
         // matches the FULL name, so a server named `read_*`/`list_*`/`grep*`
         // would otherwise slip past the policy gate; review D2-1). The `__`
         // separator marks MCP names (access_kind below).
-        let decision = bridge
-            .request(
+        let (decision, source) = bridge
+            .request_with_source(
                 RiskClass::ReadOnly,
                 "read_server__extract",
                 &serde_json::json!({}),
@@ -1302,6 +1382,7 @@ mod tests {
             PermitDecision::Deny,
             "MCP names must never bypass the read-only gate"
         );
+        assert_eq!(source, PermitSource::Policy);
 
         // Read within the cwd → auto-allowed (the manager's allow_all path).
         let decision = bridge

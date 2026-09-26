@@ -60,7 +60,50 @@ unsafe fn set_console_output_code_page_utf8() {
     }
 }
 
+/// 0bt② (2026-09-26): single-source carrier build info line
+/// (`--build-info`). The version is the package version the carrier was
+/// built from — the same bump-record string the release flow uses.
+fn build_info_line() -> String {
+    format!(
+        "orz-build-info: version={} os={} arch={} profile={}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        if cfg!(debug_assertions) { "debug" } else { "release" }
+    )
+}
+
 fn main() {
+    // 批七（2026-09-25 用户报告 Web 工作台 prompt 崩溃）：`run_agent_loop`
+    // 巨型 future（0bt 未竟拆分项②）在真实网关下首 poll 即可打穿 Windows
+    // 默认主线程栈（实锚：`thread 'main' has overflowed its stack`，
+    // 0xC00000FD）。整个 main 体搬上 64 MiB 显式大栈线程——所有入口
+    // （TUI / -p / --stdio / web 子命令链）一并受益；子进程退出码经
+    // join 透传。长期治本＝agent_loop 拆分（0bt ②）。
+    let child = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(main_inner)
+        .expect("spawn main thread (64 MiB stack)");
+    match child.join() {
+        Ok(()) => {}
+        Err(panic) => {
+            eprintln!("error: main thread panicked: {panic:?}");
+            std::process::exit(101);
+        }
+    }
+}
+
+fn main_inner() {
+    // 0bt② (2026-09-26, carries 0bj① m15): `--build-info` — the carrier's own
+    // packaging-face version seam. The Rust binary carries no Win32
+    // VersionInfo, so `dogfood_launch -DryRun` rendered `carrier=unknown`; the
+    // launcher now reads this line instead (`version=` is parsed out). Print
+    // and exit 0 before ANY home redirect / session bootstrap (pure stdout,
+    // no side effects).
+    if std::env::args().any(|a| a == "--build-info") {
+        println!("{}", build_info_line());
+        return;
+    }
     // F4 / 0as (2026-09-19): put the host console into UTF-8 mode on Windows
     // so orz's UTF-8 output (receipts, tool-output echo) is not rendered as
     // mojibake on GBK-codepage consoles, and child processes that follow the
@@ -201,6 +244,23 @@ fn main() {
     // uses (orz-host `archive_session_on_demand`); no second implementation.
     if args.get(1).map(String::as_str) == Some("archive") {
         run_archive(&args[2..]);
+        return;
+    }
+    // 0br S3 批六 (`orz unarchive|delete-session <session8>`): the Web
+    // workbench 回档/删除 actions — same spawn-by-the-bridge shape as
+    // `archive`; destructive semantics live in orz-host, the binary only
+    // carries exit codes and human-readable results.
+    if matches!(args.get(1).map(String::as_str), Some("unarchive") | Some("delete-session")) {
+        run_session_maintenance(args[1].as_str(), &args[2..]);
+        return;
+    }
+    // 0br S3 批七 (`orz trust <cwd>`): the Web workbench 信任窗 — the TUI
+    // asks interactively; the headless bridge lane cannot, so the UI confirm
+    // dialog relays through the bridge into this subcommand, which persists
+    // the grant into the SAME GROK_HOME the prompt child reads (redirect
+    // chain already applied in main, below-nothing else to align).
+    if args.get(1).map(String::as_str) == Some("trust") {
+        run_trust(&args[2..]);
         return;
     }
     if args.iter().any(|a| a == "--stdio") {
@@ -539,6 +599,76 @@ fn run_archive(rest: &[String]) {
         &cwd, session8,
     )) {
         Ok(msg) => println!("已归档 {session8}: {msg}"),
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// 0br S3 批六（`orz unarchive|delete-session <session8>`，Web 工作台
+/// 「回档」「删除」的执行体）：与 `run_archive` 同一 spawn 形态——桥以
+/// 工作区 cwd 拉起本子命令，stdout 携带结果、退出码携带成败。删除为
+/// 不可恢复操作，确认在前端弹窗完成；此处不做二次确认（桥是唯一调用方）。
+fn run_session_maintenance(verb: &str, rest: &[String]) {
+    let _guard = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+    let Some(session8) = rest.first().filter(|s| !s.starts_with('-')) else {
+        eprintln!("error: 用法: orz {verb} <session8>");
+        std::process::exit(2);
+    };
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("error: failed to start async runtime: {e}");
+            std::process::exit(1);
+        }
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let result = rt.block_on(async {
+        if verb == "unarchive" {
+            orz_host::acp_server::unarchive_session_on_demand(&cwd, session8).await
+        } else {
+            orz_host::acp_server::delete_session_on_demand(&cwd, session8).await
+        }
+    });
+    match result {
+        Ok(msg) => println!("{msg}"),
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// 0br S3 批七（`orz trust <cwd>`，Web 工作台信任窗的执行体）：把工作区
+/// 授信写入与 prompt 子进程同一 GROK_HOME 下的信任存储（GROK_HOME 由
+/// main 的 redirect 链先行注入，本子命令继承同值——同链同存储）。
+/// 注意：必须用调用方传入的**绝对** cwd；相对路径拒绝。
+fn run_trust(rest: &[String]) {
+    let _guard = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+    let Some(raw) = rest.first().filter(|s| !s.starts_with('-')) else {
+        eprintln!("error: 用法: orz trust <cwd>");
+        std::process::exit(2);
+    };
+    let cwd = PathBuf::from(raw);
+    if !cwd.is_absolute() {
+        eprintln!("error: 工作区路径必须为绝对路径: {raw}");
+        std::process::exit(2);
+    }
+    match orz_host::session::grant_workspace_trust(&cwd) {
+        Ok(msg) => println!("{msg}"),
         Err(e) => {
             eprintln!("error: {e}");
             std::process::exit(1);

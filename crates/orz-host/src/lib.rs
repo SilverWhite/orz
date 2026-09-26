@@ -113,7 +113,8 @@ use orz_assurance::permit::{
     SensitiveActionPermit,
 };
 use orz_loop::host::{
-    LoopHost, PermitDecision, PermitError, RiskClass, ToolError, ToolRegistry, ToolResult,
+    LoopHost, PermitDecision, PermitError, PermitSource, RiskClass, ToolError, ToolRegistry,
+    ToolResult,
 };
 
 use crate::keystore::MemoryInstallationKeyStore;
@@ -247,7 +248,8 @@ impl OrzHost {
     /// Build a host with an optional IP6 permission bridge.
     ///
     /// `Some(bridge)` delegates `request_permission` to the Grok permission
-    /// manager (Read auto-allow; headless Ask → Deny); `None` keeps the
+    /// manager (默认自动审批——初始 yolo，用户令 2026-09-26；policy 短路与
+    /// 无桥 fail-closed 默认不变); `None` keeps the
     /// fail-closed default.
     pub fn with_permission(
         journal: JournalRecorder,
@@ -752,8 +754,9 @@ impl OrzHost {
     /// Build a host with an IP6 permission bridge in one step.
     ///
     /// `gateway` is the outbound ACP sender when interactive (`--stdio`);
-    /// `None` (headless `-p`/`--plan`) substitutes a dead gateway — Read
-    /// auto-allows, `Ask` fails closed to `Deny`.
+    /// `None` (headless `-p`/`--plan`) substitutes a dead gateway — the
+    /// manager 默认自动审批（初始 yolo，用户令 2026-09-26），非 yolo 的
+    /// `Ask` 仍 fail closed to `Deny`.
     ///
     /// Note: `PermissionBridge::spawn` runs the manager actor via
     /// `spawn_local`, so callers must be inside a `tokio::task::LocalSet`.
@@ -1991,10 +1994,26 @@ impl LoopHost for OrzHost {
         tool: &str,
         args: &serde_json::Value,
     ) -> Result<PermitDecision, PermitError> {
+        self.request_permission_with_source(risk, tool, args)
+            .await
+            .map(|(decision, _source)| decision)
+    }
+
+    /// 0bt④（2026-09-26）：桥自报判定来源（封闭集，观测面）——判定语义与
+    /// 拒绝序不变；无桥 fail-closed 亦带来源。
+    async fn request_permission_with_source(
+        &self,
+        risk: RiskClass,
+        tool: &str,
+        args: &serde_json::Value,
+    ) -> Result<(PermitDecision, Option<PermitSource>), PermitError> {
         match &self.permission {
-            Some(bridge) => bridge.request(risk, tool, args).await,
+            Some(bridge) => bridge
+                .request_with_source(risk, tool, args)
+                .await
+                .map(|(decision, source)| (decision, Some(source))),
             // No bridge wired → fail closed, never auto-allow (review P1-1).
-            None => Ok(PermitDecision::Deny),
+            None => Ok((PermitDecision::Deny, Some(PermitSource::FailClosed))),
         }
     }
 }
@@ -3418,6 +3437,17 @@ mod tests {
                 PermitDecision::Deny,
                 "no bridge → fail closed for {tool}"
             );
+            // 0bt④：无桥 fail-closed 也须自报来源（封闭集观测面）。
+            let (decision, source) = host
+                .request_permission_with_source(risk, tool, &serde_json::json!({}))
+                .await
+                .expect("request_permission_with_source");
+            assert_eq!(decision, PermitDecision::Deny);
+            assert_eq!(
+                source,
+                Some(PermitSource::FailClosed),
+                "no-bridge fail-closed must report source=fail_closed for {tool}"
+            );
         }
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -3474,9 +3504,11 @@ mod tests {
     }
 
     /// Phase 3 wiring: host WITH the bridge — Read auto-allows through the
-    /// permission manager, Bash (no interactive client) Ask → Deny (IP6).
+    /// permission manager; Bash 亦自动放行（默认自动审批＝初始 yolo，
+    /// 用户令 2026-09-26「直接开auto mode就行」）——即使网关为 dead
+    /// gateway 也不再等待/拒绝。
     #[tokio::test]
-    async fn host_with_bridge_auto_allows_read_denies_bash() {
+    async fn host_with_bridge_default_yolo_auto_allows_read_and_bash() {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let dir = test_dir();
@@ -3508,7 +3540,11 @@ mod tests {
                     )
                     .await
                     .expect("bash request");
-                assert_eq!(bash, PermitDecision::Deny, "headless Ask → Deny");
+                assert_eq!(
+                    bash,
+                    PermitDecision::AllowOnce,
+                    "default yolo must auto-approve Ask-class requests"
+                );
 
                 let _ = std::fs::remove_dir_all(&dir);
             })

@@ -294,6 +294,7 @@ Usage:
 - Pass `outline=true` (text files only) to get a section outline — one `L<line>: <heading>` entry per Markdown heading — instead of the content; use it to locate a section before reading a range
 - Line numbers (1-based) appear as anchors in the format LINE_NUMBER→LINE_CONTENT on the first returned line and on every 10th line of the file; the lines in between show content only. Count from the nearest anchor when referring to a specific line
 - Text files larger than the coarse gate (default 64 KiB, configurable 8–64 KiB via ORZ_READ_FILE_COARSE_GATE_BYTES — TER T1.10 W-F13a) return a read-handle envelope — path / size / encoding / content_sha256 / available range / bounded preview (≤4 KiB) / truncated / offset — instead of full content. Continue with offset=… (1-based line) or switch to grep/structure-first.
+- For one specific line — including a very long line that a normal read truncates (index/ledger rows, single-line JSON) — pass `line=<N>` (1-based; negative counts from the end, -1 = last line) to get that line's bounded character window instead; `offset`/`limit`/`outline` are ignored in this mode. The response ends with a `[line N: …]` marker carrying the line's total character count; when more of the line remains the marker shows the exact `line=<L>, char_offset=<C>` continuation to page through it (`char_limit` = window size, default 4000, max 16000).
 - Every text read returns a content anchor — sha256 / size / mtime (mtime may be absent) — in the envelope header or as a trailing [read anchor] line. Before editing a file, copy that anchor into the edit call's expected_anchor so the write gate verifies the file is unchanged; a mismatch rejects the edit and requires re-reading first.
 - This tool can read PDF files (.pdf), PowerPoint files (.pptx), Jupyter notebooks (.ipynb files), and image files (e.g. PNG, JPG, etc).
 - When reading an image file the contents are presented visually as this tool uses multimodal LLMs."#;
@@ -301,7 +302,7 @@ Usage:
 fn schema_default_offset() -> Option<i64> {
     Some(1)
 }
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ReadFileInput {
     #[serde(rename = "target_file")]
     #[schemars(
@@ -340,6 +341,29 @@ pub struct ReadFileInput {
         description = "Text files only: when true, return a section outline (Markdown heading lines as `L<line>: <heading>`) instead of the file content — useful to locate a section before reading a range. Also works above the coarse gate. Ignored for non-text files."
     )]
     pub outline: Option<bool>,
+    // 0bt① (2026-09-26, carries 0bb GAP-TOOL-LONGLINE-QUOTING, 工具面): the
+    // stable single-line window — `line=N` returns a bounded character window
+    // of one line (the only way to reach the tail of a very long line, which
+    // regular reads and the coarse-gate preview truncate; index/TODO rows and
+    // single-line session JSON are the originating cases).
+    #[serde(default, deserialize_with = "crate::types::schema::deserialize_lenient_i64", skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        with = "GrokIntegerSchema",
+        description = "Text files only: 1-based line number to read as a bounded character window — the stable way to read a single very long line that regular reads truncate (or whose tail you need). Negative counts from the end (-1 = last line). When set, offset/limit/outline are ignored. The response carries a continuation pointer in a `[line N: …]` marker when more of the line remains."
+    )]
+    pub line: Option<i64>,
+    #[serde(default, deserialize_with = "crate::types::schema::deserialize_lenient_i64", skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        with = "GrokIntegerSchema",
+        description = "With line=…: 1-based character (Unicode scalar) offset within the line — page through a long line by copying the `continue with line=L, char_offset=C` value from the response marker. Default 1."
+    )]
+    pub char_offset: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        with = "GrokIntegerSchema",
+        description = "With line=…: maximum characters to return (default 4000, max 16000)."
+    )]
+    pub char_limit: Option<usize>,
 }
 async fn cursor_rules_on_read_enabled(resources: &SharedResources) -> bool {
     let res = resources.lock().await;
@@ -521,6 +545,107 @@ fn build_read_anchor(path: &std::path::Path, file_bytes: &[u8]) -> Option<ReadAn
 /// Always uses the padded `content` field. Concise post-processing
 /// (swapping in `content_concise`) is done by `ReadFileConciseTool` after this
 /// returns.
+/// 0bt①: default / max characters returned by the `line=` window mode.
+const LINE_WINDOW_DEFAULT_CHARS: usize = 4_000;
+const LINE_WINDOW_MAX_CHARS: usize = 16_000;
+
+/// 0bt①: resolve the `line=` input to a 1-based line index.
+/// Negative counts from the end (-1 = last line); 0 maps to line 1.
+/// `None` when out of range (an empty file has no lines).
+fn resolve_line_window_line(raw: i64, total_lines: usize) -> Option<usize> {
+    if total_lines == 0 {
+        return None;
+    }
+    let idx = if raw == 0 {
+        1
+    } else if raw > 0 {
+        raw as usize
+    } else {
+        let computed = total_lines as i64 + raw + 1;
+        if computed < 1 {
+            return None;
+        }
+        computed as usize
+    };
+    (idx >= 1 && idx <= total_lines).then_some(idx)
+}
+
+/// 0bt①: line text (without the trailing `\n` / `\r\n`) at a 1-based index.
+/// The phantom trailing line of a file that ends with `\n` yields `""`.
+fn line_window_text_at(file_content: &str, line_no: usize) -> &str {
+    match file_content.split_inclusive('\n').nth(line_no - 1) {
+        Some(line) => {
+            let Some(line) = line.strip_suffix('\n') else {
+                return line;
+            };
+            line.strip_suffix('\r').unwrap_or(line)
+        }
+        None => "",
+    }
+}
+
+/// 0bt①: render the `line=` single-line character window (see `ReadFileInput`
+/// field docs). The trailing `[line N: …]` marker always states the line's
+/// total char count and — while more of the line remains — the exact
+/// `line`/`char_offset` continuation pointer, so paging through a very long
+/// line never needs shell quoting or trial-and-error.
+fn render_line_window(
+    file_content: &str,
+    total_lines: usize,
+    path: std::path::PathBuf,
+    output_encoding: Option<String>,
+    read_anchor: Option<ReadAnchor>,
+    raw_line: i64,
+    char_offset: Option<i64>,
+    char_limit: Option<usize>,
+) -> ReadFileOutput {
+    let Some(line_no) = resolve_line_window_line(raw_line, total_lines) else {
+        return ReadFileOutput::FileReadError(format!(
+            "Error: line {raw_line} is out of range for this file ({total_lines} lines). \
+             Use line=N (1-based) or a negative offset from the end (e.g. line=-1 = last line)."
+        ));
+    };
+    let line_text = line_window_text_at(file_content, line_no);
+    let total_chars = line_text.chars().count();
+    let start = char_offset.unwrap_or(1).max(1) as usize;
+    let limit = char_limit
+        .unwrap_or(LINE_WINDOW_DEFAULT_CHARS)
+        .clamp(1, LINE_WINDOW_MAX_CHARS);
+    let window: String = line_text.chars().skip(start - 1).take(limit).collect();
+    let shown = window.chars().count();
+    // 1-based index of the last shown char (0 when nothing was shown).
+    let end = start - 1 + shown;
+    let marker = if total_chars == 0 {
+        format!("[line {line_no}: empty line (0 chars)]")
+    } else if shown == 0 {
+        format!(
+            "[line {line_no}: {total_chars} chars total; char_offset {start} is past the line's \
+             end (use char_offset=1..={total_chars})]"
+        )
+    } else if end >= total_chars {
+        format!("[line {line_no}: {total_chars} chars total (complete)]")
+    } else {
+        format!(
+            "[line {line_no}: {total_chars} chars total; showing {start}-{end}; \
+             continue with line={line_no}, char_offset={}]",
+            end + 1
+        )
+    };
+    let content = format!("{line_no}→{window}\n{marker}");
+    ReadFileOutput::FileContent(FileContent {
+        content: content.clone(),
+        content_concise: Some(content),
+        absolute_path: path,
+        offset: Some(line_no),
+        limit: Some(1),
+        raw_output: window,
+        total_lines,
+        output_encoding,
+        extracted_images: Vec::new(),
+        read_anchor,
+    })
+}
+
 pub(crate) async fn run_read_file(
     input: ReadFileInput,
     cwd_override: Option<std::path::PathBuf>,
@@ -857,6 +982,24 @@ pub(crate) async fn run_read_file(
         }));
     }
     let total_lines = file_content.matches('\n').count() + 1;
+    // 0bt①（2026-09-26，承接 0bb `GAP-TOOL-LONGLINE-QUOTING` 工具面）：`line=N`
+    // 单行字符窗。超长单行（路由索引／TODO 条目、`.gsa/conversations/*.json`
+    // 巨型单行）在整读与 coarse gate 预览里都只能拿到头部（行级续读无法
+    // 收窄单行）；本模式按字符切片稳定取回任意窗口，尾随 `[line N: …]` 标记
+    // 给出总长与续读指针。先于 outline 与 coarse gate（行窗即终态；offset/
+    // limit/outline 在本模式忽略）。
+    if let Some(raw_line) = input.line {
+        return Ok(render_line_window(
+            &file_content,
+            total_lines,
+            path,
+            output_encoding,
+            read_anchor,
+            raw_line,
+            input.char_offset,
+            input.char_limit,
+        ));
+    }
     // 0bh ⑫（2026-09-22，按节定位）：`outline=true` 时先于 coarse gate 返回
     // 章节索引（`L<行号>: <标题>`；Markdown ATX 标题）——大文件也能先定位再按
     // offset/limit 读段；非文本路径在更早分支已分流。
@@ -1231,6 +1374,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let shared = resources.into_shared();
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(shared.clone()), input)
@@ -1266,6 +1410,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1318,6 +1463,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1364,6 +1510,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1419,6 +1566,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let shared = resources.into_shared();
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(shared.clone()), input)
@@ -1460,6 +1608,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let shared = resources.into_shared();
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(shared.clone()), input)
@@ -1586,6 +1735,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let mut ctx = test_ctx(resources.into_shared());
         ctx.extensions.insert(xai_tool_runtime::BehaviorVersion(
@@ -1617,6 +1767,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1641,6 +1792,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let mut ctx = test_ctx(resources.into_shared());
         ctx.extensions.insert(xai_tool_runtime::BehaviorVersion(
@@ -1672,6 +1824,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1696,6 +1849,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1723,6 +1877,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1735,6 +1890,130 @@ mod tests {
             }
             other => panic!("Expected FileContent, got {:?}", other),
         }
+    }
+    /// 0bt①（2026-09-26，承接 0bb `GAP-TOOL-LONGLINE-QUOTING` 工具面）：超长
+    /// 单行的稳定取行面——`line=` 单行字符窗在 coarse gate 之上也直达，尾随
+    /// 标记给出总长与 `char_offset` 续读指针，窗口可逐页推进到行尾。
+    #[tokio::test]
+    async fn read_file_line_window_pages_long_line_above_coarse_gate() {
+        let tmp = TempDir::new().unwrap();
+        // 文件远高于 64 KiB coarse gate，感兴趣行是单行巨型行。
+        let long_row: String = (0..30_000)
+            .map(|i| (b'a' + (i % 26) as u8) as char)
+            .collect();
+        std::fs::write(
+            tmp.path().join("ledger.md"),
+            format!("head\n{long_row}\n"),
+        )
+        .unwrap();
+        let tool = ReadFileTool;
+        let resources = test_resources(tmp.path());
+        // 同文件整读只会拿到有界预览并在巨型行中途截断；行窗是稳定的续读面。
+        let first = ReadFileInput {
+            path: "ledger.md".to_string(),
+            line: Some(2),
+            char_limit: Some(64),
+            ..Default::default()
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), first)
+            .await
+            .unwrap();
+        let ReadFileOutput::FileContent(content) = result else {
+            panic!("expected FileContent");
+        };
+        assert_eq!(content.total_lines, 3);
+        assert!(
+            content.content.starts_with("2→"),
+            "anchored line: {}",
+            content.content
+        );
+        assert!(
+            content
+                .content
+                .contains("[line 2: 30000 chars total; showing 1-64; continue with line=2, char_offset=65]"),
+            "{}",
+            content.content
+        );
+        // 续读到行尾：最后一个窗口以 complete 标记收束，且内容逐字对齐源行。
+        let expect_tail: String = long_row.chars().skip(29_936).take(64).collect();
+        let tail = ReadFileInput {
+            path: "ledger.md".to_string(),
+            line: Some(2),
+            char_offset: Some(29_937),
+            char_limit: Some(64),
+            ..Default::default()
+        };
+        let result = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(test_resources(tmp.path()).into_shared()),
+            tail,
+        )
+        .await
+        .unwrap();
+        let ReadFileOutput::FileContent(content) = result else {
+            panic!("expected FileContent");
+        };
+        assert!(
+            content
+                .content
+                .contains("[line 2: 30000 chars total (complete)]"),
+            "{}",
+            content.content
+        );
+        assert_eq!(content.raw_output, expect_tail);
+    }
+    /// 0bt①：越界行号是如实报错（含总行数），行内越界 `char_offset` 是标记
+    /// 而非错误；负行号从末尾数。
+    #[tokio::test]
+    async fn read_file_line_window_out_of_range_and_past_end_char_offset() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("small.txt"), "abc\ndef").unwrap();
+        let tool = ReadFileTool;
+        let out_of_range = ReadFileInput {
+            path: "small.txt".to_string(),
+            line: Some(99),
+            ..Default::default()
+        };
+        let result = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(test_resources(tmp.path()).into_shared()),
+            out_of_range,
+        )
+        .await
+        .unwrap();
+        match result {
+            ReadFileOutput::FileReadError(msg) => {
+                assert!(
+                    msg.contains("out of range") && msg.contains("2 lines"),
+                    "{msg}"
+                );
+            }
+            other => panic!("expected FileReadError, got {other:?}"),
+        }
+        let past_end = ReadFileInput {
+            path: "small.txt".to_string(),
+            line: Some(-1),
+            char_offset: Some(10),
+            ..Default::default()
+        };
+        let result = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(test_resources(tmp.path()).into_shared()),
+            past_end,
+        )
+        .await
+        .unwrap();
+        let ReadFileOutput::FileContent(content) = result else {
+            panic!("expected FileContent");
+        };
+        assert_eq!(content.offset, Some(2));
+        assert!(
+            content
+                .content
+                .contains("[line 2: 3 chars total; char_offset 10 is past the line's end"),
+            "{}",
+            content.content
+        );
     }
     #[tokio::test]
     async fn read_file_absolute_path() {
@@ -1750,6 +2029,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1774,6 +2054,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1799,6 +2080,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1828,6 +2110,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1873,6 +2156,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1908,6 +2192,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1942,6 +2227,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let default_resources = test_resources(tmp.path());
         let default = xai_tool_runtime::Tool::run(
@@ -1995,6 +2281,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let resources = test_resources(tmp.path());
         let result =
@@ -2019,6 +2306,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let resources = test_resources(tmp.path());
         let result =
@@ -2059,6 +2347,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result =
             xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(resources.into_shared()), input)
@@ -2245,6 +2534,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2282,6 +2572,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2343,6 +2634,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2392,6 +2684,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2421,6 +2714,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2445,6 +2739,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2715,6 +3010,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2750,6 +3046,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2799,6 +3096,7 @@ mod tests {
                 pages: None,
                 format: None,
                 outline: None,
+                ..Default::default()
             };
             let result =
                 xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -2825,6 +3123,7 @@ mod tests {
                 pages: None,
                 format: None,
                 outline: None,
+                ..Default::default()
             };
             let result =
                 xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -2858,6 +3157,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let mut ctx = test_ctx(resources.into_shared());
         ctx.extensions.insert(xai_tool_runtime::BehaviorVersion(
@@ -2894,6 +3194,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2923,6 +3224,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2954,6 +3256,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -3273,6 +3576,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -3319,6 +3623,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -3349,6 +3654,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -3466,6 +3772,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(resources.into_shared()), input)
             .await
@@ -3482,6 +3789,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: Some(true),
+            ..Default::default()
         };
         xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(resources.into_shared()), input)
             .await
@@ -3658,6 +3966,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let resources = test_resources(tmp.path());
         let (deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
@@ -3697,6 +4006,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let mut ctx = xai_tool_runtime::ToolCallContext::default();
         ctx.extensions
@@ -3723,6 +4033,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: Some("text".to_string()),
             outline: None,
+            ..Default::default()
         };
         let resources = test_resources(tmp.path());
         let (deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
@@ -3750,6 +4061,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let resources = test_resources(tmp.path());
         let (deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
@@ -3780,6 +4092,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let pdf_input = || ReadFileInput {
             path: "doc.pdf".to_string(),
@@ -3788,6 +4101,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: Some("text".to_string()),
             outline: None,
+            ..Default::default()
         };
         for _ in 0..10 {
             let (text, pdf) = tokio::join!(
@@ -3827,6 +4141,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let (deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         assert!(
@@ -3867,6 +4182,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let (_deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         match terminal {
@@ -3899,6 +4215,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let (_deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         terminal
@@ -3944,6 +4261,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let (_deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         match terminal {
@@ -3998,6 +4316,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let (_deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         match terminal {
@@ -4031,6 +4350,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let (_deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         match terminal {
@@ -4164,6 +4484,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -4193,6 +4514,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -4227,6 +4549,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -4261,6 +4584,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await

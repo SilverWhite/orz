@@ -1582,7 +1582,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn approval_allow_once_executes_tool_and_journals() {
+    async fn default_yolo_executes_tool_and_journals_without_approval() {
+        // 用户令 2026-09-26「直接开auto mode就行」：会话默认自动审批（初始
+        // yolo）——workspace-write 线程的终端订单不再 approval/request，
+        // 直接执行并照常落 journal；客户端沉默也不等待（无 300s 停顿）。
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
@@ -1595,28 +1598,30 @@ mod tests {
                 initialize_and_start_thread(&mut w, &mut r, "thr_perm", "workspace-write").await;
                 run_turn(&mut w, &mut r, "thr_perm", "运行 dir").await;
 
-                // The hub payload arrives as a server→client request (skip
-                // the user-item echo queued before it).
-                let approval = recv_until(&mut r, "approval/request").await;
-                assert_eq!(approval.method.as_deref(), Some("approval/request"));
-                let id = approval.id.clone().expect("approval carries id");
-                let params = approval.params.as_ref().unwrap();
-                assert_eq!(params["tool_call_id"], "call-run_terminal_cmd");
-                assert_eq!(params["tool_name"], "run_terminal_command");
-                assert_eq!(params["bash_command"], "dir");
-                assert_eq!(params["scope"], "write");
-
-                // Allow once → the tool executes.
-                send(
-                    &mut w,
-                    &JsonMessage::response(id, json!({ "decision": "allow_once" })),
-                )
-                .await;
-                let completed = recv_until(&mut r, "turn/completed").await;
-                assert_eq!(
-                    completed.params.as_ref().unwrap()["turn"]["status"],
-                    "completed"
-                );
+                // Zero approval/request may appear; the turn completes on its
+                // own (the drain never answers anything — silence must not
+                // stall).
+                let mut approval_count = 0u32;
+                let mut status = String::new();
+                tokio::time::timeout(TURN_WAIT, async {
+                    loop {
+                        let msg = recv(&mut r).await;
+                        if msg.method.as_deref() == Some("approval/request") {
+                            approval_count += 1;
+                        }
+                        if msg.method.as_deref() == Some("turn/completed") {
+                            status = msg.params.as_ref().unwrap()["turn"]["status"]
+                                .as_str()
+                                .unwrap()
+                                .to_owned();
+                            break;
+                        }
+                    }
+                })
+                .await
+                .expect("turn terminates");
+                assert_eq!(approval_count, 0, "default yolo must not prompt");
+                assert_eq!(status, "completed", "run must complete unprompted");
 
                 let events = journal_events(&base, "thr_perm", 0);
                 assert!(
@@ -1629,41 +1634,6 @@ mod tests {
                     "the tool must genuinely execute: {events}"
                 );
                 assert_eq!(journal_terminal(&base, "thr_perm", 0), "run_finished");
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn approval_deny_never_starts_tool() {
-        tokio::task::LocalSet::new()
-            .run_until(async {
-                let base = test_dir();
-                let parts = CodexAppServer::new_parts(
-                    server_with(fake(console_exec_script("dir"))),
-                    base.clone(),
-                    TrustPolicy::Skip,
-                );
-                let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_deny", "workspace-write").await;
-                run_turn(&mut w, &mut r, "thr_deny", "运行 dir").await;
-                let approval = recv_until(&mut r, "approval/request").await;
-                send(
-                    &mut w,
-                    &JsonMessage::response(
-                        approval.id.clone().unwrap(),
-                        json!({ "decision": "deny" }),
-                    ),
-                )
-                .await;
-                recv_until(&mut r, "turn/completed").await;
-                let events = journal_events(&base, "thr_deny", 0);
-                assert!(
-                    !events.contains(
-                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"call-act-1\",\"exit_code\""
-                    ),
-                    "denied tool must never start: {events}"
-                );
-                assert!(events.contains("\"deny\""), "denial is journaled: {events}");
             })
             .await;
     }
@@ -1760,9 +1730,10 @@ mod tests {
     #[tokio::test]
     async fn read_only_and_workspace_write_threads_coexist() {
         // One server, two threads with different sandboxes: the
-        // workspace-write thread prompts exactly once (answered allow-once);
-        // the read-only thread's same-class tool is denied without prompting.
-        // Exactly one approval total, and it belongs to the ww thread.
+        // workspace-write thread executes under the default auto-approval
+        // (initial yolo — 用户令 2026-09-26); the read-only thread's
+        // same-class tool is denied by policy before the manager sees it.
+        // Zero approvals across both sandboxes.
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
@@ -1794,8 +1765,10 @@ mod tests {
                 run_turn(&mut w, &mut r, "thr_ro", "一").await;
                 run_turn(&mut w, &mut r, "thr_ww", "二").await;
 
-                // Drain to both terminals; answer the single approval the
-                // moment it arrives (a pending approval blocks its turn).
+                // Drain to both terminals; nothing should ever ask (yolo on
+                // the ww thread, policy deny on the ro thread) — the responder
+                // below stays defensive: an unexpected approval would mean a
+                // default regression.
                 let mut approvals: Vec<JsonMessage> = Vec::new();
                 let mut completed = 0u32;
                 tokio::time::timeout(TURN_WAIT, async {
@@ -1823,13 +1796,8 @@ mod tests {
                 .expect("both turns complete");
                 assert_eq!(
                     approvals.len(),
-                    1,
-                    "exactly one approval across the two sandboxes"
-                );
-                assert_eq!(
-                    approvals[0].params.as_ref().unwrap()["bash_command"],
-                    "echo ww",
-                    "the approval belongs to the workspace-write thread"
+                    0,
+                    "default yolo: no approvals across the two sandboxes"
                 );
 
                 // Journals: the read-only thread never started its tool;
@@ -1857,16 +1825,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn approval_allow_persists_for_identical_bash() {
+    async fn default_yolo_repeats_identical_orders_without_prompt() {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                // Two identical bash calls: the first prompts (always_allow),
-                // the second auto-allows via the persisted grant — the second
-                // identical bash must NOT prompt again.
+                // Two identical workspace orders (same command args) — under
+                // the default auto-approval BOTH execute with zero
+                // approval/request on the wire (previously the first prompted
+                // and only the second rode the persisted grant).
                 let script = vec![
-                    // 两次完全相同的工作区订单（命令参数一致）——发放期
-                    // 权限桥按相同 access 命中持久授权。
                     ScriptedResponse::tool_calls(vec![terminal_call("dir", "call-act-1")]),
                     ScriptedResponse::tool_calls(vec![terminal_call("dir", "call-act-2")]),
                     ScriptedResponse::text("两轮工具执行完成。"),
@@ -1881,19 +1848,7 @@ mod tests {
                 initialize_and_start_thread(&mut w, &mut r, "thr_always", "workspace-write").await;
                 run_turn(&mut w, &mut r, "thr_always", "两次 dir").await;
 
-                let approval = recv_until(&mut r, "approval/request").await;
-                send(
-                    &mut w,
-                    &JsonMessage::response(
-                        approval.id.clone().unwrap(),
-                        json!({ "decision": "allow" }),
-                    ),
-                )
-                .await;
-                // 第二笔相同订单必须经持久授权自动放行——wire 上只应出现
-                // 1 次 approval/request（若再提示则无应答，权限超时后订单
-                // 拒绝，turn 不会正常 completed）。
-                let mut wire_approvals = 1u32;
+                let mut wire_approvals = 0u32;
                 let completed = loop {
                     let msg = recv(&mut r).await;
                     if msg.method.as_deref() == Some("approval/request") {
@@ -1908,8 +1863,8 @@ mod tests {
                     "completed"
                 );
                 assert_eq!(
-                    wire_approvals, 1,
-                    "the second identical order must auto-allow via the persisted grant"
+                    wire_approvals, 0,
+                    "default yolo must auto-allow both identical orders without prompting"
                 );
                 let events = journal_events(&base, "thr_always", 0);
                 // 两笔直连终端调用都真实执行（tool_completed 带 exit_code=0）。
@@ -1927,35 +1882,6 @@ mod tests {
                     1,
                     "{events}"
                 );
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn approval_timeout_fails_closed_with_denial() {
-        tokio::task::LocalSet::new()
-            .run_until(async {
-                let base = test_dir();
-                let parts = CodexAppServer::new_parts_with_permission_timeout(
-                    server_with(fake(console_exec_script("dir"))),
-                    base.clone(),
-                    TrustPolicy::Skip,
-                    std::time::Duration::from_millis(80),
-                );
-                let (mut w, mut r) = connect(parts).await;
-                initialize_and_start_thread(&mut w, &mut r, "thr_to", "workspace-write").await;
-                run_turn(&mut w, &mut r, "thr_to", "运行 dir").await;
-                let _approval = recv_until(&mut r, "approval/request").await;
-                // Never answer — the transport times out and fails closed.
-                recv_until(&mut r, "turn/completed").await;
-                let events = journal_events(&base, "thr_to", 0);
-                assert!(
-                    !events.contains(
-                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"call-act-1\",\"exit_code\""
-                    ),
-                    "{events}"
-                );
-                assert!(events.contains("\"deny\""), "timeout must deny: {events}");
             })
             .await;
     }

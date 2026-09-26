@@ -561,23 +561,26 @@ impl AgentLoopController {
                     }),
                 )
                 .await?;
-            let d = host
-                .request_permission(risk, &tc.name, &tc.arguments)
+            let (d, permit_source) = host
+                .request_permission_with_source(risk, &tc.name, &tc.arguments)
                 .await
                 .map_err(|e| AgentLoopError::Session(e.to_string()))?;
+            let mut payload = serde_json::json!({
+                "tool": tc.name,
+                "decision": match d {
+                    PermitDecision::AllowOnce => "allow_once",
+                    PermitDecision::AllowAlways => "allow_always",
+                    PermitDecision::Deny => "deny",
+                    PermitDecision::Defer => "defer",
+                },
+            });
+            // 0bt④（2026-09-26）：判定来源观测面——宿主自报时落封闭集
+            // `source`（payload schema 可选；未自报宿主保持旧 {tool, decision} 形状）。
+            if let Some(source) = permit_source {
+                payload["source"] = serde_json::Value::String(source.as_str().to_owned());
+            }
             writer
-                .record(
-                    EventType::PermissionDecision,
-                    serde_json::json!({
-                        "tool": tc.name,
-                        "decision": match d {
-                            PermitDecision::AllowOnce => "allow_once",
-                            PermitDecision::AllowAlways => "allow_always",
-                            PermitDecision::Deny => "deny",
-                            PermitDecision::Defer => "defer",
-                        },
-                    }),
-                )
+                .record(EventType::PermissionDecision, payload)
                 .await?;
             d
         } else {
@@ -4355,7 +4358,7 @@ mod tests {
     use crate::controller_test_support::*;
     use crate::gateway::fake::{FakeProvider, ScriptedResponse};
     use crate::gateway::model::ModelGateway;
-    use crate::host::{PermitError, RiskClass, ToolRegistry};
+    use crate::host::{PermitError, PermitSource, RiskClass, ToolRegistry};
     use async_trait::async_trait;
     use orz_assurance::session::snapshot::SnapshotStore;
     use orz_assurance::{JournalRecorder, RunEvent};
@@ -4504,6 +4507,16 @@ mod tests {
         );
         assert!(types.contains(&EventType::PermissionRequested));
         assert!(types.contains(&EventType::PermissionDecision));
+        // 0bt④：未自报来源的宿主保持旧 {tool, decision} 形状（零新增字段）。
+        let pd = events(&dir)
+            .into_iter()
+            .find(|e| e.event_type == EventType::PermissionDecision)
+            .expect("permission_decision event");
+        assert!(
+            pd.payload.get("source").is_none(),
+            "unclassified hosts must keep the old payload shape: {}",
+            pd.payload
+        );
         // Three model rounds: tool-call round + text round (gate-intercepted)
         // + post-gate final text round.
         let model_outputs = types
@@ -5374,6 +5387,16 @@ mod tests {
             ) -> Result<PermitDecision, PermitError> {
                 Ok(PermitDecision::Deny)
             }
+            // 0bt④：deny 路径同址自报来源（封闭集观测面）。
+            async fn request_permission_with_source(
+                &self,
+                risk: RiskClass,
+                tool: &str,
+                args: &serde_json::Value,
+            ) -> Result<(PermitDecision, Option<PermitSource>), PermitError> {
+                let decision = self.request_permission(risk, tool, args).await?;
+                Ok((decision, Some(PermitSource::FailClosed)))
+            }
             async fn call_tool(
                 &self,
                 _name: &str,
@@ -5399,6 +5422,14 @@ mod tests {
             .run_turn(&host, "改文件", "RUN-DENY", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
+
+        // 0bt④：deny 判定在 journal 里带来源（宿主自报 fail_closed）。
+        let pd = events(&dir)
+            .into_iter()
+            .find(|e| e.event_type == EventType::PermissionDecision)
+            .expect("permission_decision event");
+        assert_eq!(pd.payload["decision"], serde_json::json!("deny"));
+        assert_eq!(pd.payload["source"], serde_json::json!("fail_closed"));
 
         // Denied: no tool_started/completed in the journal (fail-closed
         // evidence discipline), but the round still terminated cleanly.

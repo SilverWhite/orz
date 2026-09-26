@@ -156,6 +156,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         })
         .try_into();
         assert_eq!(rf.unwrap().path, "x");

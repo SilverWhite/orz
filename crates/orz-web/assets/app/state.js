@@ -16,6 +16,9 @@ export const state = {
   // 最终词汇仍在 §13 延期面，S3 词汇定稿收口。
   menu: ['文件', '事件', '标记', '编辑模式', '模型', '来源', '运行', '验证', '帮助'],
   toolbar: [
+    // 「新建会话」居首（用户令 2026-09-25「放在后退的前面」）：归档当前
+    // 会话后由它开启下一段对话——桥为单会话绑定，没有它归档流程无法收尾。
+    { id: 'new', label: '新建会话', enabled: true },
     { id: 'back', label: '后退', enabled: false },
     { id: 'forward', label: '前进', enabled: false },
     { id: 'refresh', label: '刷新', enabled: true },
@@ -62,6 +65,9 @@ export const state = {
   conversations: [],
   // 会话归档清单（0br S3 新增面：.gsa/archives 只读投影）。
   archives: [],
+  // 探索器选中项（批六用户令 2026-09-25：组级功能键的操作对象）——
+  // { group: 'active'|'archived', s8 }；单击选中、双击打开。
+  selected: null,
 
   // ── 探索器（用户令 2026-09-25：三组＝工作区／活跃会话／归档会话；
   // 工作区组两级子级＝当前工作区＋已信任工作区） ──

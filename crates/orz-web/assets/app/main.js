@@ -6,7 +6,7 @@
  */
 
 import { state, vm } from './state.js';
-import { setToken, fetchBoot, fetchConversations, fetchArchives, fetchArchive, postArchive } from './api.js';
+import { setToken, fetchBoot, fetchConversations, fetchArchives, fetchArchive, postArchive, unarchiveSession, deleteSession, grantTrust } from './api.js';
 import * as acp from './acp.js';
 import { refreshRuns, replayRun, tailRun, closeTail } from './journal.js';
 import { applyJournalEvent, applyAcpUpdate } from './projection.js';
@@ -30,8 +30,10 @@ const sendBtn = document.getElementById('sendBtn');
 const connBanner = document.getElementById('connBanner');
 
 function flash(msg) {
+  // 批六：横幅过 sanitize——子进程 stderr 透传的错误可能带 ANSI 转义码
+  // （tracing 着色），横幅不走 md/内容面净化管道，需就地剥除。
   connBanner.hidden = false;
-  connBanner.textContent = msg;
+  connBanner.textContent = vm.sanitizeText(msg);
   clearTimeout(flash._t);
   flash._t = setTimeout(() => {
     connBanner.hidden = true;
@@ -63,7 +65,7 @@ async function ensureSession() {
   return acpSessionId;
 }
 
-async function submitPrompt(text) {
+async function submitPrompt(text, isRetry = false) {
   if (state.running) {
     flash('当前有运行在进行（Ctrl+Z 可取消）');
     return;
@@ -74,8 +76,17 @@ async function submitPrompt(text) {
     vm.syncToolbar();
     renderToolbar();
     liveMode = true;
-    // 新 run 将由 journal 尾自动流入（见 startTail；此处先清空流式指针）
+    // 新 run 目录由 agent 在 prompt 处理开始时创建：运行期每秒刷新一次
+    // 清单并对准尾随（见 syncLiveTail；对准后自停）——prompt_submitted 等
+    // 事实经 /ws/journal 从文件头补发，不丢事件。此处只清流式指针。
     state.content.currentModelIndex = null;
+    const follow = setInterval(() => {
+      if (!state.running) {
+        clearInterval(follow);
+        return;
+      }
+      refreshExplorerData().catch(() => {});
+    }, 1000);
     const resp = await acp.sessionPrompt(sessionId, text);
     state.running = false;
     vm.syncToolbar();
@@ -84,6 +95,35 @@ async function submitPrompt(text) {
   } catch (e) {
     state.running = false;
     vm.syncToolbar();
+    // 引导期失败的 run 没有 run_started/终态事件（本次走查实证：信任门
+    // fail-closed 只留 run_preflight）——状态栏标签须就地回「空闲」，
+    // 不得残留「预检/运行中」。
+    vm.setRunState('空闲', true);
+    // 信任窗（批七）：桥链为非交互（is_interactive=false），未授信工作区
+    // 被 fail-closed 拒绝且没有 TUI 那样的信任窗——在此补上同语义流程：
+    // 确认 → 桥授信（POST /api/trust）→ 自动重发一次。
+    if (!isRetry && /workspace not trusted/.test(e.message) && confirm(`工作区尚未被信任（${state.workspaceCwd}）。信任它并重试？`)) {
+      try {
+        const r = await grantTrust();
+        flash(r.message || '已信任工作区');
+        // ⑬（0bs，2026-09-26）：授信后**清单就地刷新**——boot 快照里
+        // `trusted_workspaces` 是信任面的单一读数源，授信成功必须让它
+        // 立即反映（否则探索器的信任状态停在旧值直到下次手动刷新）。
+        try {
+          const b = await fetchBoot();
+          state.workspaceCwd = b.cwd || state.workspaceCwd;
+          state.trustedWorkspaces = b.trusted_workspaces || [];
+          renderExplorer();
+        } catch {
+          /* boot 不可达：授信本身已完成，列表刷新失败不阻断重试。 */
+        }
+      } catch (trustError) {
+        vm.addSystemMessage(`[错误] 授信失败：${trustError.message}`, true);
+        renderAll();
+        return;
+      }
+      return submitPrompt(text, true);
+    }
     vm.addSystemMessage(`[错误] ${e.message}`, true);
     renderAll();
   }
@@ -97,7 +137,7 @@ function stopRun() {
 
 ui.stopRun = stopRun;
 
-/* ── journal 尾：跟随最新 run ── */
+/* ── journal 尾：实时窗跟随 ── */
 
 /* 探索器数据（走查反馈五修复：/api/conversations 此前从未被调用，
  * "会话"恒为 0；数据到达即重渲，不再等 5s interval）。 */
@@ -119,21 +159,42 @@ async function refreshExplorerData() {
   state.conversations = conversations;
   state.archives = archives;
   renderExplorer();
+  await syncLiveTail();
   return runs;
+}
+
+/* 实时尾随对准（新建会话批 2026-09-25）：把 journal 尾切到应跟随的
+ * run。每轮 prompt 一个新 run 目录（RUN-{s8}-{n}），尾随必须随 run 切换
+ * ——此前只在 boot 时尾随 runs[0]，新 run 的事实（工具行/门控/终态）永
+ * 不流入实时窗。已建会话时只跟本会话的最新 run（新建会话后不得再灌旧
+ * 会话内容）；尚无会话时跟全局最新（boot 连续性）。切换从 offset 0 重灌
+ * ——journal_tail 自文件头补发，事实不丢。 */
+async function syncLiveTail() {
+  if (!liveMode) return;
+  let wanted = null;
+  if (acpSessionId) {
+    const s8 = acpSessionId.slice(0, 8);
+    const mine = state.runs.find((r) => {
+      const m = /^(?:RUN-CLI-|ARC-|RUN-)([0-9a-f]{8})/.exec(r.run_id);
+      return m?.[1] === s8;
+    });
+    if (!mine) return; // 新会话首 prompt 前：空实时窗等待
+    wanted = mine.run_id;
+  } else {
+    wanted = state.runs[0]?.run_id ?? null;
+  }
+  if (!wanted || wanted === currentRunId) return;
+  currentRunId = wanted;
+  state.liveRunId = wanted;
+  tailRun(wanted, 0, (ev) => {
+    applyJournalEvent(ev);
+    scheduleRender();
+  });
 }
 
 async function startTail() {
   try {
-    const runs = await refreshExplorerData();
-    if (!runs.length) return;
-    const runId = runs[0].run_id;
-    if (runId === currentRunId) return;
-    currentRunId = runId;
-    state.liveRunId = runId;
-    tailRun(runId, 0, (ev) => {
-      applyJournalEvent(ev);
-      scheduleRender();
-    });
+    await refreshExplorerData();
   } catch (e) {
     // 桥不可达/清单失败：如实显示，不留空白（错误路径修复 2026-09-25）。
     vm.addSystemMessage(`（实时跟随不可用：${e.message}）`, true);
@@ -304,10 +365,20 @@ ui.refresh = async () => {
 };
 ui.flashStatus = () => flash(`当前模型: ${state.modelLabel}`);
 
-/* 归档活跃会话（0br S3 用户令 2026-09-25）：POST 递单，执行在桥 spawn
- * 的 `orz archive <s8>` 子命令（复用 agent 关闭归档原语）。成功后刷新
- * 探索器——会话随即移入「归档会话」组。 */
+/* 会话维护三动作（执行都在桥 spawn 的 agent 子命令，前端零执行事实）。
+ * 批六（2026-09-25 第七用户令）：归档/回档/删除改为组级功能键——先在
+ * 组内选中会话再点功能键，动作完成后清除选中并刷新探索器。 */
+const isLiveSession = (s8) => {
+  const lm = /^(?:RUN-CLI-|ARC-|RUN-)([0-9a-f]{8})/.exec(state.liveRunId || '');
+  return !!(state.running && lm && lm[1] === s8);
+};
+
 ui.archiveSession = async (s8) => {
+  if (!s8) return;
+  if (isLiveSession(s8)) {
+    flash('该会话正在运行，暂不能归档');
+    return;
+  }
   if (!confirm(`归档会话 ${s8}？（打包为 .gsa/archives 归档包＋ARC 审计 journal；侧车保留至保留期清扫）`)) return;
   try {
     const r = await postArchive(s8);
@@ -315,7 +386,67 @@ ui.archiveSession = async (s8) => {
   } catch (e) {
     flash(`归档失败：${e.message}`);
   }
+  state.selected = null;
   await refreshExplorerData();
+};
+
+ui.unarchiveSession = async (s8) => {
+  if (!s8) return;
+  if (!confirm(`回档会话 ${s8}？（移除归档包，会话回到「活跃会话」组；运行与侧车数据全部保留）`)) return;
+  try {
+    const r = await unarchiveSession(s8);
+    flash(r.message || `已回档 ${s8}`);
+  } catch (e) {
+    flash(`回档失败：${e.message}`);
+  }
+  state.selected = null;
+  await refreshExplorerData();
+};
+
+ui.deleteSession = async (s8) => {
+  if (!s8) return;
+  if (!confirm(`彻底删除会话 ${s8}？（移除归档包＋对话侧车＋全部运行 journal——不可恢复！）`)) return;
+  try {
+    const r = await deleteSession(s8);
+    flash(r.message || `已删除 ${s8}`);
+  } catch (e) {
+    flash(`删除失败：${e.message}`);
+  }
+  state.selected = null;
+  await refreshExplorerData();
+};
+
+/* 新建会话（用户令 2026-09-25「需要一个明确的新建会话按键」，工具栏
+ * 居「后退」之前）：归档当前会话后由此开启下一段对话。桥为单 ACP 会话
+ * 绑定，此前没有任何换会话入口——旧会话一经绑定终身跟随，归档流程无法
+ * 收尾。旧 ACP 会话对象就地闲置（ACP 无 session/close，数据已留在
+ * .gsa），探索器可随时回看；运行中拒绝换会话。 */
+ui.newSession = async () => {
+  if (state.running) {
+    flash('当前有运行在进行（Ctrl+Z 可取消）');
+    return;
+  }
+  closeTail();
+  currentRunId = null;
+  state.liveRunId = null;
+  liveMode = true;
+  acpSessionId = null;
+  state.sessionId = null;
+  // 导航历史属于旧会话的浏览足迹，一并归零——「后退」不得回到旧会话回放。
+  state.nav = { current: 'workspace://live', back: [], forward: [] };
+  vm.syncToolbar();
+  state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
+  state.marker = [];
+  state.turnCounter = 0;
+  // 运行态与状态栏一并复位——上一会话回放残留的「完成」不得带进新会话。
+  vm.setRunState('空闲', true);
+  renderAll();
+  try {
+    await ensureSession();
+  } catch (e) {
+    vm.addSystemMessage(`（新会话创建失败：${e.message}）`, true);
+  }
+  flash('已新建会话（旧会话可经探索器回看）');
 };
 
 ui.navAction = async (dir) => {

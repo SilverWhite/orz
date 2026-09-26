@@ -88,6 +88,36 @@ pub fn check_workspace_trust(cwd: &Path) -> Result<WorkspaceTrust, SessionError>
     }
 }
 
+/// 批七（2026-09-25 用户报告 Web 工作台 prompt「Internal error」）：信任
+/// 授信入口——TUI 信任窗的 Web 等价物。桥以自身工作区 spawn
+/// `orz trust <cwd>`；授信写入与 prompt 子进程同一 GROK_HOME（redirect
+/// 链已在 orz-bin main 统一注入，子进程继承同值）下的信任存储，下一次
+/// prompt 的 `store_trusted` 即翻转为 Trusted。授信是用户决定（UI 弹窗
+/// 确认在先），本函数只落存储。
+pub fn grant_workspace_trust(cwd: &Path) -> Result<String, String> {
+    let mut store = orz_workspace::trust::TrustStore::load();
+    grant_workspace_trust_with(cwd, &mut store)
+}
+
+/// 注入变体（钉子用）：对显式存储执行授信。
+pub fn grant_workspace_trust_with(
+    cwd: &Path,
+    store: &mut orz_workspace::trust::TrustStore,
+) -> Result<String, String> {
+    if !cwd.is_absolute() {
+        return Err(format!("工作区路径必须为绝对路径: {}", cwd.display()));
+    }
+    let key = orz_workspace::trust::workspace_key(cwd);
+    store
+        .set_trusted(&key)
+        .map_err(|e| format!("写入信任存储失败: {e}"))?;
+    Ok(format!(
+        "已信任工作区 {}（信任键 {}）——重新发送即可开始对话",
+        cwd.display(),
+        key.display()
+    ))
+}
+
 /// Bootstrap a new agent session.
 ///
 /// 1. (Enforce policy) verify workspace trust, fail-closed
@@ -443,6 +473,32 @@ mod tests {
         assert!(result.is_err(), "expected TrustFailed, got {result:?}");
         let err = result.unwrap_err().to_string();
         assert!(err.contains("not trusted"), "{err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 批七钉子（Web 信任授信）：授信写入注入存储并翻转 is_trusted；
+    /// 非绝对路径拒绝。
+    #[test]
+    fn grant_workspace_trust_flips_store_and_gates_paths() {
+        let dir = test_dir();
+        // 布景：带 repo 配置的目录＝非交互子进程 fail-closed 的场景。
+        std::fs::create_dir_all(dir.join(".grok").join("roles")).unwrap();
+        assert!(check_workspace_trust(&dir).is_err(), "布景：授信前必须不可信");
+
+        let store_path = dir.join("grok-home").join("trusted_folders.toml");
+        std::fs::create_dir_all(dir.join("grok-home")).unwrap();
+        let mut store = orz_workspace::trust::TrustStore::load_from(store_path.clone());
+
+        let msg = grant_workspace_trust_with(&dir, &mut store).expect("grant");
+        assert!(msg.contains("已信任工作区"), "{msg}");
+        assert!(store_path.is_file(), "授信必须落盘到注入存储");
+        assert!(store.is_trusted(&dir), "授信后 is_trusted 翻转");
+
+        // 非绝对路径 ⇒ 拒绝。
+        let err = grant_workspace_trust_with(std::path::Path::new("relative/dir"), &mut store)
+            .unwrap_err();
+        assert!(err.contains("绝对路径"), "{err}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

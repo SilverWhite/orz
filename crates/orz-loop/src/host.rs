@@ -378,6 +378,46 @@ pub enum PermitDecision {
     Defer,
 }
 
+/// 0bt④（2026-09-26；原 0bu「权限判定来源落账」并件）：权限判定**来源**
+/// 观测面——封闭集，只加观测、**不改判定语义／阈值／fail-closed**。
+///
+/// 宿主在回传判定时可以一并自报来源；loop 将其原样落进
+/// `permission_decision` 事件的 `source` 字段（payload schema 可选；
+/// 旧 journal 回放零新增报错）。未分类宿主报 `None`，事件保持旧形状。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermitSource {
+    /// 策略/规则面判定（桥 ReadOnly・Benchmark 短路门；manager 内部读面
+    /// 自动放行；manager 策略 deny 臂）。
+    Policy,
+    /// 桥读面 scope 校验拒绝。
+    Scope,
+    /// manager always-approve（yolo）快路自动放行。
+    Yolo,
+    /// 交互客户端裁决（实际收到放行/拒绝答复的两径）。
+    User,
+    /// 提示等待超时 → fail-closed。
+    Timeout,
+    /// 无客户端/未答复/取消 → fail-closed 默认拒。
+    FailClosed,
+    /// 保留：auto-mode 分类器家族（现休眠，生产不产出）。
+    Classifier,
+}
+
+impl PermitSource {
+    /// Stable wire string for the journal `source` field (closed set).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Policy => "policy",
+            Self::Scope => "scope",
+            Self::Yolo => "yolo",
+            Self::User => "user",
+            Self::Timeout => "timeout",
+            Self::FailClosed => "fail_closed",
+            Self::Classifier => "classifier",
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PermitError {
     #[error("permission denied by user")]
@@ -925,6 +965,18 @@ pub trait LoopHost: Send + Sync {
         _args: &Value,
     ) -> Result<PermitDecision, PermitError> {
         Ok(PermitDecision::Deny)
+    }
+
+    /// 0bt④（2026-09-26）：同 [`request_permission`](Self::request_permission)，
+    /// 附带判定来源（[`PermitSource`]）供 journal 观测面落账。默认实现包装
+    /// 旧方法、来源 `None`（宿主未分类 ⇒ 事件保持旧形状）。
+    async fn request_permission_with_source(
+        &self,
+        risk: RiskClass,
+        tool: &str,
+        args: &Value,
+    ) -> Result<(PermitDecision, Option<PermitSource>), PermitError> {
+        Ok((self.request_permission(risk, tool, args).await?, None))
     }
 
     /// Live text-delta hook (streaming slice): the controller forwards each

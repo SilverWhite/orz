@@ -103,6 +103,12 @@ pub struct PruneReport {
     /// PDF evidence (2026-08-11): browser download staging dirs
     /// (`pdf-downloads-*`) — disposable, swept by age.
     pub removed_pdf_download_dirs: Vec<String>,
+    /// 0bs ⑪ (2026-09-26): control-lane download staging dirs
+    /// (`browser-downloads-*`, created by the gated `download` action) —
+    /// the same disposable class as `pdf-downloads-*` (the action's own
+    /// output file is the user-facing artifact; the staging tree is swept
+    /// by age once the run is old enough).
+    pub removed_browser_download_dirs: Vec<String>,
 }
 
 /// Best-effort retention sweep over `gsa_root` (the `.gsa` directory).
@@ -178,6 +184,14 @@ pub fn prune_old_records(
         gsa_root,
         cutoff,
         "pdf-downloads-",
+    );
+    // 0bs ⑪ (2026-09-26): the control-lane `download` action's staging tree
+    // (`browser-downloads-*`) — same disposable class as `pdf-downloads-*`.
+    prune_old_dirs(
+        &mut report.removed_browser_download_dirs,
+        gsa_root,
+        cutoff,
+        "browser-downloads-",
     );
     report
 }
@@ -887,6 +901,32 @@ mod tests {
         assert_eq!(
             report.removed_pdf_download_dirs,
             vec!["pdf-downloads-OLD1234"]
+        );
+        assert!(!old.exists());
+        assert!(fresh.exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0bs ⑪ (2026-09-26): the control-lane `download` staging tree
+    /// (`browser-downloads-*`) is swept by age like the PDF staging dirs.
+    #[test]
+    fn sweep_removes_old_browser_download_staging() {
+        let base = test_dir();
+        let gsa = base.join(".gsa");
+        std::fs::create_dir_all(&gsa).unwrap();
+        let old = gsa.join("browser-downloads-abcdef12");
+        std::fs::create_dir_all(old.join("00112233")).unwrap();
+        std::fs::write(old.join("00112233/data.bin"), b"x").unwrap();
+        backdate(&old, 10);
+        let fresh = gsa.join("browser-downloads-fedcba98");
+        std::fs::create_dir_all(&fresh).unwrap();
+
+        let report = prune_old_records(&gsa, default_cutoff(), None);
+
+        assert_eq!(
+            report.removed_browser_download_dirs,
+            vec!["browser-downloads-abcdef12"]
         );
         assert!(!old.exists());
         assert!(fresh.exists());

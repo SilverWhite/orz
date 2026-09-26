@@ -51,7 +51,31 @@ export function fetchArchive(session8) {
 /* 归档动作（0br S3 用户令「归档活跃会话」）：POST 递单，执行在桥侧
  * spawn 的 agent 子命令（orz archive <s8>）——前端零执行事实。 */
 export async function postArchive(session8) {
-  const resp = await fetch(`/api/archives/${encodeURIComponent(session8)}?token=${encodeURIComponent(TOKEN)}`, { method: 'POST' });
+  return sendJson('POST', `/api/archives/${encodeURIComponent(session8)}`);
+}
+
+/* 信任授信（0br S3 批七）：POST /api/trust —— TUI 信任窗的 Web 等价物。
+ * 工作区路径由桥自带（state.cwd），浏览器零路径输入。 */
+export function grantTrust() {
+  return sendJson('POST', '/api/trust');
+}
+
+/* 回档（0br S3 批六用户令）：DELETE 递单 → 桥 spawn `orz unarchive <s8>`
+ * ——移除归档包＋水位，会话回活跃组；数据保留。 */
+export async function unarchiveSession(session8) {
+  return sendJson('DELETE', `/api/archives/${encodeURIComponent(session8)}`);
+}
+
+/* 删除（0br S3 批六用户令）：DELETE 递单 → 桥 spawn
+ * `orz delete-session <s8>`——彻底移除归档包/水位/侧车/运行 journal，
+ * 不可恢复；UI 侧必须先经确认弹窗。 */
+export async function deleteSession(session8) {
+  return sendJson('DELETE', `/api/sessions/${encodeURIComponent(session8)}`);
+}
+
+async function sendJson(method, url) {
+  const sep = url.includes('?') ? '&' : '?';
+  const resp = await fetch(url + sep + 'token=' + encodeURIComponent(TOKEN), { method });
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok) {
     throw new Error(body?.error?.message || `HTTP ${resp.status}`);

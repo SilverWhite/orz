@@ -42,10 +42,16 @@ use super::url_gate::{UrlGateError, check_navigation_url};
 ///
 /// `Browser.setDownloadBehavior` (2026-08-11, PDF evidence pipeline) is the
 /// single download affordance: it points the browser's default context at an
-/// isolated staging dir. It is NOT a `Network.`/`Input.`/`Storage.` method —
-/// no network interception, no input synthesis, no storage access. Download
-/// *events* (`Page.downloadWillBegin`/`Page.downloadProgress`) are received,
-/// not sent, so they need no entry here.
+/// isolated staging dir. It is NOT a `Network.`/`Storage.` method — no
+/// network interception, no storage access. Download *events*
+/// (`Page.downloadWillBegin`/`Page.downloadProgress`) are received, not
+/// sent, so they need no entry here.
+///
+/// 0bs ⑪ (2026-09-26, user ruling §4.5/§4.6): the input face is opened —
+/// the four `Input.*` synthesis calls below carry the mechanically applied
+/// simulation from `input_sim` (fixed standard v1). `Storage.*` stays
+/// banned; arbitrary `Runtime.evaluate` stays host-fixed-expression-only
+/// until the script-approval channel is wired (0bs report §未竟).
 pub const ALLOWED_CDP_METHODS: &[&str] = &[
     "Target.createTarget",
     "Target.closeTarget",
@@ -78,6 +84,12 @@ pub const ALLOWED_CDP_METHODS: &[&str] = &[
     "Network.setBlockedURLs",
     "Runtime.enable",
     "Runtime.evaluate",
+    // 0bs ⑪ (2026-09-26): input synthesis — always driven by the
+    // `input_sim` v1 plan executor below, never by raw model telemetry.
+    "Input.dispatchKeyEvent",
+    "Input.insertText",
+    "Input.dispatchMouseEvent",
+    "Input.synthesizeScrollGesture",
 ];
 
 /// Host-owned, fixed evaluation expressions. The model never supplies an
@@ -464,6 +476,13 @@ pub struct CdpBrowserSession {
     /// S2-R P3 / P1-2b：会话控制 tab（browser_control 状态机）——动作
     /// 全程持锁（tokio Mutex，可跨 await），控制动作天然串行。
     control: tokio::sync::Mutex<Option<ControlTab>>,
+    /// 0bs ⑪（2026-09-26）：输入拟真状态——输入动作序号（seed 派生）与
+    /// 上次输入动作时刻（会话 pacing ≥5s＋jitter，`input_sim` v1）。
+    input_seq: std::sync::atomic::AtomicU64,
+    last_input_at: std::sync::Mutex<Option<std::time::Instant>>,
+    /// 0bs ⑪：本会话启动的浏览器类型（`headless` 判定）——类型留档用
+    /// （信封 `browser_type`；单会话单实例 ⇒ 天然不混用）。
+    headless: bool,
     /// P0-0v：search 动作的会话级失败备忘/频率上限状态。
     serp_state: Mutex<SerpSessionState>,
     /// P0-0v：低质量来源判定器（一次装载，search 路径复用；不逐次读 env）。
@@ -493,6 +512,10 @@ struct ControlTab {
     page_ws: WsSession,
     current_url: String,
     title: String,
+    /// 0bs ⑪（2026-09-26）：当前虚拟鼠标位（WindMouse 轨迹起点/滚轮落点；
+    /// 初始 0,0，点击与滚轮后更新）。
+    mouse_x: f64,
+    mouse_y: f64,
 }
 
 /// Internal search-engine failure before it is memoized into session state.
@@ -604,6 +627,9 @@ impl CdpBrowserSession {
             creation_lock: tokio::sync::Mutex::new(()),
             dns: Mutex::new(HashMap::new()),
             control: tokio::sync::Mutex::new(None),
+            input_seq: std::sync::atomic::AtomicU64::new(0),
+            last_input_at: std::sync::Mutex::new(None),
+            headless,
             serp_state: Mutex::new(SerpSessionState::new()),
             source_weighting: Arc::new(SourceWeightConfig::from_env_or_default()),
         })
@@ -902,8 +928,39 @@ impl CdpBrowserSession {
                     Err(e) => Self::control_failure_from_err(&e, None, None, log_lines),
                 }
             }
+            // —— 0bs ⑪（2026-09-26）：输入动作（拟真时序常驻机械施加） ——
+            super::BrowserControlAction::Type { text, submit } => {
+                self.control_input_type(&mut control, &text, submit, &mut log_lines)
+                    .await?
+            }
+            super::BrowserControlAction::Key { key } => {
+                self.control_input_key(&mut control, &key, &mut log_lines).await?
+            }
+            super::BrowserControlAction::Click { selector, x, y } => {
+                self.control_input_click(
+                    &mut control,
+                    selector.as_deref(),
+                    x,
+                    y,
+                    &mut log_lines,
+                )
+                .await?
+            }
+            super::BrowserControlAction::Scroll { dx, dy } => {
+                self.control_input_scroll(&mut control, dx, dy, &mut log_lines)
+                    .await?
+            }
             super::BrowserControlAction::Search { query } => {
                 self.control_search(&mut control, &query, timeout).await?
+            }
+            // —— 0bs ⑪（2026-09-26）：唯二门禁动作（批准由权限门先期完成；
+            // 动作层只负责执行与状态化失败） ——
+            super::BrowserControlAction::Download { url } => {
+                self.control_download(&url, timeout, &mut log_lines).await?
+            }
+            super::BrowserControlAction::Script { code } => {
+                self.control_script(&mut control, &code, timeout, &mut log_lines)
+                    .await?
             }
         };
         Ok(outcome)
@@ -1396,9 +1453,571 @@ impl CdpBrowserSession {
                 page_ws,
                 current_url: "about:blank".to_string(),
                 title: String::new(),
+                mouse_x: 0.0,
+                mouse_y: 0.0,
             });
         }
         Ok(control.as_mut().expect("just ensured"))
+    }
+
+    // —— 0bs ⑪（2026-09-26）：输入动作执行面 —— 模型下发语义指令，机械层
+    // 按 `input_sim` v1 固定标准自动施加拟真时序（用户令：「常驻，由机械层
+    // 直接机械做」）。模型不可调参、不感知细节。
+
+    /// 输入动作序号派生 seed（同会话逐次变化、可复核）。
+    fn next_input_seed(&self) -> u64 {
+        let seq = self.input_seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        0x0B5_2026 ^ seq.wrapping_mul(7919)
+    }
+
+    /// 0bs ⑪：会话 pacing——与上次输入动作间隔 ≥5s（0–50% jitter；
+    /// `input_sim` v1 单一源）。间隔不足补睡差额；记录本次动作时刻。
+    async fn apply_input_pacing(&self) {
+        let delay_ms = super::input_sim::session_pacing_delay(self.next_input_seed());
+        let prev = *self
+            .last_input_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(prev_at) = prev {
+            let elapsed = std::time::Instant::now()
+                .saturating_duration_since(prev_at)
+                .as_millis() as u64;
+            let wait = delay_ms.saturating_sub(elapsed);
+            if wait > 0 {
+                tokio::time::sleep(Duration::from_millis(wait)).await;
+            }
+        }
+        *self
+            .last_input_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::time::Instant::now());
+    }
+
+    /// 输入动作预算：计划内 sleep 总时长 + 10s 余量（CDP 调用开销），
+    /// 上限 300s——逐字符 200ms 的拟真时序天然长于导航动作的 30s 上限。
+    fn input_budget(plan: &[super::input_sim::SimEvent]) -> Duration {
+        let sleep_ms: u64 = plan
+            .iter()
+            .map(|e| match e {
+                super::input_sim::SimEvent::Sleep(ms) => *ms,
+                _ => 0,
+            })
+            .sum();
+        Duration::from_millis((sleep_ms + 10_000).min(300_000))
+    }
+
+    /// 按键事件的 CDP 参数（含 VK/code；未知键名原样透传——无 VK）。
+    fn key_event_params(kind: &str, key: &str) -> Value {
+        let (code, vk) = match key {
+            "Enter" => ("Enter", 13),
+            "Tab" => ("Tab", 9),
+            "Escape" => ("Escape", 27),
+            "Backspace" => ("Backspace", 8),
+            "Delete" => ("Delete", 46),
+            "ArrowUp" => ("ArrowUp", 38),
+            "ArrowDown" => ("ArrowDown", 40),
+            "ArrowLeft" => ("ArrowLeft", 37),
+            "ArrowRight" => ("ArrowRight", 39),
+            "Home" => ("Home", 36),
+            "End" => ("End", 35),
+            "PageUp" => ("PageUp", 33),
+            "PageDown" => ("PageDown", 34),
+            "Space" => ("Space", 32),
+            _ => ("", 0),
+        };
+        let mut params = json!({ "type": kind, "key": key });
+        if !code.is_empty() {
+            params["code"] = json!(code);
+            params["windowsVirtualKeyCode"] = json!(vk);
+            params["nativeVirtualKeyCode"] = json!(vk);
+        }
+        params
+    }
+
+    /// 0bs ⑪：把 `input_sim` 计划翻译成 CDP `Input.*` 调用并执行（sleep 为
+    /// 真实等待；总时长受 `budget` 约束）。`mouse` 为会话虚拟鼠标位（轨迹/
+    /// 点击/滚轮更新它）。
+    async fn apply_sim_plan(
+        page_ws: &mut WsSession,
+        plan: &[super::input_sim::SimEvent],
+        budget: Duration,
+        mouse: &mut (f64, f64),
+    ) -> Result<(), CdpError> {
+        let work = async {
+            for ev in plan {
+                match ev {
+                    super::input_sim::SimEvent::KeyChar(ch) => {
+                        let text = ch.to_string();
+                        page_ws
+                            .send_command(
+                                "Input.dispatchKeyEvent",
+                                json!({
+                                    "type": "keyDown",
+                                    "text": text,
+                                    "unmodifiedText": text,
+                                    "key": text,
+                                }),
+                            )
+                            .await?;
+                        page_ws
+                            .send_command(
+                                "Input.dispatchKeyEvent",
+                                json!({ "type": "keyUp", "key": text }),
+                            )
+                            .await?;
+                    }
+                    super::input_sim::SimEvent::KeyDown(key) => {
+                        page_ws
+                            .send_command(
+                                "Input.dispatchKeyEvent",
+                                Self::key_event_params("rawKeyDown", key),
+                            )
+                            .await?;
+                    }
+                    super::input_sim::SimEvent::KeyUp(key) => {
+                        page_ws
+                            .send_command(
+                                "Input.dispatchKeyEvent",
+                                Self::key_event_params("keyUp", key),
+                            )
+                            .await?;
+                    }
+                    super::input_sim::SimEvent::Backspace => {
+                        page_ws
+                            .send_command(
+                                "Input.dispatchKeyEvent",
+                                Self::key_event_params("rawKeyDown", "Backspace"),
+                            )
+                            .await?;
+                        page_ws
+                            .send_command(
+                                "Input.dispatchKeyEvent",
+                                Self::key_event_params("keyUp", "Backspace"),
+                            )
+                            .await?;
+                    }
+                    super::input_sim::SimEvent::MouseMove(x, y) => {
+                        *mouse = (*x, *y);
+                        page_ws
+                            .send_command(
+                                "Input.dispatchMouseEvent",
+                                json!({ "type": "mouseMoved", "x": x, "y": y, "button": "none" }),
+                            )
+                            .await?;
+                    }
+                    super::input_sim::SimEvent::MouseDown(x, y) => {
+                        *mouse = (*x, *y);
+                        page_ws
+                            .send_command(
+                                "Input.dispatchMouseEvent",
+                                json!({
+                                    "type": "mousePressed",
+                                    "x": x,
+                                    "y": y,
+                                    "button": "left",
+                                    "buttons": 1,
+                                    "clickCount": 1,
+                                }),
+                            )
+                            .await?;
+                    }
+                    super::input_sim::SimEvent::MouseUp(x, y) => {
+                        *mouse = (*x, *y);
+                        page_ws
+                            .send_command(
+                                "Input.dispatchMouseEvent",
+                                json!({
+                                    "type": "mouseReleased",
+                                    "x": x,
+                                    "y": y,
+                                    "button": "left",
+                                    "buttons": 0,
+                                    "clickCount": 1,
+                                }),
+                            )
+                            .await?;
+                    }
+                    super::input_sim::SimEvent::Wheel { dx, dy } => {
+                        page_ws
+                            .send_command(
+                                "Input.dispatchMouseEvent",
+                                json!({
+                                    "type": "mouseWheel",
+                                    "x": mouse.0,
+                                    "y": mouse.1,
+                                    "deltaX": dx,
+                                    "deltaY": dy,
+                                }),
+                            )
+                            .await?;
+                    }
+                    super::input_sim::SimEvent::Sleep(ms) => {
+                        tokio::time::sleep(Duration::from_millis((*ms).max(1))).await;
+                    }
+                }
+            }
+            Ok::<(), CdpError>(())
+        };
+        match tokio::time::timeout(budget, work).await {
+            Ok(res) => res,
+            Err(_) => Err(CdpError::TotalTimeout {
+                timeout: budget.as_secs(),
+            }),
+        }
+    }
+
+    /// 元素中心解析（主机自持 JS 模板；模型只供 CSS 选择器，经 JSON 字面量
+    /// 注入——无表达式拼接逃逸）。返回可见元素中心的视口坐标。
+    async fn resolve_selector_center(
+        page_ws: &mut WsSession,
+        selector: &str,
+    ) -> Result<Option<(f64, f64)>, CdpError> {
+        let selector_literal = serde_json::to_string(selector)
+            .unwrap_or_else(|_| "\"\"".to_string());
+        let expr = format!(
+            "(() => {{ const el = document.querySelector({selector_literal}); \
+             if (!el) return null; const r = el.getBoundingClientRect(); \
+             if (r.width <= 0 || r.height <= 0) return null; \
+             return {{ x: r.left + r.width / 2, y: r.top + r.height / 2 }}; }})()"
+        );
+        let value = page_ws.evaluate_value(&expr).await?;
+        let (Some(x), Some(y)) = (value.get("x").and_then(Value::as_f64), value.get("y").and_then(Value::as_f64))
+        else {
+            return Ok(None);
+        };
+        Ok(Some((x, y)))
+    }
+
+    /// 输入动作收尾：执行计划 → 快照 url/title → 统一成功信封。
+    async fn finish_input_action(
+        tab: &mut ControlTab,
+        plan: &[super::input_sim::SimEvent],
+        log_lines: &mut Vec<String>,
+    ) -> Result<super::BrowserControlOutcome, CdpError> {
+        let budget = Self::input_budget(plan);
+        let started = std::time::Instant::now();
+        let mut mouse = (tab.mouse_x, tab.mouse_y);
+        Self::apply_sim_plan(&mut tab.page_ws, plan, budget, &mut mouse).await?;
+        tab.mouse_x = mouse.0;
+        tab.mouse_y = mouse.1;
+        let (url, title) = Self::control_try_snapshot_tab(tab).unwrap_or((None, None));
+        log_lines.push(format!(
+            "input_sim v1: {} events in {}ms",
+            plan.len(),
+            started.elapsed().as_millis()
+        ));
+        let mut out = Self::control_ok("completed", url, title, std::mem::take(log_lines));
+        out.input_events = Some(plan.len());
+        Ok(out)
+    }
+
+    async fn control_input_type(
+        &self,
+        control: &mut Option<ControlTab>,
+        text: &str,
+        submit: bool,
+        log_lines: &mut Vec<String>,
+    ) -> Result<super::BrowserControlOutcome, CdpError> {
+        let tab = self.ensure_control_tab(control, log_lines).await?;
+        let seed = self.next_input_seed();
+        let plan = super::input_sim::plan_type_text(text, submit, seed);
+        self.apply_input_pacing().await;
+        match Self::finish_input_action(tab, &plan, log_lines).await {
+            Ok(out) => Ok(out),
+            Err(e) => {
+                let (url, title) = Self::control_try_snapshot_tab(tab).unwrap_or((None, None));
+                Ok(Self::control_failure_from_err(
+                    &e,
+                    url,
+                    title,
+                    std::mem::take(log_lines),
+                ))
+            }
+        }
+    }
+
+    async fn control_input_key(
+        &self,
+        control: &mut Option<ControlTab>,
+        key: &str,
+        log_lines: &mut Vec<String>,
+    ) -> Result<super::BrowserControlOutcome, CdpError> {
+        let tab = self.ensure_control_tab(control, log_lines).await?;
+        let seed = self.next_input_seed();
+        let plan = super::input_sim::plan_key(key, seed);
+        self.apply_input_pacing().await;
+        match Self::finish_input_action(tab, &plan, log_lines).await {
+            Ok(out) => Ok(out),
+            Err(e) => {
+                let (url, title) = Self::control_try_snapshot_tab(tab).unwrap_or((None, None));
+                Ok(Self::control_failure_from_err(
+                    &e,
+                    url,
+                    title,
+                    std::mem::take(log_lines),
+                ))
+            }
+        }
+    }
+
+    async fn control_input_click(
+        &self,
+        control: &mut Option<ControlTab>,
+        selector: Option<&str>,
+        x: Option<i64>,
+        y: Option<i64>,
+        log_lines: &mut Vec<String>,
+    ) -> Result<super::BrowserControlOutcome, CdpError> {
+        let tab = self.ensure_control_tab(control, log_lines).await?;
+        let target = match (selector, x, y) {
+            (Some(sel), _, _) => match Self::resolve_selector_center(&mut tab.page_ws, sel).await {
+                Ok(Some(pt)) => pt,
+                Ok(None) => {
+                    return Ok(Self::control_failure(
+                        "other",
+                        &format!("selector matched no visible element: {sel}"),
+                        None,
+                        None,
+                        std::mem::take(log_lines),
+                    ));
+                }
+                Err(e) => {
+                    return Ok(Self::control_failure_from_err(
+                        &e,
+                        None,
+                        None,
+                        std::mem::take(log_lines),
+                    ));
+                }
+            },
+            (None, Some(x), Some(y)) => (x as f64, y as f64),
+            // 参数面已由 mod.rs 严格校验；此处兜底为状态化失败。
+            _ => {
+                return Ok(Self::control_failure(
+                    "other",
+                    "click requires exactly one of `selector` or `x`+`y`",
+                    None,
+                    None,
+                    std::mem::take(log_lines),
+                ));
+            }
+        };
+        let from = (tab.mouse_x, tab.mouse_y);
+        let seed = self.next_input_seed();
+        let plan = super::input_sim::plan_click(from, target, seed);
+        self.apply_input_pacing().await;
+        match Self::finish_input_action(tab, &plan, log_lines).await {
+            Ok(out) => Ok(out),
+            Err(e) => {
+                let (url, title) = Self::control_try_snapshot_tab(tab).unwrap_or((None, None));
+                Ok(Self::control_failure_from_err(
+                    &e,
+                    url,
+                    title,
+                    std::mem::take(log_lines),
+                ))
+            }
+        }
+    }
+
+    async fn control_input_scroll(
+        &self,
+        control: &mut Option<ControlTab>,
+        dx: i64,
+        dy: i64,
+        log_lines: &mut Vec<String>,
+    ) -> Result<super::BrowserControlOutcome, CdpError> {
+        let tab = self.ensure_control_tab(control, log_lines).await?;
+        let seed = self.next_input_seed();
+        let plan = super::input_sim::plan_scroll(dx, dy, seed);
+        self.apply_input_pacing().await;
+        match Self::finish_input_action(tab, &plan, log_lines).await {
+            Ok(out) => Ok(out),
+            Err(e) => {
+                let (url, title) = Self::control_try_snapshot_tab(tab).unwrap_or((None, None));
+                Ok(Self::control_failure_from_err(
+                    &e,
+                    url,
+                    title,
+                    std::mem::take(log_lines),
+                ))
+            }
+        }
+    }
+
+    /// 0bs ⑪：本会话浏览器类型留档（`headless` / `headed`）。
+    pub fn browser_type(&self) -> &'static str {
+        if self.headless { "headless" } else { "headed" }
+    }
+
+    /// 0bs ⑪（2026-09-26）：`download` 动作——把模型给定的公共 http(s) URL
+    /// 经 CDP 原生下载通道落进**会话暂存目录**（唯二门禁动作之一；用户批准
+    /// 已在权限门完成，动作层只负责执行与状态化失败）。URL 门在入口与每次
+    /// 重定向处重检；URL 渲染成页面而非触发下载时是**状态化失败**（"没有
+    /// 下载"不是静默的成功）。
+    async fn control_download(
+        &self,
+        url: &str,
+        timeout: Duration,
+        log_lines: &mut Vec<String>,
+    ) -> Result<super::BrowserControlOutcome, CdpError> {
+        if let Err(gate) = self.check_navigation_url_cached(url).await {
+            log_lines.push(format!("url gate: {gate}"));
+            return Ok(Self::control_failure(
+                "blocked",
+                &gate.to_string(),
+                None,
+                None,
+                std::mem::take(log_lines),
+            ));
+        }
+        // 每次调用一个唯一子目录：`newest_file` 语义要求"目录里任何文件都
+        // 是本次调用的"，与 `download_or_read` 的暂存重建纪律一致。
+        let call_id = uuid::Uuid::new_v4().simple().to_string();
+        let call_dir = self.downloads_root().join(&call_id[..8]);
+        let outcome = tokio::time::timeout(timeout, self.download_or_read(url, &call_dir)).await;
+        match outcome {
+            Ok(Ok(super::BrowserDownloadOutcome::Pdf { path, final_url })) => {
+                let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                log_lines.push(format!("download: {bytes} bytes → {}", path.display()));
+                Ok(super::BrowserControlOutcome {
+                    action_status: "ok".to_string(),
+                    error_class: None,
+                    nav_phase: "completed".to_string(),
+                    url: Some(final_url.clone()),
+                    title: None,
+                    log: super::bounded_browser_log(log_lines),
+                    download: Some(super::BrowserDownloadInfo {
+                        path: path.to_string_lossy().into_owned(),
+                        bytes,
+                        final_url,
+                    }),
+                    ..Default::default()
+                })
+            }
+            Ok(Ok(super::BrowserDownloadOutcome::Page(read))) => Ok(Self::control_failure(
+                "other",
+                &format!(
+                    "no download started: the URL rendered a page instead \
+                     (final_url={})",
+                    read.final_url
+                ),
+                Some(read.final_url),
+                Some(read.title),
+                std::mem::take(log_lines),
+            )),
+            Ok(Err(e)) => Ok(Self::control_failure_from_err(
+                &e,
+                None,
+                None,
+                std::mem::take(log_lines),
+            )),
+            Err(_elapsed) => Ok(Self::control_timeout_failure(
+                timeout,
+                "download",
+                None,
+                None,
+                std::mem::take(log_lines),
+            )),
+        }
+    }
+
+    /// 0bs ⑪：控制车道的下载暂存根——会话 profile 目录的**兄弟目录**
+    /// （`.gsa/browser-downloads-<session8>`），与 `pdf-downloads-*` 同区、
+    /// 同受保留期清扫纪律覆盖。
+    fn downloads_root(&self) -> PathBuf {
+        let base = self
+            .profile_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.profile_dir.clone());
+        let suffix = self
+            .profile_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix("chrome-profile-"))
+            .unwrap_or("session");
+        base.join(format!("browser-downloads-{suffix}"))
+    }
+
+    /// 0bs ⑪（2026-09-26）：`script` 动作——在控制 tab 上执行模型下发的
+    /// JavaScript 表达式（唯二门禁动作之一；批准已在权限门完成）。
+    /// `Runtime.evaluate` + `returnByValue` + `awaitPromise`：取回值而非
+    /// 打印；异常是**状态化失败**（带真实异常文本，绝不静默当空结果）；
+    /// 输出经 [`super::bounded_script_output`] 机械截断。
+    async fn control_script(
+        &self,
+        control: &mut Option<ControlTab>,
+        code: &str,
+        timeout: Duration,
+        log_lines: &mut Vec<String>,
+    ) -> Result<super::BrowserControlOutcome, CdpError> {
+        let tab = self.ensure_control_tab(control, log_lines).await?;
+        let evaluated = tokio::time::timeout(timeout, async {
+            tab.page_ws
+                .send_command(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": code,
+                        "returnByValue": true,
+                        "awaitPromise": true,
+                        "userGesture": true,
+                    }),
+                )
+                .await
+        })
+        .await;
+        let (url, title) = Self::control_try_snapshot_tab(tab).unwrap_or((None, None));
+        match evaluated {
+            Ok(Ok(result)) => {
+                if let Some(exc) = result.get("exceptionDetails").and_then(|e| e.as_object()) {
+                    let detail = exc
+                        .get("exception")
+                        .and_then(|e| e.get("description"))
+                        .and_then(|d| d.as_str())
+                        .or_else(|| exc.get("text").and_then(|t| t.as_str()))
+                        .unwrap_or("script exception");
+                    return Ok(Self::control_failure(
+                        "other",
+                        &format!("script threw: {detail}"),
+                        url,
+                        title,
+                        std::mem::take(log_lines),
+                    ));
+                }
+                let value = result
+                    .get("result")
+                    .and_then(|r| r.get("value"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let text = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+                let bounded = super::bounded_script_output(&text);
+                log_lines.push(format!("script: {} chars result", bounded.chars().count()));
+                Ok(super::BrowserControlOutcome {
+                    action_status: "ok".to_string(),
+                    error_class: None,
+                    nav_phase: "completed".to_string(),
+                    url,
+                    title,
+                    log: super::bounded_browser_log(log_lines),
+                    script_output: Some(bounded),
+                    ..Default::default()
+                })
+            }
+            Ok(Err(e)) => Ok(Self::control_failure_from_err(
+                &e,
+                url,
+                title,
+                std::mem::take(log_lines),
+            )),
+            Err(_elapsed) => Ok(Self::control_timeout_failure(
+                timeout,
+                "script evaluation",
+                url,
+                title,
+                std::mem::take(log_lines),
+            )),
+        }
     }
 
     /// P2-3：会话级反污染前置（尽力而为，绝不返回错误）。
@@ -2571,6 +3190,9 @@ mod tests {
             browser_ws_url: "ws://127.0.0.1:1/devtools/browser/unused".to_string(),
             profile_dir: PathBuf::from("unused"),
             config,
+            input_seq: std::sync::atomic::AtomicU64::new(0),
+            last_input_at: std::sync::Mutex::new(None),
+            headless: true,
             inner: tokio::sync::Mutex::new(SessionInner {
                 browser_ws: None,
                 child: None,
@@ -2595,6 +3217,11 @@ mod tests {
                 "Browser.setDownloadBehavior",
                 "Emulation.setDeviceMetricsOverride",
                 "Emulation.setUserAgentOverride",
+                // 0bs ⑪ (2026-09-26): input synthesis — plan-driven only.
+                "Input.dispatchKeyEvent",
+                "Input.dispatchMouseEvent",
+                "Input.insertText",
+                "Input.synthesizeScrollGesture",
                 "Log.enable",
                 "Network.enable",
                 "Network.setBlockedURLs",
@@ -2609,17 +3236,26 @@ mod tests {
                 "Target.createTarget",
             ]
         );
-        // The set must never include mutation/input/storage domains.
-        // `Browser.` is allowed EXACTLY as the download affordance — no
-        // other Browser-domain command may ever be sent. `Network.` is
-        // allowed EXACTLY as the resource-blocking pair for preview/
-        // keywords reads (0k 2026-08-30) — blocking-only, no request
-        // interception or data access.
+        // `Storage.` must never appear (no storage access). `Input.` is
+        // allowed EXACTLY as the four synthesis calls driven by the
+        // `input_sim` v1 plan executor (0bs ⑪). `Browser.` is allowed
+        // EXACTLY as the download affordance. `Network.` is allowed
+        // EXACTLY as the resource-blocking pair for preview/keywords reads
+        // (0k 2026-08-30) — blocking-only, no interception or data access.
         for m in ALLOWED_CDP_METHODS {
-            assert!(
-                !m.starts_with("Input.") && !m.starts_with("Storage."),
-                "{m}"
-            );
+            assert!(!m.starts_with("Storage."), "{m}");
+            if m.starts_with("Input.") {
+                assert!(
+                    matches!(
+                        *m,
+                        "Input.dispatchKeyEvent"
+                            | "Input.dispatchMouseEvent"
+                            | "Input.insertText"
+                            | "Input.synthesizeScrollGesture"
+                    ),
+                    "{m}"
+                );
+            }
             if m.starts_with("Browser.") {
                 assert_eq!(*m, "Browser.setDownloadBehavior", "{m}");
             }

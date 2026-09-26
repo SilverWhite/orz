@@ -188,6 +188,7 @@ mod tests {
             pages: None,
             format: None,
             outline: None,
+            ..Default::default()
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)

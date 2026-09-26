@@ -16,7 +16,11 @@ use orz_tools::implementations::grok_build::web_fetch::domain_from_url;
 use xai_acp_lib::AcpAgentGatewaySender as GatewaySender;
 use xai_file_utils::events::{Event, EventWriter, PermissionDecision};
 
-const REJECT_ONCE_LABEL: &str = "No, and tell Grok what to do differently";
+/// ⑮（2026-09-26 用户令「审批弹窗否认选项问的还是告诉Grok应该做什么，这个映射不合适，
+/// 将其换为通用的‘AI’」）：否认选项去 Grok 化——单一源常量，由五处构造点共用
+/// （edit／bash-TUI／generic-bash-Web／WebFetch 防御臂／MCP）；Web 弹窗按钮文案取
+/// ACP `options[].name`，前端无独立副本 ⇒ 一处改即 Web 与 TUI 同面。
+const REJECT_ONCE_LABEL: &str = "No, and tell the AI what to do differently";
 
 /// Stable option id for the edit prompt's "Yes, allow all edits during this
 /// session" choice. Distinct from the generic `"always-allow"` id (used by
@@ -1102,6 +1106,64 @@ mod tests {
         assert!(!has_option(&opts, "allow-always-domain"));
         assert!(has_option(&opts, "allow-once"));
         assert!(has_option(&opts, "reject-once"));
+    }
+
+    /// ⑮（2026-09-26 用户令「审批弹窗否认选项去 Grok 化」）：单一源常量
+    /// `REJECT_ONCE_LABEL` 的**五处构造点**（edit／bash-TUI／generic-bash-Web／
+    /// WebFetch 防御臂／MCP）必须同文，且用户层不出现 Grok。
+    #[test]
+    fn reject_once_label_uniform_and_de_groked_across_five_construction_points() {
+        assert_eq!(
+            REJECT_ONCE_LABEL, "No, and tell the AI what to do differently",
+            "定案文案（S1）：No, and tell the AI what to do differently"
+        );
+        assert!(!REJECT_ONCE_LABEL.contains("Grok"), "用户层不出现 Grok");
+
+        let cases: [(&str, ClientType, AccessKind); 5] = [
+            (
+                "edit",
+                ClientType::GrokPager,
+                AccessKind::Edit("src/main.rs".into()),
+            ),
+            (
+                "bash-TUI",
+                ClientType::GrokPager,
+                AccessKind::Bash("kubectl get pods".to_owned()),
+            ),
+            (
+                "generic-bash-Web",
+                ClientType::GrokWeb,
+                AccessKind::Bash("kubectl get pods".to_owned()),
+            ),
+            (
+                "web-fetch-fallback",
+                ClientType::GrokPager,
+                AccessKind::WebFetch("https://example.com/x".to_owned()),
+            ),
+            (
+                "mcp",
+                ClientType::GrokPager,
+                AccessKind::MCPTool {
+                    name: "linear__list".to_owned(),
+                    input: serde_json::Value::Null,
+                },
+            ),
+        ];
+        for (point, client_type, access) in cases {
+            let opts = prompter(client_type).build_options(&access);
+            let opt = opts
+                .get(&acp::PermissionOptionId::new("reject-once"))
+                .unwrap_or_else(|| panic!("{point}: reject-once must be present"));
+            let rendered = format!("{opt:?}");
+            assert!(
+                rendered.contains(REJECT_ONCE_LABEL),
+                "{point}: 文案必须取单一源常量（got {rendered}）"
+            );
+            assert!(
+                !rendered.contains("Grok"),
+                "{point}: 用户层不出现 Grok（got {rendered}）"
+            );
+        }
     }
 
     #[test]

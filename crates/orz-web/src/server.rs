@@ -12,6 +12,11 @@
 //! - `GET /api/archives?token=` — session-archive listing (0br S3 新增面)
 //! - `GET /api/archives/{session8}?token=` — in-gzip summary + bounded
 //!   transcript
+//! - `POST /api/archives/{session8}?token=` — archive action (0br S3)
+//! - `DELETE /api/archives/{session8}?token=` — 回档 / unarchive (0br S3
+//!   批六: removes the package + watermark; session data stays)
+//! - `DELETE /api/sessions/{session8}?token=` — 删除 / purge (0br S3 批六:
+//!   removes ALL session data — package, watermark, sidecar, runs)
 //!
 //! Everything except static assets requires the per-boot token; WS
 //! upgrades additionally check Origin/Host (DNS-rebinding / drive-by
@@ -26,7 +31,7 @@ use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde_json::json;
 
@@ -358,10 +363,100 @@ async fn api_archive_session(
     if !security::session_id_ok(&session8) {
         return error_response(StatusCode::BAD_REQUEST, "无效的会话标识");
     }
+    match run_agent_session_tool(&state, "archive", &session8).await {
+        Ok(message) => Json(json!({ "ok": true, "session8": session8, "message": message }))
+            .into_response(),
+        Err((status, message)) => error_response(status, &message),
+    }
+}
+
+/// 回档（0br S3 批六，2026-09-25 第七用户令）：`DELETE /api/archives/{s8}`
+/// → 桥 spawn `<agent_binary> unarchive <s8>`（移除归档包＋水位，会话回
+/// 活跃组；数据保留）。执行仍在 agent 侧，浏览器零执行事实。
+async fn api_archive_delete(
+    State(state): State<ServerState>,
+    Path(session8): Path<String>,
+    Query(q): Query<TokenQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
+        return resp;
+    }
+    if !security::session_id_ok(&session8) {
+        return error_response(StatusCode::BAD_REQUEST, "无效的会话标识");
+    }
+    match run_agent_session_tool(&state, "unarchive", &session8).await {
+        Ok(message) => Json(json!({ "ok": true, "session8": session8, "message": message }))
+            .into_response(),
+        Err((status, message)) => error_response(status, &message),
+    }
+}
+
+/// 删除（0br S3 批六，2026-09-25 第七用户令）：`DELETE /api/sessions/{s8}`
+/// → 桥 spawn `<agent_binary> delete-session <s8>`（彻底移除该会话的
+/// 归档包/水位/侧车/运行 journal——不可恢复，UI 侧先经确认弹窗）。执行
+/// 仍在 agent 侧，浏览器零执行事实。
+async fn api_session_delete(
+    State(state): State<ServerState>,
+    Path(session8): Path<String>,
+    Query(q): Query<TokenQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
+        return resp;
+    }
+    if !security::session_id_ok(&session8) {
+        return error_response(StatusCode::BAD_REQUEST, "无效的会话标识");
+    }
+    match run_agent_session_tool(&state, "delete-session", &session8).await {
+        Ok(message) => Json(json!({ "ok": true, "session8": session8, "message": message }))
+            .into_response(),
+        Err((status, message)) => error_response(status, &message),
+    }
+}
+
+/// 信任授信（0br S3 批七，用户报告 prompt「workspace not trusted」）：
+/// `POST /api/trust?token=` → 桥 spawn `<agent_binary> trust <workspace>`
+/// ——把工作区授信写入与 prompt 子进程同一 GROK_HOME 下的信任存储
+/// （TUI 信任窗的 Web 等价物；授信决定由 UI 弹窗确认在先，工作区路径
+/// 取桥自身的 state.cwd，浏览器零执行事实、零路径输入）。
+async fn api_trust(
+    State(state): State<ServerState>,
+    Query(q): Query<TokenQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
+        return resp;
+    }
+    let cwd = state.cwd.display().to_string();
+    match run_agent_session_tool(&state, "trust", &cwd).await {
+        Ok(message) => Json(json!({ "ok": true, "cwd": cwd, "message": message })).into_response(),
+        Err((status, message)) => error_response(status, &message),
+    }
+}
+
+/// Shared spawn-relay for the session maintenance actions (archive /
+/// unarchive / delete-session / trust): one child shape, one timeout, one
+/// error mapping — no second implementation per route. The bridge only
+/// points the same binary at its dedicated subcommand; the semantics live
+/// in orz-host.
+async fn run_agent_session_tool(
+    state: &ServerState,
+    subcommand: &str,
+    arg: &str,
+) -> Result<String, (StatusCode, String)> {
+    // 面向用户的中文动词（启动失败/超时文案）；子命令名本身保持英文。
+    let label = match subcommand {
+        "archive" => "归档",
+        "unarchive" => "回档",
+        "delete-session" => "删除",
+        "trust" => "信任",
+        other => other,
+    };
     let mut child = tokio::process::Command::new((*state.agent_binary).clone());
     child
-        .arg("archive")
-        .arg(&session8)
+        .arg(subcommand)
+        .arg(arg)
         .current_dir((*state.cwd).clone())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -369,37 +464,29 @@ async fn api_archive_session(
     let output = match tokio::time::timeout(ARCHIVE_CHILD_TIMEOUT, child.output()).await {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => {
-            return error_response(
+            return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("归档进程启动失败: {e}"),
-            );
+                format!("{label}进程启动失败: {e}"),
+            ));
         }
         Err(_) => {
-            return error_response(
+            return Err((
                 StatusCode::GATEWAY_TIMEOUT,
-                "归档超时（120 s）——子进程已被终止",
-            );
+                format!("{label}超时（120 s）——子进程已被终止"),
+            ));
         }
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if output.status.success() {
-        Json(json!({
-            "ok": true,
-            "session8": session8,
-            "message": stdout.trim(),
-        }))
-        .into_response()
+        Ok(stdout.trim().to_string())
     } else {
         let detail = if stderr.trim().is_empty() {
             stdout.trim()
         } else {
             stderr.trim()
         };
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("归档失败: {detail}"),
-        )
+        Err((StatusCode::INTERNAL_SERVER_ERROR, detail.to_string()))
     }
 }
 
@@ -438,8 +525,12 @@ pub fn router(state: ServerState) -> Router {
         .route("/api/archives", get(api_archives))
         .route(
             "/api/archives/{session8}",
-            get(api_archive_detail).post(api_archive_session),
+            get(api_archive_detail)
+                .post(api_archive_session)
+                .delete(api_archive_delete),
         )
+        .route("/api/sessions/{session8}", delete(api_session_delete))
+        .route("/api/trust", post(api_trust))
         .route("/api/boot", get(api_boot))
         .with_state(state)
 }
@@ -779,6 +870,68 @@ mod tests {
                 .starts_with("归档进程启动失败"),
             "{v}"
         );
+    }
+
+    /// 0br S3 批六钉子：回档（DELETE /api/archives/{s8}）与删除（DELETE
+    /// /api/sessions/{s8}）走同一令牌/路径门与同一 spawn 错误透传面。
+    #[tokio::test]
+    async fn unarchive_and_delete_routes_gate_id_and_relay_spawn_failure() {
+        for (method, uri) in [
+            ("DELETE", "/api/archives/6aab1234"),
+            ("DELETE", "/api/sessions/6aab1234"),
+        ] {
+            // 无令牌 ⇒ 401。
+            let resp = router(test_state())
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("host", "127.0.0.1:1")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{method} {uri}");
+
+            // 令牌在、id 非法 ⇒ 400。
+            let bad = uri.replacen("6aab1234", "a%2Fb", 1);
+            let resp = router(test_state())
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(format!("{bad}?token=tok-123"))
+                        .header("host", "127.0.0.1:1")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{method} {uri}");
+
+            // agent 二进制不存在 ⇒ 子进程启动失败逐字透传（不静默成功）。
+            let resp = router(test_state())
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(format!("{uri}?token=tok-123"))
+                        .header("host", "127.0.0.1:1")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR, "{method} {uri}");
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let message = v["error"]["message"].as_str().unwrap();
+            let expected = if method == "DELETE" && uri.contains("archives") {
+                "回档进程启动失败"
+            } else {
+                "删除进程启动失败"
+            };
+            assert!(message.starts_with(expected), "{method} {uri}: {v}");
+        }
     }
 
     #[test]

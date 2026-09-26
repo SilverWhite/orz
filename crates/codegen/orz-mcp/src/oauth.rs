@@ -22,7 +22,10 @@ use crate::rmcp::transport::auth::{AuthorizationManager, OAuthClientConfig};
 /// Client name advertised to MCP servers during Dynamic Client Registration
 /// (RFC 7591). Surfaces as the application name on third-party OAuth consent
 /// screens (e.g. Linear, GitHub), so keep this human-recognizable.
-const MCP_OAUTH_CLIENT_NAME: &str = "Grok";
+///
+/// ⑯（2026-09-26 用户令「用户层不出现Grok即可」）：去 Grok 化 ⇒ 通用 `AI`
+/// （对端同意页可见面）。风险随记：对端或按名留档，改名后或需重新注册。
+const MCP_OAUTH_CLIENT_NAME: &str = "AI";
 
 /// How often the interactive OAuth flow polls the credential store to detect
 /// a login completed in another window or process.

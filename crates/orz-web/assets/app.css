@@ -134,28 +134,39 @@ html, body {
 .marker-entry.mk-model { color: #000080; }
 .marker-entry.mk-hit { color: #b25000; }
 
-/* 探索器分组表头（可折叠，走查反馈 2026-09-25） */
+/* 探索器分组表头（可折叠，走查反馈 2026-09-25）＋组级功能键（批六
+ * 用户令 2026-09-25：「归档」与「活跃会话」同行、「回档」「删除」与
+ * 「归档会话」同行——先选中组内会话，功能键才生效）。 */
 .explorer-group {
   font-weight: bold;
   margin-top: 6px;
   cursor: pointer;
   user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
 }
 .explorer-group:hover { background: #ececec; }
-
-/* 会话组行「◆归档」跳转标记（0br S3 新增面）：组行点击＝整段会话合并
- * 视图；标记点击（stopPropagation）＝归档动作。 */
-.archive-jump {
-  float: right;
-  color: #000080;
-  font-weight: bold;
+.group-action {
+  border: 1px solid #000;
+  background: #fff;
+  color: #000;
+  font-weight: normal;
+  font-size: 11px;
+  padding: 0 5px;
   cursor: pointer;
-  padding: 0 2px;
 }
-.archive-jump:hover { text-decoration: underline; }
-.marker-entry:hover .archive-jump { color: #fff; }
-.archive-jump.disabled { color: #999; cursor: default; }
-.archive-jump.disabled:hover { text-decoration: none; }
+.group-action:hover { background: #000080; color: #fff; }
+.group-action.disabled {
+  color: #999;
+  border-color: #999;
+  cursor: default;
+}
+.group-action.disabled:hover { background: #fff; color: #999; }
+
+/* 会话行选中态（批六）：经典资源管理器式深蓝底白字；hover 保持原样。 */
+.explorer-row.explorer-selected { background: #000080; color: #fff !important; }
 
 /* 探索器子级（用户令 2026-09-25：工作区组两级子级＝当前工作区＋
  * 已信任工作区）：子行缩进，弱化色。 */

@@ -72,6 +72,8 @@ pub const ENV_UNWRAP_WORKERS: &str = "ORZ_RETRIEVAL_UNWRAP_WORKERS";
 pub const ENV_UNWRAP_MS: &str = "ORZ_RETRIEVAL_UNWRAP_MS";
 /// G4：分段检索专用代理（读取序第一位；`none` 显式关闭）。
 pub const ENV_PROXY: &str = "ORZ_RETRIEVAL_PROXY";
+/// 0bs ⑩：指纹 sidecar 单次调用上限（含 python 启动；超时即回落 reqwest）。
+pub const FINGERPRINT_TIMEOUT: Duration = Duration::from_secs(25);
 
 pub const DEFAULT_PER_ENGINE_DEADLINE_MS: u64 = 10_000;
 pub const DEFAULT_OVERALL_DEADLINE_MS: u64 = 30_000;
@@ -97,18 +99,62 @@ pub const CAUSE_NO_PROGRESS: &str = "no_progress";
 
 /// The engine registry: id → search URL template (`{query}` placeholder).
 ///
-/// `bing_cn`/`bing_global` are the 0v SERP 语义资产（`#b_results > li.b_algo`
-/// 同族页面）；`duckduckgo`/`google` 直连不可达，仅在显式
-/// `ORZ_RETRIEVAL_ENGINES`（代理形态）下进入引擎链（§9.4 第 4 条/§9.6）。
+/// 0bs ⑨（2026-09-26，用户令 + 裁决）：引擎集改为
+/// **`360search` / `baidu` / `duckduckgo`** 三引擎（Bing 家族出集，仍保留
+/// 注册项供显式 `ORZ_RETRIEVAL_ENGINES` 链使用）。解析器按 SearXNG 对应
+/// 引擎的选择器**移植参考**（来源标注见各 `parse_*_serp`）。
 pub const ENGINE_REGISTRY: &[(&str, &str)] = &[
+    ("360search", "https://www.so.com/s?q={query}&pn=1"),
+    ("baidu", "https://www.baidu.com/s?wd={query}&rn=10"),
+    ("duckduckgo", "https://html.duckduckgo.com/html/?q={query}"),
+    // Bing 家族（显式链可用；默认链已出集——2026-09-26 裁决）。
     ("bing_cn", "https://cn.bing.com/search?q={query}&count=10"),
     (
         "bing_global",
         "https://www.bing.com/search?q={query}&count=10",
     ),
-    ("duckduckgo", "https://html.duckduckgo.com/html/?q={query}"),
     ("google", "https://www.google.com/search?q={query}"),
 ];
+
+/// 0bs ⑫（2026-09-26 裁决）：**垂直源引擎族**——结构化检索 API（JSON /
+/// Atom），与通用 SERP 引擎同链同预算。**不塞默认链**（垂直源是特化检索，
+/// 通用查询上会稀释命中）：显式 `ORZ_RETRIEVAL_ENGINES=github,arxiv,…`
+/// 即启用；id 与通用引擎同域（无前缀，链读数里直接可见）。
+pub const VERTICAL_REGISTRY: &[(&str, &str)] = &[
+    (
+        "github",
+        "https://api.github.com/search/repositories?q={query}&per_page=5",
+    ),
+    (
+        "stackexchange",
+        "https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&q={query}&site=stackoverflow&pagesize=5",
+    ),
+    (
+        "arxiv",
+        "https://export.arxiv.org/api/query?search_query=all:{query}&max_results=5",
+    ),
+    (
+        "openalex",
+        "https://api.openalex.org/works?search={query}&per-page=5",
+    ),
+    (
+        "crossref",
+        "https://api.crossref.org/works?query={query}&rows=5",
+    ),
+    (
+        "npm",
+        "https://registry.npmjs.org/-/v1/search?text={query}&size=5",
+    ),
+];
+
+/// 引擎 id → 搜索 URL 模板（通用 SERP 注册表 + 垂直源注册表）。
+fn engine_template(id: &str) -> Option<&'static str> {
+    ENGINE_REGISTRY
+        .iter()
+        .chain(VERTICAL_REGISTRY.iter())
+        .find(|(known, _)| *known == id)
+        .map(|(_, template)| *template)
+}
 
 /// One engine in the chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,23 +188,38 @@ pub struct LocalSegmentedConfig {
     pub unwrap_timeout: Duration,
     /// G4：代理（已按读取序解析；`None` = 直连）。只加在专用客户端。
     pub proxy: Option<String>,
+    /// 0bs ⑩（2026-09-26）：指纹 sidecar 优先（curl_cffi 子进程）。
+    /// **config 门控**——`Default` 为 `false`（单测/离线面保持确定性），
+    /// `from_env_with` 按 env 缺省（`auto` = 开）置位。
+    pub fingerprint: bool,
 }
 
-/// G4：有代理时的默认引擎链。RET-B1（2026-09-15 裁决）**改序不改集**：
-/// DDG/Google 的 SERP 解析器缺位（`fetch_serp` 统一走 `parse_bing_serp`，
-/// 对二者恒 0 命中），领头只会各烧满 `T_first` 死重——Bing 系领先是解析
-/// 器就位前的止损排序（完整解析器 = S4 待办）。四引擎集合不变、不构成
-/// 白名单（显式 `ORZ_RETRIEVAL_ENGINES` 永远优先）。
-pub const PROXY_DEFAULT_CHAIN: &[&str] = &["bing_cn", "bing_global", "duckduckgo", "google"];
+/// G4→0bs ⑨（2026-09-26 裁决）：有代理时的默认引擎链。**Bing 家族出集**，
+/// 改以三引擎（360/百度/DDG）：360 直连即用、百度需指纹伪装（无伪装时如实
+/// 失败并顺链降级）、DDG 需代理（有代理才有意义）。显式
+/// `ORZ_RETRIEVAL_ENGINES` 永远优先、不构成白名单。
+pub const PROXY_DEFAULT_CHAIN: &[&str] = &["360search", "baidu", "duckduckgo"];
+
+/// 0bs ⑨（2026-09-26 裁决）：**直连默认链**——360 直连即用；百度在有指纹
+/// 伪装时可用（无伪装时如实失败并顺链降级）。DDG 直连不可达，不入直连链。
+pub const DEFAULT_DIRECT_CHAIN: &[&str] = &["360search", "baidu"];
 
 impl Default for LocalSegmentedConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            engines: vec![EngineSpec {
-                id: "bing_cn".to_string(),
-                search_url: ENGINE_REGISTRY[0].1.to_string(),
-            }],
+            // 0bs ⑨（2026-09-26 裁决）：直连默认链 = 360search, baidu。
+            engines: DEFAULT_DIRECT_CHAIN
+                .iter()
+                .map(|id| EngineSpec {
+                    id: (*id).to_string(),
+                    search_url: ENGINE_REGISTRY
+                        .iter()
+                        .find(|(known, _)| known == id)
+                        .map(|(_, template)| (*template).to_string())
+                        .unwrap_or_default(),
+                })
+                .collect(),
             per_engine_deadline: Duration::from_millis(DEFAULT_PER_ENGINE_DEADLINE_MS),
             overall_deadline: Duration::from_millis(DEFAULT_OVERALL_DEADLINE_MS),
             segment_pages: DEFAULT_SEGMENT_PAGES,
@@ -168,6 +229,9 @@ impl Default for LocalSegmentedConfig {
             unwrap_workers: DEFAULT_UNWRAP_WORKERS,
             unwrap_timeout: Duration::from_millis(DEFAULT_UNWRAP_MS),
             proxy: None,
+            // 0bs ⑩：`Default` 保持确定性（单测/离线面无 sidecar）；
+            // 进程装配面（from_env_with）按 env 缺省置位。
+            fingerprint: false,
         }
     }
 }
@@ -253,17 +317,17 @@ impl LocalSegmentedConfig {
         // bing_cn,bing_global,duckduckgo,google（§6.1；RET-B1 止损排序，
         // 见 PROXY_DEFAULT_CHAIN）。
         config.proxy = resolve_proxy_from(&get);
+        // 0bs ⑩：指纹 sidecar 模式（env 缺省 `auto` = 开；`off` 关闭）。
+        config.fingerprint = super::fingerprint::enabled();
         let explicit_engines = get(ENV_ENGINES).and_then(|list| {
             let engines: Vec<EngineSpec> = list
                 .split(',')
                 .filter_map(|id| {
                     let id = id.trim().to_ascii_lowercase();
-                    ENGINE_REGISTRY.iter().find(|(known, _)| *known == id).map(
-                        |(known, template)| EngineSpec {
-                            id: (*known).to_string(),
-                            search_url: (*template).to_string(),
-                        },
-                    )
+                    engine_template(&id).map(|template| EngineSpec {
+                        id: id.clone(),
+                        search_url: template.to_string(),
+                    })
                 })
                 .collect();
             if engines.is_empty() {
@@ -487,6 +551,410 @@ pub fn parse_bing_serp(html: &str) -> Vec<SerpHit> {
 pub fn strip_tags(fragment: &str) -> String {
     let without_tags = TAG_RE.replace_all(fragment, " ");
     WS_RE.replace_all(&without_tags, " ").trim().to_string()
+}
+
+// ── 0bs ⑨（2026-09-26 裁决）：引擎解析器移植面 ─────────────────────────
+//
+// 移植参考：SearXNG 对应引擎的 `parse` 选择器（`searx/engines/360search.py`
+// / `baidu.py` / `duckduckgo.py`），在原始 HTML 上用正则复刻同一组语义
+// （块级容器 → 标题/链接 → 摘要），来源与行文随注释保留。
+
+static SO_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<li[^>]*class="[^"]*res-list[^"]*"[^>]*>(.*?)</li>"#)
+        .expect("valid so block regex")
+});
+static SO_TITLE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<h3[^>]*class="[^"]*res-title[^"]*"[^>]*>.*?<a[^>]*>(.*?)</a>"#)
+        .expect("valid so title regex")
+});
+static SO_HREF_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)(?:data-mdurl|href)="([^"]+)""#).expect("valid so href regex")
+});
+/// 0bs ⑨：360 把真实目标塞在 `data-mdurl`（`href` 是 so.com 包装）——
+/// 优先取它，缺失才回退 `href`。
+static SO_MDURL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)data-mdurl="([^"]+)""#).expect("valid so mdurl regex")
+});
+static SO_SNIPPET_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<p[^>]*class="[^"]*res-desc[^"]*"[^>]*>(.*?)</p>"#)
+        .expect("valid so snippet regex")
+});
+
+/// Parse a 360 搜索（so.com）SERP — SearXNG `360search.py` 语义移植：
+/// `li.res-list` 容器、`h3.res-title > a` 标题（链接优先取 `data-mdurl`，
+/// 缺失回退 `href`）、`p.res-desc` 摘要。
+pub fn parse_360_serp(html: &str) -> Vec<SerpHit> {
+    let mut hits = Vec::new();
+    for block in SO_BLOCK_RE.captures_iter(html) {
+        let block = block.get(1).map(|m| m.as_str()).unwrap_or_default();
+        // 标题锚点窗口：从 <a …> 起取其后的一段（标题 + 链接属性同域）。
+        let Some(anchor_start) = block.find("<a") else {
+            continue;
+        };
+        let anchor_window = &block[anchor_start..];
+        let Some(title_caps) = SO_TITLE_RE.captures(block) else {
+            continue;
+        };
+        let raw_title = title_caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+        let Some(href) = SO_MDURL_RE
+            .captures(anchor_window)
+            .or_else(|| SO_HREF_RE.captures(anchor_window))
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str())
+        else {
+            continue;
+        };
+        let title = decode_html_entities(&strip_tags(raw_title));
+        let url = normalize_hit_url(&decode_html_entities(href));
+        if title.is_empty() || !url.starts_with("http") {
+            continue;
+        }
+        let snippet = SO_SNIPPET_RE
+            .captures(block)
+            .and_then(|c| c.get(1))
+            .map(|m| decode_html_entities(&strip_tags(m.as_str())))
+            .unwrap_or_default();
+        hits.push(SerpHit {
+            title,
+            url,
+            snippet,
+        });
+    }
+    hits
+}
+
+static BAIDU_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<div[^>]*class="[^"]*(?:result|result-op)[^"]*"[^>]*>(.*?)</div>"#)
+        .expect("valid baidu block regex")
+});
+/// SearXNG `baidu.py` 的 `data-tools` JSON 通道（标题/URL 直接是结构化
+/// 字段，绕开百度对锚点属性的混淆）。
+static BAIDU_DATA_TOOLS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)data-tools='([^']*)"#).expect("valid baidu data-tools regex")
+});
+static BAIDU_TITLE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<h3[^>]*>.*?<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#)
+        .expect("valid baidu title regex")
+});
+static BAIDU_SNIPPET_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<span[^>]*class="[^"]*content-right[^"]*"[^>]*>(.*?)</span>"#)
+        .expect("valid baidu snippet regex")
+});
+
+/// Parse a Baidu SERP — SearXNG `baidu.py` 语义移植：优先 `data-tools`
+/// JSON 通道（`{"title":…,"url":…}`，百度把结果元数据塞在这个属性里），
+/// 缺失时回退 `div.result h3 > a` 锚点 + `span.content-right*` 摘要。
+pub fn parse_baidu_serp(html: &str) -> Vec<SerpHit> {
+    let mut hits = Vec::new();
+    for caps in BAIDU_DATA_TOOLS_RE.captures_iter(html) {
+        let raw = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+        let decoded = decode_html_entities(raw);
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&decoded) else {
+            continue;
+        };
+        let title = value
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_default();
+        let url = value
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_default();
+        let snippet = value
+            .get("abs")
+            .or_else(|| value.get("publish_time"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if title.is_empty() || !url.starts_with("http") {
+            continue;
+        }
+        hits.push(SerpHit {
+            title: decode_html_entities(&strip_tags(&title)),
+            url,
+            snippet,
+        });
+    }
+    if !hits.is_empty() {
+        return hits;
+    }
+    for block in BAIDU_BLOCK_RE.captures_iter(html) {
+        let block = block.get(1).map(|m| m.as_str()).unwrap_or_default();
+        let Some(title_caps) = BAIDU_TITLE_RE.captures(block) else {
+            continue;
+        };
+        let href = title_caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+        let raw_title = title_caps.get(2).map(|m| m.as_str()).unwrap_or_default();
+        let title = decode_html_entities(&strip_tags(raw_title));
+        let url = normalize_hit_url(&decode_html_entities(href));
+        if title.is_empty() || !url.starts_with("http") {
+            continue;
+        }
+        let snippet = BAIDU_SNIPPET_RE
+            .captures(block)
+            .and_then(|c| c.get(1))
+            .map(|m| decode_html_entities(&strip_tags(m.as_str())))
+            .unwrap_or_default();
+        hits.push(SerpHit {
+            title,
+            url,
+            snippet,
+        });
+    }
+    hits
+}
+
+static DDG_TITLE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#)
+        .expect("valid ddg title regex")
+});
+/// 摘要锚点在标题锚点**之后的窗口**内单独取——不把可选的摘要并进标题
+/// 正则：`(?:snippet)?` 在 leftmost-first 语义下会在窗口为空时直接成功
+/// （摘要被静默跳过），这正是 0bs ⑨ 首版 fixture 抓到的缺陷形态。
+static DDG_SNIPPET_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>"#)
+        .expect("valid ddg snippet regex")
+});
+
+/// Parse a DuckDuckGo HTML-endpoint SERP — SearXNG `duckduckgo.py` 语义
+/// 移植：`a.result__a` 标题锚点（`href` 可能是 `/l/?uddg=<urlencoded>`
+/// 跳转包装，离线解包）+ 其后窗口内的 `a.result__snippet` 摘要。
+pub fn parse_duckduckgo_serp(html: &str) -> Vec<SerpHit> {
+    let mut hits = Vec::new();
+    for caps in DDG_TITLE_RE.captures_iter(html) {
+        let Some(whole) = caps.get(0) else {
+            continue;
+        };
+        let href = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+        let raw_title = caps.get(2).map(|m| m.as_str()).unwrap_or_default();
+        // 摘要窗口：标题锚点结尾起的 4KB（无摘要的条目自然拿到空串；窗口
+        // 跨进下一条目时语义仍按"最近一条摘要"——与 HTML 端点的排版一致）。
+        let window_end = (whole.end() + 4096).min(html.len());
+        let window = &html[whole.end()..window_end];
+        let snippet = DDG_SNIPPET_RE
+            .captures(window)
+            .and_then(|c| c.get(1))
+            .map(|m| decode_html_entities(&strip_tags(m.as_str())))
+            .unwrap_or_default();
+        let title = decode_html_entities(&strip_tags(raw_title));
+        let url = normalize_ddg_url(&decode_html_entities(href));
+        if title.is_empty() || !url.starts_with("http") {
+            continue;
+        }
+        hits.push(SerpHit {
+            title,
+            url,
+            snippet,
+        });
+    }
+    hits
+}
+
+/// DDG 的 `/l/?uddg=<percent-encoded>` 跳转包装 → 真实 URL（HTML 端点
+/// 的离线解包；非包装形态原样通过）。SearXNG `duckduckgo.py` 同语义。
+pub fn normalize_ddg_url(url: &str) -> String {
+    let Some(index) = url.find("uddg=") else {
+        return url.to_string();
+    };
+    let rest = &url[index + "uddg=".len()..];
+    let encoded = rest.split('&').next().unwrap_or(rest);
+    let mut decoded = String::new();
+    let bytes = encoded.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = &encoded[i + 1..i + 3];
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                decoded.push(byte as char);
+                i += 3;
+                continue;
+            }
+        }
+        if bytes[i] == b'+' {
+            decoded.push(' ');
+        } else {
+            decoded.push(bytes[i] as char);
+        }
+        i += 1;
+    }
+    if decoded.starts_with("http") {
+        decoded
+    } else {
+        url.to_string()
+    }
+}
+
+/// 0bs ⑨：按引擎 id 分派解析器（未知 id 走 Bing 形态——google 的解析器
+/// 就位前它只会得到空命中，如实计入 `empty_result` 并顺链降级）。
+pub fn parse_engine_serp(engine_id: &str, body: &str) -> Vec<SerpHit> {
+    if is_vertical_engine(engine_id) {
+        return parse_vertical_serp(engine_id, body);
+    }
+    match engine_id {
+        "360search" => parse_360_serp(body),
+        "baidu" => parse_baidu_serp(body),
+        "duckduckgo" => parse_duckduckgo_serp(body),
+        _ => parse_bing_serp(body),
+    }
+}
+
+/// 0bs ⑫（2026-09-26 裁决）：引擎 id 是否属垂直源族。
+pub fn is_vertical_engine(engine_id: &str) -> bool {
+    VERTICAL_REGISTRY
+        .iter()
+        .any(|(known, _)| *known == engine_id)
+}
+
+static ARXIV_ENTRY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<entry>(.*?)</entry>"#).expect("valid arxiv entry regex")
+});
+static ARXIV_TITLE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<title[^>]*>(.*?)</title>"#).expect("valid arxiv title regex")
+});
+static ARXIV_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<id>(.*?)</id>"#).expect("valid arxiv id regex")
+});
+static ARXIV_SUMMARY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<summary[^>]*>(.*?)</summary>"#).expect("valid arxiv summary regex")
+});
+
+/// 0bs ⑫：垂直源解析（结构化 API → [`SerpHit`]）——JSON 通道为各家的
+/// 原生字段映射；arXiv 是 Atom XML（正则取 `<entry>` 三元组）。解析失败
+/// 一律回空（引擎链按 `empty_result` 如实降级，不造伪命中）。
+pub fn parse_vertical_serp(engine_id: &str, body: &str) -> Vec<SerpHit> {
+    if engine_id == "arxiv" {
+        let mut hits = Vec::new();
+        for entry in ARXIV_ENTRY_RE.captures_iter(body) {
+            let entry = entry.get(1).map(|m| m.as_str()).unwrap_or_default();
+            let title = ARXIV_TITLE_RE
+                .captures(entry)
+                .and_then(|c| c.get(1))
+                .map(|m| WS_RE.replace_all(m.as_str(), " ").trim().to_string())
+                .unwrap_or_default();
+            let url = ARXIV_ID_RE
+                .captures(entry)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().trim().to_string())
+                .unwrap_or_default();
+            let snippet = ARXIV_SUMMARY_RE
+                .captures(entry)
+                .and_then(|c| c.get(1))
+                .map(|m| WS_RE.replace_all(m.as_str(), " ").trim().to_string())
+                .unwrap_or_default();
+            if title.is_empty() || !url.starts_with("http") {
+                continue;
+            }
+            hits.push(SerpHit {
+                title,
+                url,
+                snippet,
+            });
+        }
+        return hits;
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    let str_at = |node: &serde_json::Value, path: &[&str]| -> String {
+        let mut current = node;
+        for key in path {
+            match current.get(*key) {
+                Some(next) => current = next,
+                None => return String::new(),
+            }
+        }
+        current.as_str().unwrap_or_default().to_string()
+    };
+    let mut hits = Vec::new();
+    let mut push = |title: String, url: String, snippet: String| {
+        if !title.is_empty() && url.starts_with("http") {
+            hits.push(SerpHit {
+                title,
+                url,
+                snippet,
+            });
+        }
+    };
+    match engine_id {
+        "github" => {
+            for item in value.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
+                push(
+                    str_at(&item, &["full_name"]),
+                    str_at(&item, &["html_url"]),
+                    str_at(&item, &["description"]),
+                );
+            }
+        }
+        "npm" => {
+            for object in value
+                .get("objects")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default()
+            {
+                let package = object.get("package").cloned().unwrap_or_default();
+                push(
+                    str_at(&package, &["name"]),
+                    str_at(&package, &["links", "npm"]),
+                    str_at(&package, &["description"]),
+                );
+            }
+        }
+        "stackexchange" => {
+            for item in value.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
+                push(
+                    str_at(&item, &["title"]),
+                    str_at(&item, &["link"]),
+                    String::new(),
+                );
+            }
+        }
+        "openalex" => {
+            for item in value
+                .get("results")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default()
+            {
+                let url = {
+                    let landing = str_at(&item, &["primary_location", "landing_page_url"]);
+                    if landing.is_empty() {
+                        let doi = str_at(&item, &["doi"]);
+                        if doi.starts_with("http") {
+                            doi
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        landing
+                    }
+                };
+                push(str_at(&item, &["display_name"]), url, String::new());
+            }
+        }
+        "crossref" => {
+            for item in value
+                .get("message")
+                .and_then(|m| m.get("items"))
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default()
+            {
+                let title = item
+                    .get("title")
+                    .and_then(|t| t.as_array())
+                    .and_then(|t| t.first())
+                    .and_then(|t| t.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                push(title, str_at(&item, &["URL"]), String::new());
+            }
+        }
+        _ => {}
+    }
+    hits
 }
 
 /// Minimal HTML entity decoding (the SERP surface set).
@@ -767,7 +1235,7 @@ pub async fn search(
         let url = engine
             .search_url
             .replace("{query}", &urlencode_query(query));
-        let serp = tokio::time::timeout(budget, fetch_serp(http, engine, &url)).await;
+        let serp = tokio::time::timeout(budget, fetch_serp(http, engine, &url, config.fingerprint)).await;
         match serp {
             Err(_elapsed) => {
                 attempts.push(EngineAttempt {
@@ -808,7 +1276,7 @@ pub async fn search(
                     last = Some(SegmentedError {
                         cause: CAUSE_EMPTY_RESULT,
                         engine: engine.id.clone(),
-                        detail: "SERP parsed but carried no organic b_algo hit".to_string(),
+                        detail: "SERP parsed but carried no organic hit".to_string(),
                         waited_ms: engine_started.elapsed().as_millis() as u64,
                         attempts: attempts.clone(),
                         gate_score: None,
@@ -966,8 +1434,21 @@ async fn fetch_serp(
     http: &reqwest::Client,
     engine: &EngineSpec,
     url: &str,
+    fingerprint: bool,
 ) -> Result<Vec<SerpHit>, SegmentedError> {
     let engine_started = Instant::now();
+    // 0bs ⑩（2026-09-26 裁决）：**指纹伪装优先**——curl_cffi sidecar（python
+    // 子进程，固定内嵌脚本）先试；不可用（python/curl_cffi 缺失）或调用失败
+    // 时**如实回落** reqwest（`wreq` 记为目标形态，后续批），不把回落伪装成
+    // 指纹成功。引擎解析按 id 分派（⑨ 三引擎 + Bing 家族保留）。
+    // 门控＝config.fingerprint（`Default` 为 false，单测保持确定性）。
+    if fingerprint
+        && super::fingerprint::enabled()
+        && let Some((body, _final_url)) =
+            super::fingerprint::fetch(url, FINGERPRINT_TIMEOUT).await
+    {
+        return Ok(parse_engine_serp(&engine.id, &body));
+    }
     let response = http.get(url).send().await.map_err(|e| {
         let cause = if e.is_connect() {
             CAUSE_CAPABILITY_UNREACHABLE
@@ -1002,7 +1483,7 @@ async fn fetch_serp(
         attempts: Vec::new(),
         gate_score: None,
     })?;
-    Ok(parse_bing_serp(&html))
+    Ok(parse_engine_serp(&engine.id, &html))
 }
 
 /// 页抓取返回 `(正文, 最终 URL)`——G3：reqwest 跟随重定向后
@@ -1094,6 +1575,39 @@ mod tests {
 </ol></body></html>"#;
 
     #[test]
+    /// 0bs ⑫：垂直源解析（结构化 API → SerpHit 三元组）。
+    #[test]
+    fn parse_vertical_serp_maps_native_json_shapes() {
+        let github = r#"{"items":[{"full_name":"rust-lang/rust","html_url":"https://github.com/rust-lang/rust","description":"empowering everyone"}]}"#;
+        let hits = parse_vertical_serp("github", github);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].title, "rust-lang/rust");
+        assert_eq!(hits[0].url, "https://github.com/rust-lang/rust");
+        assert!(hits[0].snippet.contains("empowering"));
+        let npm = r#"{"objects":[{"package":{"name":"vitest","links":{"npm":"https://www.npmjs.com/package/vitest"},"description":"test runner"}}]}"#;
+        let hits = parse_vertical_serp("npm", npm);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].url, "https://www.npmjs.com/package/vitest");
+        let arxiv = r#"<feed><entry><title>Attention Is All You Need</title><id>http://arxiv.org/abs/1706.03762v7</id><summary> The dominant sequence transduction models. </summary></entry></feed>"#;
+        let hits = parse_vertical_serp("arxiv", arxiv);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].title, "Attention Is All You Need");
+        assert!(hits[0].url.starts_with("http://arxiv.org/abs/1706"));
+        assert!(hits[0].snippet.contains("dominant"));
+        // 坏 JSON ⇒ 空命中（如实降级，不造伪命中）。
+        assert!(parse_vertical_serp("github", "not json").is_empty());
+        // 垂直源 id 也可进显式链（engine_template 覆盖两张注册表）。
+        assert!(is_vertical_engine("openalex"));
+        assert!(!is_vertical_engine("360search"));
+        assert!(engine_template("crossref").is_some());
+        let config = LocalSegmentedConfig::from_env_with(|key| match key {
+            ENV_ENGINES => Some("github,arxiv,bogus".to_string()),
+            _ => None,
+        });
+        let ids: Vec<&str> = config.engines.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, vec!["github", "arxiv"]);
+    }
+
     fn parse_bing_serp_reads_current_structure_and_skips_ads() {
         let hits = parse_bing_serp(SERP_FIXTURE);
         assert_eq!(hits.len(), 2, "ad block must be excluded: {hits:?}");
@@ -1103,6 +1617,61 @@ mod tests {
         assert_eq!(hits[1].title, "The Rust Book");
         // Bing ck/a redirect → real target.
         assert_eq!(hits[1].url, "https://docs.rust-lang.org/book/");
+    }
+
+    /// 0bs ⑨：三引擎解析器 fixtures（选择器语义按 SearXNG 对应移植）。
+    #[test]
+    fn parse_360_serp_reads_res_list_and_prefers_data_mdurl() {
+        let html = r#"<!DOCTYPE html><html><body>
+<li class="res-list"><h3 class="res-title"><a href="https://www.so.com/link?m=wrapped" data-mdurl="https://example.com/so-target">360 目标站 &amp; 副题</a></h3>
+  <p class="res-desc">360 摘要文本。</p></li>
+<li class="res-list other"><h3 class="res-title"><a href="https://example.com/second">第二条</a></h3></li>
+</body></html>"#;
+        let hits = parse_360_serp(html);
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        assert_eq!(hits[0].title, "360 目标站 & 副题");
+        assert_eq!(hits[0].url, "https://example.com/so-target");
+        assert!(hits[0].snippet.contains("360 摘要"));
+        assert_eq!(hits[1].url, "https://example.com/second");
+    }
+
+    /// 0bs ⑨：百度走 `data-tools` JSON 通道（SearXNG baidu.py 同语义）。
+    #[test]
+    fn parse_baidu_serp_reads_data_tools_json_channel() {
+        let html = r#"<!DOCTYPE html><html><body>
+<div class="result c-container" data-tools='{"title":"百度目标站","url":"https://example.com/baidu-target","abs":"百度摘要"}'>…</div>
+<div class="result c-container" data-tools='{"title":"","url":""}'>no</div>
+</body></html>"#;
+        let hits = parse_baidu_serp(html);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].title, "百度目标站");
+        assert_eq!(hits[0].url, "https://example.com/baidu-target");
+        assert_eq!(hits[0].snippet, "百度摘要");
+        // 锚点回退通道（无 data-tools 时）。
+        let fallback = r#"<div class="result c-container"><h3 class="t"><a href="https://www.baidu.com/link?url=abc">回退标题</a></h3><span class="content-right_1">回退摘要</span></div>"#;
+        let hits = parse_baidu_serp(fallback);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].title, "回退标题");
+        assert!(hits[0].snippet.contains("回退摘要"));
+    }
+
+    /// 0bs ⑨：DDG HTML 端点——`/l/?uddg=` 跳转包装离线解包。
+    #[test]
+    fn parse_duckduckgo_serp_unwraps_uddg_redirect() {
+        let html = r##"<!DOCTYPE html><html><body>
+<a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fddg-target&amp;rut=1">DDG 目标站</a>
+<a class="result__snippet" href="#">DDG 摘要文本</a>
+</body></html>"##;
+        let hits = parse_duckduckgo_serp(html);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].title, "DDG 目标站");
+        assert_eq!(hits[0].url, "https://example.com/ddg-target");
+        assert!(hits[0].snippet.contains("DDG 摘要"));
+        assert_eq!(
+            normalize_ddg_url("/l/?uddg=https%3A%2F%2Fa.example%2Fb&x=1"),
+            "https://a.example/b"
+        );
+        assert_eq!(normalize_ddg_url("https://plain.example/"), "https://plain.example/");
     }
 
     #[test]
@@ -1151,15 +1720,20 @@ mod tests {
         );
         assert_eq!(default.per_engine_deadline.as_millis(), 10_000);
         assert_eq!(default.overall_deadline.as_millis(), 30_000);
-        assert_eq!(default.engines.len(), 1);
-        assert_eq!(default.engines[0].id, "bing_cn");
+        // 0bs ⑨（2026-09-26 裁决）：直连默认链 ＝ 360search, baidu。
+        assert_eq!(default.engines.len(), 2);
+        assert_eq!(default.engines[0].id, "360search");
+        assert_eq!(default.engines[1].id, "baidu");
         assert_eq!(default.acquire_timeout.as_millis(), 5_000, "G1 T_acquire");
         assert_eq!(default.segment_deadline.as_millis(), 10_000, "G1 T_segment");
         assert!(default.relevance_gate, "G2 闸门默认开");
         assert_eq!(default.unwrap_workers, 6, "G3 worker");
         assert_eq!(default.unwrap_timeout.as_millis(), 6_000, "G3 单条超时");
         assert!(default.proxy.is_none(), "G4 直连缺省");
-        assert_eq!(default.engine_chain_detail(), "bing_cn; proxy=off");
+        assert_eq!(
+            default.engine_chain_detail(),
+            "360search,baidu; proxy=off"
+        );
         let enabled = LocalSegmentedConfig::from_env_with(|key| match key {
             ENV_SWITCH => Some("on".to_string()),
             ENV_PER_ENGINE_DEADLINE_MS => Some("7000".to_string()),
@@ -1716,20 +2290,26 @@ mod tests {
     /// `T_first` 死重。完整解析器就位（S4）前改链，前两引擎必须保持在
     /// Bing 系；集合不变（改序不改集，不构成白名单）。
     #[test]
-    fn proxy_default_chain_leads_with_bing_parsers() {
-        let leads: Vec<&str> = PROXY_DEFAULT_CHAIN.iter().take(2).copied().collect();
-        assert!(
-            leads
-                .iter()
-                .all(|id| matches!(id, &"bing_cn" | &"bing_global")),
-            "有代理默认链前两引擎必须是带解析器的 Bing 系（防死重回潮）：{leads:?}"
+    fn proxy_default_chain_leads_with_three_engines() {
+        // 0bs ⑨（2026-09-26 裁决）：Bing 家族出集，代理默认链改以
+        // 360/百度/DDG 三引擎（360 直连即用、百度经指纹伪装、DDG 需代理）。
+        let leads: Vec<&str> = PROXY_DEFAULT_CHAIN.iter().take(3).copied().collect();
+        assert_eq!(
+            leads,
+            vec!["360search", "baidu", "duckduckgo"],
+            "有代理默认链 = 三引擎（不构成白名单）"
         );
         let mut sorted = PROXY_DEFAULT_CHAIN.to_vec();
         sorted.sort_unstable();
         assert_eq!(
             sorted,
-            vec!["bing_cn", "bing_global", "duckduckgo", "google"],
-            "四引擎集合不变（改序不改集，不构成白名单）"
+            vec!["360search", "baidu", "duckduckgo"],
+            "三引擎集合固定（显式 ORZ_RETRIEVAL_ENGINES 永远优先）"
+        );
+        assert_eq!(
+            DEFAULT_DIRECT_CHAIN,
+            &["360search", "baidu"],
+            "直连默认链：360 + 百度（DDG 直连不可达，不入直连链）"
         );
     }
 
@@ -1744,7 +2324,7 @@ mod tests {
         assert_eq!(ids, PROXY_DEFAULT_CHAIN, "有代理默认链（不构成白名单）");
         assert_eq!(
             proxied.engine_chain_detail(),
-            "bing_cn,bing_global,duckduckgo,google; proxy=on 127.0.0.1:7890",
+            "360search,baidu,duckduckgo; proxy=on 127.0.0.1:7890",
             "探针读数带 proxy 状态与脱敏端点"
         );
         // 显式 ORZ_RETRIEVAL_ENGINES 永远优先（不设引擎白名单）。
@@ -1762,7 +2342,10 @@ mod tests {
             _ => None,
         });
         assert!(off.proxy.is_none());
-        assert_eq!(off.engines.len(), 1);
-        assert_eq!(off.engines[0].id, "bing_cn");
+        let off_ids: Vec<&str> = off.engines.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(
+            off_ids, DEFAULT_DIRECT_CHAIN,
+            "显式 none = 直连 ⇒ 直连默认链（0bs ⑨：360search, baidu）"
+        );
     }
 }

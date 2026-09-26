@@ -252,6 +252,14 @@ pub enum PermissionCommand {
         subagent_type: Option<String>,
         /// Subagent description if this request is from a child.
         subagent_description: Option<String>,
+        /// 0bs ⑪ (2026-09-26): ApprovalAlways — force the interactive prompt,
+        /// skipping every auto-allow short-circuit (yolo / session grants /
+        /// auto classifier / sandbox / policy allow). Used for the two
+        /// user-ruled browser gates (download / script execution): the user
+        /// must explicitly approve every single use. No client to answer ⇒
+        /// fail closed (the prompt path's existing semantics). Policy *deny*
+        /// still wins over the forced prompt.
+        force_prompt: bool,
     },
     /// Set the YOLO mode (auto-approve all permissions)
     SetYoloMode(bool),

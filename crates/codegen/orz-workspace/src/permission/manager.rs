@@ -62,6 +62,10 @@ pub(crate) mod reasons {
     pub const SESSION_DENY: &str = "session_deny";
     pub const PROMPT_DENY: &str = "prompt_deny";
     pub const NEEDS_USER: &str = "needs_user";
+    /// 0bs ⑪ (2026-09-26): an ApprovalAlways request (browser download /
+    /// script) reached the prompt because the gate forced it — auto-allow
+    /// short-circuits were skipped by design, not because nothing matched.
+    pub const APPROVAL_REQUIRED: &str = "approval_required";
     pub const BASH_REQUEST_FLOOR: &str = "bash_request_floor";
     pub const OPAQUE_SHELL: &str = "opaque_shell";
     pub const REQUESTER_GONE: &str = "requester_gone";
@@ -935,6 +939,53 @@ impl PermissionHandle {
         subagent_type: Option<String>,
         subagent_description: Option<String>,
     ) -> Decision {
+        self.request_full(
+            access,
+            tool_call_update,
+            edit_path_context,
+            session_id,
+            subagent_type,
+            subagent_description,
+            false,
+        )
+        .await
+    }
+
+    /// 0bs ⑪（2026-09-26）：ApprovalAlways 请求——`force_prompt = true` 时
+    /// actor 跳过一切自动放行短路（yolo / 会话授予 / auto 分类器 / sandbox /
+    /// policy-allow），直落交互提示；无客户端应答 fail-closed（提示路径既有
+    /// 语义）。用于用户裁决的浏览器唯二门禁（download / script 执行，须逐次
+    /// 明确批准）。policy *deny* 仍先于强制提示生效。
+    pub async fn request_force_prompt(
+        &self,
+        access: AccessKind,
+        tool_call_update: acp::ToolCallUpdate,
+        session_id: Option<String>,
+        subagent_type: Option<String>,
+        subagent_description: Option<String>,
+    ) -> Decision {
+        self.request_full(
+            access,
+            tool_call_update,
+            None,
+            session_id,
+            subagent_type,
+            subagent_description,
+            true,
+        )
+        .await
+    }
+
+    async fn request_full(
+        &self,
+        access: AccessKind,
+        tool_call_update: acp::ToolCallUpdate,
+        edit_path_context: Option<EditPathContext>,
+        session_id: Option<String>,
+        subagent_type: Option<String>,
+        subagent_description: Option<String>,
+        force_prompt: bool,
+    ) -> Decision {
         match self {
             PermissionHandle::AllowAll => Decision::Allow,
             PermissionHandle::Actor {
@@ -952,6 +1003,7 @@ impl PermissionHandle {
                     session_id,
                     subagent_type,
                     subagent_description,
+                    force_prompt,
                 };
                 if let Err(e) = cmd_tx.send(msg) {
                     tracing::error!(?e, "failed to send permission request");
@@ -1419,11 +1471,16 @@ fn spawn_permission_manager_with_pin(
                     session_id: request_session_id,
                     subagent_type: request_subagent_type,
                     subagent_description: request_subagent_description,
+                    force_prompt,
                 } => {
                     // wait_ms timer; starts at dequeue so it excludes time queued behind others.
                     let request_received = std::time::Instant::now();
                     // Effective mode (yolo wins); stable for the arm (single-threaded actor).
-                    let permission_mode = if yolo_mode {
+                    // 0bs ⑪：强制提示请求的有效模式是 Ask——yolo/auto 的自动
+                    // 放行对它不生效，遥测按请求的**实际**判定形态记账。
+                    let permission_mode = if force_prompt {
+                        orz_telemetry::enums::PermissionMode::Ask
+                    } else if yolo_mode {
                         orz_telemetry::enums::PermissionMode::AlwaysApprove
                     } else if auto_mode {
                         orz_telemetry::enums::PermissionMode::Auto
@@ -1620,7 +1677,20 @@ fn spawn_permission_manager_with_pin(
                         continue;
                     }
 
-                    if yolo_mode && !shell_forced_prompt {
+                    // 0bs ⑪（2026-09-26）：ApprovalAlways——强制提示请求跳过
+                    // 一切自动放行短路（yolo／会话授予／auto 快路与分类器／
+                    // sandbox／policy-allow；见下各处的 `!force_prompt` 守卫），
+                    // 直落交互提示路径；无客户端应答由提示路径 fail-closed。
+                    // 上方 policy *deny* 不受影响（deny 恒优先）。
+                    if force_prompt {
+                        auto_prompt_reason = Some(reasons::APPROVAL_REQUIRED);
+                        tracing::info!(
+                            tool = ?tool_name,
+                            "permission: approval-required action — prompting user (auto-approve disabled)"
+                        );
+                    }
+
+                    if yolo_mode && !shell_forced_prompt && !force_prompt {
                         tracing::debug!("YOLO mode: auto-approving permission request");
                         let decision = Decision::Allow;
                         emit_event(&decision, true, false, None, Some(reasons::YOLO));
@@ -1630,8 +1700,11 @@ fn spawn_permission_manager_with_pin(
 
                     // Session always-allow grants win before the auto classifier.
                     // Ask floors fall through so managed Ask / shell-file Ask stay binding.
+                    // 0bs ⑪: an ApprovalAlways request skips session grants too —
+                    // every use is approved on its own.
                     if !policy_forced_prompt
                         && !shell_forced_prompt
+                        && !force_prompt
                         && protected_edit.is_none()
                         && let Some((decision, reason)) = session_grant_pre_decision(
                             &access,
@@ -1654,6 +1727,7 @@ fn spawn_permission_manager_with_pin(
                     }
 
                     if auto_mode
+                        && !force_prompt
                         && !policy_forced_prompt
                         && !shell_forced_prompt
                         && protected_edit.is_none()
@@ -1678,6 +1752,7 @@ fn spawn_permission_manager_with_pin(
                     // paths; policy Asks and Bash request floors skip auto entirely
                     // unless they defer (fail-closed gate Ask / unvetted-env floor).
                     if auto_mode
+                        && !force_prompt
                         && preflight.admits_auto_classifier()
                         && (!bash_request_floor_requires_prompt(bash_evaluation.as_ref())
                             || bash_request_floor_defers_to_classifier(bash_evaluation.as_ref()))
@@ -1881,6 +1956,7 @@ fn spawn_permission_manager_with_pin(
                         )
                         && !policy_forced_prompt
                         && !auto_forced_prompt
+                        && !force_prompt
                     {
                         tracing::debug!("sandbox: auto-approving bash");
                         let decision = Decision::Allow;
@@ -1897,6 +1973,15 @@ fn spawn_permission_manager_with_pin(
                     // overrides the session allowlist and forces a re-prompt.
                     // Other access kinds keep their legacy fall-through behavior,
                     // subject to Bash request and protected-edit floors.
+                    //
+                    // 0bs ⑪：强制提示下 policy-allow 短路同样让位——动作仍
+                    // 须逐次经用户明确批准（deny 已在更早处生效；Ask 与 None
+                    // 的落点本就是提示路径）。
+                    let policy_decision = if force_prompt {
+                        policy_decision.filter(|d| !matches!(d, Decision::Allow))
+                    } else {
+                        policy_decision
+                    };
                     match policy_decision {
                         Some(Decision::Ask) => {
                             tracing::info!(
@@ -2066,7 +2151,9 @@ fn spawn_permission_manager_with_pin(
                     // Auto forced a prompt: neutralize leftover non-bash Allows.
                     // Session grants already short-circuited; bash grants stay gated
                     // on `!auto_forced_prompt` in `bash_grant_pre_decision`.
-                    if auto_forced_prompt
+                    // 0bs ⑪: an ApprovalAlways request neutralizes them too — the
+                    // action must reach the user even if a rule/grant would allow it.
+                    if (auto_forced_prompt || force_prompt)
                         && auto_prompt_blocks_allow(&access)
                         && matches!(pre_decision, Some((Decision::Allow, _)))
                     {
@@ -5252,6 +5339,7 @@ mod tests {
                         session_id: None,
                         subagent_type: None,
                         subagent_description: None,
+                        force_prompt: false,
                     })
                     .expect("actor alive");
 
@@ -5350,6 +5438,7 @@ mod tests {
                         session_id: None,
                         subagent_type: None,
                         subagent_description: None,
+                        force_prompt: false,
                     })
                     .expect("actor alive");
                 tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -5416,6 +5505,7 @@ mod tests {
                         session_id: None,
                         subagent_type: None,
                         subagent_description: None,
+                        force_prompt: false,
                     })
                     .expect("actor alive");
                 tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -8177,6 +8267,7 @@ mod tests {
                         session_id: None,
                         subagent_type: None,
                         subagent_description: None,
+                        force_prompt: false,
                     })
                     .expect("actor alive");
                 tokio::time::timeout(std::time::Duration::from_secs(5), async {

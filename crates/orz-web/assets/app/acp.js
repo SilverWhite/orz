@@ -33,6 +33,16 @@ function notify(method, params) {
   send({ jsonrpc: '2.0', method, params });
 }
 
+/* 错误细节透出（批七 2026-09-25）：agent 侧把真实原因放在 error.data
+ * （如 ACAF fail-closed 的拒绝理由），只读 message 会把一切吞成
+ * 「Internal error」。 */
+function errorMessage(err) {
+  const base = err.message || `JSON-RPC ${err.code}`;
+  const data =
+    typeof err.data === 'string' ? err.data : err.data != null ? JSON.stringify(err.data) : '';
+  return data ? `${base}：${data}` : base;
+}
+
 export function on(evt, fn) {
   handlers[evt] = fn;
 }
@@ -66,7 +76,7 @@ export function connect(token) {
         const p = pending.get(msg.id);
         if (p) {
           pending.delete(msg.id);
-          if (msg.error) p.reject(new Error(msg.error.message || `JSON-RPC ${msg.error.code}`));
+          if (msg.error) p.reject(new Error(errorMessage(msg.error)));
           else p.resolve(msg.result);
         }
         return;

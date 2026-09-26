@@ -193,26 +193,39 @@ impl WebSearchClient {
         query: &str,
         allowed_domains: Option<Vec<String>>,
     ) -> Result<(String, Vec<String>), xai_tool_runtime::ToolError> {
-        // 0ac S3① (design §9.1/§10.3 item 1): the local segmented path takes
-        // over entirely when switched on — SERP engine chain (default Bing
-        // HTML direct) → 逐页抓取 → 逐段抽取, per-engine deadline + overall
-        // bound; failures ride a self-describing stable `cause`.
+        // 0bs ⑧（2026-09-26 裁决）：本地分段车道由"**整条短路**"改为
+        // **链中的一段**——`ORZ_WEB_SEARCH_LOCAL` 语义＝"允许本地 HTTP 车道
+        // 进入链路"，不再独占。成功即交付（原语义不变）；失败时**让渡**给
+        // provider 合成，让渡注记随内容/失败 details 如实回传（不静默）。
+        // （浏览器 SERP 车道为链首的接缝＝session-scoped resource，见报告
+        // 记账；此前置未装配时本地 HTTP 就是链首。）
+        let mut local_note: Option<String> = None;
         if let (Some(config), Some(http)) =
             (self.local_segmented.as_ref(), self.local_http.as_ref())
         {
-            let mut outcome = local_segmented::search(http, config, query)
-                .await
-                .map_err(|e| e.to_tool_error())?;
-            if let Some(domains) = allowed_domains.as_deref().filter(|d| !d.is_empty()) {
-                outcome
-                    .hits
-                    .retain(|hit| domains.iter().any(|d| host_matches(&hit.url, d)));
+            match local_segmented::search(http, config, query).await {
+                Ok(mut outcome) => {
+                    if let Some(domains) = allowed_domains.as_deref().filter(|d| !d.is_empty()) {
+                        outcome
+                            .hits
+                            .retain(|hit| domains.iter().any(|d| host_matches(&hit.url, d)));
+                    }
+                    return Ok((
+                        local_segmented::render_content(&outcome),
+                        local_segmented::citations(&outcome),
+                    ));
+                }
+                Err(local_error) => {
+                    local_note = Some(format!(
+                        "[local_segmented] fell back to provider: cause={} engine={} \
+                         waited={}ms detail={}",
+                        local_error.cause, local_error.engine, local_error.waited_ms,
+                        local_error.detail
+                    ));
+                }
             }
-            return Ok((
-                local_segmented::render_content(&outcome),
-                local_segmented::citations(&outcome),
-            ));
         }
+        let provider = async move {
         let web_search = rs::WebSearchToolArgs::default()
             .filters(rs::WebSearchToolFilters { allowed_domains })
             .build()
@@ -295,6 +308,16 @@ impl WebSearchClient {
         };
         let citations = extract_citations(&value);
         Ok((content, citations))
+        }
+        .await;
+        match (provider, local_note) {
+            (Ok((content, citations)), Some(note)) => Ok((format!("{note}\n{content}"), citations)),
+            (Ok(result), None) => Ok(result),
+            (Err(error), Some(note)) => Err(error.with_details(serde_json::json!({
+                "local_segmented_fallback": note,
+            }))),
+            (Err(error), None) => Err(error),
+        }
     }
     /// Same as [`Self::search`] but also extracts per-citation titles when
     /// the Responses API surfaces them. Returns `(content, citations_with_titles)`
@@ -308,25 +331,37 @@ impl WebSearchClient {
         query: &str,
         allowed_domains: Option<Vec<String>>,
     ) -> Result<(String, Vec<(String, String)>), xai_tool_runtime::ToolError> {
-        // 0ac S3①: same local short-circuit as [`Self::search`], with titles.
+        // 0bs ⑧：与 [`Self::search`] 同语义——本地 HTTP 车道是链中的一段，
+        // 失败让渡 provider（带注记），不再整条短路。
+        let mut local_note: Option<String> = None;
         if let (Some(config), Some(http)) =
             (self.local_segmented.as_ref(), self.local_http.as_ref())
         {
-            let mut outcome = local_segmented::search(http, config, query)
-                .await
-                .map_err(|e| e.to_tool_error())?;
-            if let Some(domains) = allowed_domains.as_deref().filter(|d| !d.is_empty()) {
-                outcome
-                    .hits
-                    .retain(|hit| domains.iter().any(|d| host_matches(&hit.url, d)));
+            match local_segmented::search(http, config, query).await {
+                Ok(mut outcome) => {
+                    if let Some(domains) = allowed_domains.as_deref().filter(|d| !d.is_empty()) {
+                        outcome
+                            .hits
+                            .retain(|hit| domains.iter().any(|d| host_matches(&hit.url, d)));
+                    }
+                    let pairs = outcome
+                        .hits
+                        .iter()
+                        .map(|hit| (hit.title.clone(), hit.url.clone()))
+                        .collect();
+                    return Ok((local_segmented::render_content(&outcome), pairs));
+                }
+                Err(local_error) => {
+                    local_note = Some(format!(
+                        "[local_segmented] fell back to provider: cause={} engine={} \
+                         waited={}ms detail={}",
+                        local_error.cause, local_error.engine, local_error.waited_ms,
+                        local_error.detail
+                    ));
+                }
             }
-            let pairs = outcome
-                .hits
-                .iter()
-                .map(|hit| (hit.title.clone(), hit.url.clone()))
-                .collect();
-            return Ok((local_segmented::render_content(&outcome), pairs));
         }
+        let provider = async move {
         let web_search = rs::WebSearchToolArgs::default()
             .filters(rs::WebSearchToolFilters { allowed_domains })
             .build()
@@ -405,6 +440,16 @@ impl WebSearchClient {
         };
         let pairs = extract_citation_pairs(&value);
         Ok((content, pairs))
+        }
+        .await;
+        match (provider, local_note) {
+            (Ok((content, pairs)), Some(note)) => Ok((format!("{note}\n{content}"), pairs)),
+            (Ok(result), None) => Ok(result),
+            (Err(error), Some(note)) => Err(error.with_details(serde_json::json!({
+                "local_segmented_fallback": note,
+            }))),
+            (Err(error), None) => Err(error),
+        }
     }
 }
 /// 0ac S3① (2026-09-13): `allowed_domains` filtering for the local segmented

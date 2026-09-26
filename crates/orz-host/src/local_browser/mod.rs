@@ -7,9 +7,15 @@
 //! pipeline (2026-08-11) adds `download_or_read` — an owned-tab download
 //! into an isolated staging dir for whitelisted paper-library domains
 //! (`ORZ_PDF_BROWSER_DOMAINS`), consumed by the host's PDF evidence store.
-//! Still NO form interaction, NO arbitrary JS evaluation (ADR-0010 §3.7.3
-//! keeps those out of the MVP; the only `Runtime.evaluate` calls are
-//! host-owned fixed expressions).
+//! 0bs ⑪ (2026-09-26): the action face is opened — typing / key presses /
+//! clicks / scrolling act on the page like a user, with input simulation
+//! (delay jitter, typo+correction, WindMouse trajectory, wheel cadence)
+//! applied MECHANICALLY and permanently by [`input_sim`] (fixed standard v1,
+//! single source): the model issues plain commands and never tunes the
+//! rhythm. Only two actions keep gates: downloads and script execution
+//! (user ruling 2026-09-25 — verify dialog + explicit user approval).
+//! Arbitrary JS evaluation stays host-fixed-expression-only until that
+//! approval channel is wired (recorded as open in the 0bs report).
 //!
 //! Architecture:
 //! - [`BrowserSession`] trait — the tool side depends on this, so tests and
@@ -26,6 +32,7 @@
 
 mod cdp;
 mod discovery;
+mod input_sim;
 mod serp;
 mod url_gate;
 
@@ -91,6 +98,37 @@ pub enum BrowserControlAction {
     /// 检索引擎 SERP 链（Google → Bing → DuckDuckGo；机械固定 en-US 区域
     /// 参数）。搜索引擎需求由本动作承载，不加新工具。
     Search { query: String },
+    // —— 0bs ⑪（2026-09-26）：输入动作面（用户令「模型对浏览器的使用是
+    // 完全的……输入动作常驻，机械层自动做拟真」）。拟真时序全部由
+    // `input_sim` v1 固定标准常驻施加，模型只下发语义指令、不调参。
+    /// 键入到当前焦点（`submit=true` 时文本后按 Enter 提交）。
+    Type { text: String, submit: bool },
+    /// 单键（CDP 键名：`Enter` / `Tab` / `Escape` / `Backspace` /
+    /// `ArrowDown` …）。
+    Key { key: String },
+    /// 点击：`selector`（CSS 选择器，主机自持 JS 模板解析元素中心）与
+    /// 视口像素坐标 `x,y`（整数）二选一。轨迹＝WindMouse + 按下-抬起驻留。
+    Click {
+        selector: Option<String>,
+        x: Option<i64>,
+        y: Option<i64>,
+    },
+    /// 滚动：视口像素增量（正 = 向右/下；负 = 向左/上）。
+    Scroll { dx: i64, dy: i64 },
+    // —— 0bs ⑪（2026-09-26）：唯二门禁动作（用户令：下载与脚本执行一律
+    // 弹验证＋用户明确批准）。二者恒过 ApprovalAlways 权限门（桥侧
+    // `browser_action_requires_approval` → `force_prompt`）：逐次交互提示，
+    // yolo／会话授予／auto 分类器／policy-allow 一切自动放行短路对其失效；
+    // 无客户端应答 fail-closed。其余动作面全面放开。
+    /// 下载一个公共 http(s) URL 到会话暂存目录
+    /// （`.gsa/browser-downloads-<session8>/<call8>/`），回传落盘路径与
+    /// 字节数。URL 门与 `browser_read` 同级（入口与每次重定向都重检）。
+    Download { url: String },
+    /// 在当前控制 tab 上执行一段 JavaScript 表达式（CDP
+    /// `Runtime.evaluate`，`returnByValue`+`awaitPromise`；输出有界截断）。
+    /// 执行面**只**经此批准动作可达——其余内部表达式仍是主机固定式
+    /// （模型文本只从这个已批准入口进入 evaluate）。
+    Script { code: String },
 }
 
 /// 每动作统一返回的机械段（P1 设计 §2.2）——状态 + 真实类别 + 导航阶段 +
@@ -120,6 +158,28 @@ pub struct BrowserControlOutcome {
     /// search 动作成功时的结构化结果（≤10 条；tier/weight/reason 为
     /// 低质量来源机械标注，不硬过滤）。非 search 动作恒为 None。
     pub results: Option<Vec<SerpResult>>,
+    /// 0bs ⑪（2026-09-26）：本会话所用浏览器**类型留档**（`headless` /
+    /// `headed`）——每次使用时随信封回传（journal 侧即落档）；单会话单实例
+    /// ⇒ 天然不混用（用户令 §4.6②）。
+    pub browser_type: Option<String>,
+    /// 0bs ⑪：输入动作实际施加的拟真事件数（输入动作恒 Some；非输入动作
+    /// None）——留档与可核性（不是可调参数）。
+    pub input_events: Option<usize>,
+    /// 0bs ⑪：download 动作成功时的落盘信息（非 download 动作恒 None）。
+    pub download: Option<BrowserDownloadInfo>,
+    /// 0bs ⑪：script 动作的结果文本（`Runtime.evaluate` returnByValue 的
+    /// JSON 取值，有界截断；非 script 动作恒 None）。
+    pub script_output: Option<String>,
+}
+
+/// 0bs ⑪（2026-09-26）：`download` 动作的落盘读数——路径 + 字节数 +
+/// 重定向后的落点 URL（URL 门在入口与重定向处均已重检）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserDownloadInfo {
+    /// 绝对路径（会话暂存目录 `.gsa/browser-downloads-<session8>/<call8>/`）。
+    pub path: String,
+    pub bytes: u64,
+    pub final_url: String,
 }
 
 /// 特征回传边界（P1 设计 §2.2 / §3.2-1）：≤12 行 / ≤2 KiB，超出截断标记。
@@ -197,6 +257,13 @@ pub trait BrowserSession: Send + Sync {
 
     /// True when a browser is actually available (drives tool declaration).
     fn ready(&self) -> bool;
+
+    /// 0bs ⑪（2026-09-26）：本会话所用浏览器**类型留档**（`headless` /
+    /// `headed`）——每次使用时随信封回传（journal 落档；用户令 §4.6②：
+    /// 单次子代理进程只用一类）。fake/stub 实现默认 `unknown`。
+    fn browser_type(&self) -> &'static str {
+        "unknown"
+    }
 
     /// P2-3（2026-09-10）：本会话已消耗的 SERP **引擎导航次数**与会话上限
     /// （`(navigations, ceiling)`）。宿主把它作为机械事实上报给 loop，loop
@@ -290,6 +357,15 @@ impl BrowserSession for LocalBrowserManager {
             .try_lock()
             .map(|g| g.as_ref().is_some_and(|s| s.is_alive()))
             .unwrap_or(false)
+    }
+
+    /// 0bs ⑪：类型留档——短取锁读会话（try_lock：读进行中不阻塞留档）。
+    fn browser_type(&self) -> &'static str {
+        self.inner
+            .try_lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(|session| session.browser_type()))
+            .unwrap_or("unknown")
     }
 
     /// P2-3：转发会话内部的 SERP 计数器（跨 run 存活；锁内 clone、锁外
@@ -668,36 +744,53 @@ pub fn browser_control_tool_def() -> ToolDef {
     ToolDef {
         name: "browser_control".to_string(),
         description: "Control the local browser lane: navigate to a URL, \
-             go back/forward in history, refresh, wait for load, or snapshot \
-             the current page state, or run a bounded search-engine SERP \
-             lookup (Google → Bing → DuckDuckGo, fixed en-US region). Each \
-             action returns action_status + a \
-             real error class (dns / connection_reset / timeout / blocked / \
-             certificate / other) + navigation phase + current url/title + a \
-             bounded [browser_log] excerpt (console/network errors only, \
-             never page prose). Reading page content is done with \
-             browser_read — this tool never returns full page text. Public \
-             http(s) URLs only (file://, localhost, private IPs and cloud \
-             metadata are blocked by policy)."
+             go back/forward in history, refresh, wait for load, snapshot \
+             the current page state, run a bounded search-engine SERP \
+             lookup (Google → Bing → DuckDuckGo, fixed en-US region), or act \
+             on the page like a user — type text (type), press a key (key), \
+             click (click), scroll (scroll). Input actions are driven through \
+             a resident human-like simulation (per-char delays, typo and \
+             correction, mouse trajectory, wheel cadence); you issue plain \
+             commands and never tune the rhythm. Each action returns \
+             action_status + a real error class (dns / connection_reset / \
+             timeout / blocked / certificate / other) + navigation phase + \
+             current url/title + a bounded [browser_log] excerpt \
+             (console/network errors only, never page prose) + browser_type \
+             (headless/headed; input actions also carry input_events). \
+             Reading page content is done with browser_read — this tool never \
+             returns full page text. Public http(s) URLs only (file://, \
+             localhost, private IPs and cloud metadata are blocked by policy)."
             .to_string(),
         parameters: json!({
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["navigate", "back", "forward", "refresh", "wait_load", "snapshot", "search"],
+                    "enum": [
+                        "navigate", "back", "forward", "refresh", "wait_load", "snapshot",
+                        "search", "type", "key", "click", "scroll", "download", "script",
+                    ],
                     "description": "Action to perform: navigate(url) direct \
                         navigation; back/forward history; refresh reloads the \
                         current page; wait_load waits up to timeout_secs for \
                         load/text readiness; snapshot reports the current page \
                         state without navigating; search(query) runs the fixed \
-                        Google → Bing → DuckDuckGo SERP chain and returns up \
-                        to 10 weighted organic results.",
+                        SERP chain and returns up to 10 weighted organic \
+                        results; type/key/click/scroll act on the page like a \
+                        user (resident human-like simulation, no tuning); \
+                        download(url) saves a public http(s) URL to the \
+                        session download dir (ALWAYS asks the user for \
+                        explicit approval — download is one of the two gated \
+                        actions); script evaluates a JavaScript expression on \
+                        the current control tab (ALWAYS asks the user for \
+                        explicit approval — script execution is the other \
+                        gated action; output is bounded).",
                 },
                 "url": {
                     "type": "string",
-                    "description": "Required when action=navigate: public \
-                        http(s) URL to navigate to.",
+                    "description": "Required when action=navigate or \
+                        action=download: public http(s) URL (file://, \
+                        localhost, private IPs and cloud metadata are blocked).",
                 },
                 "query": {
                     "type": "string",
@@ -711,7 +804,72 @@ pub fn browser_control_tool_def() -> ToolDef {
                     "minimum": 1,
                     "maximum": 30,
                     "description": "Optional bounded wait for navigate / \
-                        wait_load (default 30s, capped at 30s).",
+                        wait_load / download (default 30s, capped at 30s).",
+                },
+                "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": CONTROL_TYPE_MAX_CHARS,
+                    "description": "Required when action=type: text to type \
+                        into the focused element.",
+                },
+                "submit": {
+                    "type": "boolean",
+                    "description": "action=type: press Enter after typing \
+                        (default false).",
+                },
+                "key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": CONTROL_KEY_MAX_CHARS,
+                    "description": "Required when action=key: CDP key name \
+                        (Enter / Tab / Escape / Backspace / ArrowDown / …).",
+                },
+                "selector": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": CONTROL_SELECTOR_MAX_CHARS,
+                    "description": "action=click: CSS selector; the host \
+                        resolves the element center and moves the mouse there \
+                        (takes precedence over x/y).",
+                },
+                "x": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": CONTROL_COORD_MAX,
+                    "description": "action=click: viewport x in CSS pixels \
+                        (use with y when selector is omitted).",
+                },
+                "y": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": CONTROL_COORD_MAX,
+                    "description": "action=click: viewport y in CSS pixels \
+                        (use with x when selector is omitted).",
+                },
+                "dx": {
+                    "type": "integer",
+                    "minimum": -CONTROL_SCROLL_MAX_PX,
+                    "maximum": CONTROL_SCROLL_MAX_PX,
+                    "description": "action=scroll: horizontal wheel delta in \
+                        pixels (negative = left).",
+                },
+                "dy": {
+                    "type": "integer",
+                    "minimum": -CONTROL_SCROLL_MAX_PX,
+                    "maximum": CONTROL_SCROLL_MAX_PX,
+                    "description": "action=scroll: vertical wheel delta in \
+                        pixels (negative = up).",
+                },
+                "script": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": CONTROL_SCRIPT_MAX_CHARS,
+                    "description": "Required when action=script: JavaScript \
+                        expression evaluated on the current control tab \
+                        (returnByValue; output bounded to \
+                        4000 chars). Requires explicit user approval every \
+                        time.",
                 },
             },
             "required": ["action"],
@@ -736,7 +894,26 @@ pub async fn handle_browser_control(
     })?;
     let unknown: Vec<&String> = obj
         .keys()
-        .filter(|k| !matches!(k.as_str(), "action" | "url" | "query" | "timeout_secs"))
+        .filter(|k| {
+            !matches!(
+                k.as_str(),
+                "action"
+                    | "url"
+                    | "query"
+                    | "timeout_secs"
+                    // 0bs ⑪（2026-09-26）：输入动作参数（type/key/click/scroll）。
+                    | "text"
+                    | "submit"
+                    | "key"
+                    | "selector"
+                    | "x"
+                    | "y"
+                    | "dx"
+                    | "dy"
+                    // 0bs ⑪：唯二门禁动作参数（script 本体的源码字段）。
+                    | "script"
+            )
+        })
         .collect();
     if !unknown.is_empty() {
         return Err(ToolError::ExecutionFailed(format!(
@@ -763,6 +940,8 @@ pub async fn handle_browser_control(
     let url_arg = obj.get("url").and_then(|v| v.as_str()).map(str::to_string);
     let action = match action_name {
         "navigate" => {
+            // 0bs ⑪：输入参数只在输入动作上（navigate 不例外）。
+            reject_input_params(action_name, &obj)?;
             if obj.contains_key("url") && url_arg.is_none() {
                 return Err(ToolError::ExecutionFailed(
                     "browser_control failed [browser_control_invalid_arguments]: \
@@ -827,11 +1006,209 @@ pub async fn handle_browser_control(
                 query: query.to_string(),
             }
         }
+        // —— 0bs ⑪（2026-09-26）：输入动作（拟真时序由机械层常驻施加） ——
+        "type" => {
+            reject_url_for_action(action_name, &obj)?;
+            reject_keys(
+                action_name,
+                &obj,
+                &["query", "key", "selector", "x", "y", "dx", "dy"],
+            )?;
+            let text = obj
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    ToolError::ExecutionFailed(
+                        "browser_control failed [browser_control_missing_text]: \
+                         action=type requires a non-empty `text` argument"
+                            .to_string(),
+                    )
+                })?;
+            if text.chars().count() > CONTROL_TYPE_MAX_CHARS {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "browser_control failed [browser_control_invalid_arguments]: \
+                     `text` must be at most {CONTROL_TYPE_MAX_CHARS} chars \
+                     (realistic typing is ~200ms per char)"
+                )));
+            }
+            let submit = match obj.get("submit") {
+                None => false,
+                Some(v) => v.as_bool().ok_or_else(|| {
+                    ToolError::ExecutionFailed(
+                        "browser_control failed [browser_control_invalid_arguments]: \
+                         `submit` must be a boolean"
+                            .to_string(),
+                    )
+                })?,
+            };
+            BrowserControlAction::Type { text, submit }
+        }
+        "key" => {
+            reject_url_for_action(action_name, &obj)?;
+            reject_keys(
+                action_name,
+                &obj,
+                &["query", "text", "submit", "selector", "x", "y", "dx", "dy"],
+            )?;
+            let key = obj
+                .get("key")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .filter(|s| !s.is_empty() && s.chars().count() <= CONTROL_KEY_MAX_CHARS)
+                .ok_or_else(|| {
+                    ToolError::ExecutionFailed(format!(
+                        "browser_control failed [browser_control_missing_key]: \
+                         action=key requires a non-empty `key` of at most \
+                         {CONTROL_KEY_MAX_CHARS} chars (CDP key name, e.g. Enter)"
+                    ))
+                })?;
+            BrowserControlAction::Key { key }
+        }
+        "click" => {
+            reject_url_for_action(action_name, &obj)?;
+            reject_keys(action_name, &obj, &["query", "text", "submit", "key", "dx", "dy"])?;
+            let selector = match obj.get("selector") {
+                None => None,
+                Some(v) => {
+                    let s = v.as_str().map(str::to_string).filter(|s| !s.is_empty());
+                    let Some(s) = s else {
+                        return Err(ToolError::ExecutionFailed(
+                            "browser_control failed [browser_control_invalid_arguments]: \
+                             `selector` must be a non-empty string"
+                                .to_string(),
+                        ));
+                    };
+                    if s.chars().count() > CONTROL_SELECTOR_MAX_CHARS {
+                        return Err(ToolError::ExecutionFailed(format!(
+                            "browser_control failed [browser_control_invalid_arguments]: \
+                             `selector` must be at most {CONTROL_SELECTOR_MAX_CHARS} chars"
+                        )));
+                    }
+                    Some(s)
+                }
+            };
+            let coord = |name: &str| -> Result<Option<i64>, ToolError> {
+                match obj.get(name) {
+                    None => Ok(None),
+                    Some(v) => {
+                        let n = v.as_i64().filter(|n| (0..=CONTROL_COORD_MAX).contains(n));
+                        n.map(Some).ok_or_else(|| {
+                            ToolError::ExecutionFailed(format!(
+                                "browser_control failed [browser_control_invalid_arguments]: \
+                                 `{name}` must be an integer in 0..={CONTROL_COORD_MAX}"
+                            ))
+                        })
+                    }
+                }
+            };
+            let (x, y) = (coord("x")?, coord("y")?);
+            match (&selector, x, y) {
+                // 二选一（严格）：selector 独占，或 x+y 成对；混给也拒绝。
+                (Some(_), None, None) | (None, Some(_), Some(_)) => {}
+                _ => {
+                    return Err(ToolError::ExecutionFailed(
+                        "browser_control failed [browser_control_invalid_arguments]: \
+                         action=click requires exactly one of `selector` or `x`+`y`"
+                            .to_string(),
+                    ));
+                }
+            }
+            BrowserControlAction::Click { selector, x, y }
+        }
+        "scroll" => {
+            reject_url_for_action(action_name, &obj)?;
+            reject_keys(
+                action_name,
+                &obj,
+                &["query", "text", "submit", "key", "selector", "x", "y"],
+            )?;
+            let delta = |name: &str| -> Result<i64, ToolError> {
+                match obj.get(name) {
+                    None => Ok(0),
+                    Some(v) => v
+                        .as_i64()
+                        .filter(|n| n.abs() <= CONTROL_SCROLL_MAX_PX)
+                        .ok_or_else(|| {
+                            ToolError::ExecutionFailed(format!(
+                                "browser_control failed [browser_control_invalid_arguments]: \
+                                 `{name}` must be an integer in \
+                                 ±{CONTROL_SCROLL_MAX_PX}"
+                            ))
+                        }),
+                }
+            };
+            let (dx, dy) = (delta("dx")?, delta("dy")?);
+            if dx == 0 && dy == 0 {
+                return Err(ToolError::ExecutionFailed(
+                    "browser_control failed [browser_control_invalid_arguments]: \
+                     action=scroll requires a non-zero `dx` or `dy`"
+                        .to_string(),
+                ));
+            }
+            BrowserControlAction::Scroll { dx, dy }
+        }
+        // —— 0bs ⑪（2026-09-26）：唯二门禁动作 ——
+        "download" => {
+            reject_keys(
+                action_name,
+                &obj,
+                &["query", "text", "submit", "key", "selector", "x", "y", "dx", "dy", "script"],
+            )?;
+            if obj.contains_key("url") && url_arg.is_none() {
+                return Err(ToolError::ExecutionFailed(
+                    "browser_control failed [browser_control_invalid_arguments]: \
+                     `url` must be a string"
+                        .to_string(),
+                ));
+            }
+            let url = url_arg
+                .as_ref()
+                .filter(|s| !s.trim().is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    ToolError::ExecutionFailed(
+                        "browser_control failed [browser_control_missing_url]: \
+                         action=download requires a non-empty `url` argument"
+                            .to_string(),
+                    )
+                })?;
+            BrowserControlAction::Download { url }
+        }
+        "script" => {
+            reject_url_for_action(action_name, &obj)?;
+            reject_keys(
+                action_name,
+                &obj,
+                &["query", "text", "submit", "key", "selector", "x", "y", "dx", "dy"],
+            )?;
+            let code = obj
+                .get("script")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| {
+                    ToolError::ExecutionFailed(
+                        "browser_control failed [browser_control_missing_script]: \
+                         action=script requires a non-empty `script` argument"
+                            .to_string(),
+                    )
+                })?;
+            if code.chars().count() > CONTROL_SCRIPT_MAX_CHARS {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "browser_control failed [browser_control_invalid_arguments]: \
+                     `script` must be at most {CONTROL_SCRIPT_MAX_CHARS} chars"
+                )));
+            }
+            BrowserControlAction::Script { code }
+        }
         _ => {
             return Err(ToolError::ExecutionFailed(format!(
                 "browser_control failed [browser_control_invalid_arguments]: \
                  `action` must be one of \"navigate\", \"back\", \"forward\", \
-                 \"refresh\", \"wait_load\", \"snapshot\" or \"search\" \
+                 \"refresh\", \"wait_load\", \"snapshot\", \"search\", \"type\", \
+                 \"key\", \"click\", \"scroll\", \"download\" or \"script\" \
                  (got {action_name})"
             )));
         }
@@ -867,7 +1244,28 @@ pub async fn handle_browser_control(
         "error_class": outcome.error_class,
         "nav_phase": outcome.nav_phase,
         "log": outcome.log,
+        // 0bs ⑪（2026-09-26）：类型留档——每次使用随信封回传（journal 落档；
+        // 单会话单实例 ⇒ 天然不混用）。
+        "browser_type": outcome
+            .browser_type
+            .clone()
+            .unwrap_or_else(|| browser.browser_type().to_string()),
     });
+    if let Some(events) = outcome.input_events {
+        out["input_events"] = json!(events);
+    }
+    // 0bs ⑪（2026-09-26）：唯二门禁动作的机械读数——download 落盘信息与
+    // script 结果文本（有界）。两者只在对应动作上出现。
+    if let Some(download) = outcome.download {
+        out["download"] = json!({
+            "path": download.path,
+            "bytes": download.bytes,
+            "final_url": download.final_url,
+        });
+    }
+    if let Some(script_output) = outcome.script_output {
+        out["script_output"] = json!(script_output);
+    }
     if action_name == "search" {
         if let Some(engine) = outcome.engine {
             out["engine"] = json!(engine);
@@ -903,11 +1301,82 @@ fn reject_url_for_action(
              `url` is only allowed when action=navigate (action={action})"
         )));
     }
+    // 0bs ⑪（2026-09-26）：输入参数只允许出现在输入动作上（严格解析——
+    // 非输入动作携带 text/submit/key/selector/x/y/dx/dy 一律拒绝）。
+    if !matches!(action, "type" | "key" | "click" | "scroll") {
+        reject_input_params(action, obj)?;
+    }
     Ok(())
 }
 
 /// 控制动作默认等待上限（P1 设计 §2.1：默认 ≤30s，可配）。
 pub const DEFAULT_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+
+// —— 0bs ⑪（2026-09-26）：输入动作参数边界（机械层拟真时序 ⇒ 语义面只需
+// 有界常量；模型的输入本体不做动作级限制，边界只防误用/滥用） ——
+/// `type` 动作文本上限（逐字符 200ms 拟真 ⇒ 800 字 ≈ 160–224s 真实耗时）。
+pub const CONTROL_TYPE_MAX_CHARS: usize = 800;
+/// `key` 动作键名上限（CDP 键名，如 `Enter`）。
+pub const CONTROL_KEY_MAX_CHARS: usize = 32;
+/// `click` 动作 CSS 选择器上限。
+pub const CONTROL_SELECTOR_MAX_CHARS: usize = 500;
+/// `script` 动作源码上限（0bs ⑪ 唯二门禁动作；模型下发的表达式本体）。
+pub const CONTROL_SCRIPT_MAX_CHARS: usize = 8_000;
+/// `script` 动作回传输出上限（`Runtime.evaluate` returnByValue 的 JSON
+/// 取值，超出机械截断——输出进对话正文，必须有界）。
+pub const CONTROL_SCRIPT_MAX_OUTPUT_CHARS: usize = 4_000;
+/// `click` 动作视口坐标上限（0..=20000）。
+pub const CONTROL_COORD_MAX: i64 = 20_000;
+/// `scroll` 动作单轴像素上限（±20000；110px/格 ⇒ ≤182 格）。
+pub const CONTROL_SCROLL_MAX_PX: i64 = 20_000;
+
+/// 0bs ⑪：动作专属参数纪律——`keys` 中任一键出现即拒绝（严格解析；输入
+/// 参数只允许出现在对应动作上）。
+fn reject_keys(
+    action: &str,
+    obj: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Result<(), ToolError> {
+    let present: Vec<&str> = keys
+        .iter()
+        .copied()
+        .filter(|k| obj.contains_key(*k))
+        .collect();
+    if !present.is_empty() {
+        return Err(ToolError::ExecutionFailed(format!(
+            "browser_control failed [browser_control_invalid_arguments]: \
+             argument(s) {} are not allowed for action={action}",
+            present.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+/// 0bs ⑪：非输入动作的输入参数拒绝（navigate/search/历史/等待/快照）。
+fn reject_input_params(action: &str, obj: &serde_json::Map<String, serde_json::Value>) -> Result<(), ToolError> {
+    reject_keys(
+        action,
+        obj,
+        &["text", "submit", "key", "selector", "x", "y", "dx", "dy"],
+    )
+}
+
+/// 0bs ⑪：`script` 动作输出截断——超过 [`CONTROL_SCRIPT_MAX_OUTPUT_CHARS`]
+/// 字符即截断并附机械标记（输出进对话正文，必须有界；截断是显式的，绝不
+/// 静默）。截断标记与 `browser_read` 的 footer 同族形态。
+pub(crate) fn bounded_script_output(text: &str) -> String {
+    let total = text.chars().count();
+    if total <= CONTROL_SCRIPT_MAX_OUTPUT_CHARS {
+        return text.to_string();
+    }
+    let head: String = text
+        .chars()
+        .take(CONTROL_SCRIPT_MAX_OUTPUT_CHARS)
+        .collect();
+    format!(
+        "{head}\n[script output truncated: {CONTROL_SCRIPT_MAX_OUTPUT_CHARS} of {total} chars shown]"
+    )
+}
 
 /// S2-R P3 / P1-2b（2026-09-09, P1 设计 §2.2/§3.2-1）：把 CDP 层收集的
 /// 日志行（已按严重度过滤）折叠成有界 `[browser_log]` 容器——≤12 行 /
@@ -1693,6 +2162,7 @@ pub(crate) mod tests {
                     weight: 0.7,
                     reason: "low_quality_platform:csdn.net".to_string(),
                 }]),
+                ..Default::default()
             }),
         };
         let result = handle_browser_control(
@@ -1785,8 +2255,30 @@ pub(crate) mod tests {
                 json!({"action": "search", "query": "rust", "url": "https://example.com"}),
                 "browser_control_invalid_arguments",
             ),
+            // 0bs ⑪（2026-09-26）：输入动作的专属错误码与参数纪律。
+            (json!({"action": "type"}), "browser_control_missing_text"),
             (
-                json!({"action": "type"}),
+                json!({"action": "click"}),
+                "browser_control_invalid_arguments",
+            ),
+            (
+                json!({"action": "click", "selector": "a", "x": 1, "y": 2}),
+                "browser_control_invalid_arguments",
+            ),
+            (
+                json!({"action": "scroll", "dx": 0, "dy": 0}),
+                "browser_control_invalid_arguments",
+            ),
+            (
+                json!({"action": "key", "key": ""}),
+                "browser_control_missing_key",
+            ),
+            (
+                json!({"action": "navigate", "url": "https://example.com", "text": "x"}),
+                "browser_control_invalid_arguments",
+            ),
+            (
+                json!({"action": "scroll", "dy": 100000}),
                 "browser_control_invalid_arguments",
             ),
             (
@@ -1827,9 +2319,10 @@ pub(crate) mod tests {
         assert!(redacted.contains("***REDACTED***"), "{redacted}");
     }
 
-    /// S2-R P3 / P1-2b：工具定义形状——单工具多动作，动作集 = Phase 1
-    /// 六动作，url 仅在 navigate 场景语义存在（schema 无法表达条件必需，
-    /// 由执行层严格解析兜底）。
+    /// S2-R P3 / P1-2b：工具定义形状——单工具多动作。0bs ⑪ 起动作面为
+    /// 完整 13 动作（读/导航 7 + 输入 4 + 唯二门禁 2）；url 仅在
+    /// navigate/download 场景语义存在（schema 无法表达条件必需，由执行层
+    /// 严格解析兜底）。
     #[test]
     fn browser_control_tool_def_shape() {
         let def = browser_control_tool_def();
@@ -1850,13 +2343,86 @@ pub(crate) mod tests {
                 "refresh",
                 "wait_load",
                 "snapshot",
-                "search"
+                "search",
+                "type",
+                "key",
+                "click",
+                "scroll",
+                "download",
+                "script"
             ]
         );
         assert!(props["url"].is_object());
         assert!(props["query"].is_object());
         assert_eq!(props["query"]["maxLength"], 500);
         assert_eq!(def.parameters["required"][0], "action");
+        // 0bs ⑪：输入与门禁动作的参数面必须随动作一起出现在 schema 上
+        // （b 轮遗留缺口：enum 与属性未随动作更新）。
+        assert_eq!(props["text"]["maxLength"], CONTROL_TYPE_MAX_CHARS);
+        assert!(props["submit"].is_object());
+        assert_eq!(props["key"]["maxLength"], CONTROL_KEY_MAX_CHARS);
+        assert_eq!(props["selector"]["maxLength"], CONTROL_SELECTOR_MAX_CHARS);
+        assert_eq!(props["x"]["maximum"], CONTROL_COORD_MAX);
+        assert_eq!(props["y"]["maximum"], CONTROL_COORD_MAX);
+        assert_eq!(props["dx"]["minimum"], -CONTROL_SCROLL_MAX_PX);
+        assert_eq!(props["dy"]["minimum"], -CONTROL_SCROLL_MAX_PX);
+        assert_eq!(props["script"]["maxLength"], CONTROL_SCRIPT_MAX_CHARS);
+    }
+
+    /// 0bs ⑪：script 输出截断是显式的机械标记（不是静默截断）。
+    #[test]
+    fn script_output_is_bounded_with_explicit_marker() {
+        let short = "42";
+        assert_eq!(bounded_script_output(short), "42");
+        let long: String = std::iter::repeat_n('x', CONTROL_SCRIPT_MAX_OUTPUT_CHARS + 10).collect();
+        let bounded = bounded_script_output(&long);
+        assert!(
+            bounded.contains("[script output truncated:"),
+            "truncation must be visible: {bounded}"
+        );
+        assert!(
+            bounded.starts_with(&"x".repeat(CONTROL_SCRIPT_MAX_OUTPUT_CHARS)),
+            "head must be the first N chars"
+        );
+    }
+
+    /// 0bs ⑪：唯二门禁动作的解析纪律——download 要 url、script 要非空
+    /// script、两者拒绝彼此与输入参数、超限拒绝、catch-all 文案含新动作。
+    #[tokio::test]
+    async fn download_and_script_actions_parse_strictly() {
+        async fn err_of(args: serde_json::Value) -> String {
+            let browser = StubBrowser {
+                outcome: Ok(sample_outcome("x")),
+                download: Ok(BrowserDownloadOutcome::Page(sample_outcome("x"))),
+            };
+            handle_browser_control(&browser, &args)
+                .await
+                .err()
+                .expect("must reject")
+                .to_string()
+        }
+        // download 缺 url。
+        let e = err_of(json!({"action": "download"})).await;
+        assert!(e.contains("browser_control_missing_url"), "{e}");
+        // download 带输入参数。
+        let e = err_of(json!({"action": "download", "url": "https://example.com/a", "text": "x"}))
+            .await;
+        assert!(e.contains("browser_control_invalid_arguments"), "{e}");
+        // script 缺 script。
+        let e = err_of(json!({"action": "script"})).await;
+        assert!(e.contains("browser_control_missing_script"), "{e}");
+        // script 带 url（url 只在 navigate/download 上）。
+        let e = err_of(json!({"action": "script", "script": "1+1", "url": "https://example.com/"}))
+            .await;
+        assert!(e.contains("browser_control_invalid_arguments"), "{e}");
+        // script 超限。
+        let long = "x".repeat(CONTROL_SCRIPT_MAX_CHARS + 1);
+        let e = err_of(json!({"action": "script", "script": long})).await;
+        assert!(e.contains("browser_control_invalid_arguments"), "{e}");
+        // catch-all 文案覆盖新动作（未知动作）。
+        let e = err_of(json!({"action": "eval"})).await;
+        assert!(e.contains("download"), "{e}");
+        assert!(e.contains("script"), "{e}");
     }
 
     #[tokio::test]

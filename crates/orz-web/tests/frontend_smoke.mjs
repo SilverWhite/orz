@@ -196,6 +196,15 @@ assert.equal(ui.menubar.children.length, state.menu.length, '菜单项数量');
 assert.ok(state.menu.includes('编辑模式'), '菜单词表含「编辑模式」（补充稿 §13 冻结转换）');
 console.log('ok  MenuBar 渲染与「编辑模式」词表');
 
+/* ── 4b. 工具栏「新建会话」居「后退」之前（用户令 2026-09-25） ── */
+
+widgets.renderToolbar();
+const toolbarBtns = ui.toolbar.children.filter((n) => n.tagName === 'BUTTON').map((n) => n.textContent);
+assert.equal(toolbarBtns[0], '新建会话', '「新建会话」必须居工具栏首位');
+assert.equal(toolbarBtns[1], '后退', '「后退」必须紧随「新建会话」之后（用户令「放在后退的前面」）');
+assert.equal(typeof ui.newSession, 'function', '新建会话动作已接线');
+console.log('ok  工具栏「新建会话」居「后退」之前');
+
 /* ── 5. dialogs 权限应答结算（审查处理批 C-1 回归） ── */
 
 const dialogs = await import('../assets/app/dialogs.js');
@@ -299,6 +308,9 @@ const api = await import('../assets/app/api.js');
 assert.equal(typeof api.fetchArchives, 'function', '归档清单 API 客户端');
 assert.equal(typeof api.fetchArchive, 'function', '归档详情 API 客户端');
 assert.equal(typeof api.postArchive, 'function', '归档动作 API 客户端');
+assert.equal(typeof api.unarchiveSession, 'function', '回档动作 API 客户端（批六）');
+assert.equal(typeof api.deleteSession, 'function', '删除动作 API 客户端（批六）');
+assert.equal(typeof api.grantTrust, 'function', '信任授信 API 客户端（批七）');
 
 state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
 state.marker = [];
@@ -372,12 +384,102 @@ state.archives = [{ session8: '6aab1234', size_bytes: 1, modified_ms: 50, archiv
 widgets.renderExplorer();
 tree = JSON.stringify(ui.explorer.children);
 assert.ok(tree.includes('活跃会话（1）') && tree.includes('归档会话（0）'), '归档后又继续的会话回活跃组');
-const jump = ui.explorer.children
-  .flatMap((n) => n.children || [])
-  .find((n) => n.textContent === '◆归档');
-assert.ok(jump, '活跃会话行必须带 ◆归档 动作键');
+
+// 分组规则补钉（新建会话批 2026-09-25）：ARC- 审计 journal 由归档动作
+// 自身写入（恒晚于归档包落盘），不得计入活动水位——否则每次新归档都被
+// 顶回活跃组（用户令「刷新后也没有将活跃会话归档」；实证 6ab6275c/6ab6570c）。
+state.runs = [
+  { run_id: 'RUN-6aab1234-1', status: 'completed', modified_ms: 100 },
+  { run_id: 'ARC-6aab1234-1', status: 'completed', modified_ms: 300 },
+];
+state.archives = [{ session8: '6aab1234', size_bytes: 1, modified_ms: 200, archived_at: '2026-09-25T11:00:00Z' }];
+widgets.renderExplorer();
+tree = JSON.stringify(ui.explorer.children);
+assert.ok(
+  tree.includes('活跃会话（0）') && tree.includes('归档会话（1）'),
+  'ARC 审计 journal 不得把新归档顶回活跃组',
+);
+// 反向：归档后真实新 run（mtime 更晚）仍如实回活跃组。
+state.runs = [
+  { run_id: 'RUN-6aab1234-2', status: 'completed', modified_ms: 400 },
+  { run_id: 'ARC-6aab1234-1', status: 'completed', modified_ms: 300 },
+];
+widgets.renderExplorer();
+tree = JSON.stringify(ui.explorer.children);
+assert.ok(tree.includes('活跃会话（1）') && tree.includes('归档会话（0）'), '归档后真实新 run 仍如实回活跃组');
+
+/* ── 8b. 组级功能键＋选中模型（批六用户令 2026-09-25）：
+ *    「归档」与「活跃会话」组头同行、「回档」「删除」与「归档会话」
+ *    组头同行；单击选中、双击打开；未选中＝禁用。 ── */
+
+state.runs = [
+  { run_id: 'RUN-6aab1111-1', status: 'completed', modified_ms: 100 },
+  { run_id: 'RUN-6aab2222-1', status: 'completed', modified_ms: 300 },
+];
+state.archives = [{ session8: '6aab2222', size_bytes: 1, modified_ms: 400, archived_at: '2026-09-25T12:00:00Z' }];
+state.selected = null;
+
+const groupActions = () =>
+  ui.explorer.children
+    .filter((n) => n.className === 'explorer-group')
+    .flatMap((n) => n.children || [])
+    .filter((c) => (c.className || '').startsWith('group-action'))
+    // stub 的 classList 与 className 字符串不同步——按字符串解析禁用态。
+    .map((c) => ({ label: c.textContent, disabled: (c.className || '').split(' ').includes('disabled') }));
+
+widgets.renderExplorer();
+assert.ok(
+  !JSON.stringify(ui.explorer.children).includes('◆归档'),
+  '行内「◆归档」动作键必须退役（改组级功能键）',
+);
+let actions = groupActions();
+assert.deepEqual(actions.map((a) => a.label), ['归档', '回档', '删除'], '三个功能键与各自组头同行');
+assert.ok(actions.every((a) => a.disabled), '未选中时三个功能键全部禁用');
+
+// 选中活跃会话 ⇒ 仅「归档」生效。
+state.selected = { group: 'active', s8: '6aab1111' };
+widgets.renderExplorer();
+actions = groupActions();
+assert.equal(actions.find((a) => a.label === '归档').disabled, false, '选中活跃会话后「归档」可用');
+assert.ok(
+  actions.filter((a) => a.label !== '归档').every((a) => a.disabled),
+  '选中活跃会话不得点亮回档/删除',
+);
+const activeRow = ui.explorer.children.find(
+  (n) => (n.className || '').includes('explorer-row') && n.children?.[0]?.textContent === '6aab1111',
+);
+assert.ok(activeRow.classList.contains('explorer-selected'), '选中行必须有高亮类');
+// 批七修正（用户报告「点击其他对话，主窗口不会切换了」）：单击＝打开
+// （主窗口切换）＋选中——不再有只选不开的中间态。
+activeRow.dispatch('click');
+assert.equal(state.nav.current, 'conversation://6aab1111', '单击即打开（主窗口切换）');
+assert.ok(state.selected?.s8 === '6aab1111', '单击同时保持选中');
+
+// 选中归档会话 ⇒ 「回档」「删除」生效、「归档」禁用。
+state.selected = { group: 'archived', s8: '6aab2222' };
+widgets.renderExplorer();
+actions = groupActions();
+assert.equal(actions.find((a) => a.label === '回档').disabled, false, '选中归档会话后「回档」可用');
+assert.equal(actions.find((a) => a.label === '删除').disabled, false, '选中归档会话后「删除」可用');
+assert.equal(actions.find((a) => a.label === '归档').disabled, true, '选中归档会话不得点亮「归档」');
+
+state.selected = null;
 state.archives = [];
-console.log('ok  探索器三组重构＋归档动作键＋进行中/未完成语义');
+state.runs = [];
+console.log('ok  组级功能键（归档/回档/删除与组头同行）＋单击选中模型');
+
+/* ── 9. 新建会话动作（新建会话批 2026-09-25）：归档收尾流程的入口 ── */
+
+// 桥未连接（stub）路径：同步复位面先落地，ensureSession 走失败支路且
+// 不残留旧会话绑定。
+state.nav = { current: 'run://zz', back: ['workspace://live'], forward: [] };
+ui.newSession();
+await new Promise((r) => setTimeout(r, 0));
+assert.equal(state.nav.current, 'workspace://live', '新建会话复位导航栈');
+assert.equal(state.nav.back.length, 0, '新建会话清空后退历史');
+assert.equal(state.sessionId, null, '桥不可达时不得残留旧会话绑定');
+assert.equal(state.running, false, '新建会话不改运行态');
+console.log('ok  新建会话复位导航/内容区并解绑旧会话');
 
 console.log('\nfrontend smoke: 全部通过');
 process.exit(0);

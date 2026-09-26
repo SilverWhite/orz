@@ -912,6 +912,105 @@ pub async fn archive_session_on_demand(base_dir: &Path, session8: &str) -> Resul
     ))
 }
 
+/// 归档产物目录（与 `package_archive_raw` 同一构造，禁第二套口径）。
+fn on_demand_archives_dir(base_dir: &Path) -> PathBuf {
+    base_dir.join(".gsa").join("archives")
+}
+
+/// 0br S3 批六（2026-09-25 第七用户令：Web 工作台「回档」）：移除会话的
+/// 归档包（`{s8}.json.gz`＋里程碑水位），会话随即按分组规则回到活跃组——
+/// 运行 journal 与对话侧车一律不动（回档 ≠ 删除）。包缺失 ⇒ Err（与桥
+/// 404 同口径）。
+pub async fn unarchive_session_on_demand(
+    base_dir: &Path,
+    session8: &str,
+) -> Result<String, String> {
+    require_session8(session8)?;
+    let archives_dir = on_demand_archives_dir(base_dir);
+    let pkg = archives_dir.join(format!("{session8}.json.gz"));
+    if !pkg.is_file() {
+        return Err(format!("会话 {session8} 的归档包不存在（或已清扫）"));
+    }
+    std::fs::remove_file(&pkg).map_err(|e| format!("移除归档包失败: {e}"))?;
+    let mut removed = 1u32;
+    let milestones = archives_dir.join(format!("{session8}.milestones.json"));
+    if milestones.is_file() {
+        let _ = std::fs::remove_file(&milestones);
+        removed += 1;
+    }
+    Ok(format!("已移除归档包 {session8}.json.gz（{removed} 件）——会话回活跃组，数据保留"))
+}
+
+/// 0br S3 批六（2026-09-25 第七用户令：Web 工作台「删除」）：彻底移除
+/// 一个会话在本工作区 `.gsa` 下的全部数据——归档包＋里程碑水位＋对话
+/// 侧车＋会话名下的全部 run journal（`RUN-{s8}-*` ∪ `ARC-{s8}-*` ∪
+/// `RUN-CLI-{s8}`，与重构归档同一口径再并 ARC 面）。不可恢复——调用方
+/// （桥/UI）必须先取得用户确认。任何一件都不存在 ⇒ Err（无数据可删）。
+pub async fn delete_session_on_demand(base_dir: &Path, session8: &str) -> Result<String, String> {
+    require_session8(session8)?;
+    let archives_dir = on_demand_archives_dir(base_dir);
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let pkg = archives_dir.join(format!("{session8}.json.gz"));
+    if pkg.is_file() {
+        paths.push(pkg);
+    }
+    let milestones = archives_dir.join(format!("{session8}.milestones.json"));
+    if milestones.is_file() {
+        paths.push(milestones);
+    }
+    let sidecar = conversation_sidecar_path(base_dir, session8);
+    if sidecar.is_file() {
+        paths.push(sidecar);
+    }
+    if let Ok(entries) = std::fs::read_dir(base_dir.join(".gsa").join("runs")) {
+        let mut run_ids: Vec<String> = entries
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|name| {
+                name.starts_with(&format!("RUN-{session8}-"))
+                    || name.starts_with(&format!("ARC-{session8}-"))
+                    // RUN-CLI 面无尾分隔符（RUN-CLI-{s8}）——必须精确匹配，
+                    // 前缀匹配会误吞近似会话（钉子实证 RUN-CLI-6ab7de011）。
+                    || name == &format!("RUN-CLI-{session8}")
+            })
+            .collect();
+        run_ids.sort();
+        paths.extend(
+            run_ids.iter().map(|id| base_dir.join(".gsa").join("runs").join(id)),
+        );
+    }
+    if paths.is_empty() {
+        return Err(format!("会话 {session8} 在本工作区无数据可删除"));
+    }
+    for path in &paths {
+        let result = if path.is_dir() {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_file(path)
+        };
+        result.map_err(|e| format!("删除 {} 失败: {e}", path.display()))?;
+    }
+    Ok(format!(
+        "已彻底删除会话 {session8}（共 {} 件：归档包/水位/侧车/运行 journal）",
+        paths.len()
+    ))
+}
+
+/// 删除/回档面的会话段门：严格 8 位小写十六进制（会话 id＝UUID 前 8 字
+/// 符）。破坏性操作取最严口径——其余形态一律拒绝，不进入文件系统。
+fn require_session8(session8: &str) -> Result<(), String> {
+    if session8.len() == 8
+        && session8
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
+        Ok(())
+    } else {
+        Err(format!("无效的会话标识: {session8}"))
+    }
+}
+
 /// 从 run journal 机械重构会话对话（0br S3 批三，仅按需归档的无侧车
 /// 回退路径）：`prompt_submitted` → 用户消息、`model_output`（有正文或
 /// 工具调用）→ 助手消息。run 面＝`RUN-{s8}-*` 前缀 ∪ `RUN-CLI-{s8}` 精确
@@ -2841,8 +2940,9 @@ impl AcpServer {
     /// workspace-trust observation + IP6 permission bridge.
     ///
     /// The bridge consumes the outbound ACP gateway when one is wired
-    /// (`--stdio`); otherwise a fail-closed dead gateway — Read auto-allows,
-    /// Bash `Ask` → `Deny` (IP6 headless semantics). `policy` fixes the
+    /// (`--stdio`); otherwise a dead gateway — the manager 默认自动审批
+    /// （初始 yolo，用户令 2026-09-26），非 yolo 的 `Ask` 仍 fail closed。
+    /// `policy` fixes the
     /// bridge's per-session behavior (slice #16): a read-only session denies
     /// mutation/network without prompting.
     fn build_host(
@@ -4028,6 +4128,71 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// 0br S3 批六钉子（第七用户令「回档/删除」）：回档只移除归档包＋
+    /// 水位、数据全保留；删除清空会话名下全部数据且不越界伤及邻近会话；
+    /// 非严格 8 位小写十六进制一律拒绝。
+    #[tokio::test]
+    async fn unarchive_and_delete_session_on_demand_scope_and_gates() {
+        let base = test_dir();
+        let s8 = "6ab7de01";
+        // 布景：包＋水位＋侧车＋三种会话名 run＋一个近似前缀的邻居会话。
+        let archives = base.join(".gsa").join("archives");
+        std::fs::create_dir_all(&archives).unwrap();
+        std::fs::write(archives.join(format!("{s8}.json.gz")), b"pkg").unwrap();
+        std::fs::write(archives.join(format!("{s8}.milestones.json")), b"{}").unwrap();
+        let sidecars = base.join(".gsa").join("conversations");
+        std::fs::create_dir_all(&sidecars).unwrap();
+        std::fs::write(sidecars.join(format!("{s8}.json")), b"{}").unwrap();
+        let runs = base.join(".gsa").join("runs");
+        for id in [
+            format!("RUN-{s8}-1"),
+            format!("ARC-{s8}-1"),
+            format!("RUN-CLI-{s8}"),
+            // 近似前缀邻居：删除 {s8} 不得波及（前缀差一位即不匹配）。
+            "RUN-6ab7de011-9".to_string(),
+            "ARC-6ab7de011-1".to_string(),
+            "RUN-CLI-6ab7de011".to_string(),
+        ] {
+            std::fs::create_dir_all(runs.join(&id)).unwrap();
+            std::fs::write(runs.join(&id).join("events.jsonl"), "{}\n").unwrap();
+        }
+
+        // 回档：包＋水位移除，侧车/运行全保留。
+        let msg = unarchive_session_on_demand(&base, s8).await.expect("unarchive");
+        assert!(msg.contains("回活跃组"), "{msg}");
+        assert!(!archives.join(format!("{s8}.json.gz")).exists());
+        assert!(!archives.join(format!("{s8}.milestones.json")).exists());
+        assert!(sidecars.join(format!("{s8}.json")).is_file());
+        assert!(runs.join(format!("RUN-{s8}-1")).is_dir());
+
+        // 再回档 ⇒ 包缺失显式报错（与桥 404 同口径）。
+        let err = unarchive_session_on_demand(&base, s8).await.unwrap_err();
+        assert!(err.contains("不存在"), "{err}");
+
+        // 删除：会话名下全部数据清空，邻居会话原样。
+        let msg = delete_session_on_demand(&base, s8).await.expect("delete");
+        assert!(msg.contains("彻底删除"), "{msg}");
+        assert!(!sidecars.join(format!("{s8}.json")).exists());
+        assert!(!runs.join(format!("RUN-{s8}-1")).exists());
+        assert!(!runs.join(format!("ARC-{s8}-1")).exists());
+        assert!(!runs.join(format!("RUN-CLI-{s8}")).exists());
+        assert!(runs.join("RUN-6ab7de011-9").is_dir(), "近似前缀邻居不得被误删");
+        assert!(runs.join("ARC-6ab7de011-1").is_dir());
+        assert!(runs.join("RUN-CLI-6ab7de011").is_dir());
+
+        // 已删空再删除 ⇒ 无数据可删。
+        let err = delete_session_on_demand(&base, s8).await.unwrap_err();
+        assert!(err.contains("无数据可删除"), "{err}");
+
+        // 会话段门：严格 8 位小写十六进制，其余形态拒绝且不触文件系统。
+        for bad in ["6ab7de0", "6ab7de011", "6AB7DE01", "6ab7dem0", "../evil", ""] {
+            assert!(unarchive_session_on_demand(&base, bad).await.is_err(), "{bad}");
+            assert!(delete_session_on_demand(&base, bad).await.is_err(), "{bad}");
+        }
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// 0br S3 批三钉子：无侧车会话（§14.68 未跨里程碑的无头 `-p` run）
     /// 经 journal 重构归档——prompt/输出事实成包、`reconstructed_from_journal`
     /// 标记在位、三键段显式纳入无头 run。
@@ -4369,18 +4534,20 @@ mod tests {
             .await
     }
 
-    /// Phase 3 wiring: `bash` (SandboxEscape) with no interactive client
-    /// fails closed — PermissionDecision deny, tool never starts (IP6).
+    /// 默认自动审批（初始 yolo，用户令 2026-09-26「直接开auto mode就行」）：
+    /// 即使网关是 dead gateway（无交互客户端），mutation 订单也照常放行
+    /// 执行——不再有「无客户端 → 拒绝」路径；PermissionDecision 记录
+    /// allow_once。
     #[tokio::test]
-    async fn session_prompt_bash_denied_without_interactive_client() {
+    async fn session_prompt_default_yolo_auto_approves_with_dead_gateway() {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
 
                 let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
                     // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
-                    // 面——模型直接调 search_replace（写权限在直连调用时
-                    // 到达 permission bridge，dead gateway → 拒绝）。
+                    // 面——模型直接调 search_replace（默认 yolo 下权限门
+                    // 自动放行，dead gateway 不再构成拒绝）。
                     ScriptedResponse::tool_calls(vec![ToolCall {
                         name: "search_replace".to_string(),
                         arguments: serde_json::json!({
@@ -4390,10 +4557,10 @@ mod tests {
                         }),
                         call_id: "call-edit-1".to_string(),
                     }]),
-                    ScriptedResponse::text("完成（bash 被拒）。"),
-                    ScriptedResponse::text("完成（bash 被拒）。"),
+                    ScriptedResponse::text("完成（已自动放行）。"),
+                    ScriptedResponse::text("完成（已自动放行）。"),
                     // 0x S1：开局问询回答轮（软门消费）。
-                    ScriptedResponse::text("完成（bash 被拒）。"),
+                    ScriptedResponse::text("完成（已自动放行）。"),
                 ])));
                 server.set_gateway(dead_gateway());
                 server
@@ -4414,12 +4581,12 @@ mod tests {
                 let events = run_events(&base);
                 let types: Vec<EventType> = events.iter().map(|e| e.event_type.clone()).collect();
                 assert!(
-                    !events.iter().any(|e| {
+                    events.iter().any(|e| {
                         e.event_type == EventType::ToolStarted
                             && e.payload.get("tool").and_then(|t| t.as_str())
                                 == Some("search_replace")
                     }),
-                    "the denied order target must not start headless: {types:?}"
+                    "the default-yolo order must start even with a dead gateway: {types:?}"
                 );
                 let pd = events
                     .iter()
@@ -4430,7 +4597,7 @@ mod tests {
                     .expect("permission decision");
                 assert_eq!(
                     pd.payload.get("decision").and_then(|d| d.as_str()),
-                    Some("deny")
+                    Some("allow_once")
                 );
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -4558,13 +4725,12 @@ mod tests {
             .await
     }
 
-    /// IP5 wiring E2E (headless fail-closed): a mutation tool
-    /// (`search_replace`) is denied by the dead gateway before it starts —
-    /// the pre-mutation snapshot is NOT taken for denied tools (the snapshot
-    /// fires only after the permission gate allows, preserving the
-    /// fail-closed ordering).
+    /// 快照时序钉（默认自动审批形态）：mutation（`search_replace`）经
+    /// 权限门放行（初始 yolo）后执行——预变更快照**必须**记录（快照只在
+    /// 权限门放行之后触发；deny 臂的「拒单不快照」时序由 ReadOnly 策略
+    /// 测试 `session_prompt_respects_session_policy` 继续钉住）。
     #[tokio::test]
-    async fn session_prompt_denied_mutation_records_no_snapshot() {
+    async fn session_prompt_allowed_mutation_records_snapshot() {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
@@ -4572,8 +4738,8 @@ mod tests {
 
                 let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
                     // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
-                    // 面——模型直接调 search_replace（dead gateway 下写权限
-                    // 拒绝 → 无快照记录）。
+                    // 面——模型直接调 search_replace（默认 yolo 放行 → 快照
+                    // 记录）。
                     ScriptedResponse::tool_calls(vec![ToolCall {
                         name: "search_replace".to_string(),
                         arguments: serde_json::json!({
@@ -4583,15 +4749,15 @@ mod tests {
                         }),
                         call_id: "call-edit-snap".to_string(),
                     }]),
-                    ScriptedResponse::text("完成（被拒）。"),
-                    ScriptedResponse::text("完成（被拒）。"),
+                    ScriptedResponse::text("完成（已放行）。"),
+                    ScriptedResponse::text("完成（已放行）。"),
                     // 0x S1：开局问询回答轮（软门消费）。
-                    ScriptedResponse::text("完成（被拒）。"),
+                    ScriptedResponse::text("完成（已放行）。"),
                 ])));
                 server.set_gateway(dead_gateway());
                 server
                     .handle_session_new(
-                        "sess-deny-snap",
+                        "sess-allow-snap",
                         Some(base.clone()),
                         crate::session::TrustPolicy::Skip,
                     )
@@ -4599,7 +4765,7 @@ mod tests {
                     .unwrap();
 
                 let result = server
-                    .handle_session_prompt("sess-deny-snap", "修改 lib.rs")
+                    .handle_session_prompt("sess-allow-snap", "修改 lib.rs")
                     .await
                     .unwrap();
                 assert_eq!(result["status"], "completed");
@@ -4608,16 +4774,16 @@ mod tests {
                 let types: Vec<EventType> = events.iter().map(|e| e.event_type.clone()).collect();
                 assert!(types.contains(&EventType::PermissionDecision), "{types:?}");
                 assert!(
-                    !types.contains(&EventType::SnapshotCreated),
-                    "denied mutation must not snapshot: {types:?}"
+                    types.contains(&EventType::SnapshotCreated),
+                    "allowed mutation must snapshot: {types:?}"
                 );
                 assert!(
-                    !events.iter().any(|e| {
+                    events.iter().any(|e| {
                         e.event_type == EventType::ToolStarted
                             && e.payload.get("tool").and_then(|t| t.as_str())
                                 == Some("search_replace")
                     }),
-                    "denied order target must not start: {types:?}"
+                    "allowed order target must start: {types:?}"
                 );
 
                 let _ = std::fs::remove_dir_all(&base);

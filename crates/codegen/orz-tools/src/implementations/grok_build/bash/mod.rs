@@ -1685,10 +1685,10 @@ ${%- if shell_uses_semicolon %}
   - '&&' is not supported in this shell; chain sequential commands with ';'.
 ${%- endif %}
 ${%- if not has_unix_utilities %}
-  - The Unix utilities `grep`, `head`, `tail`, `sed`, `awk`, and `find` are NOT available in this shell. Use the dedicated tools instead.
+  - The Unix utilities `grep`, `head`, `tail`, `sed`, `awk`, and `find` are NOT available in this shell — rewrite the command instead of retrying it (0bt③, 2026-09-26): use the dedicated `grep` tool for content search and `read_file` for reads; PowerShell equivalents are `Select-String`, `Get-Content -TotalCount N` / `Select-Object -First N` (head), `Get-Content -Tail N` / `Select-Object -Last N` (tail), `Get-ChildItem -Recurse` (find), and `-replace` or Python for sed/awk.
 ${%- endif %}
 ${%- if is_windows %}
-  - Windows PowerShell notes: to pass arguments to a `.ps1` script, prefer `powershell -File <script.ps1> <args>` — invoking a script via `& <script> … -- <args>` swallows a bare `--`; if non-ASCII (CJK) output looks garbled under Windows PowerShell 5.1, set `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` at the start of the command.
+  - Windows PowerShell notes: `cd /d <path>` is CMD-only syntax and fails under PowerShell — use `cd <path>` (or `Set-Location -LiteralPath <path>`) (0bt③); to pass arguments to a `.ps1` script, prefer `powershell -File <script.ps1> <args>` — invoking a script via `& <script> … -- <args>` swallows a bare `--`; if non-ASCII (CJK) output looks garbled under Windows PowerShell 5.1, set `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` at the start of the command.
 ${%- endif %}"#
     }
 
@@ -1712,7 +1712,7 @@ ${%- if shell_uses_semicolon %}
   - '&&' is not supported in this shell; chain sequential commands with ';'.
 ${%- endif %}
 ${%- if not has_unix_utilities %}
-  - The Unix utilities `grep`, `head`, `tail`, `sed`, `awk`, and `find` are NOT available in this shell. Use the dedicated tools instead.
+  - The Unix utilities `grep`, `head`, `tail`, `sed`, `awk`, and `find` are NOT available in this shell — rewrite the command instead of retrying it (0bt③, 2026-09-26): use the dedicated `grep` tool for content search and `read_file` for reads; PowerShell equivalents are `Select-String`, `Get-Content -TotalCount N` / `Select-Object -First N` (head), `Get-Content -Tail N` / `Select-Object -Last N` (tail), `Get-ChildItem -Recurse` (find), and `-replace` or Python for sed/awk.
 ${%- endif %}"#
     }
 
@@ -1728,7 +1728,7 @@ ${%- if shell_uses_semicolon %}
   - '&&' is not supported in this shell; chain sequential commands with ';'.
 ${%- endif %}
 ${%- if not has_unix_utilities %}
-  - The Unix utilities `grep`, `head`, `tail`, `sed`, `awk`, and `find` are NOT available in this shell. Use the dedicated tools instead.
+  - The Unix utilities `grep`, `head`, `tail`, `sed`, `awk`, and `find` are NOT available in this shell — rewrite the command instead of retrying it (0bt③, 2026-09-26): use the dedicated `grep` tool for content search and `read_file` for reads; PowerShell equivalents are `Select-String`, `Get-Content -TotalCount N` / `Select-Object -First N` (head), `Get-Content -Tail N` / `Select-Object -Last N` (tail), `Get-ChildItem -Recurse` (find), and `-replace` or Python for sed/awk.
 ${%- endif %}"#
     }
 
@@ -5925,6 +5925,16 @@ mod tests {
             assert!(out.contains(
                 "Unix utilities `grep`, `head`, `tail`, `sed`, `awk`, and `find` are NOT available in this shell"
             ), "missing unavailability note, got:\n{out}");
+            // 0bt③ (2026-09-26): the unavailability note carries the rewrite
+            // table (command-side alternatives), not just a warning — the m9
+            // friction was repeated trial-and-error after the bare warning.
+            assert!(
+                out.contains("rewrite the command instead of retrying it")
+                    && out.contains("`Select-String`")
+                    && out.contains("`Get-Content -TotalCount N`")
+                    && out.contains("`Get-ChildItem -Recurse`"),
+                "PowerShell rewrite table missing, got:\n{out}"
+            );
             assert!(
                 out.contains("'&&' is not supported in this shell"),
                 "missing the `;`-chaining note, got:\n{out}"

@@ -29,6 +29,10 @@ pub struct WebConfig {
     pub bind: SocketAddr,
     /// Workspace directory (the child's cwd and the `.gsa` scan root).
     pub cwd: PathBuf,
+    /// 批七（2026-09-25 用户报告 prompt 拿到 fake 回应）：真实模型传输。
+    /// 置位时桥进程设置 `ORZ_REAL=1`，spawn 的 `orz --stdio` 子进程经
+    /// env 继承走真实 DeepSeek 通道（与 TUI `--real` 同一决策点）。
+    pub real: bool,
 }
 
 /// Default bind target: loopback, survey §6 port candidate.
@@ -51,6 +55,39 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
     // once the ACTUAL port is known (`--addr …:0` picks an ephemeral one);
     // the frontend parses it as `#token=<hex>` — keep the two in lockstep.
     println!("orz web: Web 工作台已启动");
+    // 批七：模型传输面必须一眼可辨——fake 回应（`(模型)(fake) 已收到请求`）
+    // 对真实使用者毫无价值且极易误判为成功。
+    if config.real {
+        // SAFETY: run() 在任何 runtime/child spawn 之前执行，单线程窗口内
+        // 写入（edition 2024 set_var unsafe，与 orz-bin main 的 --real 同型）。
+        unsafe {
+            std::env::set_var("ORZ_REAL", "1");
+        }
+        println!("orz web: 模型传输：真实（--real；子进程经 ORZ_REAL 继承）");
+    } else if std::env::var_os("ORZ_REAL").is_some() {
+        println!("orz web: 模型传输：真实（继承自调用方 ORZ_REAL）");
+    } else {
+        println!("orz web: ⚠ 模型传输：fake（测试替身，回应无意义）——真实模型请用 `orz web --real`");
+    }
+    // 批六（2026-09-25 用户报告「旧的归档消失了」）：从错误目录启动时
+    // 桥扫的是那个目录的 .gsa——工作区必须印在启动台面上，一眼可辨。
+    println!(
+        "orz web: 工作区: {}（探索器/运行/归档均按此目录的 .gsa 投影；不符请用 --cwd 指向工作区根）",
+        config.cwd.display()
+    );
+    // 批七（2026-09-25 用户报告 prompt「Internal error」）：ACAF 签名器
+    // env 未随终端配置时，fail-closed 门会在首个 prompt 拒跑——启动台面
+    // 直接挑明，不等用户撞墙。
+    let missing: Vec<&str> = ["ORZ_ACAF_MANIFEST", "ORZ_ACAF_KEYSTORE", "ORZ_ACAF_BINARY"]
+        .into_iter()
+        .filter(|k| std::env::var(k).map(|v| v.trim().is_empty()).unwrap_or(true))
+        .collect();
+    if !missing.is_empty() {
+        println!(
+            "orz web: ⚠ ACAF 签名器 env 未配置（{}）——prompt 将被 fail-closed 拒绝；请从已 provision 的终端启动，或先设置三件 env（orz-acaf-provision 会回显）",
+            missing.join(" / ")
+        );
+    }
     println!("orz web: 仅监听回环地址；Ctrl+C 退出（会一并结束桥接的 orz 会话）");
 
     let state = server::ServerState {
@@ -63,10 +100,11 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
 }
 
 /// Parse `orz web` argv (the slice after `web`):
-/// `--addr 127.0.0.1:21487` / `--cwd <dir>`.
+/// `--addr 127.0.0.1:21487` / `--cwd <dir>` / `--real`.
 pub fn parse_args(args: &[String]) -> Result<WebConfig, String> {
     let mut bind = None;
     let mut cwd = std::env::current_dir().map_err(|e| format!("无法读取当前目录: {e}"))?;
+    let mut real = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -83,16 +121,19 @@ pub fn parse_args(args: &[String]) -> Result<WebConfig, String> {
                 i += 1;
                 cwd = PathBuf::from(args.get(i).ok_or("--cwd 需要一个目录值")?);
             }
+            "--real" => {
+                real = true;
+            }
             other => {
                 return Err(format!(
-                    "未知参数 {other}（用法: orz web [--addr ip:port] [--cwd dir]）"
+                    "未知参数 {other}（用法: orz web [--addr ip:port] [--cwd dir] [--real]）"
                 ));
             }
         }
         i += 1;
     }
     let bind = bind.unwrap_or_else(|| DEFAULT_BIND.parse().expect("default bind is valid"));
-    Ok(WebConfig { bind, cwd })
+    Ok(WebConfig { bind, cwd, real })
 }
 
 #[cfg(test)]
