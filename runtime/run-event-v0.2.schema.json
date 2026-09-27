@@ -93,7 +93,8 @@
         "retrieval_progress",
         "retrieval_result_segment",
         "result_delivered",
-        "write_control_review"
+        "write_control_review",
+        "face_fingerprint"
       ]
     },
     "run_manifest_sha256": { "$ref": "#/$defs/sha256" },

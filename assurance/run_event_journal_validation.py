@@ -4270,6 +4270,169 @@ _CAUSE_SHELL_CODES = frozenset(
 )
 
 
+
+# 0bz S1（2026-09-28，`GAP-CONTEXT-FACE-TRANSIENT-FORK` / 110 档）：模型面
+# 前缀指纹族——Rust 镜像＝
+# `orz-assurance/src/journal/families.rs::verify_face_fingerprint`（同日
+# 注册进 `families::ALL_FAMILIES`，两份花名册同步）。纯观测面：形状核证
+# ＋跨事件前缀对账（LCP 重算），无覆盖率要求。
+
+
+def _verify_v02_face_fingerprint(events: list[dict[str, Any]]) -> list[str]:
+    errors: list[str] = []
+    prev: tuple[int, list[tuple[str, str]]] | None = None
+    for event in events:
+        if event.get("event_type") != "face_fingerprint":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            errors.append("face_fingerprint: payload must be an object")
+            prev = None
+            continue
+        if payload.get("agent_role") != "main":
+            errors.append("face_fingerprint: agent_role must be main")
+        round_no = payload.get("model_round")
+        if not isinstance(round_no, int) or isinstance(round_no, bool):
+            errors.append("face_fingerprint: model_round required")
+            prev = None
+            continue
+        expected_round = (prev[0] + 1) if prev else 1
+        if round_no != expected_round:
+            errors.append(
+                "face_fingerprint: model_round must be "
+                f"{expected_round} (strictly +1), got {round_no}"
+            )
+        face_sha = payload.get("face_sha256")
+        if (
+            not isinstance(face_sha, str)
+            or len(face_sha) != 16
+            or any(c not in "0123456789abcdef" for c in face_sha)
+        ):
+            errors.append("face_fingerprint: face_sha256 must be 16-hex")
+        messages = payload.get("messages")
+        if not isinstance(messages, str):
+            errors.append("face_fingerprint: messages required")
+            prev = None
+            continue
+        entries: list[tuple[str, str]] = []
+        shape_errors = 0
+        for part in messages.split(";"):
+            if not part:
+                continue
+            bits = part.split(":")
+            if (
+                len(bits) == 3
+                and bits[0] in ("user", "assistant", "tool", "system")
+                and bits[1].isdigit()
+                and len(bits[2]) == 12
+                and all(c in "0123456789abcdef" for c in bits[2])
+            ):
+                entries.append((bits[0], bits[2]))
+            else:
+                shape_errors += 1
+        if shape_errors:
+            errors.append(
+                f"face_fingerprint: messages: {shape_errors} malformed entries "
+                "(role:chars:hash12)"
+            )
+        declared_count = payload.get("message_count")
+        if declared_count != len(entries):
+            errors.append(
+                f"face_fingerprint: message_count {declared_count} != messages entries {len(entries)}"
+            )
+        stable = payload.get("stable_prefix_messages")
+        if prev is None:
+            if round_no != 1:
+                errors.append(
+                    "face_fingerprint: first face_fingerprint in run must carry model_round 1"
+                )
+            if stable != 0:
+                errors.append(
+                    "face_fingerprint: first event must carry stable_prefix_messages 0"
+                )
+            if payload.get("first_divergent") is not None:
+                errors.append(
+                    "face_fingerprint: first event must carry first_divergent null"
+                )
+        else:
+            prev_entries = prev[1]
+            lcp = 0
+            for (_cur_role, cur_hash), (_prev_role, prev_hash) in zip(entries, prev_entries):
+                if cur_hash != prev_hash:
+                    break
+                lcp += 1
+            if stable != lcp:
+                errors.append(
+                    f"face_fingerprint: stable_prefix_messages {stable} != recomputed LCP {lcp}"
+                )
+            fd = payload.get("first_divergent")
+            if lcp == len(entries) and lcp == len(prev_entries):
+                if fd is not None:
+                    errors.append(
+                        "face_fingerprint: identical prefix+suffix must carry first_divergent null"
+                    )
+            elif fd is None:
+                errors.append(
+                    "face_fingerprint: diverging requests must carry first_divergent"
+                )
+            else:
+                kind = fd.get("kind")
+                index = fd.get("index")
+                if index != lcp:
+                    errors.append(
+                        f"face_fingerprint: first_divergent.index must be {lcp}"
+                    )
+                if lcp == len(entries):
+                    expected_kind = "removed"
+                elif lcp < len(prev_entries):
+                    expected_kind = "mutated"
+                else:
+                    expected_kind = "inserted"
+                if kind != expected_kind:
+                    errors.append(
+                        "face_fingerprint: first_divergent.kind "
+                        f"{kind!r} != {expected_kind!r} (LCP {lcp}, cur {len(entries)}, "
+                        f"prev {len(prev_entries)})"
+                    )
+                if kind == "mutated":
+                    if lcp < len(entries) and fd.get("hash") != entries[lcp][1]:
+                        errors.append(
+                            "face_fingerprint: first_divergent.hash must match current entry"
+                        )
+                    if (
+                        lcp < len(prev_entries)
+                        and fd.get("prev_hash") != prev_entries[lcp][1]
+                    ):
+                        errors.append(
+                            "face_fingerprint: first_divergent.prev_hash must match previous entry"
+                        )
+                elif kind == "inserted":
+                    if fd.get("prev_hash") is not None or fd.get("prev_head") is not None:
+                        errors.append(
+                            "face_fingerprint: inserted rows carry no prev side"
+                        )
+                elif kind == "removed":
+                    if fd.get("hash") not in (None, ""):
+                        errors.append(
+                            "face_fingerprint: removed rows carry no current side hash"
+                        )
+                    if (
+                        lcp < len(prev_entries)
+                        and fd.get("prev_hash") != prev_entries[lcp][1]
+                    ):
+                        errors.append(
+                            "face_fingerprint: removed rows carry the first dropped entry"
+                        )
+                head = fd.get("head")
+                if kind in ("mutated", "inserted") and (
+                    not isinstance(head, str) or not head
+                ):
+                    errors.append(
+                        "face_fingerprint: mutated/inserted rows carry the head preview"
+                    )
+        prev = (round_no, entries)
+    return errors
+
 def _py_int(value: Any) -> int | None:
     """Mirror of the Rust judge's `families::py_int` — Python `isinstance`
     over JSON values: ints and bools count (bool is an int in Python), floats,
@@ -4588,6 +4751,9 @@ def validate_journal_text(text: str) -> list[str]:
         # 0bw③ (2026-09-27): write-control command review — Rust twin in
         # `families.rs::verify_write_control_review` (same-day roster).
         errors.extend(_verify_v02_write_control_review(events))
+        # 0bz S1 (2026-09-28): model-face prefix fingerprint — Rust twin in
+        # `families.rs::verify_face_fingerprint` (same-day roster).
+        errors.extend(_verify_v02_face_fingerprint(events))
     return errors
 
 

@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/face-fingerprint-event-payload-v0.2.schema.json",
+  "title": "Model-face prefix fingerprint event payload (Rust track, v0.2)",
+  "description": "0bz S1（2026-09-28，GAP-CONTEXT-FACE-TRANSIENT-FORK / 110 档）：模型面前缀指纹——逐请求对投影视图（build_model_face）做逐消息 sha256 指纹（wire 同字段：role/content/tool_call_id/tool_calls/reasoning_content；round 不落 wire 故不入哈希），与上一请求判定首分歧消息。纯观测面（模型零感知、不改请求内容、不进工具面）。`messages`＝紧凑逐条表 `role:chars:hash12`（分号分隔；hash＝wire 投影 sha256 前 12 hex）；`stable_prefix_messages`＝与上一请求的最长公共哈希前缀；`first_divergent.kind`＝mutated（同位异哈希）/inserted（尾部追加）/removed（尾部收缩）。跨事件前缀对账（stable ↔ LCP 重算、first_divergent ↔ 两侧逐条表、model_round 严格 +1）由判官核证（schema 无法表达跨事件映射：Rust `verify_face_fingerprint` ↔ Python `_verify_v02_face_fingerprint` 同形）。读数用途＝前缀缓存 miss 三源（压缩后第 2 针／空跑 compress 分叉／自发塌陷）定位到具体消息（0bi §10-④ 候选落地；110 立项档 §3/§5）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "agent_role",
+    "model_round",
+    "message_count",
+    "total_chars",
+    "face_sha256",
+    "messages",
+    "stable_prefix_messages",
+    "first_divergent"
+  ],
+  "properties": {
+    "agent_role": {
+      "type": "string",
+      "enum": ["main"],
+      "description": "仅主车道发射（0bz 读数面）。"
+    },
+    "model_round": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "run 内模型请求计数（1-based；判官核证逐事件严格 +1）。"
+    },
+    "message_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "投影视图消息条数（判官核证与 messages 逐条表一致）。"
+    },
+    "total_chars": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "视图 content 总字符数（不含 wire 包装开销）。"
+    },
+    "face_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$",
+      "description": "全脸摘要＝逐条 hash 串（;连接）的 sha256 前 16 hex。"
+    },
+    "messages": {
+      "type": "string",
+      "pattern": "^(user|assistant|tool|system):[0-9]+:[0-9a-f]{12}(;(user|assistant|tool|system):[0-9]+:[0-9a-f]{12})*$",
+      "description": "紧凑逐条表 `role:chars:hash12`，分号分隔。"
+    },
+    "stable_prefix_messages": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "与上一请求的最长公共哈希前缀长度（首个事件恒 0）。"
+    },
+    "first_divergent": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "index",
+            "kind",
+            "role",
+            "chars",
+            "hash",
+            "head",
+            "prev_chars",
+            "prev_hash",
+            "prev_head"
+          ],
+          "properties": {
+            "index": { "type": "integer", "minimum": 0 },
+            "kind": {
+              "type": "string",
+              "enum": ["mutated", "inserted", "removed"]
+            },
+            "role": {
+              "type": "string",
+              "enum": ["user", "assistant", "tool", "system"]
+            },
+            "chars": { "type": "integer", "minimum": 0 },
+            "hash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{12}$|^$",
+              "description": "mutated/inserted＝12 hex；removed＝空串（无当前侧）。"
+            },
+            "head": {
+              "type": "string",
+              "description": "分歧消息诊断头（content 前 120 chars 或机械摘要；removed 行为空串）。"
+            },
+            "prev_chars": { "type": ["integer", "null"], "minimum": 0 },
+            "prev_hash": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9a-f]{12}$|^$"
+            },
+            "prev_head": { "type": ["string", "null"] }
+          }
+        }
+      ]
+    }
+  }
+}

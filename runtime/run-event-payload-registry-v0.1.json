@@ -297,6 +297,10 @@
       "write_control_review": {
         "schema": "runtime/write-control-review-event-payload-v0.2.schema.json",
         "slug": "write-control-review"
+      },
+      "face_fingerprint": {
+        "schema": "runtime/face-fingerprint-event-payload-v0.2.schema.json",
+        "slug": "face-fingerprint"
       }
     }
   },

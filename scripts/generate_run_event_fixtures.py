@@ -263,6 +263,9 @@ V02_EVENT_TYPES = [
     # 0bw③ (2026-09-27, WRITE_CONTROL_MECHANICAL_DESIGN §3.2/D5 后续扩展):
     # 写入管控 L2 命令面机械审查专用留痕（block/warn/allow 全落）。
     "write_control_review",
+    # 0bz S1 (2026-09-28, GAP-CONTEXT-FACE-TRANSIENT-FORK / 110 档):
+    # 模型面前缀指纹——逐请求逐消息 sha256 + 首分歧判定（纯观测面）。
+    "face_fingerprint",
     "snapshot_created",
     "snapshot_restored",
     "artifact_registered",
@@ -337,6 +340,8 @@ SLUGS_V02 = {
     "transport_retry": "transport-retry",
     # 0bw③ (2026-09-27): write-control command review.
     "write_control_review": "write-control-review",
+    # 0bz S1 (2026-09-28): model-face prefix fingerprint.
+    "face_fingerprint": "face-fingerprint",
 }
 
 # The v0.2 events with their own v0.2 payload schema (the rest of the v0.2
@@ -405,6 +410,8 @@ V02_PAYLOAD_EVENTS = [
     "transport_retry",
     # 0bw③ (2026-09-27): write-control command review — v0.2 专属 payload。
     "write_control_review",
+    # 0bz S1 (2026-09-28): model-face prefix fingerprint — v0.2 专属 payload。
+    "face_fingerprint",
 ]
 
 SLUGS = {
@@ -2801,6 +2808,53 @@ PAYLOAD_BAD_V02["write_control_review"] = {
     "command_len": 21,
 }
 
+# 0bz S1 (2026-09-28, GAP-CONTEXT-FACE-TRANSIENT-FORK / 110 档) ── 模型面
+# 前缀指纹（纯观测面）。schema：
+# runtime/face-fingerprint-event-payload-v0.2.schema.json。
+PAYLOAD_GOOD_V02["face_fingerprint"] = {
+    "agent_role": "main",
+    "model_round": 2,
+    "message_count": 3,
+    "total_chars": 160,
+    "face_sha256": "0123456789abcdef",
+    "messages": "user:120:aaaaaaaaaaaa;assistant:30:bbbbbbbbbbbb;tool:10:cccccccccccc",
+    "stable_prefix_messages": 2,
+    "first_divergent": {
+        "index": 2,
+        "kind": "inserted",
+        "role": "tool",
+        "chars": 10,
+        "hash": "cccccccccccc",
+        "head": "[tool_result]",
+        "prev_chars": None,
+        "prev_hash": None,
+        "prev_head": None,
+    },
+}
+
+PAYLOAD_BAD_V02["face_fingerprint"] = {
+    # violates exactly one constraint: a messages entry with an unknown role
+    # (closed set user|assistant|tool|system) breaks the compact-list pattern.
+    "agent_role": "main",
+    "model_round": 2,
+    "message_count": 3,
+    "total_chars": 160,
+    "face_sha256": "0123456789abcdef",
+    "messages": "user:120:aaaaaaaaaaaa;assistant:30:bbbbbbbbbbbb;model:10:cccccccccccc",
+    "stable_prefix_messages": 2,
+    "first_divergent": {
+        "index": 2,
+        "kind": "inserted",
+        "role": "tool",
+        "chars": 10,
+        "hash": "cccccccccccc",
+        "head": "[tool_result]",
+        "prev_chars": None,
+        "prev_hash": None,
+        "prev_head": None,
+    },
+}
+
 EXTRA_V02_PAYLOAD_POSITIVES["write-control-review.allow.valid"] = {
     # allow 行：rule/detail 恒 null（XOR 语义另一臂）。
     "tool": "run_terminal_cmd",
@@ -3254,9 +3308,10 @@ Scope:
   `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
   source enum).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (**56 events** — 55 prior +
+  event in the v0.2 enum (**57 events** — 56 prior +
   `write_control_review`（0bw③ 2026-09-27，WRITE_CONTROL_MECHANICAL_DESIGN
-  §3.2/D5 后续扩展）＋ `browser_launch_result`（0t 2026-09-09, ADR-0010
+  §3.2/D5 后续扩展）＋ `face_fingerprint`（0bz S1 2026-09-28，
+  GAP-CONTEXT-FACE-TRANSIENT-FORK／110 档：模型面前缀指纹）＋ `browser_launch_result`（0t 2026-09-09, ADR-0010
   §14.65；54 prior −
   `diagnostic_coverage_checkpoint` − `checkpoint_response`（P2-11 DC 清理
   2026-08-31，MODEL-RESIDUAL-PRESSURE-FOLLOWUP 裁决 2）后含其余

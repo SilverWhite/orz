@@ -1,0 +1,20 @@
+{
+  "agent_role": "main",
+  "model_round": 2,
+  "message_count": 3,
+  "total_chars": 160,
+  "face_sha256": "0123456789abcdef",
+  "messages": "user:120:aaaaaaaaaaaa;assistant:30:bbbbbbbbbbbb;model:10:cccccccccccc",
+  "stable_prefix_messages": 2,
+  "first_divergent": {
+    "index": 2,
+    "kind": "inserted",
+    "role": "tool",
+    "chars": 10,
+    "hash": "cccccccccccc",
+    "head": "[tool_result]",
+    "prev_chars": null,
+    "prev_hash": null,
+    "prev_head": null
+  }
+}

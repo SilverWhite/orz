@@ -353,7 +353,10 @@ class RunEventV02ContractTests(unittest.TestCase):
             if path.name != "chained-run-finished.valid.json"
         }
         self.assertEqual(fixture_events, enum_events)
-        self.assertEqual(len(enum_events), 65)
+        # 钉值校准（0bz S1，2026-09-28）：65 → 67——0bw③（094 批）加
+        # `write_control_review` 时漏校准（66 已漂移未被拦截，同批勘误）；
+        # 0bz S1（110 批）加 `face_fingerprint` 再 +1。
+        self.assertEqual(len(enum_events), 67)
         self.assertNotIn("neutral_inquiry", enum_events)
         self.assertNotIn("retrieval_completion_check", enum_events)
         self.assertNotIn("diagnostic_coverage_checkpoint", enum_events)
