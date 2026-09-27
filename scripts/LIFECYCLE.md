@@ -39,6 +39,7 @@
 | 家族 | 用途 | 转出条件 |
 |---|---|---|
 | `s4_vm_create/start/shutdown/cleanup/inspect/check_setup/sync_orz/sync_assurance/batch_right/prep*.ps1` 等 VM 生命周期件 | 0l 加固 VM 常设操作件 | 0l ⑥⑦ 闭合时随批裁决转 consumed 或归档 |
+| `probe_acaf_keystore_root.py` | 0by（ACAF 签名器不可达）探针：变量隔离矩阵（载体 × 密钥库根）＋ `--check-launcher` 读**真实启动器脚本**校验「provision 落点／导出根／manifest 目录」三处口径，并用脚本声明的密钥库根驱动签名器（S2 先红后绿钉；对修复前副本 `-script` 即红） | 0by 闭合时随批裁决转 consumed 或归档 |
 
 ## consumed（一次性探针 / 诊断，保留在位）
 

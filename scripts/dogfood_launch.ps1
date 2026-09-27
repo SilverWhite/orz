@@ -6,7 +6,9 @@
   与 0ai 收尾建议两次坐实后固化。启动前断言：
     ① cwd 必须为工作区根、且不得为 orz 子模块；
     ② 载体三件套（orz.exe / orz-signer.exe / orz-acaf-provision.exe）在册；
-    ③ ACAF manifest 复用或现场 provision；
+    ③ ACAF manifest 复用或现场 provision，且**密钥库根＝provision 落点**
+    （0by S2：此处曾多拼一层 `\keystore`，新 bin 目录下签名器启动即退、
+    票据类工具面全灭）；
     ④ 题面文件可读。
   全部通过才起跑；-DryRun 只装配与打印，不启动。
   0bd 增补（2026-09-22）：⑤⑧ RLI 开关显式入装配清单（缺省 on＝常开；-RliOff
@@ -106,13 +108,36 @@ try {
 $sha = (Get-FileHash -LiteralPath $orz -Algorithm SHA256).Hash
 
 # ③ ACAF：manifest 在册则复用，否则现场 provision（与 orz_acaf_run.ps1 同形）
+# 0by S2（2026-09-28）：**密钥库根＝`<AcafRoot>\keystore`**（与容器侧
+# `/etc/orz-acaf/keystore`、载体重建批的 provision 落点、历年实跑命令
+# 一致）；`$keystore` 这个导出值一直是对的，**错的是同一段里的 provision
+# 调用**——它把密钥库建在了 `$AcafRoot`，于是三处口径错开：新 bin 目录
+# （manifest 不在册、现场 provision）下导出根落空 ⇒ 签名器 fail-closed 启动
+# 即退（`installation key root is not a directory`）⇒ 每次签票
+# `signer_unreachable` ⇒ 票据类工具面全灭
+# （`RUN-CLI-6ab93831`／`-6ab93aaa`／`-6ab94e86`）。长期在役目录之所以
+# 「看起来没事」，只因 `<AcafRoot>\keystore\` 本来就在册（12/9 起、重建批
+# 每次核对四值的那一对）——本缺陷只在**新目录**暴露。provision 落点与导出根
+# 必须同指，故在本装配点加门。
 $manifest = Join-Path $AcafRoot 'signer-manifest.json'
 $keystore = Join-Path $AcafRoot 'keystore'
 if (-not (Test-Path -LiteralPath $manifest)) {
-    New-Item -ItemType Directory -Path $AcafRoot -Force | Out-Null
-    & $provision $AcafRoot $manifest
+    New-Item -ItemType Directory -Path $keystore -Force | Out-Null
+    & $provision $keystore $manifest
     Assert-True ($LASTEXITCODE -eq 0) "ACAF provisioning 失败（exit $LASTEXITCODE）"
 }
+# 0by S2 装配门：密钥库根必须就是 provision 的落点，且签名器启动所需的文件
+# 必须真的在册——不满足就**立刻**报出，绝不让它退化成运行期每条票据的
+# `signer_unreachable`（那正是本缺陷此前藏身之处）。
+Assert-True (Test-Path -LiteralPath $keystore -PathType Container) `
+    "ACAF 密钥库根不是目录：$keystore（provision 落点与导出根必须同指；0by S2）"
+Assert-True (Test-Path -LiteralPath (Join-Path $keystore 'installation-key.json') -PathType Leaf) `
+    "ACAF 密钥库缺 installation-key.json：$keystore（0by S2 装配门）"
+$keyBlob = @('installation-key.dpapi', 'installation-key.bin') |
+    ForEach-Object { Join-Path $keystore $_ } |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+Assert-True ($keyBlob.Count -ge 1) `
+    "ACAF 密钥库缺受保护密钥文件（installation-key.dpapi／.bin）：$keystore（0by S2 装配门）"
 
 # ④ env 装配（0am 口径：无墙钟=0；权限三键；PROTOC；grok home）
 $env:ORZ_MAX_WALLCLOCK    = $MaxWallclock
@@ -138,6 +163,9 @@ Write-Host '== 狗粮启动装配清单 =='
 Write-Host "cwd        = $ws（断言通过：非 orz 子模块）"
 $verDisp = if ($ver -eq 'unknown') { 'unknown' } else { "v$ver" }
 Write-Host "carrier    = $orz（$verDisp；sha256 $($sha.Substring(0,12))…）"
+# 0by S2：装配清单显式回显 ACAF 的三处口径（此前只看得到 manifest，密钥库根
+# 这个曾经出错的量根本不在清单上）。
+Write-Host "acaf       = keystore=$keystore / manifest=$manifest"
 Write-Host "task       = $taskPath（$($prompt.Length) 字符；$taskEncDisp；读取=显式 UTF-8）"
 $rliDisp = if ($RliOff) { 'off（-RliOff kill switch）' } else { 'on（缺省常开）' }
 Write-Host "rli        = $rliDisp（ORZ_LIF_RLI_SHADOW=$($env:ORZ_LIF_RLI_SHADOW)）"

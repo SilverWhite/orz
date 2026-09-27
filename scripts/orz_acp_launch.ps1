@@ -67,15 +67,26 @@ $sha = try {
 
 # ③ ACAF：manifest 在册则复用，否则现场 provision（与狗粮启动器同形）
 $manifest = Join-Path $AcafRoot 'signer-manifest.json'
+# 0by S2（2026-09-28）：密钥库根＝`<AcafRoot>\keystore`（与容器侧
+# `/etc/orz-acaf/keystore`、载体重建批 provision 落点、`dogfood_launch.ps1`
+# 同指）。本脚本与狗粮启动器同形，也就同病——provision 此前建在 `$AcafRoot`，
+# 与导出根错开一层，新目录下签名器会启动即退（票据全灭）。此处同批纠正，
+# 并补同一道装配门。
 $keystore = Join-Path $AcafRoot 'keystore'
 if (-not (Test-Path -LiteralPath $manifest)) {
     if ($DryRun) {
         Say "[acp] ACAF manifest 缺失（DryRun 不 provision）：$manifest"
     } else {
-        New-Item -ItemType Directory -Path $AcafRoot -Force | Out-Null
-        & $provision $AcafRoot $manifest
+        New-Item -ItemType Directory -Path $keystore -Force | Out-Null
+        & $provision $keystore $manifest
         Assert-True ($LASTEXITCODE -eq 0) "ACAF provisioning 失败（exit $LASTEXITCODE）"
     }
+}
+if (-not $DryRun) {
+    Assert-True (Test-Path -LiteralPath $keystore -PathType Container) `
+        "ACAF 密钥库根不是目录：$keystore（provision 落点与导出根必须同指；0by S2）"
+    Assert-True (Test-Path -LiteralPath (Join-Path $keystore 'installation-key.json') -PathType Leaf) `
+        "ACAF 密钥库缺 installation-key.json：$keystore（0by S2 装配门）"
 }
 
 # ④ env 装配
