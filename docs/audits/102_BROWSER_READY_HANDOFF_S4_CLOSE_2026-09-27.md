@@ -109,3 +109,8 @@
 [`099 就绪判定档`](099_BROWSER_READY_HANDOFF_2026-09-27.md)／[`097 尾巴闭合档`](097_TAIL_CLOSURE_AND_FLIPS_2026-09-27.md)（§1.4 采样口径＋§6 勘误）／[`098 S4 收口档`](098_0AC_S4_CLOSURE_2026-09-27.md)／[`101 发行档`](101_SUBMIT_PUSH_AND_RELEASE_2026-09-27.md)／[`cdp.rs`](../../orz/crates/orz-host/src/local_browser/cdp.rs)／[`browser_serp.rs`](../../orz/crates/orz-host/src/browser_serp.rs)／BACKLOG `0bx`／TODO `P1-0bx`。
 
 关键词：0bx 闭合、S4 真机承接、检索题实测、hand-off 条件预置、同 profile 活实例、`DevToolsActivePort` 64882、启动事实 1/10、对照 32/32・39/39、`serp-attempts` google ok、零让渡、容器形态不判别、`OBS-ACAF-SIGNER-UNREACHABLE-DESKTOP-080`、计数 54。
+
+## §7 勘误（104 批，2026-09-28）
+
+- **状态变更**：本节 §4.2 登记的观察项 `OBS-ACAF-SIGNER-UNREACHABLE-DESKTOP-080`（仅记录、不占计数）经用户裁决「这一部分值得正式立项，毕竟这个问题并没有进行修正，只是新版本中没有这一故障表现了而已」**升级为正式开放项 `0by` / `GAP-ACAF-SIGNER-UNREACHABLE`**（P1，`pending`；**计数 54 → 55**）；观察项记号随之撤。见 [`104 立项档`](104_ACAF_SIGNER_UNREACHABLE_REGISTRATION_2026-09-28.md)。
+- **补证（104 批秒级探针）**：签发器件与密钥库均**排除**（三配置对 `initialize_session` 全部正常应答）⇒ §4.2／§4.3 中「疑在 0.8.0 载体的 ACAF 客户端面」收窄为「桌面形态的 orz↔签名器交互面、根因未明」。本节其余读数与 0bx 闭合结论不受影响。
