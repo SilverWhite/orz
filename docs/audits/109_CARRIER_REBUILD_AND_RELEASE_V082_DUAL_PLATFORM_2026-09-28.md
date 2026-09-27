@@ -84,7 +84,7 @@
 |---|---:|---|
 | `orz-0.8.2-windows-x86_64.zip` | 28,658,314 | `679b9934713fecf4c48c2a695f43823d3ff36a1c1e044628aa59f4c3f88d1aa6` |
 | `orz-0.8.2-linux-x86_64.tar.gz` | 37,156,074 | `d8cee70e3b0bf69efaea27b6c758ed364a81354493c1e652bda16a4e8233a798` |
-| `SHA256SUMS`（顶层） | 186 | 上述两行（LF、`hash *name`） |
+| `SHA256SUMS`（顶层） | 191 | 上述两行（LF、`hash *name`）；自身 `sha256=c6fa13b77a35ad81b5a4d8cc4da06a97a02ae3c351da94bd8056ea81c9928c03` |
 
 ## §6 容器核证与清单活体两态
 
@@ -94,11 +94,24 @@
   追加一字节后**恰 1 条** finding＝`README.md: 长度不符（清单 28224 ≠ 实际 28225）` ✓ ⇒ 清单对
   `README.md`／`SHA256SUMS` 的覆盖在生效。
 
-## §7 发行
+## §7 发行（含服务端回读）
 
-- **GitHub Release `v0.8.2`**（Latest）：tag 指向本批父仓提交；三资产＝Windows zip／Linux tar.gz／顶层
-  `SHA256SUMS`。服务端 digest 与回下载逐位复核读数见后续「发行回读」批。
-- 发布说明＝包内 `README.md` 的 0.8.2 段（问题／修复／可观测性／验证四节）。
+- **GitHub Release `v0.8.2`** 已发布（Latest）：<https://github.com/SilverWhite/CLI/releases/tag/v0.8.2>；
+  `draft=false`／`prerelease=false`／`published_at=2026-09-27T17:49:47Z`／release id `397749311`；
+  tag 指向父仓提交 **`f59d2ee0`**（全 SHA `f59d2ee02ba67229982415a4436275429b3437de`）——与
+  `git ls-remote --tags origin v0.8.2`（`3133ff8c…`＝附注 tag 对象）**逐位一致**。
+
+| 资产 | asset id | 大小 (B) | 服务端 digest |
+|---|---:|---:|---|
+| `orz-0.8.2-windows-x86_64.zip` | `593442969` | 28,658,314 | `sha256:679b9934713fecf4c48c2a695f43823d3ff36a1c1e044628aa59f4c3f88d1aa6` |
+| `orz-0.8.2-linux-x86_64.tar.gz` | `593442973` | 37,156,074 | `sha256:d8cee70e3b0bf69efaea27b6c758ed364a81354493c1e652bda16a4e8233a798` |
+| `SHA256SUMS` | `593442971` | 191 | `sha256:c6fa13b77a35ad81b5a4d8cc4da06a97a02ae3c351da94bd8056ea81c9928c03` |
+
+- **完整回下载复核**（[`.tmp-b109-verify-dl.ps1`](../../.tmp-b109-verify-dl.ps1)）：`gh release download v0.8.2`
+  三件落 `rel-109-stage\\_verify_dl2` ⇒ 与本地包 **逐位一致 3/3**（`identical=True`，字节数逐一相等）——
+  即远端资产＝本地产物，无上传截断／替换。
+- 发布说明＝`.tmp-b109-release-notes.md`（`gh release create --notes-file`）；正文要点与包内 `README.md`
+  的 0.8.2 段同源（问题／修复／可观测性／验证四节）。
 
 ## §8 台账与门禁
 
