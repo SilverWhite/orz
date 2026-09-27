@@ -35,8 +35,15 @@
 
 ## §3.1 发行回读
 
-- **GitHub Release `v0.8.1`** 已发布（Latest）；`draft=false`／`prerelease=false`；tag 指向本批父仓提交 `（见 §4 回执，回填于发行后）`。
-- 三资产远端 digest 与本地逐位一致；经认证 API **完整回下载**复核 `identical=True` ×3（读数随本小节回填）。
+- **GitHub Release `v0.8.1`** 已发布（Latest）：<https://github.com/SilverWhite/CLI/releases/tag/v0.8.1>；`draft=false`／`prerelease=false`／`published_at=2026-09-27T15:00:43Z`；tag 指向父仓提交 **`27f07034`**（全 SHA `27f070344bbaba7741957d8db9cccf39896c0eb7`）——与 `git ls-remote --tags origin v0.8.1` 读数**逐位一致**。
+
+| 资产 | asset id | 大小 (B) | 服务端 digest |
+|---|---:|---:|---|
+| `orz-0.8.1-windows-x86_64.zip` | `593146342` | 27,979,623 | `sha256:fd1f7caedef13abf3c7ba8247fad047b9285f2bd8dd1a1f3c7fee36437f191f3` |
+| `orz-0.8.1-linux-x86_64.tar.gz` | `593146339` | 37,149,421 | `sha256:3bb36d566e168e7f4fc4be30a50c2361acdbc8a27ff764918048b8aad53a9f6a` |
+| `SHA256SUMS` | `593146341` | 191 | `sha256:4729f71c5d3e24f5f28beb63f204476db37d33f976b2e97cd0d9bb480710a8a1` |
+
+- **完整回下载复核**（`.tmp-b101-verify-dl.ps1`）：`gh release download v0.8.1` 三件落 `rel-101-stage\_verify_dl2` ⇒ 与本地包 **逐位一致 3/3**（`identical=True`，字节数逐一相等）——即远端资产＝本地产物，无上传截断/替换。
 
 ## §4 台账同步
 
