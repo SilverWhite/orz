@@ -260,6 +260,9 @@ V02_EVENT_TYPES = [
     # MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 第 2 项): transport
     # 重试计数事件面——零 chunk/中段截断重试的 recovered/exhausted 摘要。
     "transport_retry",
+    # 0bw③ (2026-09-27, WRITE_CONTROL_MECHANICAL_DESIGN §3.2/D5 后续扩展):
+    # 写入管控 L2 命令面机械审查专用留痕（block/warn/allow 全落）。
+    "write_control_review",
     "snapshot_created",
     "snapshot_restored",
     "artifact_registered",
@@ -332,6 +335,8 @@ SLUGS_V02 = {
     # MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.3):
     # transport 重试计数事件面（recovered/exhausted 摘要）。
     "transport_retry": "transport-retry",
+    # 0bw③ (2026-09-27): write-control command review.
+    "write_control_review": "write-control-review",
 }
 
 # The v0.2 events with their own v0.2 payload schema (the rest of the v0.2
@@ -398,6 +403,8 @@ V02_PAYLOAD_EVENTS = [
     # MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.3):
     # transport 重试计数事件面（recovered/exhausted 摘要）。
     "transport_retry",
+    # 0bw③ (2026-09-27): write-control command review — v0.2 专属 payload。
+    "write_control_review",
 ]
 
 SLUGS = {
@@ -2769,6 +2776,76 @@ EXTRA_V02_PAYLOAD_BADS["tool-completed.cause-shellcode.constraint.invalid"] = {
     "cause": "browser_launch_failed",
 }
 
+# ── 0bw③ write-control command review (2026-09-27, WRITE_CONTROL_
+# MECHANICAL_DESIGN §3.2/D5 后续扩展) ── per-command L2 审查留痕
+# （block/warn/allow 全落账）。schema：
+# runtime/write-control-review-event-payload-v0.2.schema.json。
+PAYLOAD_GOOD_V02["write_control_review"] = {
+    "tool": "run_terminal_cmd",
+    "call_id": "call-wc-1",
+    "review": "block",
+    "rule": "carrier-write",
+    "detail": "carrier-write: Remove-Item 目标命中载体面 .gsa（cwd 归一后 <cwd>\\.gsa）",
+    "command_sha256": ZERO_HASH,
+    "command_len": 21,
+}
+
+PAYLOAD_BAD_V02["write_control_review"] = {
+    # violates exactly one constraint: review outside the closed enum.
+    "tool": "run_terminal_cmd",
+    "call_id": "call-wc-1",
+    "review": "deny",
+    "rule": None,
+    "detail": None,
+    "command_sha256": ZERO_HASH,
+    "command_len": 21,
+}
+
+EXTRA_V02_PAYLOAD_POSITIVES["write-control-review.allow.valid"] = {
+    # allow 行：rule/detail 恒 null（XOR 语义另一臂）。
+    "tool": "run_terminal_cmd",
+    "call_id": "call-wc-2",
+    "review": "allow",
+    "rule": None,
+    "detail": None,
+    "command_sha256": DUMMY_HASH,
+    "command_len": 8,
+}
+
+EXTRA_V02_PAYLOAD_POSITIVES["write-control-review.warn.valid"] = {
+    "tool": "run_terminal_cmd",
+    "call_id": "call-wc-3",
+    "review": "warn",
+    "rule": "broad-destructive",
+    "detail": "broad-destructive: 删除类动词＋根级目标 C:\\",
+    "command_sha256": DUMMY_HASH,
+    "command_len": 30,
+}
+
+EXTRA_V02_PAYLOAD_BADS["write-control-review.allow-with-rule.constraint.invalid"] = {
+    # XOR 违反：allow 行携带 rule（schema allOf 拒）。
+    "tool": "run_terminal_cmd",
+    "call_id": "call-wc-4",
+    "review": "allow",
+    "rule": "elevation",
+    "detail": None,
+    "command_sha256": ZERO_HASH,
+    "command_len": 12,
+}
+
+EXTRA_V02_PAYLOAD_BADS["write-control-review.unknown-rule.constraint.invalid"] = {
+    # 封闭集违反（2026-09-27 复审 P2）：warn 行携带未知规则名——schema
+    # allOf then 臂 enum 拒（此前封闭集仅判官独任，schema 消费方可溜入
+    # 未知名；现 schema 与判官双锁）。
+    "tool": "run_terminal_cmd",
+    "call_id": "call-wc-5",
+    "review": "warn",
+    "rule": "totally-new-rule",
+    "detail": "unknown rule name",
+    "command_sha256": DUMMY_HASH,
+    "command_len": 18,
+}
+
 
 def _v02_context_compressed_payload() -> dict:
     return json.loads(json.dumps(PAYLOAD_GOOD_V02["context_compressed"]))
@@ -3177,8 +3254,10 @@ Scope:
   `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
   source enum).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (**55 events** — 54 prior +
-  `browser_launch_result`（0t 2026-09-09, ADR-0010 §14.65；54 prior −
+  event in the v0.2 enum (**56 events** — 55 prior +
+  `write_control_review`（0bw③ 2026-09-27，WRITE_CONTROL_MECHANICAL_DESIGN
+  §3.2/D5 后续扩展）＋ `browser_launch_result`（0t 2026-09-09, ADR-0010
+  §14.65；54 prior −
   `diagnostic_coverage_checkpoint` − `checkpoint_response`（P2-11 DC 清理
   2026-08-31，MODEL-RESIDUAL-PRESSURE-FOLLOWUP 裁决 2）后含其余
   TER/P2-13 增量；`runtime_stagnation_guard` 已于 2026-08-22 退役). The

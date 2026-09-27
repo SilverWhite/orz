@@ -118,9 +118,26 @@ allowlist 半边作废。本档沿用 L0–L4 编号并收窄：
   其余逐项 allow 写；**读不设限**；与既有 seccomp 网络过滤同型接线（先例：`computer/local/terminal.rs:3549`、
   `orz-sandbox/src/child_net.rs`）。**本轮仅注记不落码**（本机无 Linux 实测面；避免不可验证的 unsafe 代码——先红后绿纪律），
   排期随 Linux 批；实施批决策点＝复用 `orz-sandbox`（nono 引擎，未接生产态保持不动）或直写 syscall。
+  **2026-09-27 复审增补（落码定案）**：① **顶层 symlink 一律不授权**（`ln -s /etc /w` 两步旁路；merged-usr 的
+  `/bin→/usr/bin` 等本就在表 B 内被名字排除；非核心 symlink 丢授权＝默认拒＝fail-closed）＋ `O_NOFOLLOW` 打开纵深；
+  ② **装挂失败永不 fail spawn**（三 fail-open 分支：内核不支持／枚举失败 ⇒ 不装 pre_exec、warn 一次；子进程内装挂
+  失败 ⇒ `write(2)` 直写 stderr 一行提示〔async-signal-safe〕后照常 exec）；③ **架构门**：统一 syscall 号仅
+  x86_64／aarch64 成立，其余架构 prepare 恒 `None`（错号探测可能命中无关 syscall，不得尝试）；④ **ABI v1 内核**
+  rename/link 不受约束（REFER v2 才有）——见 §9。
 - **Windows＝CFA 探针先行（§5）**；候选 B＝AppContainer／受限令牌（v2 排期项，不入 v1）。
 - **现状勘定**：`orz-sandbox`（nono/Landlock/Seatbelt 引擎、deny glob、hook_write_deny）存在但**未接线生产**
   （orz-host 依赖注明 intentionally not declared）——本批**不改其接线**，避免牵动未启用面。
+
+### 3.4 undo 面消费点（2026-09-27 复审增补；deny 单一源第四消费）
+
+`orz rollback restore`（0bw④ undo CLI）是**写路径**且模型可经命令面调用（命令文本不含 L2 动词表词汇，
+命令面审查不可达），故目标域定死如下（实现在 `orz-host::rollback_maintenance`）：
+
+- **目标必须归一化后仍在 cwd 之内**：反斜杠归一＋词法走组件；绝对路径、盘符形态（`C:`/`C:x`）、`..` 越界恒拒。
+- **C1 在归一后判定**：`./.gsa/…`、`x/../.gsa/…`、`.GSA` 大小写变体（Windows 路径大小写不敏感）均不可绕。
+- **复用 `types::write_control::check_write_target`**——回退写面与工具面同表（系统核心 A/B＋载体 C2/C3 命中即拒）。
+- **写回原子化**：同目录临时文件＋rename，中断不留截断目标。
+- CLI 参数面：未知旗标与多余位置参数显式报错（exit 2），不静默过滤。
 
 ## §4 L2 规则库 v1（命令面机械审查；best-effort 风险闸）
 
@@ -166,12 +183,17 @@ allowlist 半边作废。本档沿用 L0–L4 编号并收窄：
 
 - **既有（0bm⑦，已交付）**：编辑面**回退窗口**——`search_replace` 写前原始字节快照入 `.gsa/rollback/<key>/`
   （每文件保留 5 条），成功面附回退指针告知行。写入管控 v1 沿用为「工具面补偿 leg」。
+- **undo 面（2026-09-27 落码，§3.4）**：`orz rollback list/restore`——restore 目标域收敛＋原子写＋第四消费点。
 - **设计（未落码，登记）**：git 自动检查点与 journal undo（content anchor 前像复用）——须先裁定容器/触发/回收
   （避免污染用户仓库历史），列 0bw 后续批。
 - **载体完整性自检**：**repo 层＝已存在**（`scripts/generate_orz_source_manifest.py`＋`check_repository.py::_check_orz_source_manifest`，
   覆盖 orz 子树；父仓门禁面，本批在报告档记实测读数）；**运行时形态（载体发布物 manifest＋启动自检）＝设计登记、未落码**
   （涉发布/重建链，随载体重建批实施）。**注**：本批未落账的新源码文件将使 manifest 校验呈预期 drift——
   重生成随落账批执行（不提交/不重建令下不动 manifest）。
+  **2026-09-27 复审增补（落码边界）**：① 清单键按「单个 Normal 组件」判定（`C:foo` 盘符相对形拒；
+  `a..b.txt` 合法文件名不误杀）；② **未列文件检测**（顶层清单外常规文件 ⇒ 告警——已列文件篡改/缺失之外的新增面）；
+  ③ **坏清单 ⇒ 静默不检**（解析失败归 NoManifest：宁可不检不可误报——篡改者可删清单消音，D-4 审计腿定位的
+  如实退化面）；④ manifest 生成端显式 LF。
 
 ## §7 与 0z（真机资源安全边界）的分工表
 
@@ -200,6 +222,17 @@ allowlist 半边作废。本档沿用 L0–L4 编号并收窄：
 - **Unicode 同形字**：仅既有保守表做归一辅助；同形字绕过登记为已知边界。
 - **降级面**：install_dir ⊆ cwd 时文件级保护；DLL 侧植等残余风险不保证。**UNC/网络路径**不在 v1 表内。
 - **三档措辞**（保证＝机制可证｜阻力＝高成本低收益｜审计＝事后可查）落点＝`orz/SECURITY.md`＋父 README 安全节。
+- **2026-09-27 复审增补边界**：
+  - **Landlock（L3-Linux）**：① ABI v1 内核 `rename/link` 不受 ruleset 约束（REFER 为 v2 能力——旧内核上
+    可把文件移入核心集，内核明载缺口）；② 统一 syscall 号仅 x86_64/aarch64，其余架构 L3 静默不启用
+    （L1/L2 仍硬拒）；③ 子进程内装挂失败＝该命令无 L3（write(2) 一行提示，照常 exec）；④ `warn 一次`
+    ＝每 spawn 点一次（每进程至多 3 条）；⑤ per-spawn 重复枚举 `/`（毫秒级成本；换来晚建顶层目录的新鲜度）。
+  - **事件族（0bw③）**：无覆盖率要求（D-7）；`warn` 留痕在命令超时臂已与 Ok/Err 同纪律收取（2026-09-27
+    复审修复）——但队列写入本身 best-effort，审计面缺失 ≠ 审查失效；review↔rule 分类配对由判官核证
+    （schema 无法表达跨字段映射）。
+  - **载体自检（0bw②）**：flat v1 只覆盖顶层常规文件（grok-home/ 子树由写保护面承接）；坏清单 ⇒ 静默不检
+    （宁可不检不可误报）；启动自检时点 tracing subscriber 尚未初始化，有效腿＝stderr 横幅。
+  - **undo 面（0bw④）**：目标域收敛 cwd＋归一后 C1 判定＋第四消费点（§3.4）；被挤出保留窗口的快照不可恢复。
 
 ## §10 交付与实施记
 

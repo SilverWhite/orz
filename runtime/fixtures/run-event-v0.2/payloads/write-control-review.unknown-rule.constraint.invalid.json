@@ -1,0 +1,9 @@
+{
+  "tool": "run_terminal_cmd",
+  "call_id": "call-wc-5",
+  "review": "warn",
+  "rule": "totally-new-rule",
+  "detail": "unknown rule name",
+  "command_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "command_len": 18
+}

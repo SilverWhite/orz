@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-WRITE-CONTROL-REVIEW",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "write_control_review",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "tool": "run_terminal_cmd",
+    "call_id": "call-wc-1",
+    "review": "block",
+    "rule": "carrier-write",
+    "detail": "carrier-write: Remove-Item 目标命中载体面 .gsa（cwd 归一后 <cwd>\\.gsa）",
+    "command_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "command_len": 21
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

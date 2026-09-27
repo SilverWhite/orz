@@ -1,0 +1,9 @@
+{
+  "tool": "run_terminal_cmd",
+  "call_id": "call-wc-1",
+  "review": "block",
+  "rule": "carrier-write",
+  "detail": "carrier-write: Remove-Item 目标命中载体面 .gsa（cwd 归一后 <cwd>\\.gsa）",
+  "command_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "command_len": 21
+}

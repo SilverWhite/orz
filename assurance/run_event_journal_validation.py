@@ -4165,6 +4165,95 @@ def _verify_v02_resource_limit_hit(events):
     return errors
 
 
+# ── 0bw③ write-control command review (2026-09-27, WRITE_CONTROL_
+# MECHANICAL_DESIGN §3.2/D5 后续扩展) ── Rust twin:
+# `orz-assurance/src/journal/families.rs::verify_write_control_review`
+# (registered in `families::ALL_FAMILIES` the same day; keep the two rosters
+# in lockstep). Best-effort 闸边界不变：形状核证、无覆盖率要求。
+
+_WRITE_CONTROL_RULES = frozenset(
+    {
+        "safety-mechanism-flip",
+        "system-core-write",
+        "carrier-write",
+        "broad-destructive",
+        "elevation",
+    }
+)
+
+# review↔rule 分类配对（设计 §4 每规则钉死分类；2026-09-27 复审 P2 加入，
+# 与 Rust `WRITE_CONTROL_RULE_CATEGORIES` 逐条同形）。
+_WRITE_CONTROL_RULE_CATEGORIES = {
+    "safety-mechanism-flip": "block",
+    "system-core-write": "block",
+    "carrier-write": "block",
+    "broad-destructive": "warn",
+    "elevation": "warn",
+}
+
+
+def _verify_v02_write_control_review(events: list[dict[str, Any]]) -> list[str]:
+    errors: list[str] = []
+    for event in events:
+        if event.get("event_type") != "write_control_review":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            # 非 object payload：与 Rust（Value 索引落 Null ⇒ review 出集）
+            # 同形——报 review 形状错，不崩（2026-09-27 复审加固）。
+            errors.append("write_control_review: review must be allow|warn|block")
+            continue
+        review = payload.get("review")
+        if review not in ("allow", "warn", "block"):
+            errors.append("write_control_review: review must be allow|warn|block")
+            continue
+        rule = payload.get("rule")
+        detail = payload.get("detail")
+        if review == "allow":
+            if rule is not None:
+                errors.append("write_control_review: allow rows carry no rule")
+            if detail is not None:
+                errors.append("write_control_review: allow rows carry no detail")
+        else:
+            # 仅 None/非串 ⇒ 「carry the rule」并跳过本行后续字段（与 Rust
+            # `let Some(rule) = ... else` 同形）；空串落封闭集臂（2026-09-27
+            # 复审对齐——此前空串在此短路，错误条数与 Rust 不一致）。
+            if rule is None or not isinstance(rule, str):
+                errors.append("write_control_review: warn/block rows carry the rule")
+                continue
+            if rule not in _WRITE_CONTROL_RULES:
+                errors.append(f"write_control_review: unknown rule {rule} (closed set)")
+            elif _WRITE_CONTROL_RULE_CATEGORIES.get(rule) != review:
+                errors.append(
+                    f"write_control_review: rule {rule} is a "
+                    f"{_WRITE_CONTROL_RULE_CATEGORIES.get(rule)!r}-class rule, not {review}"
+                )
+            if not isinstance(detail, str) or not detail:
+                errors.append("write_control_review: warn/block rows carry the detail")
+        if not _host_is_non_empty_str(payload.get("call_id")):
+            errors.append("write_control_review: call_id required")
+        if payload.get("tool") != "run_terminal_cmd":
+            errors.append("write_control_review: tool must be run_terminal_cmd")
+        sha = payload.get("command_sha256")
+        if (
+            not isinstance(sha, str)
+            or len(sha) != 64
+            or any(c not in "0123456789abcdef" for c in sha)
+        ):
+            errors.append("write_control_review: command_sha256 must be 64-hex")
+        length = payload.get("command_len")
+        if (
+            not isinstance(length, int)
+            or isinstance(length, bool)
+            or length < 1
+            or length > 2**64 - 1
+        ):
+            # 上限对齐 Rust `as_u64()`（u64 溢出整形同样违例，2026-09-27
+            # 复审镜像对齐）。
+            errors.append("write_control_review: command_len must be >= 1")
+    return errors
+
+
 # ── 0ac S3-b immediate-feedback families (2026-09-13, F-007 裁决 (a)) ──
 # Rust twins: `orz-assurance/src/journal/immediate_feedback.rs` (registered in
 # `families::ALL_FAMILIES` the same day; keep the two rosters in lockstep).
@@ -4496,6 +4585,9 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_retrieval_family_probe(events))
         errors.extend(_verify_v02_failure_cause_shape(events))
         errors.extend(_verify_v02_first_result_deadline(events))
+        # 0bw③ (2026-09-27): write-control command review — Rust twin in
+        # `families.rs::verify_write_control_review` (same-day roster).
+        errors.extend(_verify_v02_write_control_review(events))
     return errors
 
 

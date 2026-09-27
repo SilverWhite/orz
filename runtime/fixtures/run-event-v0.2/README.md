@@ -83,8 +83,10 @@ Scope:
   `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
   source enum).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (**55 events** — 54 prior +
-  `browser_launch_result`（0t 2026-09-09, ADR-0010 §14.65；54 prior −
+  event in the v0.2 enum (**56 events** — 55 prior +
+  `write_control_review`（0bw③ 2026-09-27，WRITE_CONTROL_MECHANICAL_DESIGN
+  §3.2/D5 后续扩展）＋ `browser_launch_result`（0t 2026-09-09, ADR-0010
+  §14.65；54 prior −
   `diagnostic_coverage_checkpoint` − `checkpoint_response`（P2-11 DC 清理
   2026-08-31，MODEL-RESIDUAL-PRESSURE-FOLLOWUP 裁决 2）后含其余
   TER/P2-13 增量；`runtime_stagnation_guard` 已于 2026-08-22 退役). The

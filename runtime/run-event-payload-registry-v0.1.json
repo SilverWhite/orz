@@ -293,6 +293,10 @@
       "resource_limit_hit": {
         "schema": "runtime/resource-limit-hit-event-payload-v0.2.schema.json",
         "slug": "resource-limit-hit"
+      },
+      "write_control_review": {
+        "schema": "runtime/write-control-review-event-payload-v0.2.schema.json",
+        "slug": "write-control-review"
       }
     }
   },

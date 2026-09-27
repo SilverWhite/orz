@@ -1,0 +1,9 @@
+{
+  "tool": "run_terminal_cmd",
+  "call_id": "call-wc-2",
+  "review": "allow",
+  "rule": null,
+  "detail": null,
+  "command_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "command_len": 8
+}

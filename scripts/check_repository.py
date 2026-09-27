@@ -2825,10 +2825,34 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_root
         / "information-sufficiency-assessment.partial-report.valid.json"
     ] = assessment_schema
+    # 0bw③ (2026-09-27, WRITE_CONTROL_MECHANICAL_DESIGN §3.2/D5 后续扩展)：
+    # write-control command review 的 allow／warn 正例（与 minimal 的 block
+    # 臂互补，XOR 两臂全覆盖）＋ allow 携 rule 的 XOR 约束反例。
+    write_control_review_schema = (
+        ROOT / "runtime/write-control-review-event-payload-v0.2.schema.json"
+    )
+    for name in (
+        "write-control-review.allow.valid.json",
+        "write-control-review.warn.valid.json",
+    ):
+        run_event_v02_payload_positive_contracts[run_event_v02_payload_root / name] = (
+            write_control_review_schema
+        )
     run_event_v02_payload_negative_contracts = {
         run_event_v02_payload_root / f"{slug}.constraint.invalid.json": schema
         for slug, schema in run_event_v02_payload_schema_by_slug.items()
     }
+    # 0bw③ (2026-09-27) XOR 约束反例：allow 行携带 rule（schema allOf 拒）。
+    run_event_v02_payload_negative_contracts[
+        run_event_v02_payload_root
+        / "write-control-review.allow-with-rule.constraint.invalid.json"
+    ] = write_control_review_schema
+    # 0bw③ (2026-09-27 复审) 封闭集反例：未知规则名（schema allOf then 臂
+    # enum 拒——与判官封闭集双锁）。
+    run_event_v02_payload_negative_contracts[
+        run_event_v02_payload_root
+        / "write-control-review.unknown-rule.constraint.invalid.json"
+    ] = write_control_review_schema
     # 0ar S1 约束反例（负例映射建立后登记）：① 到点交回缺 assessment 链
     # （§8 判据 1：「已得计数＋缺口」随 assessment 携带）；② assessment
     # 缺口字段缺可用计数（gap ⇒ count 配对约束）。

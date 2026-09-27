@@ -1,0 +1,9 @@
+{
+  "tool": "run_terminal_cmd",
+  "call_id": "call-wc-3",
+  "review": "warn",
+  "rule": "broad-destructive",
+  "detail": "broad-destructive: 删除类动词＋根级目标 C:\\",
+  "command_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "command_len": 30
+}

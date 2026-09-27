@@ -92,7 +92,8 @@
         "resource_limit_hit",
         "retrieval_progress",
         "retrieval_result_segment",
-        "result_delivered"
+        "result_delivered",
+        "write_control_review"
       ]
     },
     "run_manifest_sha256": { "$ref": "#/$defs/sha256" },
