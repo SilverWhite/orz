@@ -373,7 +373,7 @@ mod tests {
         let key_dir = dir.join(".gsa").join("rollback").join("00000001");
         std::fs::create_dir_all(&key_dir).unwrap();
         std::fs::write(key_dir.join("0000000000001-old.bak"), b"content").unwrap();
-        std::fs::create_dir_all(dir.join("src"));
+        let _ = std::fs::create_dir_all(dir.join("src"));
         let pointer = ".gsa/rollback/00000001/0000000000001-old.bak";
         restore_rollback(&dir, pointer, Some("src/a.txt")).unwrap();
         let leftovers: Vec<String> = std::fs::read_dir(dir.join("src"))

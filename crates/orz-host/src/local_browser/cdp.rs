@@ -163,6 +163,12 @@ const DEFAULT_TOTAL_BUDGET: Duration = Duration::from_secs(60);
 /// Discovery-endpoint HTTP bound (loopback devtools, sub-second in health).
 const HTTP_JSON_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// 0bx（2026-09-27）：CDP 端点探活的单次连接超时——回环连接，短超时足够。
+const ENDPOINT_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
+/// 0bx：端点探活读数 TTL——`ready()` 在每次浏览器调用与 `web_search` 链首
+/// 判定时都会读，TTL 内复用读数以免热路径反复建连。
+const ENDPOINT_LIVENESS_TTL: Duration = Duration::from_millis(1000);
+
 /// Page-read timing knobs (injectable for tests).
 #[derive(Debug, Clone)]
 pub struct CdpConfig {
@@ -487,6 +493,13 @@ pub struct CdpBrowserSession {
     serp_state: Mutex<SerpSessionState>,
     /// P0-0v：低质量来源判定器（一次装载，search 路径复用；不逐次读 env）。
     source_weighting: Arc<SourceWeightConfig>,
+    /// 0bx（2026-09-27）：端点存活读数缓存（`Instant` 时刻 ＋ 结论）。
+    /// `is_alive()` 在跟踪子进程退出后改以 CDP 端点应答判定（交付
+    /// 〔hand-off〕形态），本缓存把该判定限制在 TTL 内最多一次建连。
+    endpoint_liveness: Mutex<Option<(Instant, bool)>>,
+    /// 0bx：本会话已 `shutdown()`——此后一律 not-alive（端点可能仍由交付
+    /// 形态下的既有实例应答，光看清缓存会误报存活）。
+    shut_down: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Default)]
@@ -632,6 +645,8 @@ impl CdpBrowserSession {
             headless,
             serp_state: Mutex::new(SerpSessionState::new()),
             source_weighting: Arc::new(SourceWeightConfig::from_env_or_default()),
+            endpoint_liveness: Mutex::new(None),
+            shut_down: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -642,14 +657,46 @@ impl CdpBrowserSession {
     /// the browser was killed out-of-band. tokio caches the reap status, so
     /// the later `wait()` in `shutdown`/`kill_process_tree` still returns it.
     pub fn is_alive(&self) -> bool {
-        match self.inner.try_lock() {
-            Ok(mut inner) => match inner.child.as_mut() {
-                Some(child) => child.try_wait().map(|s| s.is_none()).unwrap_or(false),
-                None => false,
-            },
-            // 锁忙（create_target/shutdown 进行中）→ 保守视为存活。
-            Err(_) => true,
+        if self.shut_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return false;
         }
+        match self.inner.try_lock() {
+            Ok(mut inner) => {
+                if let Some(child) = inner.child.as_mut()
+                    && child.try_wait().map(|s| s.is_none()).unwrap_or(false)
+                {
+                    return true;
+                }
+            }
+            // 锁忙（create_target/shutdown 进行中）→ 保守视为存活。
+            Err(_) => return true,
+        }
+        // 0bx（2026-09-27）：子进程退出 ≠ 浏览器已死。`--user-data-dir` 是
+        // 会话固定 profile，已有实例在跑时新进程会把请求交付给它后**立即
+        // 退出**（hand-off）——此时端点仍在应答、会话完全可用。修复前只认
+        // 子进程存活 ⇒ `ready()` 恒否 ⇒ 宿主每次浏览器调用都重复启动，
+        // `web_search` 链首恒以 `browser_unavailable` 让渡（097 采样实证：
+        // `RUN-CLI-6ab91021` 5/5 浏览器调用各落一条启动事实）。改以端点应答
+        // 兜底：真死（进程被杀/崩溃）⇒ 端口不再应答 ⇒ 仍走既有自愈重启。
+        self.endpoint_alive()
+    }
+
+    /// 0bx：CDP 端点应答判定（TTL 内复用读数）。两道机械检查——
+    /// ①`<profile>/DevToolsActivePort` 仍指向本会话端口（挡住端口被别的
+    /// profile 复用）；②该回环端口一次短超时连接成功。
+    fn endpoint_alive(&self) -> bool {
+        if let Ok(cache) = self.endpoint_liveness.lock()
+            && let Some((at, verdict)) = *cache
+            && at.elapsed() < ENDPOINT_LIVENESS_TTL
+        {
+            return verdict;
+        }
+        let verdict = profile_names_port(&self.profile_dir, self.port)
+            && endpoint_listening(self.port, ENDPOINT_PROBE_TIMEOUT);
+        if let Ok(mut cache) = self.endpoint_liveness.lock() {
+            *cache = Some((Instant::now(), verdict));
+        }
+        verdict
     }
 
     /// One read of one URL: gate (shape + DNS, 会话级缓存) → 租约 tab →
@@ -2533,6 +2580,13 @@ impl CdpBrowserSession {
     /// an immediate `remove_dir_all` right after taskkill failed). Still
     /// best-effort — a leftover dir is covered by the A5 retention sweep.
     pub async fn shutdown(&self) {
+        // 0bx：先落关停位——交付形态下端点可能仍由既有实例应答，`is_alive()`
+        // 的端点兜底不得把已关停的会话报成存活。
+        self.shut_down
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut cache) = self.endpoint_liveness.lock() {
+            *cache = None;
+        }
         // Serialize with any concurrent launch on the same profile (review
         // M4): this teardown must not delete files a new browser is writing.
         let profile = super::profile_lock(&self.profile_dir);
@@ -2986,6 +3040,27 @@ async fn wait_for_new_file(dir: &Path, timeout: Duration) -> Result<PathBuf, Cdp
     }
 }
 
+/// 0bx（2026-09-27）：`<profile>/DevToolsActivePort` 是否仍指向给定端口——
+/// 端点兜底的第一道机械检查（挡住该端口被别的 profile／进程复用）。
+fn profile_names_port(profile_dir: &Path, port: u16) -> bool {
+    std::fs::read_to_string(profile_dir.join("DevToolsActivePort"))
+        .ok()
+        .and_then(|content| {
+            content
+                .lines()
+                .next()
+                .and_then(|line| line.trim().parse::<u16>().ok())
+        })
+        == Some(port)
+}
+
+/// 0bx：本机回环 CDP 端口一次短超时连接探活（同步、有界——`is_alive()`
+/// 是同步谓词，热路径靠 TTL 缓存把建连压到每秒至多一次）。
+fn endpoint_listening(port: u16, timeout: Duration) -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpStream::connect_timeout(&addr, timeout).is_ok()
+}
+
 /// Poll the profile's `DevToolsActivePort` file (Chrome writes
 /// `<port>\n<ws-path>` there when `--remote-debugging-port=0` is used).
 async fn poll_devtools_active_port(port_file: &Path, timeout_s: u64) -> Result<u16, CdpError> {
@@ -3184,11 +3259,17 @@ mod tests {
 
     /// 测试用会话构造（无需真实浏览器进程；gate/池语义可离线断言）。
     fn test_session(config: CdpConfig) -> CdpBrowserSession {
+        test_session_with(1, PathBuf::from("unused"), config)
+    }
+
+    /// 0bx：带端口/profile 的会话构造——端点兜底判定要按实际 profile 与端口
+    /// 断言（`test_session` 的固定值不适用于该组）。
+    fn test_session_with(port: u16, profile_dir: PathBuf, config: CdpConfig) -> CdpBrowserSession {
         let pool_size = config.tab_pool_size;
         CdpBrowserSession {
-            port: 1,
+            port,
             browser_ws_url: "ws://127.0.0.1:1/devtools/browser/unused".to_string(),
-            profile_dir: PathBuf::from("unused"),
+            profile_dir,
             config,
             input_seq: std::sync::atomic::AtomicU64::new(0),
             last_input_at: std::sync::Mutex::new(None),
@@ -3204,6 +3285,8 @@ mod tests {
             control: tokio::sync::Mutex::new(None),
             serp_state: Mutex::new(SerpSessionState::new()),
             source_weighting: Arc::new(SourceWeightConfig::from_env_or_default()),
+            endpoint_liveness: Mutex::new(None),
+            shut_down: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -4368,5 +4451,122 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(path.file_name().unwrap().to_str().unwrap(), "a.pdf");
+    }
+
+    /// 0bx（2026-09-27）：端点兜底的三态机械断言——①profile 指向本端口且
+    /// 端口在听 ⇒ 存活；②端口不再应答（浏览器真死）⇒ 不存活；③端口在听但
+    /// `DevToolsActivePort` 指向别的端口（端口被复用）⇒ 不存活。
+    #[test]
+    fn endpoint_fallback_requires_matching_profile_port_and_live_listener() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let dir = test_tmp_dir("endpoint-fallback");
+        std::fs::create_dir_all(&dir).unwrap();
+        let port_file = dir.join("DevToolsActivePort");
+
+        // ① 指向本端口 ＋ 在听 ⇒ 存活（子进程已退出＝hand-off 形态）。
+        std::fs::write(&port_file, format!("{port}\n/devtools/browser/x\n")).unwrap();
+        let handed_off = test_session_with(port, dir.clone(), test_config());
+        assert!(
+            handed_off.is_alive(),
+            "endpoint-backed session must report alive after hand-off"
+        );
+
+        // ③ 文件指向别的端口 ⇒ 不存活（防端口复用误报）。
+        std::fs::write(&port_file, "1\n/devtools/browser/x\n").unwrap();
+        let mismatched = test_session_with(port, dir.clone(), test_config());
+        assert!(
+            !mismatched.is_alive(),
+            "a profile naming another port must not be adopted"
+        );
+
+        // ② 浏览器真死（监听消失）⇒ 不存活（自愈重启路径保持）。
+        drop(listener);
+        std::fs::write(&port_file, format!("{port}\n/devtools/browser/x\n")).unwrap();
+        let dead = test_session_with(port, dir.clone(), test_config());
+        assert!(!dead.is_alive(), "a dead endpoint must report not-alive");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0bx：`shutdown()` 后一律 not-alive——交付形态下既有实例可能仍在应答
+    /// 该端口，关停位必须压过端点兜底（否则会话关停后仍报就绪）。
+    #[tokio::test]
+    async fn shutdown_beats_endpoint_fallback() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let dir = test_tmp_dir("endpoint-shutdown");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("DevToolsActivePort"),
+            format!("{port}\n/devtools/browser/x\n"),
+        )
+        .unwrap();
+        let session = test_session_with(port, dir.clone(), test_config());
+        assert!(session.is_alive(), "live endpoint must report alive");
+
+        session.shutdown().await;
+        assert!(
+            !session.is_alive(),
+            "a shut-down session must never report alive"
+        );
+
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0bx 勘定钉（先红后绿，真机态；2026-09-27）：同一 profile 上的第二个
+    /// 会话必须仍报 ready。
+    ///
+    /// **机制**：`--user-data-dir` 是会话固定的共享 profile。第一个实例在跑
+    /// 时，第二次 `launch` 会让新进程把请求交付给已有实例后**立即退出**
+    /// （hand-off）；此时 CDP 端点仍在应答、会话完全可用，但被跟踪的子进程
+    /// 已死 ⇒ 修复前 `is_alive()`＝false ⇒ `ready()`＝false ⇒ 宿主每次浏览器
+    /// 调用都重复启动、`web_search` 链首恒以 `browser_unavailable` 让渡
+    /// （097 批采样 `RUN-CLI-6ab91021`：5/5 浏览器调用各落一条启动事实）。
+    ///
+    /// **判据**：第二个会话①可读页面②`is_alive()` 为真。
+    #[tokio::test]
+    #[ignore = "live browser e2e — GSA_RUN_LIVE_BROWSER_TESTS=1 cargo test -p orz-host -- --ignored handoff_same_profile"]
+    async fn handoff_same_profile_second_session_reports_ready() {
+        const LIVE_BROWSER_ENV: &str = "GSA_RUN_LIVE_BROWSER_TESTS";
+        if std::env::var_os(LIVE_BROWSER_ENV).is_none() {
+            return; // env-gated; the #[ignore] marker is the primary switch
+        }
+        let binary = crate::local_browser::discovery::find_browser(None)
+            .expect("a Chrome/Edge binary must be discoverable")
+            .path;
+        let workspace =
+            std::env::temp_dir().join(format!("orz-cdp-handoff-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workspace);
+        std::fs::create_dir_all(&workspace).unwrap();
+        let profile = workspace.join("chrome-profile-handoff");
+
+        let first =
+            CdpBrowserSession::launch(binary.clone(), profile.clone(), CdpConfig::default())
+                .await
+                .expect("first launch must succeed");
+        assert!(first.is_alive(), "cold launch must report alive");
+
+        // 同一 profile 的第二次启动＝交付形态：新进程把请求交给已有实例后退出。
+        let second = CdpBrowserSession::launch(binary, profile.clone(), CdpConfig::default())
+            .await
+            .expect("second launch must attach to the serving instance");
+
+        let page = second
+            .read_page("https://example.com/", crate::local_browser::ReadMode::Full)
+            .await
+            .expect("hand-off session must still read pages");
+        assert!(page.text.contains("Example Domain"), "{}", page.text);
+
+        assert!(
+            second.is_alive(),
+            "0bx: hand-off session must report ready — the CDP endpoint is alive \
+             even though the spawned hand-off process already exited"
+        );
+
+        first.shutdown().await;
+        second.shutdown().await;
+        let _ = std::fs::remove_dir_all(&workspace);
     }
 }
