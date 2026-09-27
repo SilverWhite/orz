@@ -196,7 +196,8 @@ impl WebSearchClient {
         query: &str,
         allowed_domains: Option<Vec<String>>,
     ) -> Result<(String, Vec<String>), xai_tool_runtime::ToolError> {
-        let (content, citations, _facts) = self.search_with_serp(query, allowed_domains, None).await?;
+        let (content, citations, _facts) =
+            self.search_with_serp(query, allowed_domains, None).await?;
         Ok((content, citations))
     }
 
@@ -315,95 +316,97 @@ impl WebSearchClient {
                     local_note = Some(format!(
                         "[local_segmented] fell back to provider: cause={} engine={} \
                          waited={}ms detail={}",
-                        local_error.cause, local_error.engine, local_error.waited_ms,
+                        local_error.cause,
+                        local_error.engine,
+                        local_error.waited_ms,
                         local_error.detail
                     ));
                 }
             }
         }
         let provider = async move {
-        let web_search = rs::WebSearchToolArgs::default()
-            .filters(rs::WebSearchToolFilters { allowed_domains })
-            .build()
-            .map_err(|e| {
+            let web_search = rs::WebSearchToolArgs::default()
+                .filters(rs::WebSearchToolFilters { allowed_domains })
+                .build()
+                .map_err(|e| {
+                    xai_tool_runtime::ToolError::execution(
+                        xai_tool_protocol::ToolId::new("web_search").expect("valid"),
+                        format!("Failed to build web search tool: {e}"),
+                    )
+                })?;
+            let request = rs::CreateResponseArgs::default()
+                .model(self.model.clone())
+                .input(query.to_string())
+                .tools(vec![rs::Tool::WebSearch(web_search)])
+                .store(false)
+                .temperature(0.1_f32)
+                .top_p(0.95_f32)
+                .max_output_tokens(8192u32)
+                .build()
+                .map_err(|e| {
+                    xai_tool_runtime::ToolError::execution(
+                        xai_tool_protocol::ToolId::new("web_search").expect("valid"),
+                        format!("Failed to build request: {e}"),
+                    )
+                })?;
+            let url = format!("{}/responses", self.base_url.trim_end_matches('/'));
+            let sent_bearer = self.current_bearer().await;
+            let mut req = self.http.post(&url).json(&request);
+            if let Some(ref key) = sent_bearer {
+                req = req.header(AUTHORIZATION, format!("Bearer {key}"));
+            }
+            let started = std::time::Instant::now();
+            let response = req
+                .send()
+                .await
+                .map_err(|e| Self::map_transport_error(e, started.elapsed(), "sending request"))?;
+            let status = response.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                self.record_401_attribution(sent_bearer.as_deref());
+                let body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Failed to read error body".to_string());
+                return Err(xai_tool_runtime::ToolError::unauthorized(format!(
+                    "Responses API returned 401 Unauthorized: {body}"
+                ))
+                .with_details(serde_json::json!({
+                    "tool_id": "web_search",
+                    "status": 401,
+                })));
+            }
+            if !status.is_success() {
+                let body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Failed to read error body".to_string());
+                return Err(xai_tool_runtime::ToolError::execution(
+                    xai_tool_protocol::ToolId::new("web_search").expect("valid"),
+                    format!("Responses API returned {status}: {body}"),
+                ));
+            }
+            let bytes = response.bytes().await.map_err(|e| {
+                Self::map_transport_error(e, started.elapsed(), "reading response body")
+            })?;
+            // 2026-08-11 (direction correction): parsed as raw JSON — the
+            // typed `rs::Response` shape does not match the DeepSeek backend
+            // (its `web_search_call` search action carries `queries`, while
+            // async-openai requires `query`; the typed parse would fail).
+            // `response_content`/`extract_citations` walk the raw output.
+            let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
                 xai_tool_runtime::ToolError::execution(
                     xai_tool_protocol::ToolId::new("web_search").expect("valid"),
-                    format!("Failed to build web search tool: {e}"),
+                    format!("Failed to parse response: {e}"),
                 )
             })?;
-        let request = rs::CreateResponseArgs::default()
-            .model(self.model.clone())
-            .input(query.to_string())
-            .tools(vec![rs::Tool::WebSearch(web_search)])
-            .store(false)
-            .temperature(0.1_f32)
-            .top_p(0.95_f32)
-            .max_output_tokens(8192u32)
-            .build()
-            .map_err(|e| {
-                xai_tool_runtime::ToolError::execution(
-                    xai_tool_protocol::ToolId::new("web_search").expect("valid"),
-                    format!("Failed to build request: {e}"),
-                )
-            })?;
-        let url = format!("{}/responses", self.base_url.trim_end_matches('/'));
-        let sent_bearer = self.current_bearer().await;
-        let mut req = self.http.post(&url).json(&request);
-        if let Some(ref key) = sent_bearer {
-            req = req.header(AUTHORIZATION, format!("Bearer {key}"));
-        }
-        let started = std::time::Instant::now();
-        let response = req
-            .send()
-            .await
-            .map_err(|e| Self::map_transport_error(e, started.elapsed(), "sending request"))?;
-        let status = response.status();
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            self.record_401_attribution(sent_bearer.as_deref());
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Failed to read error body".to_string());
-            return Err(xai_tool_runtime::ToolError::unauthorized(format!(
-                "Responses API returned 401 Unauthorized: {body}"
-            ))
-            .with_details(serde_json::json!({
-                "tool_id": "web_search",
-                "status": 401,
-            })));
-        }
-        if !status.is_success() {
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Failed to read error body".to_string());
-            return Err(xai_tool_runtime::ToolError::execution(
-                xai_tool_protocol::ToolId::new("web_search").expect("valid"),
-                format!("Responses API returned {status}: {body}"),
-            ));
-        }
-        let bytes = response.bytes().await.map_err(|e| {
-            Self::map_transport_error(e, started.elapsed(), "reading response body")
-        })?;
-        // 2026-08-11 (direction correction): parsed as raw JSON — the
-        // typed `rs::Response` shape does not match the DeepSeek backend
-        // (its `web_search_call` search action carries `queries`, while
-        // async-openai requires `query`; the typed parse would fail).
-        // `response_content`/`extract_citations` walk the raw output.
-        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-            xai_tool_runtime::ToolError::execution(
-                xai_tool_protocol::ToolId::new("web_search").expect("valid"),
-                format!("Failed to parse response: {e}"),
-            )
-        })?;
-        let content = response_content(&value);
-        let content = if content.is_empty() {
-            "No search results found.".to_string()
-        } else {
-            content
-        };
-        let citations = extract_citations(&value);
-        Ok((content, citations))
+            let content = response_content(&value);
+            let content = if content.is_empty() {
+                "No search results found.".to_string()
+            } else {
+                content
+            };
+            let citations = extract_citations(&value);
+            Ok((content, citations))
         }
         .await;
         // 注记链（链序：浏览器 SERP → 本地 HTTP）：任一存在则随交付/失败如实
@@ -467,91 +470,93 @@ impl WebSearchClient {
                     local_note = Some(format!(
                         "[local_segmented] fell back to provider: cause={} engine={} \
                          waited={}ms detail={}",
-                        local_error.cause, local_error.engine, local_error.waited_ms,
+                        local_error.cause,
+                        local_error.engine,
+                        local_error.waited_ms,
                         local_error.detail
                     ));
                 }
             }
         }
         let provider = async move {
-        let web_search = rs::WebSearchToolArgs::default()
-            .filters(rs::WebSearchToolFilters { allowed_domains })
-            .build()
-            .map_err(|e| {
+            let web_search = rs::WebSearchToolArgs::default()
+                .filters(rs::WebSearchToolFilters { allowed_domains })
+                .build()
+                .map_err(|e| {
+                    xai_tool_runtime::ToolError::execution(
+                        xai_tool_protocol::ToolId::new("web_search").expect("valid"),
+                        format!("Failed to build web search tool: {e}"),
+                    )
+                })?;
+            let request = rs::CreateResponseArgs::default()
+                .model(self.model.clone())
+                .input(query.to_string())
+                .tools(vec![rs::Tool::WebSearch(web_search)])
+                .store(false)
+                .temperature(0.1_f32)
+                .top_p(0.95_f32)
+                .max_output_tokens(8192u32)
+                .build()
+                .map_err(|e| {
+                    xai_tool_runtime::ToolError::execution(
+                        xai_tool_protocol::ToolId::new("web_search").expect("valid"),
+                        format!("Failed to build request: {e}"),
+                    )
+                })?;
+            let url = format!("{}/responses", self.base_url.trim_end_matches('/'));
+            let sent_bearer = self.current_bearer().await;
+            let mut req = self.http.post(&url).json(&request);
+            if let Some(ref key) = sent_bearer {
+                req = req.header(AUTHORIZATION, format!("Bearer {key}"));
+            }
+            let started = std::time::Instant::now();
+            let response = req
+                .send()
+                .await
+                .map_err(|e| Self::map_transport_error(e, started.elapsed(), "sending request"))?;
+            let status = response.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                self.record_401_attribution(sent_bearer.as_deref());
+                let body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Failed to read error body".to_string());
+                return Err(xai_tool_runtime::ToolError::unauthorized(format!(
+                    "Responses API returned 401 Unauthorized: {body}"
+                ))
+                .with_details(serde_json::json!({
+                    "tool_id": "web_search",
+                    "status": 401,
+                })));
+            }
+            if !status.is_success() {
+                let body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Failed to read error body".to_string());
+                return Err(xai_tool_runtime::ToolError::execution(
+                    xai_tool_protocol::ToolId::new("web_search").expect("valid"),
+                    format!("Responses API returned {status}: {body}"),
+                ));
+            }
+            let bytes = response.bytes().await.map_err(|e| {
+                Self::map_transport_error(e, started.elapsed(), "reading response body")
+            })?;
+            // Raw-JSON parse — same rationale as [`Self::search`].
+            let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
                 xai_tool_runtime::ToolError::execution(
                     xai_tool_protocol::ToolId::new("web_search").expect("valid"),
-                    format!("Failed to build web search tool: {e}"),
+                    format!("Failed to parse response: {e}"),
                 )
             })?;
-        let request = rs::CreateResponseArgs::default()
-            .model(self.model.clone())
-            .input(query.to_string())
-            .tools(vec![rs::Tool::WebSearch(web_search)])
-            .store(false)
-            .temperature(0.1_f32)
-            .top_p(0.95_f32)
-            .max_output_tokens(8192u32)
-            .build()
-            .map_err(|e| {
-                xai_tool_runtime::ToolError::execution(
-                    xai_tool_protocol::ToolId::new("web_search").expect("valid"),
-                    format!("Failed to build request: {e}"),
-                )
-            })?;
-        let url = format!("{}/responses", self.base_url.trim_end_matches('/'));
-        let sent_bearer = self.current_bearer().await;
-        let mut req = self.http.post(&url).json(&request);
-        if let Some(ref key) = sent_bearer {
-            req = req.header(AUTHORIZATION, format!("Bearer {key}"));
-        }
-        let started = std::time::Instant::now();
-        let response = req
-            .send()
-            .await
-            .map_err(|e| Self::map_transport_error(e, started.elapsed(), "sending request"))?;
-        let status = response.status();
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            self.record_401_attribution(sent_bearer.as_deref());
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Failed to read error body".to_string());
-            return Err(xai_tool_runtime::ToolError::unauthorized(format!(
-                "Responses API returned 401 Unauthorized: {body}"
-            ))
-            .with_details(serde_json::json!({
-                "tool_id": "web_search",
-                "status": 401,
-            })));
-        }
-        if !status.is_success() {
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Failed to read error body".to_string());
-            return Err(xai_tool_runtime::ToolError::execution(
-                xai_tool_protocol::ToolId::new("web_search").expect("valid"),
-                format!("Responses API returned {status}: {body}"),
-            ));
-        }
-        let bytes = response.bytes().await.map_err(|e| {
-            Self::map_transport_error(e, started.elapsed(), "reading response body")
-        })?;
-        // Raw-JSON parse — same rationale as [`Self::search`].
-        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-            xai_tool_runtime::ToolError::execution(
-                xai_tool_protocol::ToolId::new("web_search").expect("valid"),
-                format!("Failed to parse response: {e}"),
-            )
-        })?;
-        let content = response_content(&value);
-        let content = if content.is_empty() {
-            "No search results found.".to_string()
-        } else {
-            content
-        };
-        let pairs = extract_citation_pairs(&value);
-        Ok((content, pairs))
+            let content = response_content(&value);
+            let content = if content.is_empty() {
+                "No search results found.".to_string()
+            } else {
+                content
+            };
+            let pairs = extract_citation_pairs(&value);
+            Ok((content, pairs))
         }
         .await;
         match (provider, local_note) {

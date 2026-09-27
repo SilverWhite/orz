@@ -251,11 +251,7 @@ pub fn check_write_target(ctx: &WriteTargetCtx<'_>) -> Option<DenyHit> {
 }
 
 /// 安装目录命中检查（命令面复用；`forms` 为候选形态集）。
-pub(crate) fn install_dir_hit(
-    install: &Path,
-    cwd: &Path,
-    forms: &[PathBuf],
-) -> Option<DenyHit> {
+pub(crate) fn install_dir_hit(install: &Path, cwd: &Path, forms: &[PathBuf]) -> Option<DenyHit> {
     let install_norm = strip_verbatim_prefix(install);
     let root_display = install_norm.to_string_lossy().into_owned();
 
@@ -398,7 +394,10 @@ mod tests {
             Path::new("/usr/lib/x.so")
         ));
         assert!(!path_hits_root(Path::new("/usr"), Path::new("/user/x")));
-        assert!(path_hits_root(Path::new("/boot"), Path::new("/boot/grub/x")));
+        assert!(path_hits_root(
+            Path::new("/boot"),
+            Path::new("/boot/grub/x")
+        ));
     }
 
     #[test]
@@ -486,7 +485,10 @@ mod tests {
         let probe = tmp.join("sub").join("not-yet.txt");
         let canon = best_effort_canonical(&probe);
         assert_eq!(canon.file_name().unwrap(), "not-yet.txt");
-        assert_eq!(canon.parent().unwrap(), dunce::canonicalize(tmp.join("sub")).unwrap());
+        assert_eq!(
+            canon.parent().unwrap(),
+            dunce::canonicalize(tmp.join("sub")).unwrap()
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

@@ -204,7 +204,9 @@ mod tests {
                 // 全量面共用）；主体文案保持不变。
                 let output = &applied.tool_output_for_prompt;
                 assert!(
-                    output.starts_with("The file test.txt has been updated. All occurrences were replaced."),
+                    output.starts_with(
+                        "The file test.txt has been updated. All occurrences were replaced."
+                    ),
                     "got: {output}"
                 );
                 assert!(

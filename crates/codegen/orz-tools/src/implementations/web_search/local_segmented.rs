@@ -572,9 +572,8 @@ static SO_HREF_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 /// 0bs ⑨：360 把真实目标塞在 `data-mdurl`（`href` 是 so.com 包装）——
 /// 优先取它，缺失才回退 `href`。
-static SO_MDURL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)data-mdurl="([^"]+)""#).expect("valid so mdurl regex")
-});
+static SO_MDURL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)data-mdurl="([^"]+)""#).expect("valid so mdurl regex"));
 static SO_SNIPPET_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?is)<p[^>]*class="[^"]*res-desc[^"]*"[^>]*>(.*?)</p>"#)
         .expect("valid so snippet regex")
@@ -807,15 +806,13 @@ pub fn is_vertical_engine(engine_id: &str) -> bool {
         .any(|(known, _)| *known == engine_id)
 }
 
-static ARXIV_ENTRY_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?is)<entry>(.*?)</entry>"#).expect("valid arxiv entry regex")
-});
+static ARXIV_ENTRY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?is)<entry>(.*?)</entry>"#).expect("valid arxiv entry regex"));
 static ARXIV_TITLE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?is)<title[^>]*>(.*?)</title>"#).expect("valid arxiv title regex")
 });
-static ARXIV_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?is)<id>(.*?)</id>"#).expect("valid arxiv id regex")
-});
+static ARXIV_ID_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?is)<id>(.*?)</id>"#).expect("valid arxiv id regex"));
 static ARXIV_SUMMARY_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?is)<summary[^>]*>(.*?)</summary>"#).expect("valid arxiv summary regex")
 });
@@ -879,7 +876,12 @@ pub fn parse_vertical_serp(engine_id: &str, body: &str) -> Vec<SerpHit> {
     };
     match engine_id {
         "github" => {
-            for item in value.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
+            for item in value
+                .get("items")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default()
+            {
                 push(
                     str_at(&item, &["full_name"]),
                     str_at(&item, &["html_url"]),
@@ -903,7 +905,12 @@ pub fn parse_vertical_serp(engine_id: &str, body: &str) -> Vec<SerpHit> {
             }
         }
         "stackexchange" => {
-            for item in value.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
+            for item in value
+                .get("items")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default()
+            {
                 push(
                     str_at(&item, &["title"]),
                     str_at(&item, &["link"]),
@@ -1235,7 +1242,8 @@ pub async fn search(
         let url = engine
             .search_url
             .replace("{query}", &urlencode_query(query));
-        let serp = tokio::time::timeout(budget, fetch_serp(http, engine, &url, config.fingerprint)).await;
+        let serp =
+            tokio::time::timeout(budget, fetch_serp(http, engine, &url, config.fingerprint)).await;
         match serp {
             Err(_elapsed) => {
                 attempts.push(EngineAttempt {
@@ -1444,8 +1452,7 @@ async fn fetch_serp(
     // 门控＝config.fingerprint（`Default` 为 false，单测保持确定性）。
     if fingerprint
         && super::fingerprint::enabled()
-        && let Some((body, _final_url)) =
-            super::fingerprint::fetch(url, FINGERPRINT_TIMEOUT).await
+        && let Some((body, _final_url)) = super::fingerprint::fetch(url, FINGERPRINT_TIMEOUT).await
     {
         return Ok(parse_engine_serp(&engine.id, &body));
     }
@@ -1671,7 +1678,10 @@ mod tests {
             normalize_ddg_url("/l/?uddg=https%3A%2F%2Fa.example%2Fb&x=1"),
             "https://a.example/b"
         );
-        assert_eq!(normalize_ddg_url("https://plain.example/"), "https://plain.example/");
+        assert_eq!(
+            normalize_ddg_url("https://plain.example/"),
+            "https://plain.example/"
+        );
     }
 
     #[test]
@@ -1730,10 +1740,7 @@ mod tests {
         assert_eq!(default.unwrap_workers, 6, "G3 worker");
         assert_eq!(default.unwrap_timeout.as_millis(), 6_000, "G3 单条超时");
         assert!(default.proxy.is_none(), "G4 直连缺省");
-        assert_eq!(
-            default.engine_chain_detail(),
-            "360search,baidu; proxy=off"
-        );
+        assert_eq!(default.engine_chain_detail(), "360search,baidu; proxy=off");
         let enabled = LocalSegmentedConfig::from_env_with(|key| match key {
             ENV_SWITCH => Some("on".to_string()),
             ENV_PER_ENGINE_DEADLINE_MS => Some("7000".to_string()),

@@ -346,13 +346,21 @@ pub struct ReadFileInput {
     // of one line (the only way to reach the tail of a very long line, which
     // regular reads and the coarse-gate preview truncate; index/TODO rows and
     // single-line session JSON are the originating cases).
-    #[serde(default, deserialize_with = "crate::types::schema::deserialize_lenient_i64", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_i64",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[schemars(
         with = "GrokIntegerSchema",
         description = "Text files only: 1-based line number to read as a bounded character window — the stable way to read a single very long line that regular reads truncate (or whose tail you need). Negative counts from the end (-1 = last line). When set, offset/limit/outline are ignored. The response carries a continuation pointer in a `[line N: …]` marker when more of the line remains."
     )]
     pub line: Option<i64>,
-    #[serde(default, deserialize_with = "crate::types::schema::deserialize_lenient_i64", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_i64",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[schemars(
         with = "GrokIntegerSchema",
         description = "With line=…: 1-based character (Unicode scalar) offset within the line — page through a long line by copying the `continue with line=L, char_offset=C` value from the response marker. Default 1."
@@ -1901,11 +1909,7 @@ mod tests {
         let long_row: String = (0..30_000)
             .map(|i| (b'a' + (i % 26) as u8) as char)
             .collect();
-        std::fs::write(
-            tmp.path().join("ledger.md"),
-            format!("head\n{long_row}\n"),
-        )
-        .unwrap();
+        std::fs::write(tmp.path().join("ledger.md"), format!("head\n{long_row}\n")).unwrap();
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         // 同文件整读只会拿到有界预览并在巨型行中途截断；行窗是稳定的续读面。
@@ -1928,9 +1932,9 @@ mod tests {
             content.content
         );
         assert!(
-            content
-                .content
-                .contains("[line 2: 30000 chars total; showing 1-64; continue with line=2, char_offset=65]"),
+            content.content.contains(
+                "[line 2: 30000 chars total; showing 1-64; continue with line=2, char_offset=65]"
+            ),
             "{}",
             content.content
         );
@@ -3839,7 +3843,10 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             ReadFileOutput::FileContent(content) => {
                 assert_eq!(content.content, "L1: # Big file\nL5002: ## Tail section");
             }
-            other => panic!("Expected FileContent outline for large file, got {:?}", other),
+            other => panic!(
+                "Expected FileContent outline for large file, got {:?}",
+                other
+            ),
         }
     }
 

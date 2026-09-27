@@ -2799,9 +2799,10 @@ mod tests {
             ..Default::default()
         }));
         let input2 = make_input("test.txt", "let x = 1;", "let x = 2;");
-        let result2 = xai_tool_runtime::Tool::run(&tool, test_ctx(resources2.into_shared()), input2)
-            .await
-            .unwrap();
+        let result2 =
+            xai_tool_runtime::Tool::run(&tool, test_ctx(resources2.into_shared()), input2)
+                .await
+                .unwrap();
         match result2 {
             SearchReplaceOutput::EditsApplied(applied) => {
                 assert!(
