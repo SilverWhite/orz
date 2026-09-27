@@ -72,3 +72,8 @@ DDG 代理腿／百度 link 壳展开／指纹 off 对照／arXiv 回落 UA—�
 [`096 落后登记对齐`]（第二卷 §1.49）／[`0BV S4 真机复验`](0BV_S4_LIVE_VERIFICATION_2026-09-27.md)／[`0BV 并件余项与 S4 修复批`](0BV_REMAINING_ITEMS_AND_S4_FIXES_2026-09-27.md)／[`真网在线验证`](0BS_RETRIEVAL_ONLINE_PROBE_2026-09-26.md)／[`095 发行档`](095_RELEASE_2026-09-27.md)／BACKLOG `0bv`·`0bw`·`0bq`／TODO `P1-0bv`·`P1-0bw`·`P1-0bq`。
 
 关键词：尾巴闭合、转码梯截断臂、from_utf8_lossy 预摧毁、truncation_decode_label、shadow pre-signing 落账、fail_closed_refusal、独立验票执行器排期、矩阵③④UI 级、旧工作区会话回放、新区新会话落盘、链首承接、browser_serp 回退 local_http、git 自动检查点不实施、0bq 闭合、0bw 闭合、0bv 闭合、计数 55。
+
+## §6 勘误（099 批，2026-09-27）
+
+- **§1.4 机理改判**：本节原将 `web_search` 链首让渡归因为「**链首就绪信号跨激活不传播**（0bs⑧ 定 `BrowserSerp` 为 session-scoped 能力）」。099 批真机复核证否该归因——**同一激活内亦复现**（宿主槽位共享、`swap_browser_session`／in-place 注入均无缺陷），真正失效点是**就绪判定本身**：`--user-data-dir` 为会话固定 profile，同 profile 已有实例在跑时第二次 `launch` 的新进程把请求交付（hand-off）给既有实例后立即退出，被跟踪的子进程已死 ⇒ 只认「子进程存活」的 `is_alive()` ⇒ `ready()` 恒否 ⇒ 链首恒以 `browser_unavailable` 让渡。判据＝本轮采样 `RUN-CLI-6ab91021` 5/5 浏览器调用各落一条启动事实（每次都在「重新启动」）、且同调用内页面可正常读取。
+- **状态变更**：`OBS-SERP-READY-HANDOFF-CROSS-ACTIVATION`（candidate，不占计数）**撤**，升级为正式开放项 **`0bx` / `GAP-BROWSER-READY-HANDOFF`**（P1，54 → 55，`partial`）；修复与钉子见 [`099 就绪判定档`](099_BROWSER_READY_HANDOFF_2026-09-27.md)。本节其余读数（让渡半实证、矩阵③④、转码梯、shadow 落账、闭合三项）不受影响。
