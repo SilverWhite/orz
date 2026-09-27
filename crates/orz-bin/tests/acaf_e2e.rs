@@ -1746,6 +1746,86 @@ async fn run_terminal_cmd_empty_command_shadow_records_rejection_and_proceeds() 
     );
 }
 
+// ── test 12b: REV-083-09⑤ — pre-signing refusal journals in shadow too ────
+// D-14 pre-signing refusal (missing file_path) under `ORZ_ACAF_FAIL_CLOSED=0`
+// shadow mode must leave an audit trace (`control_ticket_rejected` with the
+// actual code, null ticket_id) and still proceed — a shadow injection must
+// not be a silent downgrade (083 review §8; 0bv 2026-09-27).
+
+#[tokio::test]
+async fn pre_signing_refusal_records_rejection_in_shadow_mode() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+
+    let dir = test_dir();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "ignored".to_string(),
+            exit_code: Some(0),
+            output_encoding: None,
+            structured: None,
+            ..Default::default()
+        }),
+        test_runner: None,
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        // search_replace WITHOUT a file_path key → D-14 pre-signing refusal.
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "search_replace".to_string(),
+            arguments: serde_json::json!({ "old_string": "a", "new_string": "b" }),
+            call_id: "call-1".to_string(),
+        }]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_acaf_fail_closed(false)
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client));
+    controller
+        .run_turn(
+            &host,
+            "编辑文件",
+            "RUN-ACAF-SHADOW-REFUSAL",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
+        .collect();
+    assert_eq!(
+        rejected.len(),
+        1,
+        "shadow mode must journal the pre-signing refusal: {types:?}"
+    );
+    let rejection = &rejected[0].payload;
+    assert_eq!(rejection["ticket_kind"], "file_write_v1");
+    assert_eq!(rejection["reject_code"], "missing_target_argument");
+    assert!(
+        rejection["ticket_id"].is_null(),
+        "no ticket was issued: {rejection:?}"
+    );
+}
+
 // ── test 13: browser_read missing URL key → candidate gate refuses ───────
 
 #[tokio::test]

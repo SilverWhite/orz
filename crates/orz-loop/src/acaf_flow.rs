@@ -227,10 +227,15 @@ impl AgentLoopController {
 
     /// D-14/D-15 fail-closed refusal (2026-08-13): a PRE-SIGNING refusal —
     /// a required target argument is missing/empty or a dependency
-    /// (snapshot store / goal context) is absent. Shadow mode stays SILENT
-    /// (registered boundary: these paths journal nothing in the shadow
-    /// ledger); fail-closed journals `control_ticket_rejected` with a null
-    /// ticket_id and returns `Blocked` (the tool/event is not executed).
+    /// (snapshot store / goal context) is absent. REV-083-09⑤ (0bv,
+    /// 2026-09-27): shadow mode now JOURNALS the rejection too (null
+    /// ticket_id + the actual code/detail) and proceeds — an
+    /// `ORZ_ACAF_FAIL_CLOSED=0` injection must leave an audit trace, not a
+    /// silent downgrade (083 review §8; the unconfigured-fabric shadow path
+    /// upstream keeps its registered silence — there ACAF was never active,
+    /// so there is no degradation to trace). Fail-closed journals the same
+    /// event and additionally returns `Blocked` (the tool/event is not
+    /// executed).
     async fn fail_closed_refusal(
         &self,
         writer: &mut EventWriter<'_>,
@@ -239,9 +244,6 @@ impl AgentLoopController {
         detail: String,
         now: &chrono::DateTime<chrono::Utc>,
     ) -> Result<TicketGate, AgentLoopError> {
-        if !self.acaf_fail_closed {
-            return Ok(TicketGate::Proceed);
-        }
         self.journal_ticket_outcome(
             writer,
             &crate::acaf::TicketOutcome::Rejected {
@@ -253,7 +255,11 @@ impl AgentLoopController {
             now,
         )
         .await?;
-        Ok(TicketGate::Blocked { code, detail })
+        if self.acaf_fail_closed {
+            Ok(TicketGate::Blocked { code, detail })
+        } else {
+            Ok(TicketGate::Proceed)
+        }
     }
 
     /// Read the goal binding snapshot (digest + version) WITHOUT holding
@@ -327,8 +333,9 @@ impl AgentLoopController {
         // Defensive: no snapshot store → no worktree base → the real target
         // cannot be resolved; skip the ticket (production always carries the
         // store — the run_host_tool snapshot block uses the same source).
-        // D-15 (2026-08-13): fail-closed turns the silent skip into a hard
-        // refusal (`missing_snapshot_store`); shadow stays silent.
+        // D-15 (2026-08-13): fail-closed turns the missing store into a hard
+        // refusal (`missing_snapshot_store`); shadow journals the same
+        // rejection and proceeds (REV-083-09⑤, 0bv 2026-09-27).
         let now = chrono::Utc::now();
         let Some(store) = &self.snapshot_store else {
             return self
@@ -361,7 +368,8 @@ impl AgentLoopController {
         let Some(file_path) = tc_args.get("file_path").and_then(serde_json::Value::as_str) else {
             // D-14 (2026-08-13): missing/empty file_path → hard refusal in
             // fail-closed (`missing_target_argument`, null ticket_id);
-            // shadow mode keeps the registered silent skip.
+            // shadow journals the same rejection and proceeds
+            // (REV-083-09⑤, 0bv 2026-09-27).
             return self
                 .fail_closed_refusal(
                     writer,

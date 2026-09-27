@@ -356,6 +356,12 @@ struct ProcessState {
     /// Once the total char count exceeds the limit, the first half of the
     /// budget is frozen here and only the tail is kept in `output_buffer`.
     front_buffer: Option<Vec<u8>>,
+    /// Pre-truncation decode label from the capture ladder (并件三，0bv
+    /// 2026-09-27). Truncation now decodes via `decode_text` and stores
+    /// UTF-8 re-encoded slices; this stash keeps the original (e.g.
+    /// `gb18030`) stage honest in `to_result`'s merged label per
+    /// OPS-PROTOCOL §8 instead of silently relabeling the text as utf-8.
+    truncation_decode_label: Option<String>,
     /// Whether output was truncated
     truncated: bool,
     /// Total bytes written to file (before truncation)
@@ -430,6 +436,14 @@ struct ProcessState {
 
 impl ProcessState {
     fn to_result(&self) -> TerminalRunResult {
+        // 并件三（0bv，2026-09-27）：截断发生过的 run 先行声明转码梯的
+        // 原始解码阶段（如 gb18030）——切片本体已回存为 UTF-8，若无此前
+        // 置标签，合并结果会失真为纯 utf-8（OPS-PROTOCOL §8）。
+        let ladder_prefix = self
+            .truncation_decode_label
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>();
         let (combined_output, output_encoding) = if let Some(ref front) = self.front_buffer {
             // Truncated output keeps the head and tail slices only; each
             // slice decodes independently through the fixed chain and the
@@ -442,16 +456,23 @@ impl ProcessState {
                 front_str.trim_end(),
                 back_str.trim_start()
             );
+            let labels: Vec<&str> = ladder_prefix
+                .iter()
+                .copied()
+                .chain([front_label.as_str(), back_label.as_str()])
+                .collect();
             (
                 combined,
-                crate::util::encoding::merge_encoding_labels([
-                    front_label.as_str(),
-                    back_label.as_str(),
-                ]),
+                crate::util::encoding::merge_encoding_labels(labels),
             )
         } else {
             let (text, label) = crate::util::encoding::decode_text(&self.output_buffer);
-            (text, Some(label))
+            let labels: Vec<&str> = ladder_prefix
+                .iter()
+                .copied()
+                .chain([label.as_str()])
+                .collect();
+            (text, crate::util::encoding::merge_encoding_labels(labels))
         };
         TerminalRunResult {
             combined_output,
@@ -487,10 +508,18 @@ impl ProcessState {
     ///
     /// The two halves are re-joined by `to_result()` with a separator.
     fn maybe_truncate(&mut self) {
-        let s = String::from_utf8_lossy(&self.output_buffer);
+        // 并件三（0bv，2026-09-27）：截断臂的字符计数与切片必须走转码梯
+        // `decode_text`，不得用 `from_utf8_lossy` 预摧毁非 UTF-8 字节
+        // （0BV 轮 F7：长 GBK 输出截断后到模型面即乱码）。截断在解码后的
+        // 文本上做，切片以 UTF-8 回存；原始解码标签留档，由 `to_result`
+        // 合并（OPS-PROTOCOL §8 只记实际产出文本的阶段）。
+        let (s, decode_label) = crate::util::encoding::decode_text(&self.output_buffer);
         let char_count = s.chars().count();
         if char_count <= self.output_byte_limit {
             return;
+        }
+        if self.truncation_decode_label.is_none() && decode_label != "utf-8" {
+            self.truncation_decode_label = Some(decode_label);
         }
         let half = self.output_byte_limit / 2;
 
@@ -1319,6 +1348,7 @@ impl LocalTerminalActor {
             process_group: Some(self.enroll_spawned(process_group)),
             output_buffer: Vec::new(),
             front_buffer: None,
+            truncation_decode_label: None,
             truncated: false,
             total_bytes: 0,
             exit_status: None,
@@ -1455,6 +1485,7 @@ impl LocalTerminalActor {
             process_group: Some(self.enroll_spawned(process_group)),
             output_buffer: Vec::new(),
             front_buffer: None,
+            truncation_decode_label: None,
             truncated: false,
             total_bytes: 0,
             exit_status: None,
@@ -6370,6 +6401,96 @@ mod tests {
             snap.owner_session_id.as_deref(),
             Some("test-owner"),
             "owner_session_id should propagate from request to snapshot"
+        );
+    }
+
+    /// 并件三（0bv，2026-09-27）勘定钉（REV-083-14 先红后绿）：截断臂的
+    /// 字符计数与切片必须走转码梯（`decode_text`）——0BV 轮 F7 实证长
+    /// GBK 输出经 `from_utf8_lossy` 预摧毁后到模型面即乱码（journal 后端
+    /// 编码门已识别 gb18030 ⇒ 缺口在下游消费臂）。钉住：① 截断后头/尾
+    /// 中文完好；② 零 U+FFFD；③ 编码标签如实保留 gb18030 段。
+    #[tokio::test]
+    async fn truncated_gbk_output_decodes_via_capture_ladder_not_lossy() {
+        let src_head = "头部标记";
+        let src_tail = "尾部标记";
+        let body = "中文测试输出行\n".repeat(60);
+        let src = format!("{src_head}\n{body}{src_tail}\n");
+        let (gbk, _, had_errors) = encoding_rs::GBK.encode(&src);
+        assert!(!had_errors);
+        let gbk = gbk.into_owned();
+        let limit = 128;
+        assert!(
+            gbk.len() > limit,
+            "precondition: fixture must exceed the tiny limit"
+        );
+
+        let mut child = tokio::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+            .args(if cfg!(windows) {
+                vec!["/C", "exit 0"]
+            } else {
+                vec!["-c", "exit 0"]
+            })
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn trivial child");
+
+        let mut process = ProcessState {
+            child,
+            pid: None,
+            process_group: None,
+            output_buffer: gbk,
+            front_buffer: None,
+            truncation_decode_label: None,
+            truncated: false,
+            total_bytes: 0,
+            exit_status: None,
+            bg_status: BackgroundStatus::Foreground {
+                auto_bg_on_timeout: false,
+            },
+            completion_waiters: Vec::new(),
+            output_byte_limit: limit,
+            timeout: Duration::from_secs(30),
+            foreground_block_budget: Duration::from_secs(180),
+            activity: ActivitySampler::new(Duration::from_secs(600)),
+            idle_timeout_used: None,
+            start_time: Instant::now(),
+            output_file: PathBuf::from("/tmp"),
+            file_handle: None,
+            command: "test".to_string(),
+            display_command: None,
+            cwd: "/tmp".to_string(),
+            start_wall_time: std::time::SystemTime::now(),
+            completed_at: None,
+            end_wall_time: None,
+            notification_handle: ToolNotificationHandle::noop(),
+            tool_call_id: "test".to_string(),
+            kind: TaskKind::Bash,
+            last_notified_total: 0,
+            drained: false,
+            block_waited: false,
+            explicitly_killed: false,
+            state_dump_handle: None,
+            owner_session_id: None,
+            description: None,
+        };
+
+        process.maybe_truncate();
+        let result = process.to_result();
+        assert!(result.truncated);
+        let out = &result.combined_output;
+        assert!(
+            !out.contains('\u{FFFD}'),
+            "lossy truncation arm destroyed GBK bytes: {out:?}"
+        );
+        assert!(out.contains(src_head), "head marker lost: {out:?}");
+        assert!(out.contains(src_tail), "tail marker lost: {out:?}");
+        assert!(out.contains("中文测试输出行"));
+        let label = result.output_encoding.as_deref().unwrap_or("");
+        assert!(
+            label.contains("gb18030"),
+            "encoding label must keep the gb18030 stage, got {label:?}"
         );
     }
 }
