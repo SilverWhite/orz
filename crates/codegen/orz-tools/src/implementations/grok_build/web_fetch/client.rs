@@ -10,7 +10,7 @@ use url::Url;
 use super::cache::FetchCache;
 use super::config::{MAX_REDIRECTS, MAX_URL_LENGTH, USER_AGENT_STRING, WebFetchParams};
 use super::error::WebFetchError;
-use super::http::HttpClient;
+use super::http;
 use super::overflow::{OverflowHandler, RecoveryTools, inline_budget};
 use super::ssrf;
 use crate::implementations::grok_build::storage::SessionFileWriter;
@@ -21,10 +21,11 @@ use scraper::{Html, Selector};
 
 const DEFAULT_DOWNLOAD_DIR: &str = "downloads";
 
-/// Shared HTTP client and cache for web fetching.
+/// Shared cache/converter/writers for web fetching. HTTP clients are built
+/// per hop with the validated address set pinned in (REV-083-11 — see
+/// [`http::build_pinned_client`]), so no client pool is shared here anymore.
 #[derive(Clone)]
 pub struct WebFetchClient {
-    http: HttpClient,
     cache: Arc<parking_lot::RwLock<FetchCache>>,
     converter: Arc<htmd::HtmlToMarkdown>,
     params: WebFetchParams,
@@ -54,8 +55,6 @@ impl WebFetchClient {
         );
 
         Ok(Self {
-            // Reqwest client can fail to build.
-            http: HttpClient::new(params)?,
             cache: Arc::new(parking_lot::RwLock::new(FetchCache::new(
                 params.cache_ttl_secs(),
                 params.max_cache_entries(),
@@ -71,10 +70,12 @@ impl WebFetchClient {
 
     /// Fetch a URL and return its content as markdown.
     ///
-    /// Handles: validation, HTTPS upgrade, SSRF check, HTTP fetch with
+    /// Handles: validation, HTTPS upgrade, SSRF check with the validated
+    /// address set pinned into a per-hop client (REV-083-11), HTTP fetch with
     /// same-host redirects, HTML-to-markdown conversion, truncation, and
-    /// caching. On transport errors, the HTTP client is invalidated so
-    /// the next call gets a fresh connection pool (see [`HttpClient`]).
+    /// caching. Each fetch owns its connection pool, so a transport error can
+    /// never poison subsequent fetches (the former shared-client
+    /// invalidation semantics, carried over by construction).
     pub async fn fetch(
         &self,
         raw_url: &str,
@@ -96,17 +97,10 @@ impl WebFetchClient {
             }
         }
 
-        // SSRF check (policy from tool params — not process env at call time).
-        ssrf::check_ssrf(&url, self.params.allow_local()).await?;
-
-        // Make request and build output.
-        let http = self.http.get_or_rebuild()?;
-        let result = match fetch_url(&http, &url, self.params.allow_local()).await {
+        // Make request and build output.（SSRF 校验＋地址 pin 在 fetch_url
+        // 的每跳循环内完成——含首跳。）
+        let result = match fetch_url(&self.params, &url, self.params.allow_local()).await {
             Ok(result) => result,
-            Err(e @ WebFetchError::HttpRequest(_)) => {
-                self.http.invalidate();
-                return Err(e);
-            }
             Err(e) => return Err(e),
         };
 
@@ -389,11 +383,15 @@ enum FetchResult {
 
 /// Fetch a URL with manual same-host redirect handling.
 ///
-/// Re-runs SSRF checks on every hop so DNS rebinding between redirects cannot
-/// sneak a previously-blocked address past the initial check (partial TOCTOU
-/// mitigation; peer IP on the live TCP connection is not available from reqwest).
+/// Re-runs the SSRF resolution+check on every hop and pins the validated
+/// address set into a hop-local client (REV-083-11): the connection can only
+/// land on addresses that passed the check, so DNS rebinding between
+/// validation and connect is closed (the former comment "peer IP on the live
+/// TCP connection is not available from reqwest" no longer applies — the
+/// client's resolver override makes the validated set the only connectable
+/// set).
 async fn fetch_url(
-    client: &reqwest::Client,
+    params: &WebFetchParams,
     url: &Url,
     allow_local: bool,
 ) -> Result<FetchResult, WebFetchError> {
@@ -402,9 +400,12 @@ async fn fetch_url(
 
     // Loop to follow redirects under the same host.
     loop {
-        // Re-check on every hop (including the first) so a rebinding name that
-        // was public at the pre-fetch check cannot become loopback/private here.
-        ssrf::check_ssrf(&current_url, allow_local).await?;
+        // Resolve + check on every hop (including the first), then pin the
+        // validated addresses into this hop's client so a rebinding name that
+        // changes answers between check and connect cannot be reached.
+        let addrs = ssrf::resolve_and_check(&current_url, allow_local).await?;
+        let host = current_url.host_str().unwrap_or_default().to_string();
+        let client = http::build_pinned_client(params, &host, &addrs)?;
 
         let resp = client
             .get(current_url.as_str())

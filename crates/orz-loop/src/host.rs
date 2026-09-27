@@ -329,6 +329,25 @@ impl SerpSessionFacts {
     }
 }
 
+/// 0bw③（2026-09-27，WRITE_CONTROL_MECHANICAL_DESIGN §3.2/D5 后续扩展）：
+/// 写入管控命令审查事实——bash 工具审查时结构化入队（allow/warn/block 全
+/// 落），宿主调用边界收集，loop drain 落 `write_control_review` 事件。
+/// 命令原文以 sha256＋长度关联（tool_started 已载原文）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteControlReviewFact {
+    pub call_id: String,
+    /// 封闭集：`allow` / `warn` / `block`。
+    pub review: String,
+    /// 命中规则 id；allow 恒 `None`。
+    pub rule: Option<String>,
+    /// 机械细节；allow 恒 `None`。
+    pub detail: Option<String>,
+    /// 被审查命令 sha256（小写 64 hex）。
+    pub command_sha256: String,
+    /// 被审查命令字节长度（≥1）。
+    pub command_len: u64,
+}
+
 /// Lightweight error from tool execution.
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
@@ -851,6 +870,15 @@ pub trait LoopHost: Send + Sync {
     /// `resource_exhausted` / `host_resource_denied` 的暂存行（drain 语义）。
     /// 不支持的后端默认空（fail-closed，不伪造）。
     async fn drain_host_resource_facts(&self) -> Vec<serde_json::Value> {
+        Vec::new()
+    }
+
+    /// 0bw③（2026-09-27，WRITE_CONTROL_MECHANICAL_DESIGN §3.2/D5 后续
+    /// 扩展）：写入管控命令审查事实源——bash 工具审查时入队（toolset
+    /// `Resources` 通道），宿主在 `run_terminal_cmd` 调用边界收集；loop
+    /// drain 落 `write_control_review` 事件（block/warn/allow 全落）。
+    /// 不支持的后端默认空（fail-closed，不伪造）。
+    async fn drain_write_control_reviews(&self) -> Vec<WriteControlReviewFact> {
         Vec::new()
     }
 

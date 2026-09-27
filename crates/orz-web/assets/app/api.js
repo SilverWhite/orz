@@ -69,9 +69,11 @@ export function grantTrust() {
 /* 工作区切换（0bv ②，B 形态：服务随启动而立＋信任清单全局共享＋服务内
  * 点击切换）：POST /api/workspace/switch —— 机械切换（模型零感知）；
  * 未信任工作区桥侧 403（fail-closed，桥回错误消息）；「运行中禁切」由
- * 前端 state.running 主判（载荷＝目标路径，来自信任清单投影）。 */
+ * 前端 state.running 主判（载荷＝目标路径，来自信任清单投影）。
+ * （REV-083-22 回归注记：载荷必须真实随 POST 发出——曾引用未定义符号
+ * sendJsonBody ⇒ ReferenceError，切换请求从未能发出。） */
 export function switchWorkspace(path) {
-  return sendJsonBody('POST', '/api/workspace/switch', { path });
+  return sendJson('POST', '/api/workspace/switch', { path });
 }
 
 /* 回档（0br S3 批六用户令）：DELETE 递单 → 桥 spawn `orz unarchive <s8>`
@@ -87,12 +89,19 @@ export async function deleteSession(session8) {
   return sendJson('DELETE', `/api/sessions/${encodeURIComponent(session8)}`);
 }
 
-async function sendJson(method, url) {
+/* POST/DELETE 递单统一出口；body 非空时以 JSON 载荷发送（REV-083-22：
+ * 切换面需要真实 body——此前 sendJson 只有无载荷形态）。 */
+async function sendJson(method, url, body) {
   const sep = url.includes('?') ? '&' : '?';
-  const resp = await fetch(url + sep + 'token=' + encodeURIComponent(TOKEN), { method });
-  const body = await resp.json().catch(() => ({}));
-  if (!resp.ok) {
-    throw new Error(body?.error?.message || `HTTP ${resp.status}`);
+  const init = { method };
+  if (body !== undefined) {
+    init.headers = { 'Content-Type': 'application/json' };
+    init.body = JSON.stringify(body);
   }
-  return body;
+  const resp = await fetch(url + sep + 'token=' + encodeURIComponent(TOKEN), init);
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(data?.error?.message || `HTTP ${resp.status}`);
+  }
+  return data;
 }

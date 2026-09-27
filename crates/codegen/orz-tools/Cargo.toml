@@ -7,7 +7,6 @@ description = "Grok tools library"
 
 [dependencies]
 anyhow = { workspace = true }
-arc-swap = { workspace = true }
 dirs = { workspace = true }
 derive_more = { workspace = true, features = ["from", "try_into"] }
 dunce = { workspace = true }

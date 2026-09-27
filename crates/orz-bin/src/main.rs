@@ -69,7 +69,11 @@ fn build_info_line() -> String {
         env!("CARGO_PKG_VERSION"),
         std::env::consts::OS,
         std::env::consts::ARCH,
-        if cfg!(debug_assertions) { "debug" } else { "release" }
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
     )
 }
 
@@ -86,6 +90,11 @@ fn main() {
         .expect("spawn main thread (64 MiB stack)");
     match child.join() {
         Ok(()) => {}
+        // REV-083-12（2026-09-27，D-12 路线）：本分支仅在 unwind 档可达——
+        // 默认 dev/release/release-dist 均 `panic = "abort"`，panic 直接走
+        // 平台 abort 路径终止进程，join 永不见 Err。exit(101) 契约面保留
+        // 给 unwind 档（x-prod）与显式 stderr 行；契约文档见 README
+        // 「Exit codes」节。
         Err(panic) => {
             eprintln!("error: main thread panicked: {panic:?}");
             std::process::exit(101);
@@ -115,6 +124,26 @@ fn main_inner() {
     #[cfg(windows)]
     unsafe {
         set_console_output_code_page_utf8();
+    }
+    // 0bw② (2026-09-27, WRITE_CONTROL_MECHANICAL_DESIGN §6 运行时形态):
+    // 载体完整性自检——发布打包生成的 carrier-manifest.json 在位时逐文件
+    // 复验 sha256；失配/缺失 ⇒ stderr 告警横幅（审计腿，不拒绝启动；
+    // 清单缺席＝开发树形态，静默跳过）。只读面，先于一切会话装配。
+    // 如实注记（2026-09-27 复审 P3）：本时点 tracing subscriber 尚未初始化
+    // （各运行模式在分派后各自 init），下方 `tracing` 调用为前置埋点——
+    // 当前有效腿是 stderr 横幅。
+    match orz_host::carrier_integrity::verify_at_startup() {
+        orz_host::carrier_integrity::IntegrityReport::Violated { findings } => {
+            eprintln!(
+                "{}",
+                orz_host::carrier_integrity::violation_banner(&findings)
+            );
+            tracing::warn!(findings = ?findings, "carrier integrity check failed");
+        }
+        orz_host::carrier_integrity::IntegrityReport::Clean { checked } => {
+            tracing::debug!(checked, "carrier integrity check passed");
+        }
+        orz_host::carrier_integrity::IntegrityReport::NoManifest => {}
     }
     // L1 (2026-08-08 write placement): redirect `$GROK_HOME` off the user
     // directory to the orz install dir (degradation chain → `{cwd}/.gsa/
@@ -250,7 +279,10 @@ fn main_inner() {
     // workbench 回档/删除 actions — same spawn-by-the-bridge shape as
     // `archive`; destructive semantics live in orz-host, the binary only
     // carries exit codes and human-readable results.
-    if matches!(args.get(1).map(String::as_str), Some("unarchive") | Some("delete-session")) {
+    if matches!(
+        args.get(1).map(String::as_str),
+        Some("unarchive") | Some("delete-session")
+    ) {
         run_session_maintenance(args[1].as_str(), &args[2..]);
         return;
     }
@@ -261,6 +293,12 @@ fn main_inner() {
     // chain already applied in main, below-nothing else to align).
     if args.get(1).map(String::as_str) == Some("trust") {
         run_trust(&args[2..]);
+        return;
+    }
+    // 0bw④ (2026-09-27): 回退窗口机械 undo 面——编辑前快照的 list/restore
+    // （不涉 git；`.gsa` 域目标拒绝；restore 覆写前自动存当前内容）。
+    if args.get(1).map(String::as_str) == Some("rollback") {
+        run_rollback(&args[2..]);
         return;
     }
     if args.iter().any(|a| a == "--stdio") {
@@ -690,6 +728,81 @@ fn run_session_maintenance(verb: &str, rest: &[String]) {
 /// 授信写入与 prompt 子进程同一 GROK_HOME 下的信任存储（GROK_HOME 由
 /// main 的 redirect 链先行注入，本子命令继承同值——同链同存储）。
 /// 注意：必须用调用方传入的**绝对** cwd；相对路径拒绝。
+/// 0bw④ (2026-09-27, WRITE_CONTROL_MECHANICAL_DESIGN §6 可实施半边)：
+/// 回退窗口机械 undo——`orz rollback list` ／ `orz rollback restore
+/// <pointer> [target]`。逻辑单点在 `orz_host::rollback_maintenance`；
+/// 本壳只做参数解析与退出码（与 archive/trust 子命令同形态）。
+fn run_rollback(rest: &[String]) {
+    let _guard = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match rest.first().map(String::as_str) {
+        Some("list") => match orz_host::rollback_maintenance::list_rollback(&cwd) {
+            Ok(rows) => {
+                if rows.is_empty() {
+                    println!("回退窗口为空（{}/.gsa/rollback/ 无快照）", cwd.display());
+                    return;
+                }
+                println!("回退窗口（{} 条，新↴旧序见时间戳）：", rows.len());
+                for row in rows {
+                    let target = row
+                        .target
+                        .as_deref()
+                        .unwrap_or("(无 meta，restore 须显式给目标)");
+                    println!(
+                        "  {}  {} 字节  目标 {}",
+                        row.pointer, row.size_bytes, target
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        },
+        Some("restore") => {
+            // 复审 P3（2026-09-27）：未知旗标不静默过滤、多余位置参数不静默
+            // 忽略——undo 面不做「猜用户意图」的超范围动作。
+            let args: Vec<&String> = rest.iter().skip(1).collect();
+            if args.iter().any(|s| s.starts_with('-')) {
+                eprintln!(
+                    "error: orz rollback restore 不接受旗标: 用法: orz rollback restore <pointer> [target]"
+                );
+                std::process::exit(2);
+            }
+            let mut positional = args.into_iter();
+            let Some(pointer) = positional.next() else {
+                eprintln!("error: 用法: orz rollback restore <pointer> [target]");
+                std::process::exit(2);
+            };
+            let target = match positional.next() {
+                Some(t) => Some(t.as_str()),
+                None => None,
+            };
+            if positional.next().is_some() {
+                eprintln!("error: 多余参数: 用法: orz rollback restore <pointer> [target]");
+                std::process::exit(2);
+            }
+            match orz_host::rollback_maintenance::restore_rollback(&cwd, pointer, target) {
+                Ok(message) => println!("{message}"),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        _ => {
+            eprintln!("error: 用法: orz rollback <list|restore <pointer> [target]>");
+            std::process::exit(2);
+        }
+    }
+}
+
 fn run_trust(rest: &[String]) {
     let _guard = tracing_subscriber::fmt()
         .with_env_filter(

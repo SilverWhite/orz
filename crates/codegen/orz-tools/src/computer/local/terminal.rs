@@ -887,6 +887,32 @@ impl LocalTerminalActor {
             }
         }
 
+        // 0bw①（2026-09-27）：子进程写面 Landlock——`/` 顶层逐项 allow 写、
+        // 表 B 系统核心不授权（单一源 `write_control::LINUX_SYSTEM_CORE`）、
+        // 读不设限；顶层 symlink 不授权（2026-09-27 复审 P1）。best-effort：
+        // 内核不支持或枚举失败 ⇒ 不装（仅 warn 一次）；装挂失败 ⇒ write(2)
+        // 提示后照常 exec、绝不 fail spawn（复审裁决，L3＝附加阻力，非绝对
+        // 保证；L1 工具面／L2 命令面仍硬拒锁死面）。
+        #[cfg(target_os = "linux")]
+        match orz_sandbox::child_write_guard::prepare_allow_dirs(
+            &crate::types::write_control::LINUX_SYSTEM_CORE,
+        ) {
+            Some(dirs) => unsafe {
+                cmd.pre_exec(move || {
+                    orz_sandbox::child_write_guard::install_best_effort(&dirs);
+                    Ok(())
+                });
+            },
+            None => {
+                static WRITE_GUARD_UNAVAILABLE: std::sync::Once = std::sync::Once::new();
+                WRITE_GUARD_UNAVAILABLE.call_once(|| {
+                    tracing::warn!(
+                        "0bw L3 child write guard unavailable (kernel Landlock missing or / enumeration failed); falling back to L1/L2 enforcement only"
+                    );
+                });
+            }
+        }
+
         let child = cmd.spawn().map_err(|e| {
             ComputerError::io_with_kind(format!("spawn shell in {}: {e}", cwd.display()), e.kind())
         })?;
@@ -1006,6 +1032,32 @@ impl LocalTerminalActor {
         if orz_sandbox::should_restrict_child_network() {
             unsafe {
                 cmd.pre_exec(|| orz_sandbox::child_net::install_child_network_filter());
+            }
+        }
+
+        // 0bw①（2026-09-27）：子进程写面 Landlock——`/` 顶层逐项 allow 写、
+        // 表 B 系统核心不授权（单一源 `write_control::LINUX_SYSTEM_CORE`）、
+        // 读不设限；顶层 symlink 不授权（2026-09-27 复审 P1）。best-effort：
+        // 内核不支持或枚举失败 ⇒ 不装（仅 warn 一次）；装挂失败 ⇒ write(2)
+        // 提示后照常 exec、绝不 fail spawn（复审裁决，L3＝附加阻力，非绝对
+        // 保证；L1 工具面／L2 命令面仍硬拒锁死面）。
+        #[cfg(target_os = "linux")]
+        match orz_sandbox::child_write_guard::prepare_allow_dirs(
+            &crate::types::write_control::LINUX_SYSTEM_CORE,
+        ) {
+            Some(dirs) => unsafe {
+                cmd.pre_exec(move || {
+                    orz_sandbox::child_write_guard::install_best_effort(&dirs);
+                    Ok(())
+                });
+            },
+            None => {
+                static WRITE_GUARD_UNAVAILABLE: std::sync::Once = std::sync::Once::new();
+                WRITE_GUARD_UNAVAILABLE.call_once(|| {
+                    tracing::warn!(
+                        "0bw L3 child write guard unavailable (kernel Landlock missing or / enumeration failed); falling back to L1/L2 enforcement only"
+                    );
+                });
             }
         }
 
@@ -3555,6 +3607,31 @@ fn spawn_shell_command(
         if orz_sandbox::should_restrict_child_network() {
             unsafe {
                 cmd.pre_exec(|| orz_sandbox::child_net::install_child_network_filter());
+            }
+        }
+        // 0bw①（2026-09-27）：子进程写面 Landlock——`/` 顶层逐项 allow 写、
+        // 表 B 系统核心不授权（单一源 `write_control::LINUX_SYSTEM_CORE`）、
+        // 读不设限；顶层 symlink 不授权（2026-09-27 复审 P1）。best-effort：
+        // 内核不支持或枚举失败 ⇒ 不装（仅 warn 一次）；装挂失败 ⇒ write(2)
+        // 提示后照常 exec、绝不 fail spawn（复审裁决，L3＝附加阻力，非绝对
+        // 保证；L1 工具面／L2 命令面仍硬拒锁死面）。
+        #[cfg(target_os = "linux")]
+        match orz_sandbox::child_write_guard::prepare_allow_dirs(
+            &crate::types::write_control::LINUX_SYSTEM_CORE,
+        ) {
+            Some(dirs) => unsafe {
+                cmd.pre_exec(move || {
+                    orz_sandbox::child_write_guard::install_best_effort(&dirs);
+                    Ok(())
+                });
+            },
+            None => {
+                static WRITE_GUARD_UNAVAILABLE: std::sync::Once = std::sync::Once::new();
+                WRITE_GUARD_UNAVAILABLE.call_once(|| {
+                    tracing::warn!(
+                        "0bw L3 child write guard unavailable (kernel Landlock missing or / enumeration failed); falling back to L1/L2 enforcement only"
+                    );
+                });
             }
         }
         cmd

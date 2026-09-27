@@ -152,11 +152,17 @@ pub fn is_blocked_for_host(ip: IpAddr, host: &str, allow_local: bool) -> bool {
 }
 
 /// Resolve hostname via DNS and verify none of the resolved addresses are
-/// blocked under the SSRF policy.
+/// blocked under the SSRF policy. Returns the validated address set so the
+/// caller can **pin the connection to exactly these addresses**
+/// (REV-083-11: closes the DNS-rebinding TOCTOU window between validation
+/// and connect — the HTTP client no longer re-resolves on its own).
 ///
 /// `allow_local` comes from tool config (`WebFetchParams::allow_local`); it is
 /// not read from the environment here so the agent cannot flip the policy.
-pub async fn check_ssrf(url: &Url, allow_local: bool) -> Result<(), WebFetchError> {
+pub async fn resolve_and_check(
+    url: &Url,
+    allow_local: bool,
+) -> Result<Vec<std::net::SocketAddr>, WebFetchError> {
     let host = url
         .host_str()
         .ok_or_else(|| WebFetchError::SingleLabelHost {
@@ -171,7 +177,8 @@ pub async fn check_ssrf(url: &Url, allow_local: bool) -> Result<(), WebFetchErro
                 ip,
             });
         }
-        return Ok(());
+        let port = url.port_or_known_default().unwrap_or(443);
+        return Ok(vec![std::net::SocketAddr::new(ip, port)]);
     }
 
     // DNS resolution.
@@ -192,15 +199,23 @@ pub async fn check_ssrf(url: &Url, allow_local: bool) -> Result<(), WebFetchErro
     // Any non-public address blocks the request. When allow_local is on,
     // only *explicit* loopback hosts may use loopback IPs — a rebinding name
     // that resolves to 127.0.0.1 stays blocked.
-    addrs
+    if let Some(addr) = addrs
         .iter()
         .find(|addr| is_blocked_for_host(addr.ip(), host, allow_local))
-        .map_or(Ok(()), |addr| {
-            Err(WebFetchError::SsrfBlocked {
-                host: host.to_string(),
-                ip: addr.ip(),
-            })
-        })
+    {
+        return Err(WebFetchError::SsrfBlocked {
+            host: host.to_string(),
+            ip: addr.ip(),
+        });
+    }
+    Ok(addrs)
+}
+
+/// Validate a URL's host under the SSRF policy (validation only — the
+/// validated-address pinning lives in [`resolve_and_check`], consumed by the
+/// `web_fetch` fetch loop; the browser URL gate keeps using this entry).
+pub async fn check_ssrf(url: &Url, allow_local: bool) -> Result<(), WebFetchError> {
+    resolve_and_check(url, allow_local).await.map(|_| ())
 }
 
 #[cfg(test)]
@@ -466,5 +481,25 @@ mod tests {
         let url = Url::parse("https://1.1.1.1/").unwrap();
         let result = check_ssrf(&url, false).await;
         assert!(result.is_ok());
+    }
+
+    /// REV-083-11：`resolve_and_check` 返回已校验地址集（pin 面）——
+    /// IP 字面量直接给出「字面量＋约定端口」；被拦地址不产生返回值。
+    #[tokio::test]
+    async fn resolve_and_check_returns_validated_addrs_for_literals() {
+        let public = Url::parse("https://1.1.1.1/").unwrap();
+        let addrs = resolve_and_check(&public, false).await.unwrap();
+        assert_eq!(addrs, vec!["1.1.1.1:443".parse().unwrap()]);
+
+        let explicit_port = Url::parse("http://8.8.8.8:8080/").unwrap();
+        let addrs = resolve_and_check(&explicit_port, false).await.unwrap();
+        assert_eq!(addrs, vec!["8.8.8.8:8080".parse().unwrap()]);
+
+        let loopback_opt_in = Url::parse("http://127.0.0.1:8080/").unwrap();
+        let addrs = resolve_and_check(&loopback_opt_in, true).await.unwrap();
+        assert_eq!(addrs, vec!["127.0.0.1:8080".parse().unwrap()]);
+
+        let blocked = Url::parse("https://10.0.0.1/secret").unwrap();
+        assert!(resolve_and_check(&blocked, false).await.is_err());
     }
 }

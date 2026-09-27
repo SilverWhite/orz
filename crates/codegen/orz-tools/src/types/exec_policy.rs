@@ -37,6 +37,61 @@ pub enum CommandReview {
     Block(CommandFinding),
 }
 
+/// 0bw③（2026-09-27）：一次命令审查的结构化报告——`write_control_review`
+/// journal 事件族的 producer 面（schema：`runtime/write-control-review-
+/// event-payload-v0.2.schema.json`）。`CommandReview::report()` 构造。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CommandReviewReport {
+    /// 分类（封闭集：`allow` / `warn` / `block`，与 schema 枚举一致）。
+    pub review: String,
+    /// 命中规则 id（封闭集见 [`CommandFinding::rule`]）；allow 恒 `None`。
+    pub rule: Option<String>,
+    /// 机械细节（命中词元/目标路径）；allow 恒 `None`。
+    pub detail: Option<String>,
+}
+
+impl CommandReview {
+    /// 结构化报告（审查判定已经发生；本函数零额外判定）。
+    pub fn report(&self) -> CommandReviewReport {
+        match self {
+            CommandReview::Allow => CommandReviewReport {
+                review: "allow".to_string(),
+                rule: None,
+                detail: None,
+            },
+            CommandReview::Warn(finding) => CommandReviewReport {
+                review: "warn".to_string(),
+                rule: Some(finding.rule.to_string()),
+                detail: Some(finding.detail.clone()),
+            },
+            CommandReview::Block(finding) => CommandReviewReport {
+                review: "block".to_string(),
+                rule: Some(finding.rule.to_string()),
+                detail: Some(finding.detail.clone()),
+            },
+        }
+    }
+}
+
+/// 0bw③：审查报告的工具→宿主传递队列项。
+///
+/// 命令原文不随事件重复入账（tool_started 已载原文）——以 sha256＋长度
+/// 关联。`call_id` 由 bash 工具落账点填充。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct EnqueuedCommandReview {
+    pub call_id: String,
+    pub report: CommandReviewReport,
+    /// 被审查命令的 sha256（小写 64 hex）。
+    pub command_sha256: String,
+    /// 被审查命令的字节长度（≥1；空命令在 bash 审查点的空命令防线被跳过，
+    /// 不出事件——2026-09-27 复审 P2 使本不变量机械化）。
+    pub command_len: u64,
+}
+
+/// 0bw③：审查报告队列——bash 工具 push、宿主 drain 的 `Resources` 通道
+/// （`ReportedTaskCompletions` 同型 `State<Vec<_>>`）。
+pub type CommandReviewQueue = crate::types::resources::State<Vec<EnqueuedCommandReview>>;
+
 // ─── 规则表（v1；设计 §4）───────────────────────────────────────────────
 
 /// 安全机制翻转类程序（程序位词元精确；`.exe`/`.com` 后缀剥离后比对）。
@@ -80,20 +135,69 @@ const FLIP_PHRASES: &[&str] = &[
 
 /// 破坏/修改动词（程序位匹配；命中 deny 根目标即 block）。
 const DESTRUCTIVE_VERBS: &[&str] = &[
-    "rm", "rmdir", "rd", "del", "erase", "remove-item", "ri", "rmtree", "mv", "move", "move-item",
-    "mi", "rename-item", "ren", "rename", "cp", "copy", "copy-item", "cpi", "xcopy", "robocopy",
-    "set-content", "add-content", "out-file", "new-item", "ni", "mkdir", "md", "touch", "tee",
-    "icacls", "takeown", "attrib", "cacls", "set-acl", "chmod", "chown",
+    "rm",
+    "rmdir",
+    "rd",
+    "del",
+    "erase",
+    "remove-item",
+    "ri",
+    "rmtree",
+    "mv",
+    "move",
+    "move-item",
+    "mi",
+    "rename-item",
+    "ren",
+    "rename",
+    "cp",
+    "copy",
+    "copy-item",
+    "cpi",
+    "xcopy",
+    "robocopy",
+    "set-content",
+    "add-content",
+    "out-file",
+    "new-item",
+    "ni",
+    "mkdir",
+    "md",
+    "touch",
+    "tee",
+    "icacls",
+    "takeown",
+    "attrib",
+    "cacls",
+    "set-acl",
+    "chmod",
+    "chown",
 ];
 
 /// 删除类动词（broad-destructive 的前置）。
-const DELETE_VERBS: &[&str] = &["rm", "rmdir", "rd", "del", "erase", "remove-item", "ri", "rmtree"];
+const DELETE_VERBS: &[&str] = &[
+    "rm",
+    "rmdir",
+    "rd",
+    "del",
+    "erase",
+    "remove-item",
+    "ri",
+    "rmtree",
+];
 
 /// `reg` 修改子命令与受保护蜂巢。
-const REG_MODIFY_SUBCOMMANDS: &[&str] =
-    &["add", "delete", "import", "copy", "restore", "load", "unload"];
-const REG_PROTECTED_HIVES: &[&str] =
-    &["hklm", "hkey_local_machine", "hkcr", "hkey_classes_root", "hku", "hkey_users"];
+const REG_MODIFY_SUBCOMMANDS: &[&str] = &[
+    "add", "delete", "import", "copy", "restore", "load", "unload",
+];
+const REG_PROTECTED_HIVES: &[&str] = &[
+    "hklm",
+    "hkey_local_machine",
+    "hkcr",
+    "hkey_classes_root",
+    "hku",
+    "hkey_users",
+];
 
 /// 递归/强制旗（broad-destructive 的递归腿）。
 const RECURSIVE_FLAGS: &[&str] = &["-r", "-rf", "-fr", "-recurse", "-force", "/s", "/q"];
@@ -103,10 +207,38 @@ const ELEVATION_PROGRAMS: &[&str] = &["sudo", "doas", "gsudo", "runas"];
 
 /// wrapper/前缀词（找程序位时跳过；内容位 `-command` 等递归展开）。
 const WRAPPER_WORDS: &[&str] = &[
-    "sudo", "doas", "gsudo", "env", "nohup", "time", "exec", "command", "xargs", "cmd",
-    "cmd.exe", "/c", "/k", "powershell", "powershell.exe", "pwsh", "pwsh.exe", "-command", "-c",
-    "-lc", "-l", "bash", "bash.exe", "sh", "sh.exe", "zsh", "zsh.exe", "runas", "start-process",
-    "-noprofile", "-nologo", "-verb",
+    "sudo",
+    "doas",
+    "gsudo",
+    "env",
+    "nohup",
+    "time",
+    "exec",
+    "command",
+    "xargs",
+    "cmd",
+    "cmd.exe",
+    "/c",
+    "/k",
+    "powershell",
+    "powershell.exe",
+    "pwsh",
+    "pwsh.exe",
+    "-command",
+    "-c",
+    "-lc",
+    "-l",
+    "bash",
+    "bash.exe",
+    "sh",
+    "sh.exe",
+    "zsh",
+    "zsh.exe",
+    "runas",
+    "start-process",
+    "-noprofile",
+    "-nologo",
+    "-verb",
 ];
 
 /// 内容位词元（其后的内容词按子命令递归展开）。
@@ -257,9 +389,10 @@ pub fn review_command_with(
             }
         }
     }
-    if words.windows(2).any(|pair| {
-        norm_word(&pair[0].text) == "-verb" && norm_word(&pair[1].text) == "runas"
-    }) {
+    if words
+        .windows(2)
+        .any(|pair| norm_word(&pair[0].text) == "-verb" && norm_word(&pair[1].text) == "runas")
+    {
         return CommandReview::Warn(CommandFinding {
             rule: "elevation",
             detail: "privilege elevation (`-Verb RunAs`)".to_owned(),
@@ -459,7 +592,9 @@ fn known_vars(cwd: &Path) -> Vec<(String, String)> {
         ),
         (
             "userprofile".to_owned(),
-            get("USERPROFILE").or_else(|| get("HOME")).unwrap_or_default(),
+            get("USERPROFILE")
+                .or_else(|| get("HOME"))
+                .unwrap_or_default(),
         ),
         (
             "temp".to_owned(),
@@ -506,7 +641,10 @@ fn is_rootish(expanded: &str) -> bool {
     if lower == "/" || lower == "\\" || lower == "*" || lower == "/*" || lower == "\\*" {
         return true;
     }
-    if matches!(lower.as_str(), "~" | "$home" | "$env:userprofile" | "%userprofile%") {
+    if matches!(
+        lower.as_str(),
+        "~" | "$home" | "$env:userprofile" | "%userprofile%"
+    ) {
         return true;
     }
     // 盘根（`C:`、`C:\`、`C:/`）
@@ -689,7 +827,10 @@ fn program_entries(seg: &[Word], depth: u8, out: &mut Vec<ProgEntry>) {
 }
 
 fn push_content_entry(w: &Word, seg: &[Word], idx: usize, depth: u8, out: &mut Vec<ProgEntry>) {
-    if w.fully_quoted && w.text.contains(|c: char| c.is_whitespace() || c == ';' || c == '|') {
+    if w.fully_quoted
+        && w.text
+            .contains(|c: char| c.is_whitespace() || c == ';' || c == '|')
+    {
         let inner = tokenize(&w.text);
         for inner_seg in segments(&inner) {
             program_entries(&inner_seg, depth + 1, out);
@@ -748,6 +889,25 @@ mod tests {
             CommandReview::Block(f) | CommandReview::Warn(f) => Some(f.rule),
             CommandReview::Allow => None,
         }
+    }
+
+    /// 0bw③：`CommandReview::report()` 形状——allow 恒 null 臂、warn/block
+    /// 恒 rule+detail 臂（schema XOR 语义的生产侧镜像）。
+    #[test]
+    fn review_report_shapes_match_schema_xor() {
+        assert_eq!(
+            review("cargo build").report(),
+            CommandReviewReport {
+                review: "allow".to_string(),
+                rule: None,
+                detail: None,
+            }
+        );
+        let warn = review("Remove-Item C:\\ -Recurse -Force");
+        let report = warn.report();
+        assert_eq!(report.review, "warn");
+        assert!(report.rule.is_some());
+        assert!(report.detail.is_some());
     }
 
     #[test]

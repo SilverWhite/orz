@@ -27,6 +27,7 @@
 //! sandbox.install();
 //! ```
 pub mod child_net;
+pub mod child_write_guard;
 mod deny;
 mod hook_write_deny;
 mod logging;

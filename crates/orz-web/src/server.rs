@@ -85,7 +85,7 @@ impl ServerState {
         let Some(root) = root.filter(|r| !r.trim().is_empty()) else {
             return Some(current);
         };
-        let canon = std::fs::canonicalize(root).ok()?;
+        let canon = canonicalize_usable(root).ok()?;
         if !canon.is_dir() {
             return None;
         }
@@ -104,10 +104,41 @@ impl ServerState {
     }
 }
 
-/// 路径等值（Windows 大小写不敏感；分隔符归一；两侧尽力 canonical 化）。
+/// 剥除 Windows verbatim／设备前缀（REV-083-21）：`\\?\UNC\host\share` →
+/// `\\host\share`；`\\?\`／`\\.\` 直接剥除。`std::fs::canonicalize` 在
+/// Windows 恒返回 `\\?\` verbatim 形态，而信任库键与用户输入为常规形态——
+/// 不剥则任何比较恒 false（连已信任工作区自身也 403，S4 实测）。
+/// 前缀匹配大小写不敏感（2026-09-27 复审 P3：手写信任键可为
+/// `\\?\unc\…` 形态；ASCII 小写化不改长度，余段保留原大小写）。
+fn strip_verbatim(path: &std::path::Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with(r"\\?\unc\") {
+        return PathBuf::from(format!(r"\\{}", &s[r"\\?\unc\".len()..]));
+    }
+    for prefix in [r"\\?\", r"\\.\"] {
+        if lower.starts_with(prefix) {
+            return PathBuf::from(s[prefix.len()..].to_string());
+        }
+    }
+    path.to_path_buf()
+}
+
+/// canonical 化——dunce::canonicalize＝工作区唯一合规形态（clippy.toml 禁
+/// `std::fs::canonicalize`）。**不在此剥前缀**（2026-09-27 复审 P2）：dunce
+/// 对 >260 字符长路径等形态**刻意保留 verbatim**（安全判定），二次剥除会
+/// 击穿该保留；verbatim 形态流转无碍——`path_eq` 两侧剥前缀作比较纵深，
+/// 判等/权限判定不受影响。
+fn canonicalize_usable(path: &str) -> std::io::Result<PathBuf> {
+    dunce::canonicalize(path)
+}
+
+/// 路径等值（Windows 大小写不敏感；分隔符归一；两侧剥 verbatim／设备前缀
+/// 后比对——信任库键为常规形态，canonical 化结果为 verbatim 形态）。
 fn path_eq(a: &std::path::Path, b: &std::path::Path) -> bool {
     let norm = |p: &std::path::Path| {
-        p.to_string_lossy()
+        strip_verbatim(p)
+            .to_string_lossy()
             .replace('/', "\\")
             .trim_end_matches('\\')
             .to_lowercase()
@@ -305,13 +336,7 @@ async fn ws_acp(
         // RAII release: the slot frees on every exit path of `pump`,
         // including an unexpected panic unwinding through this future.
         let guard = crate::acp_pump::SlotGuard::new(slot.clone(), key.clone());
-        crate::acp_pump::pump(
-            socket,
-            (*state.agent_binary).clone(),
-            cwd,
-            guard.releaser(),
-        )
-        .await;
+        crate::acp_pump::pump(socket, (*state.agent_binary).clone(), cwd, guard.releaser()).await;
         drop(guard);
     })
 }
@@ -490,8 +515,9 @@ async fn api_archive_session(
         return error_response(StatusCode::BAD_REQUEST, "无效的会话标识");
     }
     match run_agent_session_tool(&state, "archive", &session8).await {
-        Ok(message) => Json(json!({ "ok": true, "session8": session8, "message": message }))
-            .into_response(),
+        Ok(message) => {
+            Json(json!({ "ok": true, "session8": session8, "message": message })).into_response()
+        }
         Err((status, message)) => error_response(status, &message),
     }
 }
@@ -512,8 +538,9 @@ async fn api_archive_delete(
         return error_response(StatusCode::BAD_REQUEST, "无效的会话标识");
     }
     match run_agent_session_tool(&state, "unarchive", &session8).await {
-        Ok(message) => Json(json!({ "ok": true, "session8": session8, "message": message }))
-            .into_response(),
+        Ok(message) => {
+            Json(json!({ "ok": true, "session8": session8, "message": message })).into_response()
+        }
         Err((status, message)) => error_response(status, &message),
     }
 }
@@ -535,8 +562,9 @@ async fn api_session_delete(
         return error_response(StatusCode::BAD_REQUEST, "无效的会话标识");
     }
     match run_agent_session_tool(&state, "delete-session", &session8).await {
-        Ok(message) => Json(json!({ "ok": true, "session8": session8, "message": message }))
-            .into_response(),
+        Ok(message) => {
+            Json(json!({ "ok": true, "session8": session8, "message": message })).into_response()
+        }
         Err((status, message)) => error_response(status, &message),
     }
 }
@@ -661,7 +689,7 @@ async fn api_workspace_switch(
     if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
         return resp;
     }
-    let Ok(target) = std::fs::canonicalize(body.path.trim()) else {
+    let Ok(target) = canonicalize_usable(body.path.trim()) else {
         return error_response(
             StatusCode::BAD_REQUEST,
             "工作区路径不存在或不可读取（canonicalize 失败）",
@@ -1101,8 +1129,14 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR, "{method} {uri}");
-            let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{method} {uri}"
+            );
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
             let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
             let message = v["error"]["message"].as_str().unwrap();
             let expected = if method == "DELETE" && uri.contains("archives") {
@@ -1120,5 +1154,125 @@ mod tests {
         assert!(validate_bind("[::1]:21487".parse().unwrap()).is_ok());
         assert!(validate_bind("0.0.0.0:21487".parse().unwrap()).is_err());
         assert!(validate_bind("192.168.0.9:21487".parse().unwrap()).is_err());
+    }
+
+    /// REV-083-21（F-1）回归钉：真实 `std::fs::canonicalize` 返回形态
+    /// （Windows 恒带 `\\?\` verbatim 前缀）必须与常规拼写判等——
+    /// 修复前此测试在 Windows 上为红（切换信任门恒 403 的根因）。
+    /// 本测试**故意**使用被禁的 `std::fs::canonicalize` 以钉死真实形态。
+    #[allow(clippy::disallowed_methods)]
+    #[test]
+    fn path_eq_matches_real_canonicalize_verbatim_form() {
+        let tmp = tempfile_dir();
+        std::fs::create_dir_all(&tmp).unwrap();
+        let canon = std::fs::canonicalize(&tmp).expect("canonicalize temp dir");
+        assert!(
+            path_eq(std::path::Path::new(&tmp), &canon),
+            "canonicalize 形态必须与常规拼写判等：plain={tmp:?} canon={canon:?}"
+        );
+        assert!(path_eq(&canon, &canon));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// REV-083-21 形态单测：verbatim／设备／UNC 三类前缀剥除后判等；
+    /// 大小写与分隔符归一保持；不同路径不得误判相等。
+    #[test]
+    fn path_eq_strips_verbatim_device_and_unc_prefixes() {
+        use std::path::Path;
+        assert!(path_eq(
+            Path::new(r"\\?\C:\Windows"),
+            Path::new(r"C:\Windows")
+        ));
+        assert!(path_eq(
+            Path::new(r"\\.\C:\Windows"),
+            Path::new(r"c:/windows")
+        ));
+        assert!(path_eq(
+            Path::new(r"\\?\UNC\server\share\x"),
+            Path::new(r"\\server\share\x")
+        ));
+        assert!(path_eq(Path::new(r"\\?\C:\a\b\"), Path::new(r"C:/A/B")));
+        // 负例：前缀剥除不得把不同路径折叠成相等。
+        assert!(!path_eq(
+            Path::new(r"\\?\C:\Windows"),
+            Path::new(r"C:\WindowsTemp")
+        ));
+        assert!(!path_eq(
+            Path::new(r"\\?\UNC\server\share"),
+            Path::new(r"\\server\other")
+        ));
+    }
+
+    /// 2026-09-27 复审 P3：`strip_verbatim` 前缀匹配大小写不敏感（手写
+    /// 信任键可为 `\\?\unc\…` / `\\?\c:\…` 形态），余段保留原大小写。
+    #[test]
+    fn strip_verbatim_handles_lowercase_prefix_variants() {
+        use std::path::Path;
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\unc\server\Share")),
+            PathBuf::from(r"\\server\Share")
+        );
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\c:\Users\x")),
+            PathBuf::from(r"c:\Users\x")
+        );
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\.\C:\x")),
+            PathBuf::from(r"C:\x")
+        );
+        // 非前缀路径原样返回。
+        assert_eq!(
+            strip_verbatim(Path::new(r"C:\plain\path")),
+            PathBuf::from(r"C:\plain\path")
+        );
+    }
+
+    /// REV-083-21：`canonicalize_usable` 落回常规形态——返回值不得携带
+    /// verbatim 前缀（cwd 存储与展示面消费此形态）。
+    #[test]
+    fn canonicalize_usable_returns_non_verbatim_path() {
+        let tmp = tempfile_dir();
+        std::fs::create_dir_all(&tmp).unwrap();
+        let usable = canonicalize_usable(tmp.to_str().unwrap()).expect("canonicalize temp dir");
+        let s = usable.to_string_lossy();
+        assert!(
+            !s.starts_with(r"\\?\") && !s.starts_with(r"\\.\"),
+            "verbatim 前缀必须剥除：{usable:?}"
+        );
+        assert!(usable.is_dir());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// REV-083-21（F-1 的 `?root=` 半边）回归钉：对当前工作区自身按根
+    /// 解析必须可达（S4 实测修复前恒 403「工作区根不可用」）。只走
+    /// 「当前 cwd」分支，不触用户级信任库。
+    #[test]
+    fn resolve_root_accepts_current_workspace_by_real_canonical_form() {
+        let tmp = tempfile_dir();
+        std::fs::create_dir_all(&tmp).unwrap();
+        let state = ServerState {
+            token: Arc::new("tok".into()),
+            cwd: Arc::new(std::sync::RwLock::new(tmp.clone())),
+            agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
+            session: SessionSlot::default(),
+        };
+        let resolved = state
+            .resolve_root(Some(tmp.to_str().unwrap()))
+            .unwrap_or_else(|| panic!("当前工作区自身必须可按根解析: {}", tmp.display()));
+        assert!(path_eq(&resolved, &tmp));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    fn tempfile_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-web-path-eq-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
     }
 }

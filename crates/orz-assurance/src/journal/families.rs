@@ -1606,6 +1606,9 @@ pub const ALL_FAMILIES: &[&str] = &[
     "retrieval_family_probe",
     "failure_cause_shape",
     "first_result_deadline",
+    // 0bw③ (2026-09-27, WRITE_CONTROL_MECHANICAL_DESIGN §3.2/D5 后续
+    // 扩展): write-control command review — block/warn/allow per command.
+    "write_control_review",
 ];
 
 // ---------------------------------------------------------------------------
@@ -1921,6 +1924,111 @@ pub fn verify_host_resource_families(events: &[Value]) -> Vec<String> {
     errors
 }
 
+// ---------------------------------------------------------------------------
+// 0bw③ (2026-09-27, WRITE_CONTROL_MECHANICAL_DESIGN §3.2/D5 后续扩展) —
+// write-control command review. Payload shape is pinned by
+// `runtime/write-control-review-event-payload-v0.2.schema.json`; this
+// verifier pins the cross-field contracts the schema cannot express alone
+// (review/rule XOR coupling, tool closed set). Best-effort 闸边界（设计
+// §9）不变：本族只做形状核证，不做覆盖率要求（无命令即无事件）。
+// ---------------------------------------------------------------------------
+
+const WRITE_CONTROL_RULES: &[&str] = &[
+    "safety-mechanism-flip",
+    "system-core-write",
+    "carrier-write",
+    "broad-destructive",
+    "elevation",
+];
+
+/// review↔rule 分类配对（设计 §4 每规则钉死分类；schema 无法表达跨字段
+/// 映射，由判官核证——2026-09-27 复审 P2）。与 Python 镜像
+/// `_WRITE_CONTROL_RULE_CATEGORIES` 逐条同形。
+const WRITE_CONTROL_RULE_CATEGORIES: &[(&str, &str)] = &[
+    ("safety-mechanism-flip", "block"),
+    ("system-core-write", "block"),
+    ("carrier-write", "block"),
+    ("broad-destructive", "warn"),
+    ("elevation", "warn"),
+];
+
+/// `write_control_review`: per-command L2 review record — block/warn/allow
+/// 全落账（allow 也落）。review/rule XOR：allow ⇒ rule/detail 恒 null（按
+/// `Value::Null` 判——非串类型〔数字/布尔〕同样违例，与 Python 镜像
+/// `is not None` 同形，2026-09-27 复审对齐）；warn/block ⇒ rule/detail 恒在
+/// 且规则名在封闭集内、分类与 review 配对一致。
+pub fn verify_write_control_review(events: &[Value]) -> Vec<String> {
+    let mut errors = Vec::new();
+    for event in events
+        .iter()
+        .filter(|e| e["event_type"] == "write_control_review")
+    {
+        let payload = &event["payload"];
+        let review = payload["review"].as_str().unwrap_or_default();
+        if !matches!(review, "allow" | "warn" | "block") {
+            errors.push("write_control_review: review must be allow|warn|block".to_string());
+            continue;
+        }
+        if review == "allow" {
+            if !payload["rule"].is_null() {
+                errors.push("write_control_review: allow rows carry no rule".to_string());
+            }
+            if !payload["detail"].is_null() {
+                errors.push("write_control_review: allow rows carry no detail".to_string());
+            }
+        } else {
+            let Some(rule) = payload["rule"].as_str() else {
+                errors.push("write_control_review: warn/block rows carry the rule".to_string());
+                continue;
+            };
+            if !WRITE_CONTROL_RULES.contains(&rule) {
+                errors.push(format!(
+                    "write_control_review: unknown rule {rule} (closed set)"
+                ));
+            } else {
+                // 配对核证（2026-09-27 复审 P2）：规则分类必须与 review 一致
+                // （`warn + safety-mechanism-flip`、`block + elevation` 拒）。
+                let expected = WRITE_CONTROL_RULE_CATEGORIES
+                    .iter()
+                    .find(|(name, _)| *name == rule)
+                    .map(|(_, category)| *category);
+                if expected != Some(review) {
+                    errors.push(format!(
+                        "write_control_review: rule {rule} is a {expected:?}-class rule, not {review}"
+                    ));
+                }
+            }
+            if payload["detail"]
+                .as_str()
+                .map(str::is_empty)
+                .unwrap_or(true)
+            {
+                errors.push("write_control_review: warn/block rows carry the detail".to_string());
+            }
+        }
+        if payload["call_id"]
+            .as_str()
+            .map(str::is_empty)
+            .unwrap_or(true)
+        {
+            errors.push("write_control_review: call_id required".to_string());
+        }
+        if payload["tool"].as_str() != Some("run_terminal_cmd") {
+            errors.push("write_control_review: tool must be run_terminal_cmd".to_string());
+        }
+        // sha256 关联键：小写 64 hex（命令原文不重复入账，靠它回连
+        // tool_started 的 args）。
+        let sha = payload["command_sha256"].as_str().unwrap_or_default();
+        if sha.len() != 64 || !sha.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+            errors.push("write_control_review: command_sha256 must be 64-hex".to_string());
+        }
+        if payload["command_len"].as_u64().map(|n| n >= 1) != Some(true) {
+            errors.push("write_control_review: command_len must be >= 1".to_string());
+        }
+    }
+    errors
+}
+
 /// Run one named rule family (S2b ∪ S2c) over a parsed journal; unknown names
 /// yield an empty list (the caller validates the name).
 pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
@@ -1943,6 +2051,8 @@ pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
         "process_tree_reaped" => verify_process_tree_reaped(events),
         "reclaim_performed" => verify_reclaim_performed(events),
         "resource_limit_hit" => verify_resource_limit_hit(events),
+        // 0bw③ (2026-09-27): write-control command review family.
+        "write_control_review" => verify_write_control_review(events),
         // 0ac S3-b (2026-09-13, F-007 裁决 (a)): immediate-feedback families.
         "retrieval_dedupe"
         | "result_delivered_accounting"
@@ -1969,6 +2079,107 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::BTreeMap;
+
+    /// 0bw③（2026-09-27）：write_control_review 判官——XOR 语义、规则
+    /// 封闭集、关联键形状三面正负测。
+    #[test]
+    fn write_control_review_shape_xor_and_closed_set() {
+        let allow = ev(
+            "write_control_review",
+            json!({
+                "tool": "run_terminal_cmd",
+                "call_id": "call-1",
+                "review": "allow",
+                "rule": null,
+                "detail": null,
+                "command_sha256": hex64(1),
+                "command_len": 12,
+            }),
+        );
+        assert!(verify_write_control_review(std::slice::from_ref(&allow)).is_empty());
+
+        let warn = ev(
+            "write_control_review",
+            json!({
+                "tool": "run_terminal_cmd",
+                "call_id": "call-2",
+                "review": "warn",
+                "rule": "broad-destructive",
+                "detail": "root-level delete",
+                "command_sha256": hex64(2),
+                "command_len": 30,
+            }),
+        );
+        assert!(verify_write_control_review(std::slice::from_ref(&warn)).is_empty());
+
+        // XOR 负测：allow 携带 rule ⇒ 报错。
+        let mut bad_allow = allow.clone();
+        bad_allow["payload"]["rule"] = json!("elevation");
+        assert!(!verify_write_control_review(std::slice::from_ref(&bad_allow)).is_empty());
+
+        // 封闭集负测：block 带未知规则名 ⇒ 报错。
+        let bad_rule = ev(
+            "write_control_review",
+            json!({
+                "tool": "run_terminal_cmd",
+                "call_id": "call-3",
+                "review": "block",
+                "rule": "totally-new-rule",
+                "detail": "x",
+                "command_sha256": hex64(3),
+                "command_len": 9,
+            }),
+        );
+        let errors = verify_write_control_review(std::slice::from_ref(&bad_rule));
+        assert!(
+            errors.iter().any(|e| e.contains("closed set")),
+            "{errors:?}"
+        );
+
+        // 关联键负测：sha256 非 64 hex ⇒ 报错。
+        let mut bad_sha = warn.clone();
+        bad_sha["payload"]["command_sha256"] = json!("nothex");
+        let errors = verify_write_control_review(std::slice::from_ref(&bad_sha));
+        assert!(errors.iter().any(|e| e.contains("64-hex")), "{errors:?}");
+
+        // 枚举负测：review 取值出封闭集 ⇒ 报错。
+        let mut bad_review = allow.clone();
+        bad_review["payload"]["review"] = json!("deny");
+        let errors = verify_write_control_review(std::slice::from_ref(&bad_review));
+        assert!(
+            errors.iter().any(|e| e.contains("allow|warn|block")),
+            "{errors:?}"
+        );
+
+        // 配对负测（2026-09-27 复审 P2）：分类错配 ⇒ 报错——warn 携 block 类
+        // 规则、block 携 warn 类规则各一。
+        let mut bad_pairing = warn.clone();
+        bad_pairing["payload"]["rule"] = json!("safety-mechanism-flip");
+        let errors = verify_write_control_review(std::slice::from_ref(&bad_pairing));
+        assert!(
+            errors.iter().any(|e| e.contains("-class rule")),
+            "{errors:?}"
+        );
+        let mut bad_pairing_block = warn.clone();
+        bad_pairing_block["payload"]["review"] = json!("block");
+        let errors = verify_write_control_review(std::slice::from_ref(&bad_pairing_block));
+        assert!(
+            errors.iter().any(|e| e.contains("-class rule")),
+            "{errors:?}"
+        );
+
+        // allow 臂非串值（复审对齐）：rule 为数字同样违例（Value::Null 判，
+        // 与 Python 镜像 `is not None` 同形）。
+        let mut non_string_rule = allow.clone();
+        non_string_rule["payload"]["rule"] = json!(5);
+        let errors = verify_write_control_review(std::slice::from_ref(&non_string_rule));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("allow rows carry no rule")),
+            "{errors:?}"
+        );
+    }
 
     fn ev(event_type: &str, payload: Value) -> Value {
         json!({
@@ -5643,6 +5854,72 @@ mod tests {
                     ),
                 ],
             ),
+            (
+                // 0bw③（2026-09-27 复审）：write_control_review 对拍场景——
+                // 此前该族在合成语料无场景，Rust↔Python parity 平凡成立；
+                // 正例三臂（allow/warn/block 配对一致）。
+                "write_control_review_ok",
+                vec![
+                    ev(
+                        "write_control_review",
+                        json!({
+                            "tool": "run_terminal_cmd", "call_id": "wc-1",
+                            "review": "allow", "rule": null, "detail": null,
+                            "command_sha256": hex64(1), "command_len": 8,
+                        }),
+                    ),
+                    ev(
+                        "write_control_review",
+                        json!({
+                            "tool": "run_terminal_cmd", "call_id": "wc-2",
+                            "review": "warn", "rule": "broad-destructive",
+                            "detail": "root-level delete",
+                            "command_sha256": hex64(2), "command_len": 30,
+                        }),
+                    ),
+                    ev(
+                        "write_control_review",
+                        json!({
+                            "tool": "run_terminal_cmd", "call_id": "wc-3",
+                            "review": "block", "rule": "carrier-write",
+                            "detail": "carrier hit",
+                            "command_sha256": hex64(3), "command_len": 21,
+                        }),
+                    ),
+                ],
+            ),
+            (
+                // 违例场景：XOR 违反＋未知规则＋分类错配。
+                "write_control_review_violations",
+                vec![
+                    ev(
+                        "write_control_review",
+                        json!({
+                            "tool": "run_terminal_cmd", "call_id": "wc-4",
+                            "review": "allow", "rule": "elevation", "detail": null,
+                            "command_sha256": hex64(4), "command_len": 12,
+                        }),
+                    ),
+                    ev(
+                        "write_control_review",
+                        json!({
+                            "tool": "run_terminal_cmd", "call_id": "wc-5",
+                            "review": "warn", "rule": "totally-new-rule",
+                            "detail": "x",
+                            "command_sha256": hex64(5), "command_len": 9,
+                        }),
+                    ),
+                    ev(
+                        "write_control_review",
+                        json!({
+                            "tool": "run_terminal_cmd", "call_id": "wc-6",
+                            "review": "warn", "rule": "safety-mechanism-flip",
+                            "detail": "pairing violation",
+                            "command_sha256": hex64(6), "command_len": 9,
+                        }),
+                    ),
+                ],
+            ),
         ]
     }
 
@@ -5672,6 +5949,9 @@ mod tests {
         for family in HOST_RESOURCE_FAMILIES {
             expect("host_resource_families_violations", family);
         }
+        // 0bw③（2026-09-27 复审）：write_control_review 违例场景——XOR／
+        // 未知规则／分类错配三案恰触发本族。
+        expect("write_control_review_violations", "write_control_review");
         expect("control_tickets_unknown", "control_tickets");
         expect("control_tickets_kind_conflict", "control_tickets");
         expect("control_tickets_one_shot", "control_tickets");
@@ -6192,6 +6472,7 @@ fams = {
     "retrieval_family_probe": v._verify_v02_retrieval_family_probe,
     "failure_cause_shape": v._verify_v02_failure_cause_shape,
     "first_result_deadline": v._verify_v02_first_result_deadline,
+    "write_control_review": v._verify_v02_write_control_review,
 }
 data = json.load(sys.stdin)
 out = {}
@@ -6278,8 +6559,10 @@ json.dump(out, sys.stdout)
         // / _mismatch (the auditability field's clean and drifting forms);
         // 253 → 256 (0az ④, 2026-09-20): +the 0ax-era mixed replay (F-1), the
         // cross-class dedup key (F-2) and the declared-usable drift.
+        // 256 → 258 (0bw③ 复审, 2026-09-27): +write_control_review_ok /
+        // _violations (该族对拍 parity 自此非平凡——此前合成语料无场景).
         assert_eq!(
-            scenario_count, 256,
+            scenario_count, 258,
             "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(

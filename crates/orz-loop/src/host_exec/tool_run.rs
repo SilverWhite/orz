@@ -4087,6 +4087,9 @@ impl AgentLoopController {
                     .await?;
                 self.journal_pending_host_resource_facts(host, writer)
                     .await?;
+                // 0bw③：写入管控命令审查事实（allow/warn/block 全落）。
+                self.journal_pending_write_control_reviews(host, writer)
+                    .await?;
                 // 2026-08-08 blackboard partition: fold the executed call
                 // into the tool-action section (category from the dispatcher).
                 // P2-14 S1：共享折叠分区按执行窗主轮章盖章。
@@ -4234,6 +4237,10 @@ impl AgentLoopController {
                 // TER 全面审查 P1-1：执行出错边界同样 drain（错误也是工具
                 // 边界；后台 idle-kill 生命周期事件不应因本调用失败而丢）。
                 self.journal_pending_idle_kills(host, writer).await?;
+                // 0bw③：block 拒绝（host ToolError）也是审查完成——审查
+                // 事实与 Ok 路径同面落账。
+                self.journal_pending_write_control_reviews(host, writer)
+                    .await?;
                 // P0-A step 5 (design §5): 调用即探针 — a real work-tool call
                 // failure (ToolCompleted status=error) corrects the minimal
                 // previous-round map; the next probe compares against it.

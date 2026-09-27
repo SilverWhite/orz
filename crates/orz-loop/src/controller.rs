@@ -1103,7 +1103,10 @@ impl AgentLoopController {
     /// incomplete so the next probe compares against the corrected state.
     /// Non-work tools are ignored (their declaration rules are unchanged).
     pub(crate) fn note_probe_call_failure(&self, tool: &str) {
-        self.probe_state.lock().unwrap_or_else(|e| e.into_inner()).mark_incomplete(tool);
+        self.probe_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .mark_incomplete(tool);
     }
 
     /// P0-A step 5 review fix (2026-08-13): 调用即探针, lane-gated — only
@@ -1122,14 +1125,21 @@ impl AgentLoopController {
     /// (`todo_write` / `update_goal` probe chain). Pinned at run start by
     /// `set_goal_digest`.
     pub(crate) fn goal_context_present(&self) -> bool {
-        self.goal_context.lock().unwrap_or_else(|e| e.into_inner()).digest.is_some()
+        self.goal_context
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .digest
+            .is_some()
     }
 
     /// FUS-TOOL-PROBE P0-A-2 (审查复核 2026-08-13): whether an activation
     /// carries an undisposed pending assessment — the only state in which
     /// `retrieval_disposition` can be submitted.
     pub(crate) fn has_live_activation(&self) -> bool {
-        self.activations.lock().unwrap_or_else(|e| e.into_inner()).has_live()
+        self.activations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .has_live()
     }
 
     /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 v1.3): 独立检索启用门——
@@ -1193,7 +1203,10 @@ impl AgentLoopController {
                 let mut reg = self.activations.lock().unwrap_or_else(|e| e.into_inner());
                 reg.seed_from_json(value)
             };
-            *self.restored_activations.lock().unwrap_or_else(|e| e.into_inner()) = restored;
+            *self
+                .restored_activations
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = restored;
         }
         self
     }
@@ -1471,7 +1484,12 @@ impl AgentLoopController {
         &self,
         writer: &mut EventWriter<'_>,
     ) -> Result<(), AgentLoopError> {
-        let pending = std::mem::take(&mut *self.epoch_archive_errors.lock().unwrap_or_else(|e| e.into_inner()));
+        let pending = std::mem::take(
+            &mut *self
+                .epoch_archive_errors
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
         for (plan_epoch, kind) in pending {
             let archive_dir = self
                 .blackboard_archive_dir
@@ -1524,7 +1542,10 @@ impl AgentLoopController {
     /// 变化轮仅小段状态行作为新尾随消息计费。无计划（None）不追加。
     pub(crate) fn sync_status_line_message(&self, messages: &mut Vec<Message>) {
         let line = self.render_status_line();
-        let mut last = self.status_line_appended.lock().unwrap_or_else(|e| e.into_inner());
+        let mut last = self
+            .status_line_appended
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if line != *last {
             if let Some(text) = line.clone() {
                 messages.push(Message {
@@ -1628,14 +1649,20 @@ impl AgentLoopController {
         policy: crate::host::ToolPolicy,
         snapshot: crate::tool_probe::ToolProbeSnapshot,
     ) {
-        *self.console_probe_source.lock().unwrap_or_else(|e| e.into_inner()) = Some((policy, snapshot));
+        *self
+            .console_probe_source
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some((policy, snapshot));
     }
 
     /// PLAN-FIRST 阶段 B 审查收口 (2026-08-16): 探针源随 run 复位——与
     /// `probe_state` 同纪律（run 起始清空，本 run 首个有探针轮重新记录；
     /// 不跨 run 沿用）。复位后无探针源时，注册板块沿用既有内容、不派生。
     pub(crate) fn reset_console_probe_source(&self) {
-        *self.console_probe_source.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self
+            .console_probe_source
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     /// PLAN-FIRST 阶段 B (2026-08-16): 注册板块派生并持久化——由最近探针源
@@ -1643,7 +1670,12 @@ impl AgentLoopController {
     /// 源时不改写（checkpoint 轮/无探针轮次沿用既有内容，替代 bundle-only
     /// 静态刷新中间态）。
     pub(crate) fn sync_console_registrations(&self) {
-        let Some((policy, probe)) = self.console_probe_source.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+        let Some((policy, probe)) = self
+            .console_probe_source
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        else {
             return;
         };
         let registrations = self.console_registrations(policy, Some(&probe));
@@ -1711,24 +1743,38 @@ impl AgentLoopController {
     }
 
     pub(crate) fn console_mode(&self) -> crate::console_mode::ConsoleMode {
-        self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner()).mode
+        self.console_mode_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .mode
     }
 
     /// run 起始复位（与 `reset_console_probe_source` 同一点调用）：
     /// 模式回 console、连败清零、询问标记清空、direct 证据面清空。
     pub(crate) fn reset_console_mode(&self) {
-        *self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner()) =
+        *self
+            .console_mode_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
             crate::console_mode::ConsoleModeState::start(Self::console_fallback_threshold());
     }
 
     /// 询问触发检查（§7.2/§7.3）：console 态 + 连续故障 ≥ 阈值 + 未问。
     pub(crate) fn console_inquiry_due(&self) -> bool {
-        self.console_default_enabled && self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner()).inquiry_due()
+        self.console_default_enabled
+            && self
+                .console_mode_state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .inquiry_due()
     }
 
     /// 询问轮触发的快照：当前连败计数 + 构成连败的订单 id。
     pub(crate) fn console_streak_snapshot(&self) -> (u32, Vec<String>) {
-        let state = self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self
+            .console_mode_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         (state.streak, state.streak_order_ids.clone())
     }
 
@@ -1739,7 +1785,10 @@ impl AgentLoopController {
         &self,
         call_id: &str,
     ) -> Option<(crate::console_mode::DirectStamp, crate::console::Trace)> {
-        let state = self.console_mode_state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self
+            .console_mode_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if !state.is_direct() {
             return None;
         }
@@ -1774,7 +1823,10 @@ impl AgentLoopController {
             Some(detail.unwrap_or_default().to_string()),
             None,
         );
-        self.console_traces.lock().unwrap_or_else(|e| e.into_inner()).commit(&trace);
+        self.console_traces
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .commit(&trace);
         self.console_mode_state
             .lock()
             .unwrap()
@@ -2223,7 +2275,12 @@ impl AgentLoopController {
     pub(crate) fn wallclock_rounds_line(&self) -> Option<String> {
         let limit_secs = main_wallclock_limit_secs_override()?;
         let remaining_secs = limit_secs.saturating_sub(self.run_elapsed_wallclock_secs());
-        let t_hat_secs = self.lif.lock().unwrap_or_else(|e| e.into_inner()).estimator().estimate_opt()?;
+        let t_hat_secs = self
+            .lif
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .estimator()
+            .estimate_opt()?;
         crate::prompt::wallclock_rounds_line(remaining_secs, t_hat_secs)
     }
 
@@ -2247,7 +2304,10 @@ impl AgentLoopController {
         };
         let remaining_secs = limit_secs.saturating_sub(self.run_elapsed_wallclock_secs());
         let threshold_secs = {
-            let mut crossed = self.f6_push_crossed.lock().unwrap_or_else(|e| e.into_inner());
+            let mut crossed = self
+                .f6_push_crossed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             crate::prompt::f6_push_cue_for_remaining(remaining_secs, &mut crossed)
         };
         let Some(threshold_secs) = threshold_secs else {
@@ -3017,7 +3077,10 @@ impl AgentLoopController {
             items.push(("rli", steps));
         }
 
-        let mut cursors = self.blackboard_read_cursors.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cursors = self
+            .blackboard_read_cursors
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // 0ap（2026-09-18，设计 §3 主面）：水位标旁增**滑块读数段**——主
         // 滑块以外未压缩分块数 N＋估算 token（「滑块外可压缩 N 块 ≈ est K」）。
         // 读时现算：分段文本由调用方在工具执行点现算传入（messages 在握、
@@ -3150,7 +3213,12 @@ impl AgentLoopController {
         // 索引口径与装配循环严格一致）；投递/暂存计数与头段余量入影子
         // （「delivered 计数化」＋余量可核；随侧车持久）。
         if attached_notices > 0 || deferred_notices > 0 {
-            if let Some(shadow) = self.lif.lock().unwrap_or_else(|e| e.into_inner()).rli_shadow_mut() {
+            if let Some(shadow) = self
+                .lif
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .rli_shadow_mut()
+            {
                 shadow.mark_notices_delivered_at(&attached_indices);
                 shadow.record_notice_delivery_accounting(
                     deferred_notices,
@@ -3209,7 +3277,10 @@ impl AgentLoopController {
         let lif = self.lif.lock().unwrap_or_else(|e| e.into_inner());
         let t = lif.temporal();
         let total = t.migration_count();
-        let mut recorded = self.lif_migration_recorded.lock().unwrap_or_else(|e| e.into_inner());
+        let mut recorded = self
+            .lif_migration_recorded
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if total <= *recorded {
             return Vec::new();
         }
@@ -3232,7 +3303,12 @@ impl AgentLoopController {
 
     /// P2-10 F2 §3.5 (I4): the current domain spikes (sidecar persistence).
     pub fn temporal_spikes(&self) -> Vec<orz_assurance::lif::DomainSpike> {
-        self.lif.lock().unwrap_or_else(|e| e.into_inner()).temporal().spikes().to_vec()
+        self.lif
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .temporal()
+            .spikes()
+            .to_vec()
     }
 
     /// 0be 四项④（2026-09-21）：RLI 繁杂度读数（影子未启用 = `None`——
@@ -3250,7 +3326,10 @@ impl AgentLoopController {
     /// 持久化；下一 prompt 恢复后轮号与域驻留精确续接（取代 I4
     /// restore_spikes 的近似口径）。
     pub fn lif_session_snapshot(&self) -> TemporalSessionSnapshot {
-        self.lif.lock().unwrap_or_else(|e| e.into_inner()).temporal_session_snapshot()
+        self.lif
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .temporal_session_snapshot()
     }
 
     /// B1：从会话侧车快照续接轮号与域机器；`axis_origin_wall` = 会话
@@ -3270,7 +3349,10 @@ impl AgentLoopController {
     /// B1：仅预置会话时间轴原点（无快照可续的 legacy/全新会话也保证
     /// temporal `t` 与会话相对）。引擎尚未观测任何事件时生效。
     pub fn preset_lif_session_axis(&self, session_started_at: f64) {
-        self.lif.lock().unwrap_or_else(|e| e.into_inner()).set_axis_origin(session_started_at);
+        self.lif
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_axis_origin(session_started_at);
     }
 
     /// B1 写时盖章：黑板各分区（exec / edits / tool_actions / actions
@@ -3301,7 +3383,10 @@ impl AgentLoopController {
     /// 绝不跨模型请求残留。
     pub(crate) fn pin_main_board_stamp(&self) -> BoardStampPinGuard<'_> {
         let stamp = self.blackboard_stamp();
-        *self.board_stamp_pin.lock().unwrap_or_else(|e| e.into_inner()) = Some(stamp);
+        *self
+            .board_stamp_pin
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(stamp);
         BoardStampPinGuard {
             slot: &self.board_stamp_pin,
         }
@@ -3525,6 +3610,10 @@ impl AgentLoopController {
                 let _ = self
                     .journal_pending_host_resource_facts(host, &mut writer)
                     .await;
+                // 0bw③：Err 臂同样 drain（审查事实不因 run 失败丢失）。
+                let _ = self
+                    .journal_pending_write_control_reviews(host, &mut writer)
+                    .await;
                 let _ = writer.record_terminal(event, payload).await;
                 let _ = journal.flush_async().await;
                 Err(e)
@@ -3637,7 +3726,8 @@ impl AgentLoopController {
         // per-run too — a fresh run starts with no previous state (the
         // pre-run_started probe below seeds it; never persisted across
         // runs, design §8).
-        *self.probe_state.lock().unwrap_or_else(|e| e.into_inner()) = crate::tool_probe::MinimalProbeMap::default();
+        *self.probe_state.lock().unwrap_or_else(|e| e.into_inner()) =
+            crate::tool_probe::MinimalProbeMap::default();
         // PLAN-FIRST 阶段 B 审查收口 (2026-08-16): 注册板块探针源同样随
         // run 复位——与 `probe_state` 同纪律，本 run 首个有探针轮重新记录，
         // 不跨 run 沿用（此前依赖「首个有探针轮必先覆盖」才能保证无泄漏）。
@@ -3650,17 +3740,29 @@ impl AgentLoopController {
         // citation verifier's evidence is per-run — the main lane's read
         // evidence and the committed retrieval ledgers start empty.
         *self.main_evidence.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
-        *self.run_source_ledgers.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
-        *self.next_source_seq.lock().unwrap_or_else(|e| e.into_inner()) = 0;
+        *self
+            .run_source_ledgers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Vec::new();
+        *self
+            .next_source_seq
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = 0;
         // 0ar S2：连续提前交付 streak 随 run 复位（run 内观测语义）。
         self.retrieval_early_delivery_streak
             .store(0, std::sync::atomic::Ordering::Relaxed);
         // PULL 自描述 (2026-08-31, P2-11 第 1 项 / 设计 §3): 读取游标随
         // run 复位——「自上次读取以来」增量是 run 内语义（LIF 参考系同
         // 纪律：每独立 run 从头确定）。
-        *self.blackboard_read_cursors.lock().unwrap_or_else(|e| e.into_inner()) = std::collections::HashMap::new();
+        *self
+            .blackboard_read_cursors
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = std::collections::HashMap::new();
         // TER T1.9：F6 push 跨阈值记账随 run 复位（每 run ≤3 档注入）。
-        *self.f6_push_crossed.lock().unwrap_or_else(|e| e.into_inner()) = [false; 3];
+        *self
+            .f6_push_crossed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = [false; 3];
         // ACAF Slice 1 (ADR-0011 §4.2): the run's task goal is the ticket
         // goal binding (check 4) — pinned before any control event can fire.
         self.set_goal_digest(prompt);
@@ -4394,6 +4496,9 @@ impl AgentLoopController {
         self.journal_pending_process_tree_reaps(host, writer)
             .await?;
         self.journal_pending_host_resource_facts(host, writer)
+            .await?;
+        // 0bw③：run 终态前补 drain 写入管控命令审查事实（链关停前落盘）。
+        self.journal_pending_write_control_reviews(host, writer)
             .await?;
         // 0bh ⑯（2026-09-22，设计 NEUTRAL_TERMINATION_AND_MODEL_STOP_DESIGN §4）：
         // **中性终态与结束自述**——模型在收束轮（无工具轮）文本里声明
@@ -6072,7 +6177,12 @@ mod tests {
                 if name == "bash" {
                     // Block until the test releases — the cancel lands while
                     // tool #1 is in flight.
-                    let mut rx = self.release.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap();
+                    let mut rx = self
+                        .release
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .take()
+                        .unwrap();
                     let _ = rx.recv().await;
                 }
                 Ok(ToolResult {
@@ -6220,7 +6330,11 @@ mod tests {
                     // 存活且在 flight。`_group`（作用域强引用）存活到本
                     // future 结束；wait 等子进程自然退出（999s）或被取消臂
                     // 杀树（即刻）。
-                    let dispatch_signal = self.dispatched.lock().unwrap_or_else(|e| e.into_inner()).take();
+                    let dispatch_signal = self
+                        .dispatched
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .take();
                     if let Some(tx) = dispatch_signal {
                         let _ = tx.send(()).await;
                     }
@@ -6337,7 +6451,12 @@ mod tests {
                 _args: &serde_json::Value,
             ) -> Result<PermitDecision, PermitError> {
                 // Block until the test sends the release, then deny.
-                let mut rx = self.release.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap();
+                let mut rx = self
+                    .release
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take()
+                    .unwrap();
                 let _ = rx.recv().await;
                 Ok(PermitDecision::Deny)
             }
@@ -6754,7 +6873,10 @@ mod tests {
         });
         let controller =
             AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
-        let mut registry = controller.activations.lock().unwrap_or_else(|e| e.into_inner());
+        let mut registry = controller
+            .activations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let restored = registry.seed_from_json(&snapshot);
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].conversation.len(), 3);
@@ -6833,15 +6955,39 @@ mod tests {
             AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
         restored.restore_temporal_spikes(spikes);
         assert_eq!(
-            restored.lif.lock().unwrap_or_else(|e| e.into_inner()).temporal().current_domain(),
+            restored
+                .lif
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .temporal()
+                .current_domain(),
             orz_assurance::lif::Domain::Stuck
         );
-        assert!(restored.lif.lock().unwrap_or_else(|e| e.into_inner()).temporal().has_success());
+        assert!(
+            restored
+                .lif
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .temporal()
+                .has_success()
+        );
 
         // First decision round after restore must stay Stuck (same features),
         // not regress to Start with a fake migration/spike.
-        let migrations_before = restored.lif.lock().unwrap_or_else(|e| e.into_inner()).temporal().history().len();
-        let spikes_before = restored.lif.lock().unwrap_or_else(|e| e.into_inner()).temporal().spikes().len();
+        let migrations_before = restored
+            .lif
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .temporal()
+            .history()
+            .len();
+        let spikes_before = restored
+            .lif
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .temporal()
+            .spikes()
+            .len();
         {
             let mut guard = restored.lif.lock().unwrap_or_else(|e| e.into_inner());
             guard.temporal_mut().record_round(3.0, 8.0, 0.2, 2.5, 5.0); // still Stuck
@@ -7534,7 +7680,11 @@ body"
         let again = controller.attach_pull_delta("rli", body, 0, None);
         assert!(!again.contains("RLI提醒:"), "{again}");
         // kill switch：无影子 = 零投递。
-        controller.lif.lock().unwrap_or_else(|e| e.into_inner()).disable_rli_shadow();
+        controller
+            .lif
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .disable_rli_shadow();
         let off = controller.attach_pull_delta("rli", "rli: x".to_string(), 0, None);
         assert!(!off.contains("RLI提醒:"), "{off}");
     }

@@ -247,6 +247,13 @@ pub enum EventType {
     // `retries` 重发次数、`reason` wire 级原因。事件面计数使重试频率
     // 与耗尽可审计（S4 复验的输入面）。
     TransportRetry,
+
+    // 0bw③ (2026-09-27, WRITE_CONTROL_MECHANICAL_DESIGN §3.2/D5 后续
+    // 扩展): 写入管控 L2 命令面机械审查的专用留痕事件——block/warn/allow
+    // 三分类逐命令结构化入账（allow 也落账；v1 的 block 拒绝文案／warn
+    // `[写入管控·提示]` 行随 tool 结果入 journal 的既有面不变）。payload：
+    // tool/call_id/review/rule/detail/command_sha256/command_len。
+    WriteControlReview,
 }
 
 impl EventType {

@@ -10,6 +10,7 @@
 pub mod acp_server;
 pub mod approval;
 pub mod browser_serp;
+pub mod carrier_integrity;
 pub mod codex_app;
 pub mod codex_permission;
 pub mod credentials;
@@ -23,6 +24,7 @@ pub mod process_tree;
 pub mod project_doc_index;
 pub mod reclaim;
 pub mod resource_hint;
+pub mod rollback_maintenance;
 
 /// Total order over tiers for the change detector (`host_resource_snapshot`
 /// trigger). Order follows the design ladder: normal < watch < soft <
@@ -214,6 +216,12 @@ pub struct OrzHost {
     /// reclaim_performed / resource_exhausted / host_resource_denied 生产端
     /// 已随 0aw 裁决 ④ 退役——schema/verifier 保留供历史 journal 校验）。
     resource_facts: std::sync::Mutex<Vec<serde_json::Value>>,
+    /// 0bw③（2026-09-27）：写入管控命令审查暂存——bash 工具审查时入队
+    /// （toolset `Resources` 通道），宿主在 `run_terminal_cmd` 调用边界
+    /// 收集到此；loop drain 落 `write_control_review` 事件（allow/warn/
+    /// block 全落）。
+    write_control_reviews:
+        std::sync::Mutex<Vec<orz_tools::types::exec_policy::EnqueuedCommandReview>>,
     /// 0z S2R F-BE-3(a)（2026-09-13 用户裁决）：在跑调用的 call job
     /// 句柄登记——`DispatchGuard::drop` 据此关闭本次调用的 per-call job
     /// 句柄（调用级拆树）。条目随派发结束由 DispatchGuard 摘除并关闭
@@ -327,9 +335,10 @@ impl OrzHost {
                 ),
             )));
         if let Ok(mut resources) = toolset.resources.try_lock() {
-            resources.insert(Arc::new(crate::browser_serp::HostBrowserSerp::new(
-                browser.clone(),
-            )) as Arc<dyn orz_tools::types::resources::BrowserSerpBackend>);
+            resources.insert(
+                Arc::new(crate::browser_serp::HostBrowserSerp::new(browser.clone()))
+                    as Arc<dyn orz_tools::types::resources::BrowserSerpBackend>,
+            );
         }
         Ok(Self {
             journal,
@@ -360,6 +369,7 @@ impl OrzHost {
             resource_hint: None,
             process_trees: None,
             resource_facts: std::sync::Mutex::new(Vec::new()),
+            write_control_reviews: std::sync::Mutex::new(Vec::new()),
             live_call_jobs: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             dispatch_token: std::sync::atomic::AtomicU64::new(0),
             last_resource_tier: std::sync::atomic::AtomicU8::new(0),
@@ -532,6 +542,28 @@ impl OrzHost {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         )
+    }
+
+    /// 0bw③（2026-09-27）：把工具侧写入管控审查队列（toolset `Resources`
+    /// 通道，bash 工具审查时 push）搬入宿主暂存——`run_terminal_cmd` 的
+    /// Ok／Err／timeout 臂各调用一次（空队列为 no-op；条目自带 call_id
+    /// 归因，误搬无害）。loop 经 `LoopHost::drain_write_control_reviews`
+    /// 消费。
+    async fn collect_write_control_reviews(&self) {
+        let drained: Vec<orz_tools::types::exec_policy::EnqueuedCommandReview> = {
+            let mut res = self.registry.toolset().resources.lock().await;
+            res.get_or_default::<orz_tools::types::exec_policy::CommandReviewQueue>()
+                .0
+                .drain(..)
+                .collect()
+        };
+        if drained.is_empty() {
+            return;
+        }
+        self.write_control_reviews
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(drained);
     }
 
     /// The process-tree registry, when one is wired (0z S2 §4.2).
@@ -1291,7 +1323,15 @@ impl OrzHost {
             .map(|t| t.min(self.tool_timeout))
             .unwrap_or(self.tool_timeout);
         let result = match tokio::time::timeout(effective_timeout, fut).await {
-            Ok(result) => result.map_err(|e| crate::tools::map_tool_error(&e))?,
+            Ok(result) => match result {
+                Ok(r) => r,
+                // 0bw③：Err 臂（含 bash block 拒绝）先收审查事实再回错——
+                // block 也是一次完成的审查，事实不得丢。
+                Err(e) => {
+                    self.collect_write_control_reviews().await;
+                    return Err(crate::tools::map_tool_error(&e));
+                }
+            },
             Err(_) if started_exec.load(std::sync::atomic::Ordering::SeqCst) => {
                 tracing::warn!(
                     tool = name,
@@ -1341,6 +1381,10 @@ impl OrzHost {
                 } else {
                     orz_tools::util::global_process_scope().kill_active();
                 }
+                // 0bw③（2026-09-27 复审 P1-2）：timeout 臂与 Ok/Err 同纪律
+                // 收审查事实——被杀命令的审查已在入队（bash 审查点先于执行），
+                // 超时恰是命令面最长路径，warn 留痕不能在此丢。
+                self.collect_write_control_reviews().await;
                 return Err(ToolError::Timeout(format!(
                     "tool '{name}' TIMED OUT after {timeout:?} wall-clock budget — \
                      process tree killed; the tool did not complete",
@@ -1364,6 +1408,8 @@ impl OrzHost {
             }
         };
         drop(spawn_sink_guard);
+        // 0bw③：Ok 臂收写入管控审查事实（allow/warn；block 走 Err 臂）。
+        self.collect_write_control_reviews().await;
         let mut tool_result = ToolResult {
             // 0aw §5 模型面：软提示附在结果头部（动作照跑；每 run 每卷一次
             // ——去重在 hint 面内完成），中文短句 ＋ 英文机械读数（0af 混排）。
@@ -1661,6 +1707,28 @@ impl LoopHost for OrzHost {
     /// 生产端已随裁决 ④ 退役，schema/verifier 保留供历史 journal 校验）。
     async fn drain_host_resource_facts(&self) -> Vec<serde_json::Value> {
         self.drain_resource_facts()
+    }
+
+    /// 0bw③（2026-09-27）：写入管控命令审查事实源——宿主暂存行的 drain
+    /// 面（bash 工具审查入队 → `collect_write_control_reviews` 调用边界
+    /// 收集 → loop 落 `write_control_review` 事件）。
+    async fn drain_write_control_reviews(&self) -> Vec<orz_loop::host::WriteControlReviewFact> {
+        std::mem::take(
+            &mut *self
+                .write_control_reviews
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+        .into_iter()
+        .map(|e| orz_loop::host::WriteControlReviewFact {
+            call_id: e.call_id,
+            review: e.report.review,
+            rule: e.report.rule,
+            detail: e.report.detail,
+            command_sha256: e.command_sha256,
+            command_len: e.command_len,
+        })
+        .collect()
     }
 
     /// 0ac S3①-b M2（2026-09-15，IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_

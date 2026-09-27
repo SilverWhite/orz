@@ -483,7 +483,10 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
         | EventType::ResourceExhausted
         | EventType::ProcessTreeReaped
         | EventType::ReclaimPerformed
-        | EventType::ResourceLimitHit => TuiEvent::Unknown {
+        | EventType::ResourceLimitHit
+        // 0bw③：写入管控命令审查事实——机器审计面（无专用 TUI 卡片，
+        // 降级 Unknown 与其余宿主事实族同姿态）。
+        | EventType::WriteControlReview => TuiEvent::Unknown {
             event_type: event.event_type.to_string(),
         },
     }

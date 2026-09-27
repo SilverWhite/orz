@@ -313,6 +313,31 @@ assert.equal(typeof api.deleteSession, 'function', '删除动作 API 客户端�
 assert.equal(typeof api.grantTrust, 'function', '信任授信 API 客户端（批七）');
 assert.equal(typeof api.switchWorkspace, 'function', '工作区切换 API 客户端（0bv ②）');
 
+// REV-083-22 回归钉（F-2）：switchWorkspace 必须真实发出带 JSON 载荷的
+// POST——修复前引用未定义符号 sendJsonBody ⇒ ReferenceError，UI 点击切换
+// 从未发出请求（「函数存在」断言抓不到，必须走真实 fetch 链路）。
+{
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init: init ?? {} });
+    return { ok: true, json: async () => ({ ok: true, cwd: 'D:\\proj-b' }) };
+  };
+  try {
+    api.setToken('tok-smoke');
+    await api.switchWorkspace('D:\\proj-b');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(calls.length, 1, 'switchWorkspace 必须恰好发出一次请求（F-2：此前为零次）');
+  assert.ok(calls[0].url.startsWith('/api/workspace/switch?'), `切换端点：${calls[0].url}`);
+  assert.ok(calls[0].url.includes('token=tok-smoke'), 'token 随 query 携带');
+  assert.equal(calls[0].init.method, 'POST', 'POST 方法');
+  assert.equal(calls[0].init.headers['Content-Type'], 'application/json', 'JSON 载荷头');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { path: 'D:\\proj-b' }, '载荷含目标路径');
+}
+console.log('ok  工作区切换真实 fetch 链路（REV-083-22 回归钉）');
+
 state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
 state.marker = [];
 state.turnCounter = 0;

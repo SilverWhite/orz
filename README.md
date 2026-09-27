@@ -92,6 +92,20 @@ The user guide ships with the pager crate
 shortcuts, slash commands, configuration, theming, MCP servers, skills,
 plugins, hooks, headless mode, sandboxing, and more.
 
+### Exit codes (REV-083-12, 2026-09-27)
+
+The `orz` binary keeps a three-tier exit-code contract:
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success (including planned, mechanically-reported refusals such as a write-control `block` rejection surfaced as a tool error — the process itself ran to completion). |
+| `1` | Runtime failure: a command body failed after argument parsing (spawn failure, session error, journal/IO failure, …). |
+| `2` | Usage error: missing/invalid command-line arguments (`orz rollback` without a verb, `orz archive` without a session id, …); nothing was executed. |
+| `101` | Panic hop: the main-thread `join()` observed a panic and re-exited. **Reachable only under unwind profiles** — the default `dev`/`release`/`release-dist` profiles set `panic = "abort"`, where a panic terminates the process directly via the platform abort path and `101` is never produced. The `exit(101)` branch exists for the unwind-profile contract and for the explicit "main thread panicked" stderr line. |
+
+Subcommands may refine `1` with their own stderr text; the tiers themselves
+are stable launcher-facing contract (the dogfood launcher parses them).
+
 ## Repository layout
 
 | Path | Contents |

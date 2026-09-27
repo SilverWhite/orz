@@ -128,6 +128,34 @@ impl AgentLoopController {
         Ok(())
     }
 
+    /// 0bw③（2026-09-27，WRITE_CONTROL_MECHANICAL_DESIGN §3.2/D5 后续
+    /// 扩展）：写入管控命令审查的 journal 面——`write_control_review`
+    /// 事件（block/warn/allow 全落；v1 文案留痕不变，本族补结构化审计）。
+    /// 工具边界与 run 收尾 drain。
+    pub(crate) async fn journal_pending_write_control_reviews(
+        &self,
+        host: &dyn LoopHost,
+        writer: &mut EventWriter<'_>,
+    ) -> Result<(), AgentLoopError> {
+        for fact in host.drain_write_control_reviews().await {
+            writer
+                .record(
+                    EventType::WriteControlReview,
+                    serde_json::json!({
+                        "tool": "run_terminal_cmd",
+                        "call_id": fact.call_id,
+                        "review": fact.review,
+                        "rule": fact.rule,
+                        "detail": fact.detail,
+                        "command_sha256": fact.command_sha256,
+                        "command_len": fact.command_len,
+                    }),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
     /// TER 全面审查 P1-1 (2026-09-04)：idle-kill `tool_running` 事件生产者。
     /// host 在工具执行 / run 收尾边界 drain `LoopHost::drain_terminal_idle_kills`；
     /// loop 只对**本 run 内已记过 mid-run `tool_running`** 的 auto-bg 调用补记
@@ -145,7 +173,10 @@ impl AgentLoopController {
             return Ok(());
         }
         let eligible = {
-            let guard = self.mid_run_call_ids.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = self
+                .mid_run_call_ids
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             facts
                 .into_iter()
                 .filter(|f| guard.get(&f.task_id).map(String::as_str) == Some(run_id.as_str()))
@@ -543,6 +574,147 @@ mod tests {
     struct BrowserLaunchHost {
         journal: JournalRecorder,
         outcome: BrowserLaunchHostOutcome,
+    }
+
+    /// 0bw③ 测试宿主：一次 `run_terminal_cmd` 调用携带一条命令审查事实
+    /// （drain 面）——loop 须在 ToolCompleted 之后落 `write_control_review`。
+    struct WriteControlReviewHost {
+        journal: JournalRecorder,
+        /// drain 语义：队列只承载一条，被取走即空。
+        queue: std::sync::Mutex<Vec<crate::host::WriteControlReviewFact>>,
+    }
+
+    #[async_trait]
+    impl LoopHost for WriteControlReviewHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &EmptyRegistry
+        }
+        fn session_cwd(&self) -> std::path::PathBuf {
+            self.journal.journal_dir().to_path_buf()
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::AllowOnce)
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            Ok(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                ..Default::default()
+            })
+        }
+        async fn drain_write_control_reviews(&self) -> Vec<crate::host::WriteControlReviewFact> {
+            std::mem::take(
+                &mut *self
+                    .queue
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn write_control_review_fact_journaled_after_completion() {
+        // 本地 `events` 绑定会遮蔽同名帮助函数——先取别名供二次读账。
+        let read_events = events;
+        let dir = test_dir();
+        let host = WriteControlReviewHost {
+            journal: JournalRecorder::new(dir.clone()),
+            queue: std::sync::Mutex::new(vec![crate::host::WriteControlReviewFact {
+                call_id: "call-wc-loop".to_string(),
+                review: "block".to_string(),
+                rule: Some("carrier-write".to_string()),
+                detail: Some("Remove-Item targets .gsa".to_string()),
+                command_sha256: "a".repeat(64),
+                command_len: 21,
+            }]),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        let tc = ToolCall {
+            name: "run_terminal_cmd".to_string(),
+            arguments: serde_json::json!({ "command": "Remove-Item .gsa" }),
+            call_id: "call-wc-loop".to_string(),
+        };
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(host.journal()),
+            EventTrack::V02,
+            "RUN-WC",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &tc,
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                None,
+                None,
+                true,
+                true,
+            )
+            .await
+            .unwrap();
+        let events = events(&dir);
+        let completed_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::ToolCompleted)
+            .expect("tool_completed");
+        let fact_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::WriteControlReview)
+            .expect("write_control_review fact journaled");
+        assert!(
+            completed_index < fact_index,
+            "ToolCompleted → write_control_review 全序: {events:?}"
+        );
+        let payload = &events[fact_index].payload;
+        assert_eq!(payload["tool"], serde_json::json!("run_terminal_cmd"));
+        assert_eq!(payload["review"], serde_json::json!("block"));
+        assert_eq!(payload["rule"], serde_json::json!("carrier-write"));
+        assert_eq!(payload["call_id"], serde_json::json!("call-wc-loop"));
+        // drain 语义：事实只落一次（第二次边界 drain 为空）。
+        let mut writer2 = EventWriter::new(
+            Some(host.journal()),
+            EventTrack::V02,
+            "RUN-WC-2",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .journal_pending_write_control_reviews(&host, &mut writer2)
+            .await
+            .unwrap();
+        let events2 = read_events(&dir);
+        assert_eq!(
+            events2
+                .iter()
+                .filter(|e| e.event_type == EventType::WriteControlReview)
+                .count(),
+            1,
+            "review fact is drained exactly once"
+        );
     }
 
     enum BrowserLaunchHostOutcome {

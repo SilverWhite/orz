@@ -2215,16 +2215,52 @@ impl xai_tool_runtime::Tool for BashTool {
         // block＝锁死面/安全机制翻转类命中 → 命令不执行（机械拒绝文案随 tool
         // 结果入 journal）；warn＝留痕（结果头部 `[写入管控·提示]` 行，不阻断）。
         // best-effort 闸（设计档 §9 边界）。
-        let write_control_warn =
-            match crate::types::exec_policy::review_command(&cwd, &input.command) {
+        // 空命令防线（2026-09-27 复审 P2）：空/纯空白命令无审查对象——不审
+        // 查、不入队（D-7「无命令即无事件」的机械兑现；schema `command_len
+        // ≥ 1` 下限由此保证）。
+        let command_is_empty = input.command.trim().is_empty();
+        let command_review = if command_is_empty {
+            crate::types::exec_policy::CommandReview::Allow
+        } else {
+            crate::types::exec_policy::review_command(&cwd, &input.command)
+        };
+        // 0bw③（2026-09-27，设计档 §3.2/D5 后续扩展）：审查报告结构化入队
+        // （allow/warn/block 全落）——宿主在调用边界 drain 转
+        // `write_control_review` journal 事件。命令原文以 sha256＋长度关联
+        // （tool_started 已载原文，不重复入账）。入队失败不阻断（审计面
+        // 缺失 ≠ 审查失效；判定已在 hand，队列仅承载留痕；队列槽位由
+        // `get_or_default` 自动补建，不因缺席丢失）。
+        let write_control_warn = if command_is_empty {
+            None
+        } else {
+            {
+                use sha2::{Digest, Sha256};
+                let command_sha256 = {
+                    let mut hasher = Sha256::new();
+                    hasher.update(input.command.as_bytes());
+                    format!("{:x}", hasher.finalize())
+                };
+                let enqueue = crate::types::exec_policy::EnqueuedCommandReview {
+                    call_id: tool_call_id.as_str().to_owned(),
+                    report: command_review.report(),
+                    command_sha256,
+                    command_len: input.command.len() as u64,
+                };
+                let mut res = resources.lock().await;
+                res.get_or_default::<crate::types::exec_policy::CommandReviewQueue>()
+                    .0
+                    .push(enqueue);
+            }
+            match &command_review {
                 crate::types::exec_policy::CommandReview::Block(finding) => {
                     return Err(xai_tool_runtime::ToolError::permission_denied(
-                        crate::types::exec_policy::block_message(&finding),
+                        crate::types::exec_policy::block_message(finding),
                     ));
                 }
-                crate::types::exec_policy::CommandReview::Warn(finding) => Some(finding),
+                crate::types::exec_policy::CommandReview::Warn(finding) => Some(finding.clone()),
                 crate::types::exec_policy::CommandReview::Allow => None,
-            };
+            }
+        };
 
         // --- Prefix ---
         let command = Self::get_prefixed_command(&params.cmd_prefix, &input.command);
@@ -3936,6 +3972,39 @@ mod tests {
             }
             other => panic!("Expected foreground output, got {other:?}"),
         }
+    }
+
+    /// 2026-09-27 复审 P2：空命令防线——空/纯空白命令不审查、不入队
+    /// （schema `command_len ≥ 1` 下限的机械保证）；随后同一队列对真实
+    /// 命令照常入队（反向钉：证明断言方法本身有效）。
+    #[tokio::test]
+    async fn empty_command_skips_review_and_enqueue() {
+        let shared = make_resources(MockTerminal::success("", 0)).into_shared();
+        let tool = BashTool;
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(shared.clone()), make_input(""))
+            .await
+            .expect("empty command must not be rejected");
+        assert!(matches!(result, BashToolOutput::Foreground(_)));
+        let queue_len = shared
+            .lock()
+            .await
+            .get::<crate::types::exec_policy::CommandReviewQueue>()
+            .map_or(0, |q| q.0.len());
+        assert_eq!(queue_len, 0, "empty command must not enqueue a review");
+
+        // 反向钉：真实命令（warn 命中）照常入队恰一条。
+        let _ = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(shared.clone()),
+            make_input("sudo echo hi"),
+        )
+        .await;
+        let queue_len = shared
+            .lock()
+            .await
+            .get::<crate::types::exec_policy::CommandReviewQueue>()
+            .map_or(0, |q| q.0.len());
+        assert_eq!(queue_len, 1, "real command must enqueue exactly one review");
     }
 
     /// With default params (flag on) a foreground `&` is accepted end-to-end, not

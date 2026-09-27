@@ -69,7 +69,7 @@ pub(crate) fn check_edit_size(file_path: &str, actual_bytes: u64) -> Option<Stri
 }
 
 /// 回退快照存储结局（失败**不静默**：退化为告知行文案，如实随成功输出携带）。
-pub(crate) enum RollbackOutcome {
+pub enum RollbackOutcome {
     /// 已存储；携带相对 cwd 的回退指针（`.gsa/rollback/…`）。
     Stored(String),
     /// 存储失败；携带原因摘要。
@@ -83,7 +83,7 @@ pub(crate) enum RollbackOutcome {
 /// - **原始字节**（BOM/行尾/编码形态保真——回退即原样写回）；
 /// - 每目录保留最近 [`ROLLBACK_RETENTION`] 条（按文件名序＝时间序，超出清旧）；
 /// - 存储失败不静默：返回 [`RollbackOutcome::Failed`]，调用方随告知行如实携带。
-pub(crate) fn store_rollback_snapshot(
+pub fn store_rollback_snapshot(
     cwd: &Path,
     target_display: &str,
     previous: &[u8],
@@ -125,6 +125,11 @@ pub(crate) fn store_rollback_snapshot(
     if let Err(err) = std::fs::write(&file, previous) {
         return RollbackOutcome::Failed(format!("write {}: {err}", file.display()));
     }
+    // 0bw④（2026-09-27）：meta 侧车记录目标路径——`orz rollback list`
+    // 据此展示、`restore` 据此默认目标。缺省回退＝旧快照形态（无 meta，
+    // restore 需显式给目标）。meta 写失败不回滚快照本体（留痕面缺失
+    // 如实，不影响 undo 字节源）。
+    let _ = std::fs::write(dir.join(format!("{name}.meta")), target_display);
     prune_rollback_dir(&dir);
     RollbackOutcome::Stored(format!(".gsa/rollback/{key}/{name}"))
 }
@@ -146,6 +151,8 @@ fn prune_rollback_dir(dir: &Path) {
     }
     for name in &names[..names.len() - ROLLBACK_RETENTION] {
         let _ = std::fs::remove_file(dir.join(name));
+        // 0bw④：meta 侧车随快照一同修剪。
+        let _ = std::fs::remove_file(dir.join(format!("{name}.meta")));
     }
 }
 
@@ -278,9 +285,16 @@ mod tests {
             .unwrap()
             .flatten()
             .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+            // 0bw④：meta 侧车随行但不计快照窗口数。
+            .filter(|name| name.ends_with(".bak") && !name.ends_with(".bak.meta"))
             .collect();
         names.sort();
         assert_eq!(names.len(), ROLLBACK_RETENTION, "{names:?}");
+        // 每条快照恰有一条 meta 侧车，且记录目标路径。
+        for name in &names {
+            let meta = std::fs::read_to_string(dir.join(format!("{name}.meta"))).unwrap();
+            assert_eq!(meta, "keep.txt");
+        }
         // 保留的是最近 5 条：v2..v6（v0/v1 被清）。
         let contents: Vec<Vec<u8>> = names
             .iter()

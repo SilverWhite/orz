@@ -10,6 +10,9 @@ workspace = true
 
 [dependencies]
 axum = { workspace = true }
+# REV-083-21 (2026-09-27): canonicalization without Windows `\\?\` verbatim
+# prefixes (workspace clippy.toml bans `std::fs::canonicalize`).
+dunce = { workspace = true }
 flate2 = { workspace = true }
 futures = { workspace = true }
 orz-workspace = { workspace = true }
