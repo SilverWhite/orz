@@ -2260,6 +2260,11 @@ pub(crate) async fn run_agent_loop(
     } else {
         None
     };
+    // 0bz S1（2026-09-28，`GAP-CONTEXT-FACE-TRANSIENT-FORK`）：模型面前缀
+    // 指纹的跨轮状态——上一请求的逐消息指纹（首分歧判定基准）与本次 run
+    // 内的请求计数（`model_round`，1-based 逐次 +1）。仅主车道消费。
+    let mut prev_face_fingerprint: Option<crate::model_face::FaceFingerprint> = None;
+    let mut face_model_round: u64 = 0;
 
     loop {
         loop_rounds = loop_rounds.saturating_add(1);
@@ -3042,6 +3047,51 @@ pub(crate) async fn run_agent_loop(
         // run 走终态收口（不 abort；链有效、留终态，与 journal 降级链同形）。
         let request_messages = crate::model_face::build_model_face(messages, &face_params)
             .map_err(|e| AgentLoopError::AllocFailure(e.to_string()))?;
+        // 0bz S1（2026-09-28，`GAP-CONTEXT-FACE-TRANSIENT-FORK`）：模型面
+        // 前缀指纹——逐请求对投影视图做逐消息 sha256 指纹，与上一请求判定
+        // 首分歧消息后落 `face_fingerprint` 事件。纯观测面：不改请求内容、
+        // 不进工具面（模型零感知）；仅主车道（0bz 读数面）。事件落在请求
+        // 之前 ⇒ journal 上紧邻其后的 `model_output` 即同轮 hit/miss 读数，
+        // 「分歧消息 ↔ miss」逐轮可对账（110 档 §3 三源定位的数据面）。
+        if profile.role == AgentRole::Main {
+            face_model_round += 1;
+            let fingerprint = crate::model_face::face_fingerprint(&request_messages);
+            let divergence = prev_face_fingerprint
+                .as_ref()
+                .and_then(|prev| fingerprint.first_divergence(prev));
+            let stable_prefix = match (&prev_face_fingerprint, &divergence) {
+                (None, _) => 0,
+                (Some(_), Some(d)) => d.index,
+                (Some(_), None) => fingerprint.entries.len(),
+            };
+            let first_divergent = divergence.map(|d| {
+                serde_json::json!({
+                    "index": d.index,
+                    "kind": d.kind,
+                    "role": d.role,
+                    "chars": d.chars,
+                    "hash": d.hash,
+                    "head": d.head,
+                    "prev_chars": d.prev_chars,
+                    "prev_hash": d.prev_hash,
+                    "prev_head": d.prev_head,
+                })
+            });
+            let face_payload = serde_json::json!({
+                "agent_role": profile.role.as_str(),
+                "model_round": face_model_round,
+                "message_count": fingerprint.entries.len(),
+                "total_chars": fingerprint.total_chars(),
+                "face_sha256": fingerprint.digest(),
+                "messages": fingerprint.compact(),
+                "stable_prefix_messages": stable_prefix,
+                "first_divergent": first_divergent,
+            });
+            writer
+                .record(EventType::FaceFingerprint, face_payload)
+                .await?;
+            prev_face_fingerprint = Some(fingerprint);
+        }
         // FUS-LEDGER-FOLD-STATE 复验取证 (2026-08-18)：`ORZ_DEBUG_VIEW=1`
         // 时在请求失败路径 dump 实际发送的视图角色序列（定位折叠/压缩
         // 交互下的消息配对破坏点；正常路径零成本）。

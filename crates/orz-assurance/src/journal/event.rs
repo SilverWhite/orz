@@ -254,6 +254,17 @@ pub enum EventType {
     // `[写入管控·提示]` 行随 tool 结果入 journal 的既有面不变）。payload：
     // tool/call_id/review/rule/detail/command_sha256/command_len。
     WriteControlReview,
+
+    // 0bz S1 (2026-09-28, GAP-CONTEXT-FACE-TRANSIENT-FORK / 110 档): 模型面
+    // 前缀指纹——逐轮对投影视图做逐消息 sha256 指纹（wire 同字段：role/
+    // content/tool_call_id/tool_calls/reasoning_content；`round` 不落 wire
+    // 故不入哈希），与上一请求判定首分歧消息后落 journal。纯观测面（模型
+    // 零感知、不改请求内容、不进工具面）；读数用途＝前缀缓存 miss 三源
+    // （压缩后第 2 针／空跑 compress 分叉／自发塌陷）从 token 级推断定位到
+    // 具体消息（0bi §10-④ 候选落地）。payload：agent_role/model_round/
+    // message_count/total_chars/face_sha256/messages/stable_prefix_messages/
+    // first_divergent。
+    FaceFingerprint,
 }
 
 impl EventType {

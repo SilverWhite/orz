@@ -1168,6 +1168,203 @@ fn truncate_chars(text: &str, max: usize) -> String {
     s
 }
 
+// ===========================================================================
+// 0bz S1（2026-09-28，`GAP-CONTEXT-FACE-TRANSIENT-FORK` / 110 档）：模型面
+// **前缀指纹**。逐轮对投影视图做逐消息 sha256 指纹，与上一请求判定**首分歧
+// 消息**并落 journal 事件（`face_fingerprint`）——纯观测面：不改请求内容、
+// 不进工具面、模型零感知。读数用途＝把前缀缓存 miss 的三源（压缩后第 2 针
+// ／空跑 `context_compress` 分叉／自发塌陷）从 token 级推断定位到具体消息
+// （0bi §10-④「逐轮模型面前缀指纹」候选的落地；110 立项档 §3/§5）。
+//
+// 哈希输入＝**wire 同字段**投影（`map_message` 映射的 role/content/
+// tool_call_id/tool_calls/reasoning_content 五字段；`round` 不落 wire 故
+// 不入哈希——否则内部轮章变化会造成假分歧）。键序经 serde_json BTreeMap
+// 规范化（字典序），跨轮次逐字节确定。
+// ===========================================================================
+
+/// 单条投影消息的指纹条目。`head` 是诊断面（分歧时落 journal 的头部预览），
+/// 仅驻内存、不参与哈希。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FaceFingerprintEntry {
+    pub role: &'static str,
+    pub chars: usize,
+    /// sha256（wire 投影）前 12 hex。
+    pub hash: String,
+    pub head: String,
+}
+
+/// 一次请求视图的逐消息指纹。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FaceFingerprint {
+    pub entries: Vec<FaceFingerprintEntry>,
+}
+
+/// 首分歧判定结果（与上一请求对比）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FaceDivergence {
+    pub index: usize,
+    /// `mutated`＝同位置消息内容变了；`inserted`＝尾部追加（位置超出上一
+    /// 请求）；`removed`＝尾部收缩（本请求比上一请求短）。
+    pub kind: &'static str,
+    pub role: &'static str,
+    pub chars: usize,
+    pub hash: String,
+    pub head: String,
+    pub prev_chars: Option<usize>,
+    pub prev_hash: Option<String>,
+    pub prev_head: Option<String>,
+}
+
+fn role_label(role: &crate::gateway::model::Role) -> &'static str {
+    match role {
+        crate::gateway::model::Role::System => "system",
+        crate::gateway::model::Role::User => "user",
+        crate::gateway::model::Role::Assistant => "assistant",
+        crate::gateway::model::Role::Tool => "tool",
+    }
+}
+
+/// 单消息诊断头（≤120 chars；tool_calls/reasoning 消息给机械摘要，不给正文）。
+fn message_head(m: &Message) -> String {
+    if !m.content.is_empty() {
+        return truncate_chars(&m.content, 120);
+    }
+    if !m.tool_calls.is_empty() {
+        let ids: Vec<&str> = m.tool_calls.iter().map(|t| t.call_id.as_str()).collect();
+        return truncate_chars(&format!("[tool_calls: {}]", ids.join(",")), 120);
+    }
+    if m.tool_call_id.is_some() {
+        return "[tool_result]".to_string();
+    }
+    if m.reasoning_content.is_some() {
+        return "[reasoning]".to_string();
+    }
+    "[empty]".to_string()
+}
+
+/// wire 投影哈希（12 hex）：哈希输入与 transport `map_message` 同字段集。
+fn message_wire_hash(m: &Message) -> String {
+    let projection = serde_json::json!({
+        "content": m.content,
+        "reasoning_content": m.reasoning_content,
+        "role": role_label(&m.role),
+        "tool_call_id": m.tool_call_id,
+        "tool_calls": m
+            .tool_calls
+            .iter()
+            .map(|tc| serde_json::json!({
+                "arguments": tc.arguments,
+                "call_id": tc.call_id,
+                "name": tc.name,
+            }))
+            .collect::<Vec<_>>(),
+    });
+    let bytes = orz_assurance::canonical_json(&projection).unwrap_or_default();
+    orz_assurance::sha256_hex(&bytes)[..12].to_string()
+}
+
+/// 逐消息指纹（投影视图 → 条目表）。
+pub fn face_fingerprint(messages: &[Message]) -> FaceFingerprint {
+    let entries = messages
+        .iter()
+        .map(|m| FaceFingerprintEntry {
+            role: role_label(&m.role),
+            chars: m.content.chars().count(),
+            hash: message_wire_hash(m),
+            head: message_head(m),
+        })
+        .collect();
+    FaceFingerprint { entries }
+}
+
+impl FaceFingerprint {
+    /// 视图内容总字符数（content 面；不含 wire 包装开销）。
+    pub fn total_chars(&self) -> usize {
+        self.entries.iter().map(|e| e.chars).sum()
+    }
+
+    /// 全脸摘要（sha256 前 16 hex）——对逐条 hash 串再哈希，跨轮次对账键。
+    pub fn digest(&self) -> String {
+        let joined = self
+            .entries
+            .iter()
+            .map(|e| e.hash.as_str())
+            .collect::<Vec<_>>()
+            .join(";");
+        orz_assurance::sha256_hex(joined.as_bytes())[..16].to_string()
+    }
+
+    /// 紧凑逐条表：`role:chars:hash12` 用 `;` 连接（journal 事件载荷面）。
+    pub fn compact(&self) -> String {
+        self.entries
+            .iter()
+            .map(|e| format!("{}:{}:{}", e.role, e.chars, e.hash))
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    /// 与上一请求的首分歧判定（最长公共哈希前缀 LCP）。
+    ///
+    /// - `None`＝逐条哈希完全一致（含两者同长）。
+    /// - `removed`＝本请求在 LCP 处结束且上一请求更长（尾部收缩）。
+    /// - `mutated`＝LCP 处两请求都有消息但哈希不同。
+    /// - `inserted`＝LCP 等于上一请求长度（尾部追加；正常轮的尾巴即此形）。
+    pub fn first_divergence(&self, prev: &FaceFingerprint) -> Option<FaceDivergence> {
+        let lcp = self
+            .entries
+            .iter()
+            .zip(prev.entries.iter())
+            .take_while(|(a, b)| a.hash == b.hash)
+            .count();
+        if lcp == self.entries.len() && lcp == prev.entries.len() {
+            return None;
+        }
+        if lcp == self.entries.len() {
+            // 尾部收缩：分歧位置在本请求之外，携带上一请求侧的首条被删消息。
+            let prev_e = &prev.entries[lcp];
+            return Some(FaceDivergence {
+                index: lcp,
+                kind: "removed",
+                role: prev_e.role,
+                chars: 0,
+                hash: String::new(),
+                head: String::new(),
+                prev_chars: Some(prev_e.chars),
+                prev_hash: Some(prev_e.hash.clone()),
+                prev_head: Some(prev_e.head.clone()),
+            });
+        }
+        let cur_e = &self.entries[lcp];
+        if lcp < prev.entries.len() {
+            let prev_e = &prev.entries[lcp];
+            debug_assert_ne!(cur_e.hash, prev_e.hash, "LCP 是最大公共前缀");
+            Some(FaceDivergence {
+                index: lcp,
+                kind: "mutated",
+                role: cur_e.role,
+                chars: cur_e.chars,
+                hash: cur_e.hash.clone(),
+                head: cur_e.head.clone(),
+                prev_chars: Some(prev_e.chars),
+                prev_hash: Some(prev_e.hash.clone()),
+                prev_head: Some(prev_e.head.clone()),
+            })
+        } else {
+            Some(FaceDivergence {
+                index: lcp,
+                kind: "inserted",
+                role: cur_e.role,
+                chars: cur_e.chars,
+                hash: cur_e.hash.clone(),
+                head: cur_e.head.clone(),
+                prev_chars: None,
+                prev_hash: None,
+                prev_head: None,
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1615,5 +1812,112 @@ mod tests {
         twice.extend(messages.clone());
         let markers = face_markers(&twice);
         assert_eq!(markers.truncated.len(), 2);
+    }
+
+    // --- 0bz S1（2026-09-28）：模型面前缀指纹钉子（先红后绿钉的机械面） ---
+
+    fn user_msg(content: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: content.to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        }
+    }
+
+    #[test]
+    fn face_fingerprint_same_wire_same_hash_and_round_field_excluded() {
+        let a = face_fingerprint(&[user_msg("前文内容"), tool("c1", "结果")]);
+        let b = face_fingerprint(&[user_msg("前文内容"), tool("c1", "结果")]);
+        assert_eq!(a, b, "同 wire 内容必须同指纹");
+        // `round` 不落 wire（transport map_message 剔除）⇒ 改轮章不得改哈希。
+        let mut renumbered = tool("c1", "结果");
+        renumbered.round = Some(7);
+        let c = face_fingerprint(&[user_msg("前文内容"), renumbered]);
+        assert_eq!(a.entries[1].hash, c.entries[1].hash, "round 入哈希＝假分歧");
+        // 内容变 ⇒ 哈希变。
+        let d = face_fingerprint(&[user_msg("前文内容!"), tool("c1", "结果")]);
+        assert_ne!(a.entries[0].hash, d.entries[0].hash);
+        // tool_calls（arguments）入哈希。
+        let e = face_fingerprint(&[decl("c1", "read_file", "a.txt"), user_msg("x")]);
+        let f = face_fingerprint(&[decl("c1", "read_file", "b.txt"), user_msg("x")]);
+        assert_ne!(e.entries[0].hash, f.entries[0].hash, "arguments 入哈希");
+    }
+
+    #[test]
+    fn face_fingerprint_digest_and_compact_shape() {
+        let fp = face_fingerprint(&[user_msg("hello"), tool("c9", "done")]);
+        assert_eq!(fp.digest().len(), 16);
+        assert!(fp.digest().bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_eq!(
+            fp.compact(),
+            format!(
+                "user:5:{};tool:4:{}",
+                fp.entries[0].hash, fp.entries[1].hash
+            )
+        );
+        assert_eq!(fp.total_chars(), 9);
+        // head 诊断面：tool_calls 消息给机械摘要而非空串。
+        let d = face_fingerprint(&[decl("c1", "read_file", "a.txt")]);
+        assert!(d.entries[0].head.starts_with("[tool_calls: c1]"));
+    }
+
+    #[test]
+    fn first_divergence_insert_mutate_remove_and_none() {
+        let base = face_fingerprint(&[user_msg("a"), user_msg("b"), user_msg("c")]);
+        // 无分歧。
+        assert!(
+            base.first_divergence(&face_fingerprint(&[
+                user_msg("a"),
+                user_msg("b"),
+                user_msg("c")
+            ]))
+            .is_none()
+        );
+        // 正常轮尾巴＝尾部追加两条（decl+tool）⇒ inserted at index=3。
+        let grown = face_fingerprint(&[
+            user_msg("a"),
+            user_msg("b"),
+            user_msg("c"),
+            decl("c1", "read_file", "a.txt"),
+            tool("c1", "内容"),
+        ]);
+        let div = grown
+            .first_divergence(&base)
+            .expect("appended tail must diverge");
+        assert_eq!(div.kind, "inserted");
+        assert_eq!(div.index, 3);
+        assert!(div.prev_hash.is_none());
+        // 早期消息被改（空跑 compress / 自发塌陷的候选形）⇒ mutated at 早期位。
+        let mutated = face_fingerprint(&[
+            user_msg("a"),
+            user_msg("B!"),
+            user_msg("c"),
+            decl("c1", "read_file", "a.txt"),
+            tool("c1", "内容"),
+        ]);
+        let div = mutated
+            .first_divergence(&base)
+            .expect("early mutation must diverge");
+        assert_eq!(div.kind, "mutated");
+        assert_eq!(div.index, 1);
+        assert_eq!(
+            div.prev_hash.as_deref(),
+            Some(base.entries[1].hash.as_str())
+        );
+        assert_eq!(div.prev_chars, Some(1));
+        // 尾部收缩（压缩落地后的新窗口更短）⇒ removed。
+        let shrunk = face_fingerprint(&[user_msg("a")]);
+        let div = shrunk
+            .first_divergence(&base)
+            .expect("shrunk tail must diverge");
+        assert_eq!(div.kind, "removed");
+        assert_eq!(div.index, 1);
+        assert_eq!(
+            div.prev_hash.as_deref(),
+            Some(base.entries[1].hash.as_str())
+        );
     }
 }

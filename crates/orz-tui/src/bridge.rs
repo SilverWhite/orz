@@ -486,7 +486,9 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
         | EventType::ResourceLimitHit
         // 0bw③：写入管控命令审查事实——机器审计面（无专用 TUI 卡片，
         // 降级 Unknown 与其余宿主事实族同姿态）。
-        | EventType::WriteControlReview => TuiEvent::Unknown {
+        | EventType::WriteControlReview
+        // 0bz S1：模型面前缀指纹——纯观测面（无专用 TUI 卡片，同姿态）。
+        | EventType::FaceFingerprint => TuiEvent::Unknown {
             event_type: event.event_type.to_string(),
         },
     }

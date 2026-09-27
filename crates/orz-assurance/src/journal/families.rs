@@ -1609,6 +1609,7 @@ pub const ALL_FAMILIES: &[&str] = &[
     // 0bw③ (2026-09-27, WRITE_CONTROL_MECHANICAL_DESIGN §3.2/D5 后续
     // 扩展): write-control command review — block/warn/allow per command.
     "write_control_review",
+    "face_fingerprint",
 ];
 
 // ---------------------------------------------------------------------------
@@ -2029,6 +2030,206 @@ pub fn verify_write_control_review(events: &[Value]) -> Vec<String> {
     errors
 }
 
+/// 0bz S1（2026-09-28，`GAP-CONTEXT-FACE-TRANSIENT-FORK` / 110 档）：模型面
+/// 前缀指纹族判官——payload 形状＋跨事件前缀对账（LCP 重算）。
+///
+/// 跨事件核证是本族的实质面：`stable_prefix_messages` 必须等于上一事件
+/// `messages` 与本事件 `messages` 的最长公共哈希前缀；`first_divergent` 的
+/// index/kind/prev_hash 必须与两侧逐条表一致（mutated ⇔ 同位异哈希；
+/// inserted ⇔ 位置超出上一请求；removed ⇔ 本请求在 LCP 处结束且上一请求
+/// 更长）。`model_round` 在 run 内严格 +1、从 1 起；首个事件无分歧。
+pub fn verify_face_fingerprint(events: &[Value]) -> Vec<String> {
+    const HASH12_LEN: usize = 12;
+    let wrap = |message: String| format!("face_fingerprint: {message}");
+    let mut errors: Vec<String> = Vec::new();
+    let mut prev: Option<(u64, Vec<(&str, String)>)> = None;
+    for event in events
+        .iter()
+        .filter(|e| e["event_type"] == "face_fingerprint")
+    {
+        let payload = &event["payload"];
+        if payload["agent_role"].as_str() != Some("main") {
+            errors.push(wrap("agent_role must be main".to_string()));
+        }
+        let Some(round) = payload["model_round"].as_u64() else {
+            errors.push(wrap("model_round required".to_string()));
+            prev = None;
+            continue;
+        };
+        // 轮序：run 内严格 +1、从 1 起（每逻辑模型请求恰一条）。
+        let expected_round = prev.as_ref().map_or(1, |(r, _)| r + 1);
+        if round != expected_round {
+            errors.push(wrap(format!(
+                "model_round must be {expected_round} (strictly +1), got {round}"
+            )));
+        }
+        let face_sha = payload["face_sha256"].as_str().unwrap_or_default();
+        if face_sha.len() != 16
+            || !face_sha
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            errors.push(wrap("face_sha256 must be 16-hex".to_string()));
+        }
+        let Some(messages) = payload["messages"].as_str() else {
+            errors.push(wrap("messages required".to_string()));
+            prev = None;
+            continue;
+        };
+        let mut entries: Vec<(&str, String)> = Vec::new();
+        let mut shape_errors = 0usize;
+        for part in messages.split(';').filter(|p| !p.is_empty()) {
+            let bits: Vec<&str> = part.split(':').collect();
+            let parsed = match bits.as_slice() {
+                [role, chars, hash]
+                    if matches!(*role, "user" | "assistant" | "tool" | "system")
+                        && hash.len() == HASH12_LEN
+                        && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+                        && chars.parse::<u64>().is_ok() =>
+                {
+                    Some((*role, hash.to_string()))
+                }
+                _ => None,
+            };
+            match parsed {
+                Some(entry) => entries.push(entry),
+                None => shape_errors += 1,
+            }
+        }
+        if shape_errors > 0 {
+            errors.push(wrap(format!(
+                "messages: {shape_errors} malformed entries (role:chars:hash12)"
+            )));
+        }
+        let declared_count = payload["message_count"].as_u64();
+        if declared_count != Some(entries.len() as u64) {
+            errors.push(wrap(format!(
+                "message_count {} != messages entries {}",
+                declared_count
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "null".into()),
+                entries.len()
+            )));
+        }
+        let mut stable = payload["stable_prefix_messages"]
+            .as_u64()
+            .map(|n| n as usize);
+        match &prev {
+            None => {
+                if round != 1 {
+                    errors.push(wrap(
+                        "first face_fingerprint in run must carry model_round 1".to_string(),
+                    ));
+                }
+                if stable != Some(0) {
+                    errors.push(wrap(
+                        "first event must carry stable_prefix_messages 0".to_string(),
+                    ));
+                }
+                if !payload["first_divergent"].is_null() {
+                    errors.push(wrap(
+                        "first event must carry first_divergent null".to_string(),
+                    ));
+                }
+            }
+            Some((_, prev_entries)) => {
+                let lcp = entries
+                    .iter()
+                    .zip(prev_entries.iter())
+                    .take_while(|(a, b)| a.1 == b.1)
+                    .count();
+                if stable != Some(lcp) {
+                    errors.push(wrap(format!(
+                        "stable_prefix_messages {stable:?} != recomputed LCP {lcp}"
+                    )));
+                }
+                stable = Some(lcp);
+                let fd = &payload["first_divergent"];
+                if lcp == entries.len() && lcp == prev_entries.len() {
+                    if !fd.is_null() {
+                        errors.push(wrap(
+                            "identical prefix+suffix must carry first_divergent null".to_string(),
+                        ));
+                    }
+                } else if fd.is_null() {
+                    errors.push(wrap(
+                        "diverging requests must carry first_divergent".to_string(),
+                    ));
+                } else {
+                    let kind = fd["kind"].as_str().unwrap_or_default();
+                    let index = fd["index"].as_u64().map(|n| n as usize);
+                    if index != Some(lcp) {
+                        errors.push(wrap(format!("first_divergent.index must be {lcp}")));
+                    }
+                    let expected_kind = if lcp == entries.len() {
+                        "removed"
+                    } else if lcp < prev_entries.len() {
+                        "mutated"
+                    } else {
+                        "inserted"
+                    };
+                    if kind != expected_kind {
+                        errors.push(wrap(format!(
+                            "first_divergent.kind {kind:?} != {expected_kind:?} (LCP {lcp}, cur {}, prev {})",
+                            entries.len(),
+                            prev_entries.len()
+                        )));
+                    }
+                    // 哈希对账：mutated 两侧都得对上；inserted 无 prev 侧；
+                    // removed 无 cur 侧、prev 侧对上上一事件的同位条目。
+                    match kind {
+                        "mutated" => {
+                            if lcp < entries.len()
+                                && fd["hash"].as_str() != Some(entries[lcp].1.as_str())
+                            {
+                                errors.push(wrap(
+                                    "first_divergent.hash must match current entry".to_string(),
+                                ));
+                            }
+                            if lcp < prev_entries.len()
+                                && fd["prev_hash"].as_str() != Some(prev_entries[lcp].1.as_str())
+                            {
+                                errors.push(wrap(
+                                    "first_divergent.prev_hash must match previous entry"
+                                        .to_string(),
+                                ));
+                            }
+                        }
+                        "inserted" => {
+                            if !fd["prev_hash"].is_null() || !fd["prev_head"].is_null() {
+                                errors.push(wrap("inserted rows carry no prev side".to_string()));
+                            }
+                        }
+                        "removed" => {
+                            if !fd["hash"].is_null() && fd["hash"].as_str() != Some("") {
+                                errors.push(wrap(
+                                    "removed rows carry no current side hash".to_string(),
+                                ));
+                            }
+                            if lcp < prev_entries.len()
+                                && fd["prev_hash"].as_str() != Some(prev_entries[lcp].1.as_str())
+                            {
+                                errors.push(wrap(
+                                    "removed rows carry the first dropped entry".to_string(),
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
+                    if fd["head"].as_str().map(str::is_empty).unwrap_or(true) && kind != "removed" {
+                        errors.push(wrap(
+                            "mutated/inserted rows carry the head preview".to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        let _ = stable;
+        prev = Some((round, entries));
+    }
+    errors
+}
+
 /// Run one named rule family (S2b ∪ S2c) over a parsed journal; unknown names
 /// yield an empty list (the caller validates the name).
 pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
@@ -2053,6 +2254,8 @@ pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
         "resource_limit_hit" => verify_resource_limit_hit(events),
         // 0bw③ (2026-09-27): write-control command review family.
         "write_control_review" => verify_write_control_review(events),
+        // 0bz S1 (2026-09-28): model-face prefix fingerprint family.
+        "face_fingerprint" => verify_face_fingerprint(events),
         // 0ac S3-b (2026-09-13, F-007 裁决 (a)): immediate-feedback families.
         "retrieval_dedupe"
         | "result_delivered_accounting"
@@ -5920,6 +6123,59 @@ mod tests {
                     ),
                 ],
             ),
+            (
+                // 0bz S1（2026-09-28）：face_fingerprint 三轮 progression——
+                // 轮 1 冷启动（无分歧）；轮 2 尾部追加（inserted，正常轮
+                // 形态）；轮 3 前部同位异哈希（mutated＝瞬态重渲候选形）。
+                // 违例场景同条附 payload：stable 前缀与重算 LCP 相悖＋
+                // first_divergent.kind 错标。
+                "face_fingerprint_progression_and_violations",
+                vec![
+                    ev(
+                        "face_fingerprint",
+                        json!({
+                            "agent_role": "main", "model_round": 1,
+                            "message_count": 3, "total_chars": 160,
+                            "face_sha256": "aaaaaaaaaaaaaaaa",
+                            "messages": "user:100:111111111111;assistant:30:222222222222;tool:30:333333333333",
+                            "stable_prefix_messages": 0,
+                            "first_divergent": null,
+                        }),
+                    ),
+                    ev(
+                        "face_fingerprint",
+                        json!({
+                            "agent_role": "main", "model_round": 2,
+                            "message_count": 4, "total_chars": 190,
+                            "face_sha256": "bbbbbbbbbbbbbbbb",
+                            "messages": "user:100:111111111111;assistant:30:222222222222;tool:30:333333333333;tool:30:444444444444",
+                            "stable_prefix_messages": 3,
+                            "first_divergent": {
+                                "index": 3, "kind": "inserted", "role": "tool",
+                                "chars": 30, "hash": "444444444444",
+                                "head": "[tool_result]",
+                                "prev_chars": null, "prev_hash": null, "prev_head": null,
+                            },
+                        }),
+                    ),
+                    ev(
+                        "face_fingerprint",
+                        json!({
+                            "agent_role": "main", "model_round": 3,
+                            "message_count": 4, "total_chars": 190,
+                            "face_sha256": "cccccccccccccccc",
+                            "messages": "user:100:111111111111;assistant:31:999999999999;tool:30:333333333333;tool:30:444444444444",
+                            "stable_prefix_messages": 3,
+                            "first_divergent": {
+                                "index": 1, "kind": "inserted", "role": "assistant",
+                                "chars": 31, "hash": "999999999999",
+                                "head": "改写后的声明",
+                                "prev_chars": 30, "prev_hash": "222222222222", "prev_head": "原声明",
+                            },
+                        }),
+                    ),
+                ],
+            ),
         ]
     }
 
@@ -5952,6 +6208,12 @@ mod tests {
         // 0bw③（2026-09-27 复审）：write_control_review 违例场景——XOR／
         // 未知规则／分类错配三案恰触发本族。
         expect("write_control_review_violations", "write_control_review");
+        // 0bz S1（2026-09-28）：face_fingerprint 违例——轮 3 的 stable 前缀
+        // 与重算 LCP（=1）相悖＋kind 错标（同位异哈希必须 mutated）。
+        expect(
+            "face_fingerprint_progression_and_violations",
+            "face_fingerprint",
+        );
         expect("control_tickets_unknown", "control_tickets");
         expect("control_tickets_kind_conflict", "control_tickets");
         expect("control_tickets_one_shot", "control_tickets");
@@ -6473,6 +6735,7 @@ fams = {
     "failure_cause_shape": v._verify_v02_failure_cause_shape,
     "first_result_deadline": v._verify_v02_first_result_deadline,
     "write_control_review": v._verify_v02_write_control_review,
+    "face_fingerprint": v._verify_v02_face_fingerprint,
 }
 data = json.load(sys.stdin)
 out = {}
@@ -6561,8 +6824,10 @@ json.dump(out, sys.stdout)
         // cross-class dedup key (F-2) and the declared-usable drift.
         // 256 → 258 (0bw③ 复审, 2026-09-27): +write_control_review_ok /
         // _violations (该族对拍 parity 自此非平凡——此前合成语料无场景).
+        // 258 → 259 (0bz S1, 2026-09-28): +face_fingerprint_progression_
+        // and_violations (good progression ＋ stable/LCP 相悖 ＋ kind 错标).
         assert_eq!(
-            scenario_count, 258,
+            scenario_count, 259,
             "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(

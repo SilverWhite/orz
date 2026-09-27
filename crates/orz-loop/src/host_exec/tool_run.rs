@@ -4501,8 +4501,13 @@ mod tests {
                 // ORZ-CACHE-CONTEXT-COST (2026-08-15): initial request
                 // header fingerprint before the first model round.
                 EventType::RequestHeaderChange,
+                // 0bz S1 (2026-09-28): the per-request model-face prefix
+                // fingerprint rides every main-lane request, immediately
+                // before its model_output.
+                EventType::FaceFingerprint,
                 EventType::ModelOutput,
                 EventType::CounterexampleGate,
+                EventType::FaceFingerprint,
                 EventType::ModelOutput,
                 EventType::RunFinished,
             ],
