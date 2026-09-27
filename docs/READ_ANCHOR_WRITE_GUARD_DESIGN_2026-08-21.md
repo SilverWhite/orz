@@ -6,7 +6,7 @@
 > **2026-08-21 用户指示开始 S1 实施**（见 §8）；**同日指示开始 S2 测试**（见 §9）。
 > 性质：FUS-LARGE-FILE-READ-CONTRACT（ADR-0010 §14.22）读取信封扩展 +
 > 写订单契约（CLASSICAL-EXEC-ASSISTANT 写面）。关联：
-> [ADR-0010 §14.38](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)、
+> [ADR-0010 §14.38](../adr/ADR-0010-vol-14-addenda-index.md)、
 > [BACKLOG 0f](BACKLOG_AND_PRIORITIES.md)、[TODO P0-0f](../TODO.md)。
 > 实施路由：S1 代码（已实施 2026-08-21）→ S2 测试（已闭合 2026-08-21）→
 > S3 重建 → S4 复验。

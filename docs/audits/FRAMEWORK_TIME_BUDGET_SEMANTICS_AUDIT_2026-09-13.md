@@ -18,7 +18,7 @@
 
 **既有设计没有把各部件的时间预算定位为"需强制等待"。** 权威口径三处都写的是"上限/兜底/及时返回"：
 
-1. `adr/ADR-0010-fusion-runtime-and-agent-architecture.md:247-248`："预算是 **anti-runaway backstop**，不是对正常复杂任务工作量的估计。"
+1. `adr/ADR-0010-vol-03-isomorphic-agents.md:101-102`（2026-09-28 分卷重定位；原行钉 `adr/ADR-0010-fusion-runtime-and-agent-architecture.md:247-248` 已与引文不符）："预算是 **anti-runaway backstop**，不是对正常复杂任务工作量的估计。"
 2. `docs/TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md` §2（2026-09-03 用户裁决）：**P2 只留官方评测要求的墙钟**（orz/runner 自加硬杀墙钟全删）；**P3 工具执行层无自身硬超时**——"超阈值自动后台化 + 一次提醒，不杀；……机械兜底=5 分钟无实际活跃（无输出增长）即杀并返回提醒"。
 3. `docs/COMMAND_TIMEOUT_AND_WEB_SEARCH_TIMEOUT_RESEARCH_2026-08-29.md:62`："**超时后的行为比超时值更重要**：应返回结构化错误（step/code/message + 建议：重试/换查询/走 web_fetch 直读），而不是挂死或空结果。"
 
@@ -334,7 +334,7 @@
 
 ## 7. 附录 B：源码 / 文档索引（便于逐条复核）
 
-- 预算口径：`adr/ADR-0010-fusion-runtime-and-agent-architecture.md:246-251`；`docs/TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md` §2/§3.1/§3.3/§3.8；`docs/COMMAND_TIMEOUT_AND_WEB_SEARCH_TIMEOUT_RESEARCH_2026-08-29.md` §5/§6；`docs/TER_T1_2_FG_BUDGET_180S_DEFAULT_2026-09-03.md`；`docs/audits/TER_T1_4_NO_HARD_TIMEOUT_KILL_2026-09-04.md`；`docs/audits/TER_T1_5_IDLE_CPU_BACKSTOP_2026-09-04.md`；`docs/audits/TER_T1_7_UNLIMITED_ROUND_BUDGET_DEFAULT_2026-09-04.md`；`docs/audits/TER_T1_9_F6_PUSH_BUDGET_CUE_2026-09-04.md`；`docs/audits/TER_T2_1_WALLCLOCK_SINGLE_SOURCE_2026-09-04.md`。
+- 预算口径：`adr/ADR-0010-vol-03-isomorphic-agents.md:100-105`（2026-09-28 分卷重定位；原行钉 `adr/ADR-0010-fusion-runtime-and-agent-architecture.md:246-251` 已与引文不符）；`docs/TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md` §2/§3.1/§3.3/§3.8；`docs/COMMAND_TIMEOUT_AND_WEB_SEARCH_TIMEOUT_RESEARCH_2026-08-29.md` §5/§6；`docs/TER_T1_2_FG_BUDGET_180S_DEFAULT_2026-09-03.md`；`docs/audits/TER_T1_4_NO_HARD_TIMEOUT_KILL_2026-09-04.md`；`docs/audits/TER_T1_5_IDLE_CPU_BACKSTOP_2026-09-04.md`；`docs/audits/TER_T1_7_UNLIMITED_ROUND_BUDGET_DEFAULT_2026-09-04.md`；`docs/audits/TER_T1_9_F6_PUSH_BUDGET_CUE_2026-09-04.md`；`docs/audits/TER_T2_1_WALLCLOCK_SINGLE_SOURCE_2026-09-04.md`。
 - 检索/双车道：`docs/RETRIEVAL_SUBAGENT_DUAL_LANE_DESIGN_2026-09-09.md` §0/§2/§3.1/§3.4；`docs/TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md:63-67`。
 - 模型/传输：`orz/crates/orz-loop/src/gateway/model.rs:30-75`；`orz/crates/orz-loop/src/gateway/transport.rs:371-377`、`:1151`、`:1581-1710`。
 - 轮预算/墙钟/探针：`orz/crates/orz-loop/src/controller.rs:59-95`、`:969`；`orz/crates/orz-bin/src/main.rs:113-127`、`:600-620`；`scripts/run_r0_heavy_official.py:235-260`。

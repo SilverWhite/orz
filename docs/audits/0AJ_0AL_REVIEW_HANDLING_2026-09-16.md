@@ -6,7 +6,7 @@
 > ＋0al 修复）／账本 v3.47–v3.48。本批**不新增未闭合项**（计数维持 36）。
 > 关联：[`0aj／0al 摩擦修复与 0.5.3 载体`](0AJ_0AL_FRICTION_FIX_AND_053_CARRIER_2026-09-16.md) /
 > [`0AE 深审（QUAD 批）`](QUAD_BATCH_DEEP_REVIEW_2026-09-15.md) /
-> [`ADR-0010 §14.67`](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
+> [`ADR-0010 §14.67`](../../adr/ADR-0010-vol-14-addenda-index.md)。
 
 ## 1. 独立复核读数（主会话复现，非转抄）
 

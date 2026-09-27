@@ -180,4 +180,4 @@
   （ORZ-BLACKBOARD-PLAN-EPOCH）。
 - 本文件保持为 v1.14 实施记录；新机制实施审计另行出具。
 - 入口：[黑板 plan epoch 设计](../BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md) /
-  [ADR-0010 §14.15](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
+  [ADR-0010 §14.15](../../adr/ADR-0010-vol-14-addenda-index.md)。

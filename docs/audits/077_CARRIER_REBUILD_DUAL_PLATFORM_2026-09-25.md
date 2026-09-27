@@ -239,7 +239,7 @@
 [`0bs 轮报告`](0BS_FRICTION_REMEDIATION_AND_CARRYOVER_2026-09-25.md) ／
 [`0bm 轮报告`](0BM_EDIT_FACE_IMPLEMENTATION_AND_FRICTION_2026-09-25.md) ／
 [`0BS 检索线路线调研`](0BS_RETRIEVAL_ROUTE_SURVEY_2026-09-25.md) ／
-[`ADR-0010 §14.78`](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)
+[`ADR-0010 §14.78`](../../adr/ADR-0010-vol-14-addenda-index.md)
 
 关键词：0.6.15、0bs 进件、结束自述常驻尾行、分块表单源指向行、未落地回执、
 `context_scale:summary_not_landed`、状态符号白名单窗口、字面量核证、载体级 Web 探针、

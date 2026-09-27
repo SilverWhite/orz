@@ -91,7 +91,7 @@ r1 gpt2 单批 598 s、r2 extract-elf 单批 636 s 都是在可用证据已足�
   ——即「全文或部分正文的工具证据」；
 
 > **v1.2 勘误注（2026-09-20，零行为变更）：本口径已被 0ax S1 收窄为「可引用」口径，权威见
-> [`ADR-0010 §14.74`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。** 现行为＝上述文本级
+> [`ADR-0010 §14.74`](../adr/ADR-0010-vol-14-addenda-index.md)。** 现行为＝上述文本级
 > 证据集合**再排除无 URL 合成答案**（`source_type == web_search_result` 且原引用池为空；原池大小随可选
 > 字段 `citation_url_count` 落 ledger，判定单源 `batch_close::citation_url_count`）；合成答案改由
 > `synthetic_answer_count` 单列披露、不入阈值 5／护栏 10。S3 实读：七批 37 条文本级证据中 21 条为

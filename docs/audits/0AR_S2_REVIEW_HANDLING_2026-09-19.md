@@ -3,7 +3,7 @@
 > 状态：**处置件全部落于工作树（未提交、未推送、未重建）**；日期 2026-09-19。
 > 指令口径（用户）：「请对审查出的全部问题进行处理，处理完成后依旧暂时不提交、推送、重建」。
 > 依据：[`审查报告`](0AR_S2_RS_MECHANICAL_0M_S4_OVERNIGHT_REVIEW_2026-09-19.md)（有条件通过；P1×2／P2×2／P3×5）。
-> 关联：[设计稿 v1.1](../RETRIEVAL_BATCH_HANDOFF_AND_ROUND_SEAT_DESIGN_2026-09-19.md) / [ADR-0010 §14.73](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [过夜批报告](0AR_S2_RS_MECHANICAL_0M_S4_OVERNIGHT_2026-09-19.md) / [BACKLOG 0ar](../BACKLOG_AND_PRIORITIES.md) / [TODO P0-0ar](../../TODO.md) / 索引 v3.80。
+> 关联：[设计稿 v1.1](../RETRIEVAL_BATCH_HANDOFF_AND_ROUND_SEAT_DESIGN_2026-09-19.md) / [ADR-0010 §14.73](../../adr/ADR-0010-vol-14-addenda-index.md) / [过夜批报告](0AR_S2_RS_MECHANICAL_0M_S4_OVERNIGHT_2026-09-19.md) / [BACKLOG 0ar](../BACKLOG_AND_PRIORITIES.md) / [TODO P0-0ar](../../TODO.md) / 索引 v3.80。
 
 ---
 

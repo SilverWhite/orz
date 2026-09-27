@@ -222,7 +222,7 @@
 [`074 重建档`](074_CARRIER_REBUILD_DUAL_PLATFORM_2026-09-24.md) ／
 [`0BS 检索线路线调研`](0BS_RETRIEVAL_ROUTE_SURVEY_2026-09-25.md) ／
 [`综合稿`](../UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md) ／
-[`ADR-0010 §14.78`](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)
+[`ADR-0010 §14.78`](../../adr/ADR-0010-vol-14-addenda-index.md)
 
 关键词：0.6.14、编辑面簇进件、大小上限 16 MiB、`ORZ_EDIT_MAX_FILE_BYTES`、行尾逐行保真、
 回退窗口、`.gsa/rollback`、写路径收敛、字面量核证、载体级 Web 探针、ACAF 重 provision、

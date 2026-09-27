@@ -250,7 +250,7 @@
 [`0br S3 归档投影档`](0BR_S3_ARCHIVE_PROJECTION_2026-09-25.md) ／
 [`0br S2 审查处置档`](0BR_S2_REVIEW_HANDLING_2026-09-25.md) ／
 [`综合稿`](../UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md) ／
-[`ADR-0010 §14.78`](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)
+[`ADR-0010 §14.78`](../../adr/ADR-0010-vol-14-addenda-index.md)
 
 关键词：0.6.13、首个 UI 载体、Web 工作台进件、`orz web`、98.css、XP.css、归档投影面、
 trusted_workspaces、字面量核证、载体级 Web 探针、ACAF 重 provision、PT_INTERP=0、

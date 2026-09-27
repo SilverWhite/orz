@@ -4,7 +4,7 @@
 > 设计—实现符合性**三面全面复审，并处理复审发现的问题（2 处文档一致性 +
 > 2 处测试覆盖补强）。**无代码语义改动**。
 > **设计权威**：[`INITIAL_ORIENTATION_DECLARATION_DESIGN_2026-09-11`](../INITIAL_ORIENTATION_DECLARATION_DESIGN_2026-09-11.md)
-> / [`ADR-0010 §14.66`](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / BACKLOG 0x / TODO P0-0x。
+> / [`ADR-0010 §14.66`](../../adr/ADR-0010-vol-14-addenda-index.md) / BACKLOG 0x / TODO P0-0x。
 > **前序**：[`0X S1 实施记录`](0X_S1_INITIAL_ROUND_INQUIRY_IMPL_2026-09-11.md) /
 > [`0X S2 实施记录`](0X_S2_EVENT_FACE_AND_SIGNER_2026-09-11.md)。
 > **状态**：复审与处理完成（门禁 `valid: true`）；**S3 双平台重建 / S4 实机复验

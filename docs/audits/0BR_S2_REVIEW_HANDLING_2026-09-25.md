@@ -146,7 +146,7 @@
 ## 10. 入口
 
 - 账面：[`0BR_S1 勘定`](0BR_S1_WEB_FORM_SURVEY_2026-09-24.md) / [`0BR_S2 回执`](0BR_S2_IMPLEMENTATION_2026-09-24.md) / [`综合稿`](../UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md)
-- 裁决：[`ADR-0010 §14.78 ＋ v1.81 勘误`](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)
+- 裁决：[`ADR-0010 §14.78 ＋ v1.81 勘误`](../../adr/ADR-0010-vol-14-addenda-index.md)
 - 实现：`orz/crates/orz-web/`（桥＋前端＋`tests/frontend_smoke.mjs` 冒烟门）
 - 待办：BACKLOG/TODO `P1-0br`
 

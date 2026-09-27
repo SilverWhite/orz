@@ -4,7 +4,7 @@
 > 指令口径（用户）：「请先查看CLI_PROJECT_INDEX.md路由，随后回查所需文档。请对当前未提交内容进行全面审查，审查内容包括设计合理性，实现合理性，自己设计与实现的符合性；审查完成后按照项目管理出审计报告即可，不提交不推送不重建」。
 > 审查对象：索引 v3.79 头行所指过夜批全部未提交内容——父仓 M×14＋D×8（暂存）＋??×10；orz 子仓 27 件修改＋3 件新增（`batch_close.rs`／`lif/rli.rs`〔0am 影批〕／`rli_shadow_replay.rs`〔0am 影批〕）。
 > 处置：全部发现已于同日处置闭合（P1×2 改文＋P2×2 修复/登记＋P3 逐条），回执见 [`0AR_S2_REVIEW_HANDLING_2026-09-19`](0AR_S2_REVIEW_HANDLING_2026-09-19.md)。
-> 对照基准：[设计稿 v1.0](../RETRIEVAL_BATCH_HANDOFF_AND_ROUND_SEAT_DESIGN_2026-09-19.md)／[S1 报告](0AR_S1_CONTRACT_SURFACE_2026-09-19.md)／[ADR-0010 §14.73](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)／[过夜批报告](0AR_S2_RS_MECHANICAL_0M_S4_OVERNIGHT_2026-09-19.md)／[严格审查 RS-01…RS-18](FULL_PROJECT_STRICT_REVIEW_2026-09-18.md)。
+> 对照基准：[设计稿 v1.0](../RETRIEVAL_BATCH_HANDOFF_AND_ROUND_SEAT_DESIGN_2026-09-19.md)／[S1 报告](0AR_S1_CONTRACT_SURFACE_2026-09-19.md)／[ADR-0010 §14.73](../../adr/ADR-0010-vol-14-addenda-index.md)／[过夜批报告](0AR_S2_RS_MECHANICAL_0M_S4_OVERNIGHT_2026-09-19.md)／[严格审查 RS-01…RS-18](FULL_PROJECT_STRICT_REVIEW_2026-09-18.md)。
 > 证据边界：主会话独立读码（全量 diff 逐 hunk）＋独立工具链复核（本机实跑，见 §3）；未跑 Python assurance 全套与 clippy 全量（改动面已由四个 Rust suite＋门禁＋runtime 覆盖，与过夜批报告 §6 同口径）；S3 真机判据不在本轮可证范围。
 
 ---

@@ -1,4 +1,4 @@
-> 状态：`current-design`；立项＝ BACKLOG／TODO `0br`（2026-09-24 用户令）；裁决转录＝[`ADR-0010 §14.78`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（v1.80，2026-09-24）
+> 状态：`current-design`；立项＝ BACKLOG／TODO `0br`（2026-09-24 用户令）；裁决转录＝[`ADR-0010 §14.78`](../adr/ADR-0010-vol-14-addenda-index.md)（v1.80，2026-09-24）
 > **本稿性质**：**执行形态与复用映射综合稿**——UI 形态本身由三份 UI 设计稿定义，本稿只指向、引用与落地，不改写其正文。
 
 # UI 形态综合设计稿（Web 优先 · 复用照搬优先）
@@ -6,9 +6,9 @@
 ## 1. 权威链与本次裁决
 
 - **形态权威（2026-09-24 解冻）**：三份 UI 设计稿——[`CLI_UI_INTERACTION_MODEL_v0.1`](../architecture/CLI_UI_INTERACTION_MODEL_v0.1.md)（工作台空间语言与全局区域）、[`CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1`](../architecture/CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md)（两行顶栏／大主窗优先／默认中文／Help 弹窗）、[`CONTENT_PANE_CONVERSATION_RENDERING_v0.1`](../architecture/CONTENT_PANE_CONVERSATION_RENDERING_v0.1.md)（ContentPane 对话与机器动作的渲染规则）。
-- **定位权威**：[`ADR-0010 §2.4 条 8`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（UI 是投影层；主 UI 为 `orz-tui` assurance workbench；Codex TUI/app-server 可作 fallback；两者必须消费同一 host/loop/journal 事实，不建第二套产品 runtime）与 [`§2.6`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（Toolbar 与只读 session/run-history 投影为 presentation baseline；UI 不拥有执行事实、permission、session persistence 或 restore）。
+- **定位权威**：[`ADR-0010 §2.4 条 8`](../adr/ADR-0010-vol-02-core-decisions.md)（UI 是投影层；主 UI 为 `orz-tui` assurance workbench；Codex TUI/app-server 可作 fallback；两者必须消费同一 host/loop/journal 事实，不建第二套产品 runtime）与 [`§2.6`](../adr/ADR-0010-vol-02-core-decisions.md)（Toolbar 与只读 session/run-history 投影为 presentation baseline；UI 不拥有执行事实、permission、session persistence 或 restore）。
 - **复用权威**：`FUS-CORE`（成熟组件优先）＋ 本稿 §4 映射表（"能照搬就照搬"）。
-- **本次用户裁决（2026-09-24；五句逐字转录以 [`ADR-0010 §14.78`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) 为准）**：① UI 的具体形态就用那三份设计稿；② 三份稿子从冻结状态里拽回来；③ 搬 xai 并以 xai 作为基础就是为了复用成熟组件，能复用的当然直接复用，遵守开源协议；④ 先做 Web、后补 TUI 形式。
+- **本次用户裁决（2026-09-24；五句逐字转录以 [`ADR-0010 §14.78`](../adr/ADR-0010-vol-14-addenda-index.md) 为准）**：① UI 的具体形态就用那三份设计稿；② 三份稿子从冻结状态里拽回来；③ 搬 xai 并以 xai 作为基础就是为了复用成熟组件，能复用的当然直接复用，遵守开源协议；④ 先做 Web、后补 TUI 形式。
 
 ## 2. 形态摘要（引自三稿，细节以原文为准）
 

@@ -27,9 +27,9 @@
 
 > **分卷口径（2026-09-25 用户令）**：逐批流水与记录文档自**下一批**起**直接**记入 [BACKLOG 第二卷](docs/BACKLOG_AND_PRIORITIES_2.md)（取代先前「先落治理行、沉淀后再移入第二卷」）；本文件与主 BACKLOG 只留「当前计数＋本批一句要点＋指针链接」。
 
-- 未闭合总数：**57 项**（BACKLOG 计数口径；**本批＝ADR-0010 分卷拆分立项（114 批，零代码）**——0bz S1 指纹件（orz `7a6fe91e`）随载体进体：双平台重建换装＋ACAF 重 provision＋打包核证（`face_fingerprint` 字面量 win 0→2／linux 0→3；容器 zip 4/4・tar 4/4・顶层 2/2；清单活体两态 ✓）；**未推送未发行**（用户令「暂不推送」）。**计数 56 → 57**（新增 **0ca** `pending`），逐批流水见第二卷 §1.66。前批＝0.8.3 载体重建（113 批）。）TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
+- 未闭合总数：**56 项**（BACKLOG 计数口径；**本批＝ADR-0010 分卷拆分执行与闭合（115 批，0ca；2026-09-28）**——512 KB／5,989 行单体按大章节物理分卷为 §1–§14 十四卷（主文件保留为入口页与分卷总目录）；语义零增删零改写（字节往返重组对拍通过）＋引用面 82 处单章引用改指对应分卷＋门禁 `valid: true`。**计数 57 → 56**（0ca `pending` → `implemented`），逐批流水见第二卷 §1.67。前批＝0ca 立项（114 批，零代码）。）TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 - P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项，实施未开始；§14.2 验证载体已裁决引入模拟器（2026-09-12），S1 载体搭建待放行，M0 定版为首个无依赖里程碑）；0z 真机资源安全边界与崩溃收尾（2026-09-12 用户裁决立项，设计完成待放行实施；S1–S4，**不与 0v-C 搭车**）。`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` 已随 0.5.1 载体重建闭合（2026-09-14）。**即时结果回报与流式检索线（GAP-MECH-IMMEDIATE-FEEDBACK）已于 2026-09-27 S4 三题实机复验通过后闭合**（55 → 54；判据①②③全过＋FR-D02 达成；整轮 89 题重跑按用户修正令不发起、维持 `0b` 验证⑤ 登记）：[`098 S4 收口档`](docs/audits/098_0AC_S4_CLOSURE_2026-09-27.md)。**2026-09-20 闭合**：检索批次回送与轮级单席位线（S1 契约面／S2 实施／S3 同三题真机复验全部完成，ADR-0010 §14.73/v1.75 转录随 S2；未闭合 36 → 35）＋同日 N1–N6 摩擦深挖登记观察不立项。
-- P1：0bz 上下文脸面瞬态分叉（指纹件＋渲染稳定化；S1 已落码（111 批）；S2–S4 待续）；0by ACAF 签名器不可达（桌面形态；S1 根因已定＋S2 已修，S3/S4 待续）；FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项；0aa 历史卷 journal 全量 verifier 复扫；0aj 黑板写权限层放行（`blackboard_write` ReadOnly deny，旧摩擦残余）；0al 门禁冻结克隆树漂移；0ae 上下文软门与模型参与压缩（注意力阶梯+plan 问询+黑板写入面）；0ah 滑块上下文（v8 模型自控注意力窗口；实现更正批＋只读审查处置＋收口清理批已落码，R-12 余项已处置，五项真机读数待实测，登记待放行）；0am LIF 动力学升级线（挂起，O2 为前置门）；0aq 严格审查处置线（RS-01…RS-19 待修；明细第二卷 §2.2）；0ba 运行身份唯一性（run id 秒级撞名）；0bc 资源层收口与可失败分配（随轮观测 RLI）；0bd／0bg／0bh／0bi／0bj／0bk 摩擦大杂项轮（明细第二卷）；**0bm 狗粮长轮**（首次真机轮达成 09-25：编辑面簇四件＋0bj②⑤⑥ 落码 `b7dd241e`；同轮并入 0bj／0bp）；**0bn 必定压缩复审补口**（单独进行、不进轮；S2 已随 0.6.12 进载体）；**0bp 检索形态改指浏览器车道**（B 路径；执行面自 09-25 起随 0bs 同载）；**0br Web 形态 UI**（Web 先行、TUI 形式后补；ADR §14.78）；**0bs／0bt 大狗粮轮**（0bt 全轮并件入 0bs；七件＋0bt 四件＋⑧-⑯ 已随 **0.7.0** 提交推送与发行；S3 载体达成、S4 真机待跑）；S3 摩擦处置 0au／0aw／0ax；**ADR-0010 分卷拆分（0ca，狗粮轮题面）**。已闭合流水＝**102 批闭合**：浏览器会话就绪判定（hand-off 形态）修复（55 → 54，S4 真机链首承接达成）：见 [`102 闭合档`](docs/audits/102_BROWSER_READY_HANDOFF_S4_CLOSE_2026-09-27.md)／097 批闭合三项（58 → 55；OBS candidate 与矩阵读数见档）：[`097 尾巴闭合档`](docs/audits/097_TAIL_CLOSURE_AND_FLIPS_2026-09-27.md)／检索合成判定面（2026-09-20 闭合，载体 0.6.4）。
+- P1：0bz 上下文脸面瞬态分叉（指纹件＋渲染稳定化；S1 已落码（111 批）；S2–S4 待续）；0by ACAF 签名器不可达（桌面形态；S1 根因已定＋S2 已修，S3/S4 待续）；FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项；0aa 历史卷 journal 全量 verifier 复扫；0aj 黑板写权限层放行（`blackboard_write` ReadOnly deny，旧摩擦残余）；0al 门禁冻结克隆树漂移；0ae 上下文软门与模型参与压缩（注意力阶梯+plan 问询+黑板写入面）；0ah 滑块上下文（v8 模型自控注意力窗口；实现更正批＋只读审查处置＋收口清理批已落码，R-12 余项已处置，五项真机读数待实测，登记待放行）；0am LIF 动力学升级线（挂起，O2 为前置门）；0aq 严格审查处置线（RS-01…RS-19 待修；明细第二卷 §2.2）；0ba 运行身份唯一性（run id 秒级撞名）；0bc 资源层收口与可失败分配（随轮观测 RLI）；0bd／0bg／0bh／0bi／0bj／0bk 摩擦大杂项轮（明细第二卷）；**0bm 狗粮长轮**（首次真机轮达成 09-25：编辑面簇四件＋0bj②⑤⑥ 落码 `b7dd241e`；同轮并入 0bj／0bp）；**0bn 必定压缩复审补口**（单独进行、不进轮；S2 已随 0.6.12 进载体）；**0bp 检索形态改指浏览器车道**（B 路径；执行面自 09-25 起随 0bs 同载）；**0br Web 形态 UI**（Web 先行、TUI 形式后补；ADR §14.78）；**0bs／0bt 大狗粮轮**（0bt 全轮并件入 0bs；七件＋0bt 四件＋⑧-⑯ 已随 **0.7.0** 提交推送与发行；S3 载体达成、S4 真机待跑）；S3 摩擦处置 0au／0aw／0ax。已闭合流水＝**102 批闭合**：浏览器会话就绪判定（hand-off 形态）修复（55 → 54，S4 真机链首承接达成）：见 [`102 闭合档`](docs/audits/102_BROWSER_READY_HANDOFF_S4_CLOSE_2026-09-27.md)／097 批闭合三项（58 → 55；OBS candidate 与矩阵读数见档）：[`097 尾巴闭合档`](docs/audits/097_TAIL_CLOSURE_AND_FLIPS_2026-09-27.md)／检索合成判定面（2026-09-20 闭合，载体 0.6.4）。
 - P2：IMPL-CONTROL-FABRIC Slice 3/4（P2-7）；OPS-PROTOCOL 裁剪与接线裁决（P2-8）；P2-11 余项（PULL 自描述 S3/S4、retryable 分类位、依赖图 S3/S4）；P2-12 S4 复验；P2-13 B4；P2-14 S3/S4；P2-15 EVALUATION-CORPUS-FREEZE（S1/S2 完成；附属 `GAP-EVAL-RESULT-SCHEMA-DRIFT` 已修复）；0ap FR-A06 压缩交互设计批（首步设计评估稿，取舍随稿裁决）；0bb 命令行引号与长行取用摩擦（入口见 BACKLOG）；S3 摩擦处置 0at（逐 query 归因）／0av（批次数读数落盘面）。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky。
 - 审计登记边界（条件触发，不占当前优先级）：orz-host 可选后端、headless 计划信号、23 工具分区 journals、B-1 后续、ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL。
@@ -339,7 +339,7 @@
   [`0AR_S2_RS_MECHANICAL_0M_S4_OVERNIGHT_2026-09-19`](docs/audits/0AR_S2_RS_MECHANICAL_0M_S4_OVERNIGHT_2026-09-19.md)）。
 
 入口：[设计](docs/GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06.md) /
-[ADR-0010 §14.56](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
+[ADR-0010 §14.56](adr/ADR-0010-vol-14-addenda-index.md) /
 [BACKLOG 0m](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ### P0-0n GAP-APPROVAL-PROMPTER（**延期**；2026-09-06 排期登记，同日用户裁决延期）
@@ -989,7 +989,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] **四子件（主代理定，2026-09-24）**：① **工具关系**——`browser_control{action:"search"}` 保留，与 `web_search` **共用同一份 per-activation SERP 预算**（单账本、不双计）；`web_search` 为检索默认执行入口，`browser_control search` 留给导航／标签页型流程；② **降级序**——浏览器 SERP（首选）→ 本地分段 HTTP（`ORZ_WEB_SEARCH_LOCAL=1` 时）→ provider 合成（`/responses`）；全不可达按 FP-2 如实回传真实 cause；`ORZ_WEB_SEARCH_LOCAL` 语义由「整条 `web_search` 短路」改为「允许 HTTP 兜底」（撤 `orz-tools …/web_search/client.rs` 整段短路，改分级执行）；③ **时限统一**——收敛到既有裁决「首个结果 ≤10 s」：引擎 per-engine 10 s、`T_segment` 每页 10 s、整体 30 s；浏览器拉起等待不吃首个结果预算（拉起失败立即 `capability_unreachable`）；④ **批序**——S1 设计定稿（含 ADR-0010 §14.65 脚注：`web_search` 静态标注语义改述为「检索入口（浏览器优先、脚本兜底）」，双车道条文与 γ 退役不动）→ S2 落码＋钉子（接线钉／降级钉／预算共账钉／撤整段短路钉）→ S3 重建载体（随 0bo 轮前置）→ S4 真机复验。
 - [ ] **S4 判据（预登记）**：带 URL 来源占比、证据阈值达成、引擎链读数（`chain_detail`）、失败类别如实回传、零真实 400；顺带收 0ax「无 URL 合成」主路径消解读数。
 - **2026-09-25 用户令**：**执行面随 `P1-0bs` 同载**（本条目闭合仍随其自身史）——S1 设计定稿→S2 落码＋钉子→S3 载体重建→S4 真机复验随 0bs 跑。
-- 入口：BACKLOG 0bp / [`ADR-0010 §14.65`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`检索补强设计`](docs/RETRIEVAL_LOCAL_SEGMENTED_HARDENING_DESIGN_2026-09-15.md) / [`0v 实施设计`](docs/RETRIEVAL_ENGINE_SERP_SEARCH_ACTION_DESIGN_2026-09-10.md)。
+- 入口：BACKLOG 0bp / [`ADR-0010 §14.65`](adr/ADR-0010-vol-14-addenda-index.md) / [`检索补强设计`](docs/RETRIEVAL_LOCAL_SEGMENTED_HARDENING_DESIGN_2026-09-15.md) / [`0v 实施设计`](docs/RETRIEVAL_ENGINE_SERP_SEARCH_ACTION_DESIGN_2026-09-10.md)。
 
 ### P1-0bq 进程收口兜底（run 收尾扫净绕出 Job 的游离进程）（P1；2026-09-24 用户令立项，BACKLOG 0bq；来源＝2026-09-24 真机会话 `RUN-aa18ef7e-0`〔模型用 `WMI Win32_Process.Create` 以 detached 方式拉起 Chrome 绕开子 Job 回收：PID 23916、进程数 14→27〕＋用户令「模型既然绕出去了那就是有需求，加个收口用来兜底吧，orz 发出的进程在主进程结束后将一并被关闭，最后收干净就行」；**同轮执行＝0bm**）
 
@@ -1097,7 +1097,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 > 现象与读数：六轮狗粮长轮存档（09-25～09-27；`RUN-CLI-6ab6275c`〔0bm〕／`6ab6ce44`／`6ab6dc02`／`6ab7b7eb`〔0bw〕／`6ab7d8b7`／`6ab7f32f`；1,041 模型轮／input 146,947,652 tk）只读逐轮复算（口径与 0bm §8 账面逐位吻合）＝整体命中率 90.9%–95.5%；miss 10,301,636 tk 分账＝压缩后第 1 针 26%（2,650,263）／**第 2 针 24%（2,426,381）**／空跑 `context_compress` 瞬态分叉 12%（1,225,754）／自发塌陷 7%（737,873）／常态尾巴 30%／冷启动 1%。**三源客户端证据**＝① 恢复指纹：空跑 compress（防抖三态 no-op、无 `context_compressed` 事件）与自发塌陷（无任何特殊事件）均塌一轮即恢复命中原前缀（`6ab7b7eb` seq857→863→871＝214,144→7,296→217,344）⇒ provider 单元一直在盘、当轮请求是客户端脸面变体；② 脏 +2 例 +2 hit 反低于 +1（六例，极端 31,488→9,344）＝纯落盘时序不可能（同前缀至少保底），只能 +1→+2 间脸面又被改一次；③ 干净 +2 三例（comp@596 等）＝单往返落盘足够 ⇒ 第 2 针全部额外成本＝脸面重渲。**边界（2026-09-28 用户裁决）**＝「不压第一针，如果强制少压深压，模型的注意力质量和动作连续性就要受到影响，目前已经不能再割舍了」⇒ **压缩触发策略不动**（频率／时机／窗口大小／模型自选压缩面全部不动），第一针不作为消除目标（0bm §8.5 候选③出局）；**修复面＝渲染稳定化，规格边界写死＝只动位置／时点、不动内容**（瞬态行移尾／固定位置／开窗期间延续旧脸渲染、摘要落地方才换脸；禁删行删信息）。
 
 - [x] **S1 指纹件落码（插桩，模型零感知）**（2026-09-28 完成，111 批）：**实现勘定＝指纹单位取「逐消息」**（v8 视图＝消息列表投影，消息即装配自然单元——比设计稿的「分段」更细、定位更直接）；`face_fingerprint()` 逐消息对 **wire 同字段投影**（role/content/tool_call_id/tool_calls/reasoning_content；`round` 不落 wire 故不入哈希——防内部轮章变化造成假分歧）做 sha256 取 12 hex＋`first_divergence()`（LCP 首分歧；kind=mutated/inserted/removed）＋digest（16 hex）＋head 诊断头（120 chars）；生产者＝主车道每请求 emit（`model_round` 严格 +1；事件紧邻 `model_output` 之前 ⇒ 「分歧消息 ↔ miss」逐轮对账）；合约面＝`EventType::FaceFingerprint`＋`verify_face_fingerprint` 法官族（跨事件 LCP 重算对账＋两侧哈希核证）＋ALL_FAMILIES（47 → 48；112 批勘误——111 批此处原误记 66 → 67，该数实为信封 wire 枚举数）＋对拍场景（corpus 258 → 259）＋TUI 降级 Unknown。读数：orz-assurance **278/0**（Rust↔Python parity 绿）／orz-loop **858/0**（`user_cancel_closes` 偶发 flaky 与本批无关——干净树可复现）／orz-tui **178/0**；fmt 噪声与 HEAD 同面；clippy 零新增。
-- [ ] **S2 钉子＋单轮读数**：先红后绿钉（fixture 两版脸面判定首分歧段）＋真机单轮采集，把三源（第 2 针／空跑分叉／自发塌陷）定位到具体段落（0bi §10-④ 的「把推断变为可对账读数」落地）。〔钉子半已随 S1 落码（111 批）：model_face 三钉（同 wire 同哈希／round 不入哈希／分歧三形）＋families 对拍场景；载体前置已达成（113 批＝0.8.3 双平台重建进体，`face_fingerprint` 事件随 run 落 journal）；**余项＝真机单轮采集**（随下一狗粮轮）。〕
+- [ ] **S2 钉子＋单轮读数**：先红后绿钉（fixture 两版脸面判定首分歧段）＋真机单轮采集，把三源（第 2 针／空跑分叉／自发塌陷）定位到具体段落（0bi §10-④ 的「把推断变为可对账读数」落地）。〔钉子半已随 S1 落码（111 批）：model_face 三钉（同 wire 同哈希／round 不入哈希／分歧三形）＋families 对拍场景；载体前置已达成（113 批＝0.8.3 双平台重建进体，`face_fingerprint` 事件随 run 落 journal）；**余项＝真机单轮采集**（随下一狗粮轮）。〔**部分读数已获（115 批，`RUN-CLI-6ab99969`）**：自发塌陷族指纹定位＝index 1 折叠桥/机械摘要行 mutated（r40，塌一轮即恢复）；第 1 针 ×2 确认（分歧段＝压缩 marker 本体）；+2 双 clean（本轮无第 2 针样本）；空跑族无样本——第 2 针／空跑定位仍待长轮。〕
 - [ ] **S3 渲染稳定化修码**：按 S2 定位落两处修码（窗口开窗脸＋压缩落地脸），只动位置／时点；**机械判据＝+2 针消失＋空跑 `context_compress` 零整窗分叉**；随载体重建进体。
 - [ ] **S4 真机对账**：下一狗粮轮读数＝① 第 2 针归零 ② 空跑分叉归零 ③ 自发塌陷读数（如仍现，指纹定位）④ 命中率观察读数如实记录（不作硬判据，单轮纪律）。
 - [ ] **闭合**：S1／S2 指纹件（有钉）＋S3 修码（先红后绿：指纹事件证明瞬态段消失）＋S3 载体＋S4 真机读数 ⇒ `pending` → `implemented`，计数 56 → 55。
@@ -1105,14 +1105,14 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 ### P1-0ca ADR-0010 分卷拆分（按大章节物理分卷；语义零增删；狗粮轮题面任务）（P1；2026-09-28 用户令立项，BACKLOG 0ca；56 → 57；来源＝0bm 未竟移交 ①）
 
-> 用户令：「请给ADR-0010立单独项吧，拆解方式的话，按照大的章节拆即可」。对象＝`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`（512 KB／5,989 行；§1–§13 ≈1,120 行，**§14 裁决索引独占 ≈4,869 行**）。执行形态＝**下一轮真机狗粮的题面任务**（上下文自然过压缩水位 ⇒ 0bz S2 真机单轮采集同轮承载；0bs S4 复验并跑与否留轮时定）。分卷＝物理拆分、**语义零增删零改写**；卷首保留权威声明＋分卷总目录；索引 §1 入口与全仓引用面同一变更内修正。
+> 用户令：「请给ADR-0010立单独项吧，拆解方式的话，按照大的章节拆即可」。对象＝`adr/ADR-0010-fusion-runtime-and-agent-architecture.md`（512 KB／5,989 行；§1–§13 ≈1,120 行，**§14 裁决索引独占 ≈4,869 行**）。执行形态＝**下一轮真机狗粮的题面任务**（上下文自然过压缩水位 ⇒ 0bz S2 真机单轮采集同轮承载；0bs S4 复验并跑与否留轮时定）。分卷＝物理拆分、**语义零增删零改写**；卷首保留权威声明＋分卷总目录；索引 §1 入口与全仓引用面同一变更内修正。（**2026-09-28 执行更正（115 批）**：用户令「直接做完这一项」⇒ 主会话直接执行完成——未经狗粮轮、0bz S2 采集未同轮承载；其余约束不变。）
 
-- [ ] **S1 分卷方案勘定**：章→卷映射表＋§14 是否按 §14.x 再分层（轮内裁量）＋文件命名与主文件形态（总目录页／分卷 README）＋全仓引用面清单。
-- [ ] **S2 轮内执行**：通读全文＋按方案重写落盘＋逐节对拍（语义零增删）。
-- [ ] **S3 引用面修正**：索引 §1 AUTH-ADR-0010 入口＋全仓 `adr/ADR-0010-*.md` 引用同一变更内修正。
-- [ ] **S4 门禁与回读**：`check_repository.py` `valid: true`＋零断链＋分卷可读性回读。
-- [ ] **闭合**：S1–S4 达成 ⇒ `pending` → `implemented`，计数 57 → 56。
-- 入口：BACKLOG `0ca` / [`0bm 报告 §1`](docs/audits/0BM_EDIT_FACE_IMPLEMENTATION_AND_FRICTION_2026-09-25.md) / `adr/ADR-0010-fusion-runtime-and-agent-architecture.md`。
+- [x] **S1 分卷方案勘定**：章→卷映射表＋§14 处理（**裁定＝单卷不分层**：内部小节为追加序、非数值序，再分层无益）＋文件命名（`ADR-0010-vol-NN-<slug>.md`）＋主文件形态（**保留为入口页＋分卷总目录**）＋全仓引用面清单（142 处/68 文件）。**2026-09-28 达成**（115 批）。
+- [x] **S2 执行**：机械分卷落盘 14 卷＋主文件改造；**字节级往返重组 sha256 与原文一致**（`973438d4…`）＝语义零增删零改写。**2026-09-28 达成**（115 批）。
+- [x] **S3 引用面修正**：索引 §1 AUTH-ADR-0010 入口加注分卷＋非存档 **82 处**单章引用改指对应分卷（21 文件）＋全仓引用面清单与台账同步（索引头/§3/§8、BACKLOG、第二卷）。**2026-09-28 达成**（115 批）。
+- [x] **S4 门禁与回读**：`check_repository.py` `valid: true`＋零断链＋分卷可读性回读达成。**2026-09-28 达成**（115 批）。
+- [x] **闭合**：S1–S4 达成 ⇒ `pending` → `implemented`，计数 57 → 56。**2026-09-28 落账（115 批）**；详见 [`115 执行档`](docs/audits/115_ADR0010_VOLUME_SPLIT_EXECUTION_AND_FRICTION_2026-09-28.md)。
+- 入口：BACKLOG `0ca` / [`115 执行档`](docs/audits/115_ADR0010_VOLUME_SPLIT_EXECUTION_AND_FRICTION_2026-09-28.md) / [`114 立项档`](docs/audits/114_ADR0010_VOLUME_SPLIT_REGISTRATION_2026-09-28.md) / [`0bm 报告 §1`](docs/audits/0BM_EDIT_FACE_IMPLEMENTATION_AND_FRICTION_2026-09-25.md)。
 
 ### P1-0bn 必定压缩复审补口（单独进行，不进狗粮轮）（P1；2026-09-24 0bm 复审批立项，BACKLOG 0bn；来源＝[`073 复审`](docs/audits/073_UNCOMMITTED_REVIEW_AND_REMEDIATION_2026-09-24.md) R1/R2；设计权威＝ADR §14.77 复审补记＋v8 §15；**执行形态＝单独批次（2026-09-24 用户令「0bn 是单独进行的内容，不进狗粮轮」）**）
 
@@ -1373,7 +1373,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 ### MECHANICAL-LAYER-MATH-CALCULUS（`implemented`；阶段 0-3 全部闭合 2026-08-31，BACKLOG P2-10）
 
-- [x] 全部闭合：阶段 0 决策（D1-D7）/ 阶段 1 设计定稿（F1-F6 + ADR-0010 §14.47 转录）/ 阶段 2 实施切片（I1 T̂+LIF 计算器、I2 失败目标身份、I3 temporal 分区、I4 域 spike 侧车、I5 类型化信封、I6 pipe 归约）/ 阶段 2 全面审查处理（R1-R9 + F10-F14 全部收口）/ 阶段 3 验证（V1 FakeProvider 面 8 项 + F11 receipt↔事件链同构核对、V2 离线 102 runs 四对照门 + 聚类对照 + 零误干预、V3 S3 重建 + S4 实机冒烟 1/1 与 temporal 四查询面端到端一致）。入口：[正式设计](docs/MECHANICAL_LAYER_MATH_CALCULUS_DESIGN_2026-08-30.md) / [讨论稿](docs/MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md) / [ADR-0010 §14.47](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [阶段 3 验证记录](docs/audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE3_VERIFICATION_AUDIT_2026-08-31.md) / BACKLOG P2-10。
+- [x] 全部闭合：阶段 0 决策（D1-D7）/ 阶段 1 设计定稿（F1-F6 + ADR-0010 §14.47 转录）/ 阶段 2 实施切片（I1 T̂+LIF 计算器、I2 失败目标身份、I3 temporal 分区、I4 域 spike 侧车、I5 类型化信封、I6 pipe 归约）/ 阶段 2 全面审查处理（R1-R9 + F10-F14 全部收口）/ 阶段 3 验证（V1 FakeProvider 面 8 项 + F11 receipt↔事件链同构核对、V2 离线 102 runs 四对照门 + 聚类对照 + 零误干预、V3 S3 重建 + S4 实机冒烟 1/1 与 temporal 四查询面端到端一致）。入口：[正式设计](docs/MECHANICAL_LAYER_MATH_CALCULUS_DESIGN_2026-08-30.md) / [讨论稿](docs/MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md) / [ADR-0010 §14.47](adr/ADR-0010-vol-14-addenda-index.md) / [阶段 3 验证记录](docs/audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE3_VERIFICATION_AUDIT_2026-08-31.md) / BACKLOG P2-10。
 
 ### MODEL-RESIDUAL-PRESSURE-FOLLOWUP（P2；2026-08-31 二次讨论裁决登记，BACKLOG P2-11）
 

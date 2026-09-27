@@ -2,7 +2,7 @@
 
 > **范围**：S1（常量 + 会话一次性状态 + 触发接线 + 测试矩阵最小集）。
 > **设计权威**：[`INITIAL_ORIENTATION_DECLARATION_DESIGN_2026-09-11`](../INITIAL_ORIENTATION_DECLARATION_DESIGN_2026-09-11.md)
-> / [`ADR-0010 §14.66`](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / BACKLOG 0x / TODO P0-0x。
+> / [`ADR-0010 §14.66`](../../adr/ADR-0010-vol-14-addenda-index.md) / BACKLOG 0x / TODO P0-0x。
 > **状态**：S1 完成（**未放行实机、未重建载体**）；S2–S4 待续。
 
 ## 1. 落码清单（与设计触点清单逐项对照）

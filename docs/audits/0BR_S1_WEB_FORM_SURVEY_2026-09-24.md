@@ -1,4 +1,4 @@
-> 状态：`current`；批次＝**0br S1 勘定（只读）**（BACKLOG/TODO P1-0br，2026-09-24 用户令「先进0br，请开始」）；设计权威＝综合稿 [`UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md`](../UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md) §4/§6 ＋ 三稿（2026-09-24 解冻）＋ [`ADR-0010 §14.78`](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；性质＝只读勘定与选型定稿建议，零代码改动。
+> 状态：`current`；批次＝**0br S1 勘定（只读）**（BACKLOG/TODO P1-0br，2026-09-24 用户令「先进0br，请开始」）；设计权威＝综合稿 [`UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md`](../UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md) §4/§6 ＋ 三稿（2026-09-24 解冻）＋ [`ADR-0010 §14.78`](../../adr/ADR-0010-vol-14-addenda-index.md)；性质＝只读勘定与选型定稿建议，零代码改动。
 
 # 0br S1 Web 形态勘定（pager 族闭包 · 改名映射 · 同代性 · 复用映射定稿 · Web 桥与前端选型 · 分发面与安全边界）
 
@@ -161,7 +161,7 @@
 
 ## 10. 入口
 
-- 设计权威：[`UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md`](../UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md) / 三稿（`architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`、`CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md`、`CONTENT_PANE_CONVERSATION_RENDERING_v0.1.md`）/ [`ADR-0010 §14.78`](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)
+- 设计权威：[`UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md`](../UI_FORM_CONSOLIDATED_DESIGN_2026-09-24.md) / 三稿（`architecture/CLI_UI_INTERACTION_MODEL_v0.1.md`、`CLI_UI_SIMPLIFICATION_SUPPLEMENT_v0.1.md`、`CONTENT_PANE_CONVERSATION_RENDERING_v0.1.md`）/ [`ADR-0010 §14.78`](../../adr/ADR-0010-vol-14-addenda-index.md)
 - 交互语义母本：`orz/crates/orz-tui/src/`（projection／view_model／app／widgets／modals）
 - 上游身份：`upstream/grok-build.lock.json` ＋ `orz/SOURCE_REV`（`6372e41d…`）
 - 待办：BACKLOG/TODO `P1-0br`；索引 `DESIGN-UI-FORM-CONSOLIDATED`

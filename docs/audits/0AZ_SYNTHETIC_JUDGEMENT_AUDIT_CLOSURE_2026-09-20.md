@@ -7,7 +7,7 @@
 > **未触碰**（本批 orz 侧只碰 `journal/families.rs`、`journal/families_s2c.rs` 两个判官文件）。计数：立项 41 → 42
 > （上一批），**本批闭合 42 → 41**（口径以 [`BACKLOG`](../BACKLOG_AND_PRIORITIES.md) 为准）。
 > 入口：[`0ay S1/S2 独立审查`](0AY_S1_S2_INDEPENDENT_REVIEW_2026-09-20.md)（F-1…F-7）／
-> [`0ay S1/S2/S3 实施报告`](0AY_S1_S2_S3_IMPLEMENTATION_2026-09-20.md)／[`ADR-0010 §14.74`](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)／
+> [`0ay S1/S2/S3 实施报告`](0AY_S1_S2_S3_IMPLEMENTATION_2026-09-20.md)／[`ADR-0010 §14.74`](../../adr/ADR-0010-vol-14-addenda-index.md)／
 > BACKLOG 0az／TODO P1-0az。
 
 ## 1. 计划与执行

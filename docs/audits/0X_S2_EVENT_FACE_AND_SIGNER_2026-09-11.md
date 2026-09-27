@@ -3,7 +3,7 @@
 > **范围**：S2（事件面 fixtures 正负例 / 法官族 / Python 镜像 / `orz-signer`
 > 第二模板摘要 / `check_repository` 全绿收口）。
 > **设计权威**：[`INITIAL_ORIENTATION_DECLARATION_DESIGN_2026-09-11`](../INITIAL_ORIENTATION_DECLARATION_DESIGN_2026-09-11.md)
-> / [`ADR-0010 §14.66`](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / BACKLOG 0x / TODO P0-0x。
+> / [`ADR-0010 §14.66`](../../adr/ADR-0010-vol-14-addenda-index.md) / BACKLOG 0x / TODO P0-0x。
 > **前序**：[`0X S1 实施记录`](0X_S1_INITIAL_ROUND_INQUIRY_IMPL_2026-09-11.md)。
 > **状态**：S2 完成（门禁 `valid: true`）；**S3 双平台重建 / S4 实机复验未放行**。
 > **后序**：S1/S2 全面复审已处理（2026-09-11，同日）——2 处文档一致性更正 +

@@ -2,7 +2,7 @@
 
 - 状态：`implementing`（2026-08-18 用户裁决；2026-08-18 实施完成、验证暂缓
   ——用户指示「完成后暂时不进行测试」；待验证闭环后转 `implemented`）
-- 关联：[`ADR-0010 §14.24`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（v1.24）；
+- 关联：[`ADR-0010 §14.24`](../adr/ADR-0010-vol-14-addenda-index.md)（v1.24）；
   [`CLASSICAL-EXEC-ASSISTANT §13`](CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md)；
   [`PLAN_FIRST_BLACKBOARD §4`](PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md)
 - 实施路由：实施前登记 BACKLOG / TODO（本设计轮不动未闭合计数）
