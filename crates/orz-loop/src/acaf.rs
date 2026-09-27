@@ -43,6 +43,21 @@ pub struct AcafConfig {
     pub keystore_root: PathBuf,
     /// The signer binary (defaults to `orz-signer` on PATH).
     pub signer_binary: Option<PathBuf>,
+    /// 0by S1 (2026-09-28): opt-in capture file for the signer child's
+    /// **stderr** (env `ORZ_ACAF_SIGNER_STDERR_LOG`).
+    ///
+    /// The child's stderr used to go to `Stdio::null()`, so every signer
+    /// *startup* failure was invisible: the client only saw a closed pipe and
+    /// journaled `signer_unreachable` with a cause-free detail
+    /// (`io error: 管道正在被关闭。 (os error 232)`). That is exactly what
+    /// made 0by take a whole round of desktop runs to even locate — the signer
+    /// was exiting at startup with
+    /// `installation key root is not a directory: <path>`.
+    ///
+    /// Default `None` keeps the previous behaviour byte-for-byte (stderr
+    /// discarded); the bypass is a read-only observation face and changes no
+    /// signing semantics.
+    pub signer_stderr_log: Option<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -161,6 +176,30 @@ pub struct AcafClient {
     injected_verify_failure: std::sync::Mutex<Option<(TicketKind, String)>>,
 }
 
+/// 0by S1 (2026-09-28): resolve the signer child's stderr sink.
+///
+/// `None` (the default) → `Stdio::null()`, i.e. the historical behaviour.
+/// `Some(path)` → append the child's stderr to `path`, which makes a signer
+/// **startup** failure readable instead of an anonymous `signer_unreachable`.
+/// A log path that cannot be opened is a spawn error (never a silent fallback:
+/// asking for the bypass and quietly not getting it is worse than failing).
+fn signer_stderr_stdio(cfg: &AcafConfig) -> Result<Stdio, AcafClientError> {
+    let Some(path) = cfg.signer_stderr_log.as_deref() else {
+        return Ok(Stdio::null());
+    };
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| {
+            AcafClientError::Spawn(format!(
+                "signer stderr log {} is not writable: {e}",
+                path.display()
+            ))
+        })?;
+    Ok(Stdio::from(file))
+}
+
 /// Spawn a signer child and take its stdio (shared by `spawn` and `respawn`).
 async fn spawn_child(
     cfg: &AcafConfig,
@@ -180,7 +219,7 @@ async fn spawn_child(
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(signer_stderr_stdio(cfg)?)
         .env("ORZ_SIGNER_MANIFEST", &cfg.manifest_path)
         .env("ORZ_SIGNER_KEYSTORE_ROOT", &cfg.keystore_root);
     let mut child = command
@@ -1232,5 +1271,58 @@ mod tests {
         assert!(!predates_restart_cutoff("2023-11-14T22:15:00Z", cutoff));
         // Unparseable → not stale by this predicate.
         assert!(!predates_restart_cutoff("not-a-timestamp", cutoff));
+    }
+
+    /// 0by S1 (2026-09-28): the signer-stderr bypass is **opt-in** and
+    /// fail-loud.
+    ///
+    /// Red before: the bypass did not exist at all — `spawn_child` hard-coded
+    /// `Stdio::null()`, so a signer that exited at startup produced only
+    /// `signer_unreachable` with a cause-free detail. Green now: `None` keeps
+    /// the historical sink (and creates no file), `Some(path)` opens the
+    /// append target **before** the child starts, and an unusable path is a
+    /// spawn error rather than a silent fallback.
+    #[test]
+    fn signer_stderr_bypass_is_opt_in_and_fails_loud() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = AcafConfig {
+            manifest_path: dir.join("signer-manifest.json"),
+            keystore_root: dir.join("keystore"),
+            signer_binary: None,
+            signer_stderr_log: None,
+        };
+
+        // Default: no bypass, no side effect on disk.
+        let log = dir.join("signer-stderr.log");
+        assert!(signer_stderr_stdio(&base).is_ok());
+        assert!(!log.exists(), "the default sink must not create a log file");
+
+        // Opt-in: the append target is opened (and created) up front.
+        let armed = AcafConfig {
+            signer_stderr_log: Some(log.clone()),
+            ..base.clone()
+        };
+        assert!(signer_stderr_stdio(&armed).is_ok());
+        assert!(log.is_file(), "the bypass must open its append target");
+        std::fs::write(&log, "first\n").unwrap();
+        assert!(signer_stderr_stdio(&armed).is_ok());
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "first\n",
+            "the bypass must append, never truncate"
+        );
+
+        // Unusable path → loud spawn error naming the path (no silent null).
+        let broken = AcafConfig {
+            signer_stderr_log: Some(dir.join("missing-dir").join("signer.log")),
+            ..base
+        };
+        let err = signer_stderr_stdio(&broken).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("signer stderr log") && text.contains("missing-dir"),
+            "unexpected error: {text}"
+        );
     }
 }

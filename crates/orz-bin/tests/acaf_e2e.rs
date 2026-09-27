@@ -167,6 +167,9 @@ impl SignerFixture {
             manifest_path: self.manifest.clone(),
             keystore_root: self.keystore.clone(),
             signer_binary: Some(signer_binary()),
+            // 0by S1: the observation bypass stays off on the e2e path — the
+            // default must keep the historical `Stdio::null()` behaviour.
+            signer_stderr_log: None,
         }
     }
 }

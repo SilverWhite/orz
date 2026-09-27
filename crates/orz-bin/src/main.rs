@@ -544,10 +544,18 @@ async fn build_acaf_client() -> Result<
     let binary = std::env::var("ORZ_ACAF_BINARY")
         .ok()
         .map(std::path::PathBuf::from);
+    // 0by S1 (2026-09-28): opt-in signer-stderr capture. Unset (the default)
+    // or blank → the signer's stderr stays discarded, exactly as before.
+    let signer_stderr_log = std::env::var("ORZ_ACAF_SIGNER_STDERR_LOG")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from);
     let client = orz_loop::acaf::AcafClient::spawn(&orz_loop::acaf::AcafConfig {
         manifest_path: std::path::PathBuf::from(manifest),
         keystore_root: std::path::PathBuf::from(keystore),
         signer_binary: binary,
+        signer_stderr_log,
     })
     .await?;
     Ok(Some(std::sync::Arc::new(tokio::sync::Mutex::new(client))))
