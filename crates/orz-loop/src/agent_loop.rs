@@ -2349,7 +2349,11 @@ pub(crate) async fn run_agent_loop(
         // 工作区/git 失败）只省略基线段，自编辑清单与编辑指纹两段照常。
         // 0AE-C11 处置（2026-09-17，盘点 FR-C04 采②）：传入当前 run id，
         // 清单按 run 章分「本 run / 会话历史」两组。
-        if !face_blocks.is_empty() && face_d4_block.is_none() {
+        // 0bz S3（2026-09-28）：D4 与常驻指针同拍——自首个 loop-top 即渲染
+        // （epoch 冻结纪律不变：压缩/截断后 `face_d4_block = None` 重渲一次）。
+        // 旧条件（分块非空才渲染）使 D4 在开窗轮才插入 face 前部 ⇒ 开窗前缀
+        // 重排（与 model_face 常驻头同机理，`RUN-CLI-6ab99969` r40）。
+        if face_d4_block.is_none() {
             face_d4_block = Some(crate::action_ledger::render_run_context_block(
                 run_baseline.as_deref(),
                 &svc.blackboard.read().edits,

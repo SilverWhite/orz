@@ -12,6 +12,13 @@
 //!   `前置 ＋ 固定指针 ＋ D4 机械段 ＋ 各分块（原文｜机械摘要行）＋ 主滑块 x
 //!   ＋ 尾部 ＋ 分块表 ＋ 结束自述通道行（0bs ①，2026-09-25）`。
 //!
+//!   **常驻头自首个轮次即在（0bz S3，2026-09-28）**：固定指针＋D4 的注入时点
+//!   从「首个分块形成」提前到「首个轮次成形」——旧口径使开窗轮 face 前部
+//!   整体重排（自发塌陷族机理：`RUN-CLI-6ab99969` r40＝135,754 tk 整窗
+//!   miss）。注入点＝`round_ranges[0].0`，与开窗后 `preamble_end` 恒同值 ⇒
+//!   开窗转换只在尾部追加，前缀字节稳定（I6 从「两次压缩之间」延伸到
+//!   「会话全程」）。头部内容零改，只动时点。
+//!
 //!   **分块表落尾部（2026-09-16 实现批，前缀纪律优先）**：表里末块那一行每
 //!   新增一轮就变（区间／估算／计数都在长）⇒ 若像 v7 那样挂在固定指针之后
 //!   （模型面第 2 条），每轮都会在表处打断前缀、把其后的主滑块整体推向缓存
@@ -526,8 +533,9 @@ fn hidden_message_ranges(
     out
 }
 
-/// **模型面装配**（设计 §1 §2）。无分块时（整段会话即主滑块）原样返回
-/// `messages`——早期会话的字节形态与不含滑块机制时完全一致。
+/// **模型面装配**（设计 §1 §2）。无分块时（整段会话即主滑块）除**常驻头
+/// （指针＋D4，0bz S3）**外原样返回 `messages`——头部结构消息自首个轮次即
+/// 在，开窗转换只剩尾部追加（见 [`try_clone_messages_with_resident_head`]）。
 ///
 /// **0bc S2④（2026-09-21）：可失败分配**。本函数是 S1 清单的「模型缓冲」
 /// 巨量分配路径——逐条克隆改 `try_reserve(_exact)` 族；失败以
@@ -540,7 +548,14 @@ pub fn build_model_face(
 ) -> Result<Vec<Message>, std::io::Error> {
     let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
     if blocks.is_empty() {
-        return try_clone_messages(messages);
+        // 0bz S3（2026-09-28）：**常驻头（指针＋D4）自首个轮次起即在**——旧
+        // 口径「无分块原样返回」使指针/D4 拖到首个分块形成那一刻才整体插入
+        // face 前部 ⇒ 开窗轮前缀全变、整窗 miss（`RUN-CLI-6ab99969` r40 实测
+        // 135,754 tk，六轮狗粮「自发塌陷」同族的机理）。注入点＝
+        // `round_ranges[0].0`，与开窗后 `preamble_end = blocks[0].msg_start`
+        // 恒同值（首个分块必为首个完整轮）⇒ 开窗转换只剩尾部追加（块表／
+        // RUN_END 行），前缀逐字节稳定。内容零改，只动时点。
+        return try_clone_messages_with_resident_head(messages, params);
     }
     let markers = face_markers(messages);
     let ranges = crate::action_ledger::round_ranges(messages);
@@ -584,11 +599,47 @@ pub fn build_model_face(
     // 0bs ①（2026-09-25）：**结束自述通道常驻尾行**——告知面收口。0bm 轮
     // 实证：`[RUN_END]` 语法只挂 pull 面 `guide`（`blackboard_read section=
     // guide`）⇒ 137 工具轮零自述、`run_finished` 仍三键。单一来源＝
-    // `model_stop`；每轮尾随（分块表之后＝窗口最末消息）。无分块会话维持
-    // 「早期会话字节形态一致」不变量——不注入（早退分支不动）。
+    // `model_stop`；每轮尾随（分块表之后＝窗口最末消息）。0bz S3 后的口径：
+    // 头部结构消息（指针/D4）已常驻，尾部两行仍待分块出现——尾部追加不破
+    // 前缀，无分块会话不注入。
     view.push(mechanical_message(
         crate::model_stop::model_stop_resident_line(),
     ));
+    Ok(view)
+}
+
+/// 0bz S3（2026-09-28）：早期（无分块）形态的**常驻头**——指针＋D4 注入到
+/// 首个轮次起点（`round_ranges[0].0`）。该点与开窗后 `preamble_end =
+/// blocks[0].msg_start` 恒同值（首个分块必为首个完整轮），故「无分块 → 有
+/// 分块」的转换只发生尾部追加，face 前缀逐字节稳定。轮次尚未成形时不注入
+/// （成形那一刻 face 仅数 K token，一次性小成本，且此后注入点恒定）。
+fn try_clone_messages_with_resident_head(
+    messages: &[Message],
+    params: &ModelFaceParams,
+) -> Result<Vec<Message>, std::io::Error> {
+    let Some(at) = crate::action_ledger::round_ranges(messages)
+        .first()
+        .map(|&(s, _)| s)
+    else {
+        return try_clone_messages(messages);
+    };
+    let mut head: Vec<Message> = Vec::new();
+    if let Some(ledger) = params.ledger_path.as_deref() {
+        head.push(mechanical_message(
+            crate::action_ledger::build_pointer_message(ledger),
+        ));
+    }
+    if let Some(d4) = params.d4_block.as_deref() {
+        head.push(mechanical_message(d4.to_string()));
+    }
+    if head.is_empty() {
+        return try_clone_messages(messages);
+    }
+    let mut view = try_clone_messages(messages)?;
+    view.try_reserve_exact(head.len()).map_err(alloc_err_io)?;
+    for (k, m) in head.into_iter().enumerate() {
+        view.insert(at + k, m);
+    }
     Ok(view)
 }
 
@@ -598,7 +649,17 @@ pub fn build_model_face(
 pub fn model_face_message_count(messages: &[Message], params: &ModelFaceParams) -> usize {
     let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
     if blocks.is_empty() {
-        return messages.len();
+        // 0bz S3：常驻头与 build_model_face 同口径——轮次成形后 ＋指针 ＋D4。
+        let mut count = messages.len();
+        if !crate::action_ledger::round_ranges(messages).is_empty() {
+            if params.ledger_path.is_some() {
+                count += 1;
+            }
+            if params.d4_block.is_some() {
+                count += 1;
+            }
+        }
+        return count;
     }
     let markers = face_markers(messages);
     let ranges = crate::action_ledger::round_ranges(messages);
@@ -711,7 +772,19 @@ pub fn model_face_estimate(messages: &[Message], params: &ModelFaceParams) -> u6
 pub fn estimate_model_face_tokens(messages: &[Message], params: &ModelFaceParams) -> u64 {
     let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
     if blocks.is_empty() {
-        return crate::controller::estimate_messages_tokens(messages);
+        // 0bz S3：常驻头与 build_model_face 同口径——轮次成形后计入指针/D4。
+        let mut total = crate::controller::estimate_messages_tokens(messages);
+        if !crate::action_ledger::round_ranges(messages).is_empty() {
+            if let Some(ledger) = params.ledger_path.as_deref() {
+                total = total.saturating_add(injected_estimate(
+                    &crate::action_ledger::build_pointer_message(ledger),
+                ));
+            }
+            if let Some(d4) = params.d4_block.as_deref() {
+                total = total.saturating_add(injected_estimate(d4));
+            }
+        }
+        return total;
     }
     let markers = face_markers(messages);
     let ranges = crate::action_ledger::round_ranges(messages);
@@ -1518,6 +1591,129 @@ mod tests {
             model_face_estimate(&messages, &params),
             crate::controller::estimate_messages_tokens(&messages)
         );
+    }
+
+    #[test]
+    fn resident_head_from_first_round_and_opening_keeps_prefix_byte_stable() {
+        // 0bz S3 钉①（2026-09-28；机理实证＝`RUN-CLI-6ab99969` r40：旧口径
+        // 指针/D4 拖到首个分块形成才插入 face 前部 ⇒ 开窗轮整窗 miss
+        // 135,754 tk）：指针＋D4 自首个轮次即在 face；首个分块形成（开窗）
+        // 时 face 前缀逐字节不变，只有尾部追加（块表／RUN_END）。
+        let params = || ModelFaceParams {
+            slider_tokens: 160_000,
+            block_tokens: 32_000,
+            ledger_path: Some(std::path::PathBuf::from(".gsa/ledger/current.md")),
+            archive_tag: Some("sess0001".to_string()),
+            run_id: "RUN-TEST".to_string(),
+            d4_block: Some("D4 机械段（0bz S3 钉）".to_string()),
+            static_overhead_tokens: 0,
+        };
+        let mut messages = conversation(3, 1_000);
+        let early = build_model_face(&messages, &params()).expect("face");
+        assert_eq!(early[0], messages[0], "题面恒为 face[0]");
+        assert!(
+            early[1]
+                .content
+                .contains(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX),
+            "指针必须自首个轮次即在 face[1]"
+        );
+        assert_eq!(early[2].content, "D4 机械段（0bz S3 钉）", "D4 紧随指针");
+        // 估算/计数同口径（常驻头计入）。
+        assert!(
+            model_face_estimate(&messages, &params())
+                > crate::controller::estimate_messages_tokens(&messages)
+        );
+        assert_eq!(
+            model_face_message_count(&messages, &params()),
+            messages.len() + 2
+        );
+        // 长到溢出滑块 ⇒ 首个分块形成（开窗转换）。
+        for _ in 0..60 {
+            messages.extend(conversation(1, 8_000).into_iter().skip(1));
+        }
+        assert!(
+            !blocks_outside_slider(&messages, 160_000, 32_000).is_empty(),
+            "测试构造必须已形成首个分块"
+        );
+        let opened = build_model_face(&messages, &params()).expect("face");
+        assert_eq!(
+            early[..3],
+            opened[..3],
+            "开窗转换不得改写 face 前缀（题面＋指针＋D4）"
+        );
+        assert!(opened.len() > early.len(), "开窗只在尾部追加结构行");
+    }
+
+    #[test]
+    fn compression_landing_marker_is_byte_stable_across_next_landing() {
+        // 0bz S3 修码②钉（2026-09-28）：连续两次压缩落地——marker1 字节与
+        // 指针位在 marker2 落地后不变（+1→+2 前缀纪律的机械锁；生产几何＝
+        // marker 插入被压首轮起点、face 装配自动隐藏被压块，D4 重渲与
+        // marker 同拍落在 +1——本轮面已无 +1→+2 二次写手，本钉防回退）。
+        let params = || ModelFaceParams {
+            slider_tokens: 160_000,
+            block_tokens: 32_000,
+            ledger_path: Some(std::path::PathBuf::from(".gsa/ledger/current.md")),
+            archive_tag: Some("sess0001".to_string()),
+            run_id: "RUN-TEST".to_string(),
+            d4_block: Some("D4 机械段（0bz S3 钉）".to_string()),
+            static_overhead_tokens: 0,
+        };
+        let mk_marker = |n: u32, spec: &str| -> String {
+            format!(
+                "{} {}]
+{}{}
+摘要 ID: compaction-RUN-TEST-{n:03}
+台账定位: .gsa/ledger/current.md
+",
+                crate::prompt::CONTEXT_COMPRESSED_PREFIX,
+                BLOCK_MARKER_COMPRESSED_VERSION,
+                BLOCK_MARKER_RANGE_LABEL,
+                spec
+            )
+        };
+        let mut messages = conversation(60, 8_000);
+        // 第一次落地：压块 1（marker 插入块 1 首轮起点＝生产 insert_at 口径）。
+        let blocks1 = blocks_outside_slider(&messages, 160_000, 32_000);
+        let ranges1 = crate::action_ledger::round_ranges(&messages);
+        let b1 = blocks1.first().expect("block1");
+        let at1 = ranges1[b1.first_round].0;
+        messages.insert(at1, mechanical_message(mk_marker(1, "1")));
+        let face1 = build_model_face(&messages, &params()).expect("face1");
+        let m1 = face1
+            .iter()
+            .position(|m| m.content.contains("compaction-RUN-TEST-001"))
+            .expect("marker1 在 face1");
+        // 第二次落地：压块 2（ranges/blocks 按落地后的 messages 重算）。
+        let blocks2 = blocks_outside_slider(&messages, 160_000, 32_000);
+        let b2 = blocks2.iter().find(|b| b.number == 2).expect("block2");
+        let ranges2 = crate::action_ledger::round_ranges(&messages);
+        let at2 = ranges2[b2.first_round].0;
+        messages.insert(at2, mechanical_message(mk_marker(2, "2")));
+        let face2 = build_model_face(&messages, &params()).expect("face2");
+        // 断言：marker1 字节与位置不变、指针位不动、前缀（到指针位）逐字节一致。
+        let m1b = face2
+            .iter()
+            .position(|m| m.content.contains("compaction-RUN-TEST-001"))
+            .expect("marker1 在 face2 存续");
+        assert_eq!(m1, m1b, "marker1 的 face 位置不得移动");
+        assert_eq!(face1[m1], face2[m1b], "marker1 必须逐字节稳定");
+        let p1 = face1
+            .iter()
+            .position(|m| {
+                m.content
+                    .contains(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX)
+            })
+            .expect("指针在 face1");
+        let p2 = face2
+            .iter()
+            .position(|m| {
+                m.content
+                    .contains(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX)
+            })
+            .expect("指针在 face2");
+        assert_eq!(p1, p2, "指针位在第二次落地后不动");
+        assert_eq!(&face1[..=p1], &face2[..=p1], "+1→+2 前缀逐字节稳定");
     }
 
     #[test]

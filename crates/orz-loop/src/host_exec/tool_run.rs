@@ -4592,19 +4592,27 @@ mod tests {
         let received = fake.received_requests();
         assert!(received.len() >= 2, "round 2 request exists: {received:?}");
         let round2 = &received[1].messages;
-        // user + assistant declaration + tool result
+        // user + [常驻头：指针＋D4（0bz S3，2026-09-28）] + assistant
+        // declaration + tool result
         // (no text-summary duplicate, no per-round budget re-declaration —
         // PUSH→PULL 2026-08-21; the legacy assistant rollup of tool outputs
         // was retired in the S4 fix because DeepSeek thinking-mode 400s on
         // an assistant text message directly after tool results without
         // reasoning_content — API probe 2026-08-21 V1/V4).
-        assert_eq!(round2.len(), 3, "protocol shape: {round2:?}");
-        assert_eq!(round2[1].role, Role::Assistant);
-        assert_eq!(round2[1].tool_calls.len(), 1, "declaration replayed");
-        assert_eq!(round2[1].tool_calls[0].call_id, "call-1");
-        assert_eq!(round2[1].tool_calls[0].name, "read_file");
-        assert_eq!(round2[2].role, Role::Tool);
-        assert_eq!(round2[2].tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(round2.len(), 5, "protocol shape: {round2:?}");
+        assert!(
+            round2[1].content.contains("【上下文分块】"),
+            "resident pointer at [1] (0bz S3): {round2:?}"
+        );
+        let decl = round2
+            .iter()
+            .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+            .expect("declaration replayed");
+        assert_eq!(round2[decl].tool_calls.len(), 1, "declaration replayed");
+        assert_eq!(round2[decl].tool_calls[0].call_id, "call-1");
+        assert_eq!(round2[decl].tool_calls[0].name, "read_file");
+        assert_eq!(round2[decl + 1].role, Role::Tool);
+        assert_eq!(round2[decl + 1].tool_call_id.as_deref(), Some("call-1"));
         assert!(
             round2.iter().all(|m| !m.content.contains("REMAINING")),
             "PUSH→PULL: no per-round REMAINING trailing block: {round2:?}"
@@ -5968,17 +5976,21 @@ mod tests {
         let received = fake.received_requests();
         assert!(received.len() >= 2, "round 2 request exists: {received:?}");
         let round2 = &received[1].messages;
-        // user + assistant declaration (with reasoning) + tool result
+        // user + [常驻头：指针＋D4（0bz S3）] + assistant declaration (with
+        // reasoning) + tool result
         // (no text-summary duplicate, no per-round budget re-declaration —
         // PUSH→PULL 2026-08-21).
-        assert_eq!(round2.len(), 3, "protocol shape: {round2:?}");
-        assert_eq!(round2[1].role, Role::Assistant);
+        assert_eq!(round2.len(), 5, "protocol shape: {round2:?}");
+        let decl = round2
+            .iter()
+            .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+            .expect("declaration replayed");
         assert_eq!(
-            round2[1].reasoning_content.as_deref(),
+            round2[decl].reasoning_content.as_deref(),
             Some("need to read the file first"),
             "reasoning rides the declaration message"
         );
-        assert_eq!(round2[1].tool_calls.len(), 1);
+        assert_eq!(round2[decl].tool_calls.len(), 1);
         assert!(
             round2.iter().all(|m| !m.content.contains("REMAINING")),
             "PUSH→PULL: no per-round REMAINING trailing block: {round2:?}"
