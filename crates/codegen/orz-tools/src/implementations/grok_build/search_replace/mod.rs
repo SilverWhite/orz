@@ -227,20 +227,21 @@ pub(crate) async fn run_search_replace(
             "File path is a directory".to_owned(),
         ));
     }
-    // 0bw S2①（2026-09-26，设计档 §3.1；0cb v2 保底化 2026-09-29）：写面
-    // 机械门收窄为**载体集**（`.gsa` 会话卷／安装目录／三件套／`grok-home`）。
-    // `.gsa` 域判定委派既有窗口函数（语义不重写、文案保持）；安装目录由
-    // `current_exe` 机械推导，不依赖模型面装配；命中即拒（与 gitignore 拒编
-    // 同一 InvalidInput 形态）。v1 的系统核心整树写拒随 0bw v2 退役——写
-    // 系统树交回审批组件（0cb 设计 §2/§4）。
+    // 0bw S2①（2026-09-26；0cb v2 保底化 2026-09-29；**0cc v3 宿主状态收窄
+    // 同日**）：写面机械门收窄为**宿主状态两窄目标**（C1 `.gsa` 会话卷＋C2′
+    // ACAF keystore 根／signer manifest——装配 env 解析，见
+    // `HostStateTargets::from_env`）。`.gsa` 域判定委派既有窗口函数（语义不
+    // 重写、文案保持）。v2 的安装目录／三件套／`grok-home` 拒绝面随 0cc 双面
+    // 退役（设计 §2 条 5：载体面写交回审批组件）；v1 的系统核心整树写拒随
+    // 0bw v2 退役。
     {
-        let install_dir = crate::types::write_control::current_install_dir();
+        let host_state = crate::types::write_control::HostStateTargets::from_env();
         let hit = crate::types::write_control::check_write_target(
             &crate::types::write_control::WriteTargetCtx {
                 cwd: &cwd,
                 joined: &resolved,
                 resolved: Some(&path),
-                install_dir: install_dir.as_deref(),
+                host_state: &host_state,
             },
         );
         if let Some(hit) = hit {
@@ -3941,49 +3942,82 @@ neutTest_set);
         let ws = dunce::canonicalize(tmp.path()).unwrap();
         let roots = crate::types::write_control::disaster_tree_roots();
         let system_target = roots[0].join("Temp").join("0cb-gate-must-stay-open.txt");
+        let targets = crate::types::write_control::HostStateTargets::default();
         let hit = crate::types::write_control::check_write_target(
             &crate::types::write_control::WriteTargetCtx {
                 cwd: &ws,
                 joined: &system_target,
                 resolved: None,
-                install_dir: crate::types::write_control::current_install_dir().as_deref(),
+                host_state: &targets,
             },
         );
         assert!(
             hit.is_none(),
-            "system-tree target must not be denied by the carrier-only gate: {hit:?}"
+            "system-tree target must not be denied by the host-state-only gate: {hit:?}"
         );
         assert!(!system_target.exists(), "probe must not write anything");
     }
 
-    /// 0bw S2①（2026-09-26，设计档 §8 判据钉 4）：安装目录（载体自保护）
-    /// 目标机械拒绝，且拒绝后目标零存在。
+    /// 0bw S2①判据钉 4 的 **0cc v3 形态**：宿主状态窄目标（keystore 根／
+    /// signer manifest）机械拒绝且拒绝后零存在；载体安装目录面（v2 负向集）
+    /// 随 0cc 退役放行（判 None——工具面写门不再含载体本体）。
     #[tokio::test]
-    async fn search_replace_refuses_install_dir_targets() {
+    async fn search_replace_write_gate_locks_host_state_only() {
         let tmp = TempDir::new().unwrap();
         let ws = dunce::canonicalize(tmp.path()).unwrap();
-        let install = crate::types::write_control::current_install_dir()
-            .expect("test binary must have an install dir");
-        let target = install.join("0bw-write-control-must-not-be-created.txt");
-        let target_str = target.to_string_lossy().to_string();
-        let tool = SearchReplaceTool;
-        let output = xai_tool_runtime::Tool::run(
-            &tool,
-            test_ctx(test_resources(&ws).into_shared()),
-            make_input(&target_str, "old text", "new text"),
+        let acaf = tmp.path().join("acaf");
+        let keystore = acaf.join("keystore");
+        let manifest = acaf.join("signer-manifest.json");
+        let targets = crate::types::write_control::HostStateTargets {
+            keystore_root: Some(keystore.clone()),
+            signer_manifest: Some(manifest.clone()),
+        };
+        // ① keystore 根子树：判拒且零存在（判据钉 4 v3）。
+        let ks_target = keystore.join("0cc-write-control-must-not-be-created.txt");
+        let hit = crate::types::write_control::check_write_target(
+            &crate::types::write_control::WriteTargetCtx {
+                cwd: &ws,
+                joined: &ks_target,
+                resolved: None,
+                host_state: &targets,
+            },
         )
-        .await
-        .unwrap();
-        match output {
-            SearchReplaceOutput::InvalidInput(msg) => {
-                assert!(
-                    msg.contains("installation carrier"),
-                    "carrier write must be refused: {msg}"
-                );
-            }
-            other => panic!("Expected InvalidInput for carrier write, got {other:?}"),
+        .expect("keystore target must be denied");
+        assert_eq!(hit.rule, "carrier:keystore-root");
+        assert!(!ks_target.exists(), "rejection must not create the target");
+        // ② signer manifest 本体：判拒（宿主原生面在 keystore 目录外）。
+        let hit = crate::types::write_control::check_write_target(
+            &crate::types::write_control::WriteTargetCtx {
+                cwd: &ws,
+                joined: &manifest,
+                resolved: None,
+                host_state: &targets,
+            },
+        )
+        .expect("manifest target must be denied");
+        assert_eq!(hit.rule, "carrier:signer-manifest");
+        // ③ 退役面（0cc §2 条 5）：安装目录／三件套／grok-home 形态判 None。
+        let install = tmp.path().join("orz-install");
+        for retired in [
+            install.join("orz.exe"),
+            install.join("orz-signer.exe"),
+            install.join("grok-home").join("creds.json"),
+            install.join("_bgprobe.exe"),
+        ] {
+            let hit = crate::types::write_control::check_write_target(
+                &crate::types::write_control::WriteTargetCtx {
+                    cwd: &ws,
+                    joined: &retired,
+                    resolved: None,
+                    host_state: &targets,
+                },
+            );
+            assert!(
+                hit.is_none(),
+                "carrier-face write must be retired to allow: {} -> {hit:?}",
+                retired.display()
+            );
         }
-        assert!(!target.exists(), "rejection must not create the target");
     }
 
     /// 0bm ⑤（2026-09-25）：混排行尾锚点窗编辑——未触碰行按其原行尾逐行

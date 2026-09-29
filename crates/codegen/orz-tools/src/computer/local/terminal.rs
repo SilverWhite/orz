@@ -917,14 +917,17 @@ impl LocalTerminalActor {
         }
 
         // 0bw①（2026-09-27）：子进程写面 Landlock——`/` 顶层逐项 allow 写、
-        // 表 B 系统核心不授权（单一源 `write_control::LINUX_SYSTEM_CORE`）、
-        // 读不设限；顶层 symlink 不授权（2026-09-27 复审 P1）。best-effort：
+        // 灾难防护最小核不授权（单一源
+        // `write_control::LINUX_DISASTER_KERNEL_FACES`；**0cc v3 收窄——
+        // 载体面系统树 /etc /usr /lib* /bin /sbin 放行**，否则 L2 放行的
+        // /usr/local/bin 安装仍死于内核 EPERM＝S4 成败项）、读不设限；顶层
+        // symlink 不授权（2026-09-27 复审 P1）。best-effort：
         // 内核不支持或枚举失败 ⇒ 不装（仅 warn 一次）；装挂失败 ⇒ write(2)
         // 提示后照常 exec、绝不 fail spawn（复审裁决，L3＝附加阻力，非绝对
         // 保证；L1 工具面／L2 命令面仍硬拒锁死面）。
         #[cfg(target_os = "linux")]
         match orz_sandbox::child_write_guard::prepare_allow_dirs(
-            &crate::types::write_control::LINUX_SYSTEM_CORE,
+            &crate::types::write_control::LINUX_DISASTER_KERNEL_FACES,
         ) {
             Some(dirs) => unsafe {
                 cmd.pre_exec(move || {
@@ -1065,14 +1068,17 @@ impl LocalTerminalActor {
         }
 
         // 0bw①（2026-09-27）：子进程写面 Landlock——`/` 顶层逐项 allow 写、
-        // 表 B 系统核心不授权（单一源 `write_control::LINUX_SYSTEM_CORE`）、
-        // 读不设限；顶层 symlink 不授权（2026-09-27 复审 P1）。best-effort：
+        // 灾难防护最小核不授权（单一源
+        // `write_control::LINUX_DISASTER_KERNEL_FACES`；**0cc v3 收窄——
+        // 载体面系统树 /etc /usr /lib* /bin /sbin 放行**，否则 L2 放行的
+        // /usr/local/bin 安装仍死于内核 EPERM＝S4 成败项）、读不设限；顶层
+        // symlink 不授权（2026-09-27 复审 P1）。best-effort：
         // 内核不支持或枚举失败 ⇒ 不装（仅 warn 一次）；装挂失败 ⇒ write(2)
         // 提示后照常 exec、绝不 fail spawn（复审裁决，L3＝附加阻力，非绝对
         // 保证；L1 工具面／L2 命令面仍硬拒锁死面）。
         #[cfg(target_os = "linux")]
         match orz_sandbox::child_write_guard::prepare_allow_dirs(
-            &crate::types::write_control::LINUX_SYSTEM_CORE,
+            &crate::types::write_control::LINUX_DISASTER_KERNEL_FACES,
         ) {
             Some(dirs) => unsafe {
                 cmd.pre_exec(move || {
@@ -3641,14 +3647,17 @@ fn spawn_shell_command(
             }
         }
         // 0bw①（2026-09-27）：子进程写面 Landlock——`/` 顶层逐项 allow 写、
-        // 表 B 系统核心不授权（单一源 `write_control::LINUX_SYSTEM_CORE`）、
-        // 读不设限；顶层 symlink 不授权（2026-09-27 复审 P1）。best-effort：
+        // 灾难防护最小核不授权（单一源
+        // `write_control::LINUX_DISASTER_KERNEL_FACES`；**0cc v3 收窄——
+        // 载体面系统树 /etc /usr /lib* /bin /sbin 放行**，否则 L2 放行的
+        // /usr/local/bin 安装仍死于内核 EPERM＝S4 成败项）、读不设限；顶层
+        // symlink 不授权（2026-09-27 复审 P1）。best-effort：
         // 内核不支持或枚举失败 ⇒ 不装（仅 warn 一次）；装挂失败 ⇒ write(2)
         // 提示后照常 exec、绝不 fail spawn（复审裁决，L3＝附加阻力，非绝对
         // 保证；L1 工具面／L2 命令面仍硬拒锁死面）。
         #[cfg(target_os = "linux")]
         match orz_sandbox::child_write_guard::prepare_allow_dirs(
-            &crate::types::write_control::LINUX_SYSTEM_CORE,
+            &crate::types::write_control::LINUX_DISASTER_KERNEL_FACES,
         ) {
             Some(dirs) => unsafe {
                 cmd.pre_exec(move || {

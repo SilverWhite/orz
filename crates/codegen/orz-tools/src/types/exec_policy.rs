@@ -23,6 +23,13 @@
 //! `/dev/mapper` 增补进块设备形态集；② 规则 1 动词集补 `ri`（Remove-Item
 //! 别名）＋Windows 盘符相对根形态（`\Windows`）按 `%SystemDrive%` 补全比对；
 //! ③ 规则 4 蜂巢判定收窄到目标位词元（数据值提及不误拦）。
+//!
+//! **0cc v3（2026-09-29 晚，规则 5 宿主机灾难保底收窄）**：规则 5 目标集缩为
+//! **宿主状态两窄目标**（`.gsa` 会话卷＋ACAF keystore 根／signer manifest——
+//! [`write_control::HostStateTargets`] 装配期解析）；v2 的安装目录／三件套／
+//! `grok-home`／⊆cwd 降级**双面全退役**——`/usr/local/bin` 安装、写载体三件套、
+//! 软链指入安装目录全部放行（build-pov-ray 结构性 0 的修复面；契约面零变化＝
+//! schema v0.3 枚举不动，`carrier-write` id 沿用）。
 
 use std::path::{Path, PathBuf};
 
@@ -300,18 +307,20 @@ const CONTENT_WORDS: &[&str] = &["-command", "-c", "-lc", "/c", "/k"];
 
 // ─── 公开入口 ───────────────────────────────────────────────────────────
 
-/// 审查一条 `run_terminal_cmd` 命令（生产入口：宿平台根本树根＋当前安装目录）。
+/// 审查一条 `run_terminal_cmd` 命令（生产入口：宿平台根本树根＋装配期宿主
+/// 状态两窄目标）。
 pub fn review_command(cwd: &Path, command: &str) -> CommandReview {
-    let install_dir = write_control::current_install_dir();
+    let host_state = write_control::HostStateTargets::from_env();
     review_command_with(
         cwd,
         command,
-        install_dir.as_deref(),
+        &host_state,
         &write_control::disaster_tree_roots(),
     )
 }
 
-/// 审查（注入式；测试与跨平台场景）。`disaster_roots`＝规则 1 的根本树根目标集。
+/// 审查（注入式；测试与跨平台场景）。`disaster_roots`＝规则 1 的根本树根目标集；
+/// `host_state`＝规则 5 的宿主状态两窄目标（0cc v3）。
 ///
 /// 规则序＝设计 §1 表序（① catastrophic-recursive-delete → ② raw-device-write
 /// → ③ boot-firmware-flip → ④ registry-hive-delete → ⑤ carrier-write）；
@@ -319,7 +328,7 @@ pub fn review_command(cwd: &Path, command: &str) -> CommandReview {
 pub fn review_command_with(
     cwd: &Path,
     command: &str,
-    install_dir: Option<&Path>,
+    host_state: &write_control::HostStateTargets,
     disaster_roots: &[PathBuf],
 ) -> CommandReview {
     let scan = crate::util::unicode_confusables::normalize_confusables(command);
@@ -463,8 +472,11 @@ pub fn review_command_with(
         }
     }
 
-    // ⑤ carrier-write：写动词（破坏/修改集＋`dd`＋重定向）＋目标命中载体集
-    //    （`.gsa`／安装目录；恒拒面）。系统树不进本闸（v2 退役）。
+    // ⑤ carrier-write：写动词（破坏/修改集＋`dd`＋重定向）＋目标命中**宿主
+    //    状态两窄目标**（`.gsa` 会话卷／ACAF keystore 根／signer manifest；
+    //    恒拒面）。v2 系统树不进本闸；v3 载体面（安装目录／三件套／
+    //    `grok-home`）随 0cc 双面退役——`/usr/local/bin` 安装等载体面写交回
+    //    审批组件（设计 §2 条 5）。
     let has_write_verb = entries
         .iter()
         .any(|e| DESTRUCTIVE_VERBS.contains(&e.prog.as_str()) || e.prog == "dd")
@@ -472,7 +484,7 @@ pub fn review_command_with(
     if has_write_verb {
         for w in &words {
             for raw in path_candidates(&w.text) {
-                if let Some(detail) = carrier_target_detail(cwd, &raw, install_dir) {
+                if let Some(detail) = carrier_target_detail(cwd, &raw, host_state) {
                     return CommandReview::Block(CommandFinding {
                         rule: "carrier-write",
                         detail,
@@ -576,10 +588,16 @@ pub fn warn_line(finding: &CommandFinding) -> String {
 
 // ─── 目标解析与载体集比对 ───────────────────────────────────────────────
 
-/// 规则 5 目标解析：展开 → 绝对化 → 词法/近祖先 canonical → **载体集**比对
-/// （`.gsa` 会话卷／安装目录）。v2 退役面：系统树根比对与 `/dev//proc//sys`
-/// 前缀词元判不再进本闸（重定向目标、一般路径写交回审批组件——设计 §2）。
-fn carrier_target_detail(cwd: &Path, raw: &str, install_dir: Option<&Path>) -> Option<String> {
+/// 规则 5 目标解析：展开 → 绝对化 → 词法/近祖先 canonical → **宿主状态两窄
+/// 目标**比对（`.gsa` 会话卷／ACAF keystore 根／signer manifest）。v2 退役面：
+/// 系统树根比对与 `/dev//proc//sys` 前缀词元判不再进本闸（重定向目标、一般
+/// 路径写交回审批组件——设计 §2）；v3 退役面：安装目录／三件套／`grok-home`
+/// 比对随载体集退役（0cc §2 条 5）。
+fn carrier_target_detail(
+    cwd: &Path,
+    raw: &str,
+    host_state: &write_control::HostStateTargets,
+) -> Option<String> {
     let forms = path_forms(cwd, raw);
     let gsa = cwd.join(".gsa");
     let gsa_canonical = crate::types::resources::session_volume_canonical_root(cwd);
@@ -592,13 +610,21 @@ fn carrier_target_detail(cwd: &Path, raw: &str, install_dir: Option<&Path>) -> O
             ));
         }
     }
-    if let Some(install) = install_dir
-        && let Some(hit) = write_control::install_dir_hit(install, cwd, &forms)
-    {
-        return Some(format!(
-            "target `{raw}` is inside the carrier self-protection set (`{}`)",
-            hit.root
-        ));
+    if let Some(hit) = host_state.hit(&forms) {
+        return Some(match hit.rule {
+            "carrier:keystore-root" => format!(
+                "target `{raw}` is inside the ACAF keystore root (`{}`)",
+                hit.root
+            ),
+            "carrier:signer-manifest" => format!(
+                "target `{raw}` is the ACAF signer manifest (`{}`)",
+                hit.root
+            ),
+            _ => format!(
+                "target `{raw}` is inside the host-state protection set (`{}`)",
+                hit.root
+            ),
+        });
     }
     None
 }
@@ -1057,21 +1083,28 @@ mod tests {
     }
 
     fn review(cmd: &str) -> CommandReview {
-        review_command_with(
-            Path::new(r"D:\proj"),
-            cmd,
-            Some(Path::new(r"D:\app\orz")),
-            &roots(),
-        )
+        review_command_with(Path::new(r"D:\proj"), cmd, &host_state_win(), &roots())
     }
 
     fn review_linux(cmd: &str) -> CommandReview {
-        review_command_with(
-            Path::new("/proj"),
-            cmd,
-            Some(Path::new("/app/orz")),
-            &linux_roots(),
-        )
+        review_command_with(Path::new("/proj"), cmd, &host_state_linux(), &linux_roots())
+    }
+
+    /// 0cc v3 规则 5 宿主状态两窄目标（Windows 形态注入）。
+    fn host_state_win() -> write_control::HostStateTargets {
+        write_control::HostStateTargets {
+            keystore_root: Some(PathBuf::from(r"D:\acaf\keystore")),
+            signer_manifest: Some(PathBuf::from(r"D:\acaf\signer-manifest.json")),
+        }
+    }
+
+    /// 0cc v3 规则 5 宿主状态两窄目标（Linux/容器形态注入——`/etc/orz-acaf`
+    /// 为容器侧 keystore 约定落点）。
+    fn host_state_linux() -> write_control::HostStateTargets {
+        write_control::HostStateTargets {
+            keystore_root: Some(PathBuf::from("/etc/orz-acaf/keystore")),
+            signer_manifest: Some(PathBuf::from("/etc/orz-acaf/signer-manifest.json")),
+        }
     }
 
     fn rule_of(review: &CommandReview) -> Option<&'static str> {
@@ -1358,15 +1391,23 @@ mod tests {
         );
     }
 
-    /// 0cb 防膨胀钉③（规则 5 负向集）：载体自保护命中（恒拒面保持）。
+    /// 0cb 防膨胀钉③（规则 5 负向集；0cc v3 收窄后形态）：宿主状态两窄目标
+    /// 命中（恒拒面保持）——`.gsa` 会话卷＋ACAF keystore 根＋signer manifest。
     #[test]
     fn carrier_write_still_blocks() {
         for (cmd, kind) in [
             ("Set-Content .gsa\\journal\\x.txt hi", "session volume"),
             ("echo x > .gsa\\runs\\y", "session volume"),
             ("rm -rf D:\\proj\\.gsa\\*", "session volume"),
-            ("Remove-Item D:\\app\\orz\\orz.exe", "carrier"),
-            ("Remove-Item D:\\app\\orz\\grok-home\\creds.json", "carrier"),
+            (
+                "Set-Content D:\\acaf\\keystore\\probe.txt hi",
+                "keystore root",
+            ),
+            (
+                "rm -rf D:\\acaf\\keystore\\installation-key.json",
+                "keystore root",
+            ),
+            ("del D:\\acaf\\signer-manifest.json", "signer manifest"),
         ] {
             let r = review(cmd);
             assert!(
@@ -1379,7 +1420,67 @@ mod tests {
                     CommandReview::Block(f) => f.detail.contains(kind),
                     _ => false,
                 },
-                "detail should name the carrier face ({kind}): {r:?}"
+                "detail should name the host-state face ({kind}): {r:?}"
+            );
+        }
+        // Linux/容器形态：keystore 与 manifest 同拦（keystore 在 /etc 子树，
+        // 规则 1 只拦恰为本体——此处落规则 5）。
+        for (cmd, kind) in [
+            ("cp key.bin /etc/orz-acaf/keystore/key.bin", "keystore root"),
+            (
+                "rm -f /etc/orz-acaf/signer-manifest.json",
+                "signer manifest",
+            ),
+        ] {
+            let r = review_linux(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block (linux): {cmd} -> {r:?}"
+            );
+            assert_eq!(rule_of(&r), Some("carrier-write"), "rule for {cmd}");
+            assert!(
+                match &r {
+                    CommandReview::Block(f) => f.detail.contains(kind),
+                    _ => false,
+                },
+                "detail should name the host-state face ({kind}): {r:?}"
+            );
+        }
+    }
+
+    /// 0cc v3 防膨胀钉②增补（退役面放行集——设计 §3 ②「0cc 验收放行例」）：
+    /// 载体安装目录／三件套／`grok-home`／`_bgprobe`／软链指入安装目录全部
+    /// 放行（build-pov-ray 结构性 0 的修复面；一行回归即红）。
+    #[test]
+    fn carrier_install_face_writes_retired_to_allow() {
+        // Windows 形态：安装目录／三件套／grok-home／_bgprobe（v2 负向集轉正）。
+        for cmd in [
+            "Remove-Item D:\\app\\orz\\orz.exe",
+            "Remove-Item D:\\app\\orz\\orz-signer.exe",
+            "Remove-Item D:\\app\\orz\\grok-home\\creds.json",
+            "del D:\\app\\orz\\_bgprobe.exe",
+            "Set-Content D:\\app\\orz\\notes.txt hi",
+        ] {
+            let r = review(cmd);
+            assert_eq!(
+                r,
+                CommandReview::Allow,
+                "retired carrier face must allow: {cmd} -> {r:?}"
+            );
+        }
+        // Linux 形态：/usr/local/bin 安装（build-pov-ray 题面形状）＋软链指入
+        // 安装目录（0.8.5 重跑中 `/tmp/lnk` 软链绕道识破的合法化面）。
+        for cmd in [
+            "cp build/povray /usr/local/bin/povray",
+            "install -m 755 build/povray /usr/local/bin/povray",
+            "ln -s /app/orz/orz /usr/local/bin/orz",
+            "mv povray /usr/local/bin/povray",
+        ] {
+            let r = review_linux(cmd);
+            assert_eq!(
+                r,
+                CommandReview::Allow,
+                "carrier install face must allow: {cmd} -> {r:?}"
             );
         }
     }

@@ -129,17 +129,19 @@ pub fn restore_rollback(cwd: &Path, pointer: &str, target: Option<&str>) -> Resu
     if first.eq_ignore_ascii_case(".gsa") {
         return Err(format!("拒绝以 .gsa 域为回退目标：{resolved}"));
     }
-    // deny 单一源第四消费点（复审 P0 裁决；0cb v2 保底化 2026-09-29 收窄）：
-    // 回退写面与工具面同表——v2 起写门＝**载体集**（C2/C3；系统核心臂随
-    // 0bw v2 整树位置锁退役），cwd 边界与上方 C1 判定不变。
-    let install_dir = orz_tools::types::write_control::current_install_dir();
+    // deny 单一源第四消费点（复审 P0 裁决；0cb v2 保底化 2026-09-29 收窄；
+    // **0cc v3 宿主状态收窄同日**）：回退写面与工具面同表——v3 起写门＝
+    // **宿主状态两窄目标**（C1 `.gsa` 由上方独立判定拒；C2′ keystore 根／
+    // signer manifest 经装配 env 解析注入），v2 的安装目录／三件套载体面与
+    // v1 系统核心臂均退役，cwd 边界不变。
+    let host_state = orz_tools::types::write_control::HostStateTargets::from_env();
     let joined = cwd.join(&resolved);
     if let Some(hit) = orz_tools::types::write_control::check_write_target(
         &orz_tools::types::write_control::WriteTargetCtx {
             cwd,
             joined: &joined,
             resolved: None,
-            install_dir: install_dir.as_deref(),
+            host_state: &host_state,
         },
     ) {
         return Err(format!(

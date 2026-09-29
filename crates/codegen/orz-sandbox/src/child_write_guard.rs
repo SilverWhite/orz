@@ -6,7 +6,8 @@
 //! 读不设限（读族不入 `handled_access_fs`）。
 //!
 //! **deny 表不进本模块**——单一源在 orz-tools `write_control`
-//! （`LINUX_SYSTEM_CORE`，0bw §2 表 B）；本模块只承载机制，由调用方
+//! （`LINUX_DISASTER_KERNEL_FACES`，0cc v3 收窄＝灾难防护最小核 /boot /dev
+//! /proc /sys；载体面系统树已放行）；本模块只承载机制，由调用方
 //! （orz-tools `terminal.rs` spawn 点）枚举 `/` 顶层并排除 deny 表后传入。
 //!
 //! 失败姿态（0bw §1「高阻力＋强审计、非绝对保证」；2026-09-27 复审三分支
