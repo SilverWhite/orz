@@ -438,3 +438,15 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 
 - **本批执行与闭合（2026-09-28，用户令「当前需要处理的内容是0ca，请进行进行处理并直接做完这一项」「按照大的章节拆即可」，主会话直接执行；未提交／未推送／未重建）**：**0ca / ADR-0010-VOLUME-SPLIT** 全链达成——14 卷落盘（`adr/ADR-0010-vol-01-background.md`–`vol-14-addenda-index.md`；§14 单卷不分层）＋主文件保留为入口页与分卷总目录（原头部逐字保留）＋**语义零增删零改写**（字节级往返重组 sha256 对拍通过）＋引用面同批修正（非存档 82 处单章引用改指对应分卷、跨章/整篇仍指主文件、存档不触）＋门禁 `valid: true`＋回读达成 ⇒ `pending` → `implemented`，**计数 57 → 56**。详见 [`115 执行档`](audits/115_ADR0010_VOLUME_SPLIT_EXECUTION_AND_FRICTION_2026-09-28.md)。
 - 关键词：ADR-0010 分卷、十四卷、语义零增删、字节往返对拍、引用面 82 处、§14 单卷、115 批、0ca 闭合、计数 56。
+
+### 1.70 2026-09-29 写控宿主机灾难保底收窄立项（0cc；118 批；计数 57 → 58；未提交未推送）
+
+- **本批登记（2026-09-29 晚，TB21 下半场外科重跑第一题止损后用户裁决「请立项吧，我决定应该继续收窄，把灾难保底纯粹变成宿主机灾难保底吧，毕竟只要不重建，orz实际上不会被即时破坏」，主会话执行）**：新增 **0cc / HOST-DISASTER-BACKSTOP-NARROWING**（P1，`pending`）＝**0cb 规则 5 `carrier-write` 的容器内载体自保护成分退役**。触发证据＝build-pov-ray 0.8.5 重跑（作业 `official-v41-rerun-build-pov-ray`，run `RUN-CLI-6abbb013`，36 min／12000s 墙钟，Harbor 已传，reward 0）：7 拦全部封闭枚举内 `carrier-write`＝`/usr/local/bin` 安装 ×4（含 `/tmp/lnk` 软链绕道被目标位解析识破）＋`.gsa` 会话卷 ×2＋`_bgprobe` ×1；模型侧构建渲染全成（「正确源码构建」测试通过＝0cb v2.1 已放开的 `+O/dev/null` 检查形状；POV-Ray 2.2 渲染 3/3 SSIM 一致，产物 `/app/povray-2.2`、`/opt/povray/bin`＋`~/.profile` 幂等安装钩），结束自述 `reason=blocked`；验证器硬编码 `/usr/local/bin/povray` ⇒ 结构性 0。**方向定案（用户裁决）**：保底只保护「会话结束后仍存在的宿主状态」——容器化评测面内载体文件（安装目录／三件套／`grok-home/`）为易弃状态（删运行中二进制不影响在跑进程；真实部署在宿主 `D:\tb-eval\orz-linux` 不受触）不设位；`.gsa` 会话卷为宿主 bind mount 状态保留（兼 AUTH-GSA-SESSION-VOLUME 设计面）；规则 1–4 定位不变；Windows 宿主原生面目标集重述＝S1 设计稿裁量点。**爆炸半径**（49 题测试面已扫）＝未跑面仅 b5-14 `build-pmars`（测试断言 `/usr/local/bin/pmars`）同构。批序＝S1 设计稿（契约面 schema v0.3 规则类别＋legacy 回放面，判官/Python 镜像/fixture 同批）→ S2 落码＋审查 → S3 双平台重建 **0.8.6**＋`run_r0_heavy_official.py` 身份门换装 → S4＝TB21 5 题重跑（build-pov-ray 第一＝翻盘实锤）＋b3-13 断点续跑；**重跑线自 09-29 晚暂停至 0.8.6**。0cb S4 余项合并执行，0cb 闭合与否随读数裁决。闭合 58 → 57。
+- 关键词：0cc 立项、宿主机灾难保底、carrier-write 收窄、载体自保护退役、易弃状态、宿主 bind mount、build-pov-ray 结构性 0、软链绕道识破、0.8.6、118 批、计数 58。
+
+### 1.71 2026-09-29 晚 0cc S1 设计稿（119 批；S1 达成；计数 58 不变；未提交未推送）
+
+- **本批登记（2026-09-29 晚，用户裁决「我同意这一裁决，请按照这一裁决修改设计稿吧」，主会话执行）**：0cb 设计档升 **v3.0**（[`WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md`](../docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md)）＝0cc S1 达成——**规则 5 `carrier-write` 目标集缩为宿主状态两条窄目标**：① `{cwd}/.gsa` 会话卷（容器面 ACAF keystore 随卷覆盖，provision 落 `gsa/keystore`）；② **ACAF keystore 根**（keystore 目录＋signer manifest＋key 两件；宿主原生面＝装配期解析 `<install>\<acaf>\keystore`）；**载体安装目录／三件套／`grok-home`／⊆cwd 降级规则双面全退役**。论证四点入档 §2 条 5：守卫自保循环论证（删文件杀不死运行进程，未来 run 自宿主部署 fresh 起容器）／恢复成本分类（保底只拦不可逆，载体可从发行包秒恢复）／Windows 原生面同裁（运行中 exe 本有 OS 文件锁）／keystore 信任锚例外保留（毁＝在途票据全作废需重 provision，非平凡可恢复）。**契约面裁定＝零变化**：schema v0.3 枚举不动（`carrier-write` id 沿用、描述不绑定目标集语义；判官/Python 镜像/fixture 对拍预期零 diff）——不复现 v2.1 P1（该案是枚举值改写，本案值集零变化）。§3 fixture 更新＝正向放行集增补 build-pov-ray 题面形状（`install to /usr/local/bin/povray`＝0cc 验收放行例）＋软链指入安装目录＋写三件套路径；负向集增补写 keystore 根；载体面两表随 C3 退役（行数钉随表）。§6 增 0cc 批序（S2 落码待放行 → S3 0.8.6 重建＋身份门换装 → S4 5 题重跑＋续跑，重跑线暂停至 0.8.6）。**S2 待用户放行**。
+- 关键词：0cc S1、设计档 v3.0、宿主状态保底、C1＋C2′、keystore 根、C2/C3 退役、契约面零变化、fixture 增补、119 批、计数 58。
+
+

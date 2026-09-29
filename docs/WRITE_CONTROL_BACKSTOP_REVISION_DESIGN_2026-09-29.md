@@ -1,9 +1,14 @@
-# 写入管控保底化修订（0bw v2 / 0cb）设计档：灾难硬边界保底 ＋ 一般写动作归还审批组件
+# 写入管控保底化修订（0bw v2 / 0cb / 0cc v3）设计档：宿主机灾难硬边界保底 ＋ 一般写动作归还审批组件
 
-> **状态**：`design v2.1`（2026-09-29 定稿 v2.0＝0cb S1；**同日 v2.1＝S2 全面审查处理批**——
-> 用户三项裁决：① 契约面 **schema 升 v0.3**＋legacy 回放豁免（跨代际回放兼容）；② 实现
-> 过严臂进一步收窄（规则 2 PhysicalDrive/mkfs 目标位、规则 1 动词集 `ri` 补齐＋盘符相对根
-> 补全、规则 4 蜂巢目标位）；③ 钉覆盖补全＋证据引用修正）。**权威链**：本档修订
+> **状态**：`design v3.0`（2026-09-29 晚 **v3.0＝0cc S1**——用户裁决「继续收窄，把灾难保底
+> 纯粹变成宿主机灾难保底……只要不重建，orz实际上不会被即时破坏」：规则 5 目标集缩为
+> **宿主状态两条窄目标**（`.gsa` 会话卷＋ACAF keystore 根），载体安装目录／三件套／
+> `grok-home`／⊆cwd 降级规则**双面全退役**；**契约面零变化＝schema v0.3 枚举不动**
+> （`carrier-write` id 沿用，目标集收窄属生产语义、枚举值与配对面零 diff））。
+> 沿革：v2.0＝0cb S1 定稿（2026-09-29）；v2.1＝S2 全面审查处理批（同日——用户三项裁决：
+> ① 契约面 **schema 升 v0.3**＋legacy 回放豁免（跨代际回放兼容）；② 实现过严臂进一步收窄
+> （规则 2 PhysicalDrive/mkfs 目标位、规则 1 动词集 `ri` 补齐＋盘符相对根补全、规则 4 蜂巢
+> 目标位）；③ 钉覆盖补全＋证据引用修正）。**权威链**：本档修订
 > [`WRITE_CONTROL_MECHANICAL_DESIGN_2026-09-26.md`](WRITE_CONTROL_MECHANICAL_DESIGN_2026-09-26.md)（0bw v1）
 > 的 deny 表范围与规则分类；v1 其余架构（单一源 deny 常量、三落地点、留痕形态、补偿自检）**不变**。
 > **触发**：TB 2.1 V4.1 官方轮错题解剖（2026-09-29，解剖数字见本档头部本段；轮次窗口总账见
@@ -19,9 +24,11 @@
 ## §0 一句话设计
 
 写控从「位置型整树审查」收窄为「**模式型灾难硬边界**」：只拦**不可逆毁灭形态**
-（根级递归删除／raw 设备与卷毁写／引导固件与安全机制翻转／注册表蜂巢删除／载体自毁），
+（根级递归删除／raw 设备与卷毁写／引导固件与安全机制翻转／注册表蜂巢删除／
+**宿主状态写**〔`.gsa` 会话卷＋ACAF keystore 根——v3 收窄后〕），
 一般性写动作（装 /usr、清 C 盘、删过期补丁、编辑 /etc、`>/dev/null`）全部放行，
-交回审批组件按权限模式处置。
+交回审批组件按权限模式处置。**载体本体（安装目录／三件套／`grok-home`）不在保底面**
+（v3 裁决：可恢复的易弃状态交审批组件与恢复机制，不占硬 deny）。
 
 ## §1 最终规则面（封闭枚举；恰好 5 条 block 规则）
 
@@ -31,7 +38,7 @@
 | 2 | `raw-device-write` | **block** | `dd`＋`of=` 落**块设备**（`/dev/[sv]d*`、`/dev/vd*`〔virtio，v2.1 登记增补〕、`/dev/nvme*`、`/dev/mmcblk*`、`/dev/mapper*`〔LVM/设备映射器，v2.1 登记增补〕、`\\.\PhysicalDrive*`；**`/dev/null` 显式豁免**）；`mkfs*`＋目标词落上述块设备形态（v2.1 收窄——镜像文件构建〔`mkfs.ext4 disk.img`〕放行）；`format`；`diskpart`（脚本形态）；卷影删除（`vssadmin delete`／`wbadmin delete`）。**目标位判定**（v2.1 收窄）：PhysicalDrive 词元仅在写侧目标位（`of=` 值／`mkfs*` 目标词）命中——读侧 `dd if=\\.\PhysicalDrive0`（备份/取证）与查询类提及放行 | `dd if=x of=/dev/sda`；`mkfs.ext4 /dev/sdb` |
 | 3 | `boot-firmware-flip` | **block** | `bcdedit`；Defender 偏好域（`Set-MpPreference` 等）；防火墙 profile set；`sc/net stop windefend\|mpssvc`；`Set-ExecutionPolicy`；审计清除（`wevtutil cl`／`Clear-EventLog`）；`fltmc unload` | 沿 v1 `safety-mechanism-flip` 全集 |
 | 4 | `registry-hive-delete` | **block** | `reg delete\|add\|import` 落 `HKLM`/`HKCR`/`HKU`——**目标位判定**（v2.1 收窄）：`reg <sub> <target>` 第三词元前缀比对，数据值中的蜂巢提及（`/d hklm-…`）不误拦 | 沿 v1 |
-| 5 | `carrier-write` | **block** | `{cwd}/.gsa`、orz 安装目录（含 ⊆cwd 降级规则）、三件套、`grok-home/` | 沿 v1 C1/C2/C3（用户底线③本体） |
+| 5 | `carrier-write` | **block** | **宿主状态两条窄目标（v3 收窄）**：① `{cwd}/.gsa` 会话卷（容器面＝宿主 bind mount、宿主面＝宿主盘；容器面 ACAF keystore 随卷覆盖——provision 落 `gsa/keystore`）；② **ACAF keystore 根**（keystore 目录＋signer manifest＋key 两件；宿主原生面＝装配期解析的 `<install>\<acaf>\keystore`）。~~orz 安装目录（含 ⊆cwd 降级规则）／三件套／`grok-home/`~~（**v3 双面全退役**，论证见 §2 条 5） | 规则 id 沿用（schema v0.3 枚举零变化＝回放兼容）；目标＝「会话结束后仍存在的宿主状态」 |
 
 **文案**：block 拒绝信封含规则 id＋目标＋一句「已越过保底硬边界」；规则 1 按用户原话附
 「需精准删除」指引（写明被拦目标、建议改为具体文件/子目录）。
@@ -52,6 +59,24 @@
    （读 `/proc/cpuinfo`、参数含 `/dev/null` 一律不拦）。
 4. v1 §2.1 表 A（Win 四根整树）与表 B（Linux 十二树）**从 deny 集整体退役**，
    其中「根本性树根」仅以**规则 1 的递归删除目标**身份保留（不再拦一般性写）。
+5. **载体安装目录／三件套／`grok-home`／⊆cwd 降级规则（v3 退役；0cc 本体）**——
+   安装目录整目录保护在容器化评测面与题面要求**结构性冲突**（build-pov-ray：验证器硬编码
+   `/usr/local/bin/povray`；0.8.5 重跑 7 拦中 4 拦为此冲突〔含 `/tmp/lnk` 软链绕道识破〕，
+   run `RUN-CLI-6abbb013`）。退役论证（2026-09-29 晚用户裁决「把灾难保底纯粹变成宿主机
+   灾难保底……只要不重建，orz实际上不会被即时破坏」）：
+   - **守卫自保是循环论证**：写控由运行中进程执法，而删文件杀不死运行进程
+     （Linux 卸 inode、进程照跑；Windows 锁运行中 exe）——模型「删守卫」买不到任何
+     未 gated 的执行面；它只影响未来 run，而未来 run 每次自宿主部署 fresh 起容器，
+     拿到的永远是完好载体。
+   - **恢复成本是分类标准**：保底只拦**不可逆**灾难（无「重跑一次」恢复路径）；
+     载体本体是典型可恢复状态（发行包复制回来／三分钟重建脚本）。间接面
+     （删 `orz-signer` 断签票、动 `_bgprobe` 乱 auto-backgrounding）代价＝单次尝试报废，
+     有界、fail-closed 可检测——换不来整目录保护对合法安装的确定性杀伤。
+   - **Windows 原生面同裁**：运行中 exe 本有 OS 文件锁；其余件可从发行包秒恢复——
+     按「宿主机灾难保底」教义它们不算灾难面。
+   - **keystore 例外保留**：ACAF keystore／签名器 manifest 是信任锚——毁掉＝在途票据
+     全作废、需重 provision，非平凡可恢复，且窄到无任何模型合法写它的理由 ⇒ 与 `.gsa`
+     一并构成宿主状态保底（容器面 keystore 在卷内随 C1 覆盖；宿主原生面新增窄目标）。
 
 ## §3 确定性论证（回答「拦截没有膨胀吧？」）
 
@@ -62,24 +87,34 @@
   `apt-get install`、`pip install`、`echo x > /dev/null`、`2>/dev/null`、`+O/dev/null`、
   `Remove-Item C:\Windows\SoftwareDistribution\Download\old`（文件级）、
   `cat /proc/cpuinfo`、`ln -s /etc /w`（非递归删除，不拦）、`dd if=x of=/dev/null`；
+  **v3 增补**：`install to /usr/local/bin/povray`（build-pov-ray 题面形状——0cc 验收放行例）、
+  `ln -s` 指入安装目录（软链合法化）、写载体三件套路径／`_bgprobe`（退役面放行）；
   ③ 负向集：五规则各 ≥2 命中例（`rm -rf /`／`rd /s C:\`／`Remove-Item C:\Windows -Recurse`／
-  `dd of=/dev/sda`／`bcdedit`／`reg delete HKLM`／写 `.gsa`）。
+  `dd of=/dev/sda`／`bcdedit`／`reg delete HKLM`／写 `.gsa`／**v3 增补**：写 keystore 根）。
   **v2.1 补全**：行数钉扩展至全部封闭表（`DESTRUCTIVE_VERBS`〔规则 5 block 面〕/
   `DELETE_VERBS`/`ELEVATION_PROGRAMS`/`WRAPPER_WORDS`/`CONTENT_WORDS`/载体面三表）；
   收窄后放行负测补口（raw 读侧/镜像文件/reg 数据值/盘符相对根子目录）。
+  **v3 调整**：载体面三表中 `CARRIER_BINARY_NAMES`/`CARRIER_PROTECTED_SUBDIRS` 随 C3 退役
+  （清空或删表，行数钉随表改动）；keystore 根解析函数纳入钉覆盖。
 - **不再有车道问题**：保底形状在任何车道都无碍正常任务（没有正经任务会递归删卷根），
   无需基准/真机分档开关；v1 §2.3「无运行时开关、表项变更＝代码变更」原则维持。
 
 ## §4 三落地点与消费面变化
 
-- **工具面 `search_replace`**：`check_write_target` 收窄为**载体集**（C1/C2/C3）；
+- **工具面 `search_replace`**：`check_write_target` 收窄为**载体集**（v3：C1 `.gsa` 域＋
+  **C2′ keystore 根**；C2/C3 退役）；
   写系统树不再拒（0bw v1 的工具面系统核心拒臂退役）。
 - **命令面 `run_terminal_cmd`**：按 §1 规则面重写 `review_command_with`；
   留痕形态不变（block 文案/warn 头行随 journal）。
 - **undo 面**：目标域收敛**改为 cwd＋载体集**（v1 的「cwd＋系统核心」中的系统核心臂退役；
-  cwd 边界与 C1 判定不变）。
-- L3（Landlock/CFA）：allow 集随 deny 表收窄同步（核心集除外→仅灾难防护所需最小集），
-  实施批同步本档；本批不动 L3 落码面。
+  cwd 边界与 C1 判定不变；C2′ 随 v3 并入载体集）。
+- L3（Landlock/CFA）：allow 集随 deny 表收窄同步（核心集除外→仅灾难防护所需最小集）。
+  **v3 强约束（S4 成败项）**：0cc S2 必须同步放行载体面目标（安装目录／`/usr/local/bin` 等）
+  ——**run `RUN-CLI-6abbb013` 实证 L3 在容器在役**：L2 目标位识别未覆盖的间接写入形态
+  （编译器 `-o` 落 `/usr/local/bin`、hardlink/symlink/rename/fifo、跨目录 `mv`、
+  root/ubuntu/nobody 提权重试）全部在内核层 EPERM（模型笔记自述「双层保护」「shell 一律
+  EPERM」）。**若 L3 allow 集不同步，S4 重跑将在 L2 放行后死于 EPERM，收窄判据失真**。
+  L3 落码面 0cb 批未动；0cc S2 为必改项。
 
 ## §5 与审批组件的分工（用户裁决定案）
 
@@ -121,4 +156,27 @@
 - **S4**：基准实测读数（**2026-09-29 用户令改口径：b3-13 断点不续，TB 2.1 整轮 89 题直接全量
   重跑**，前 44 题 0.8.4 读数保留、重跑以新载体统一代际）：写控拦截数应从 215 量级跌到个位数
   （仅真灾难形态）；正常使用狗粮轮回归（保底仍在、零误拦）。
-- **台账**：0bw 条目由本档修订注记（不退役——架构与载体自保护仍有效）；ADR-0010 转录随落账批。
+- **台账**：0bw 条目由本档修订注记（不退役——架构与宿主状态保底仍有效；v2.1 旧句
+  「载体自保护仍有效」由 v3 修正）；ADR-0010 转录随落账批。
+- **0cc 批序（v3.0 起，2026-09-29 晚立项）**：
+  - **S1＝本档升 v3.0（2026-09-29 晚完成）**。
+  - **S2 落码（待放行）**：`write_control.rs` 载体集重定义＝C1 保留＋C2′ keystore 根
+    （装配期解析）＋C2/C3 退役（`CARRIER_BINARY_NAMES`/`CARRIER_PROTECTED_SUBDIRS`
+    清空或删表、行数钉随改）＋§3 fixture/钉更新＋判官/Python 镜像/fixture 对拍核证
+    （**枚举零变化，预期契约面零 diff**）；`exec_policy.rs` 规则 5 目标集同步；
+    **L3（Landlock）allow 集同步放行载体面目标（§4 v3 强约束＝S4 成败项）**；
+    工具面 `check_write_target`（`carrier:install-dir` 拒绝面随载体集退役）。
+  - **反馈面核证（S2 验收项；2026-09-29 晚用户问询「拒写是否有结果回报」触发）**：
+    本轮实证**拒绝结果三层均在回传、无「拒而不报」面**——① L2 保底文案：7 拦全入
+    journal `tool_completed` error（与工具结果单一漏斗同源；轨迹档仅记 agent 消息，
+    故不直接可见，模型行为〔软链绕道、六拼写变体〕与文案语义一致）；② L3 Landlock
+    EPERM 经 shell 回显；③ edit 工具 `carrier:install-dir` 策略拒。真实摩擦＝**三层
+    文案形状不一**，模型耗多轮探测＋**二进制考古**（`grep -aboF 'carrier-write' orz`
+    ＋`dd` 翻载体二进制字符串，重建出近似且含错的规则知识〔混入杜撰 `session-volume`、
+    误纳 warn 级 `elevation`〕）才拼出全貌。v3 载体面合法化后考古动机消解；S2 验收
+    确认 block 文案模型可见路径与 journal 同源＋三层拒绝面文案带可区分来源标识即可
+    （L2 文案已带规则 id；L3/工具面为既有形状），不新增机制。
+  - **S3**：双平台重建 **0.8.6**＋`run_r0_heavy_official.py` 身份门换装。
+  - **S4**：TB21 线 5 题重跑（**build-pov-ray 第一＝翻盘实锤判据**：`/usr/local/bin/povray`
+    安装放行、3/3 测试通过）＋b3-13 断点续跑＋余 44 题续跑；0cb S4 余项合并执行
+    （拦截数读数、狗粮回归零误拦）。**重跑线自 2026-09-29 晚暂停至 0.8.6**。

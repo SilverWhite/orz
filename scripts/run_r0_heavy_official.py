@@ -78,13 +78,15 @@ MANIFEST = (
 PULL_LOG = JOBS_DIR / 'preroll-images.log'
 PULL_TRIES = 4
 
-# 0.5.0 载体三件套锁定值（D:/tb-eval/orz-0.5.0-carrier-hashes.txt）
+# 载体锁定值（2026-09-29 换装 0.8.5＝0cb S2 写控保底化重建源冻结 orz `15bc1bfb`；
+# 旧值 0.8.4 = 87941130b37da51e585d216df55c4e84e62d2571e448470bae20c86b5a01745e〔0bz S3〕）
 EXPECTED_CARRIER_SHA256 = (
-    '393eee34dd0357cab088f289fa1068a39294a13fff48d80d33c50a40684dd623'
+    'ecf1d6650dd7da5b20be484f9b25eea09d35ace440e1808e22a91db0155e6007'
 )
-# 适配器锁定值（2026-09-13 容器侧排查记录 §1）
+# 适配器锁定值（现行 tb_agents/orz.py，含 F1 试次隔离＋0ax ORZ_WEB_SEARCH_LOCAL 透传；
+# 旧值 2737cfadc5c43603b73164b51343e58a671c0efeee8d9ab7a626dda8dae51490）
 EXPECTED_ADAPTER_SHA256 = (
-    '2737cfadc5c43603b73164b51343e58a671c0efeee8d9ab7a626dda8dae51490'
+    '6d55c26ec9415d579961371973504f0d44de8027fe8318bbd8a0e835811b0d17'
 )
 
 # 默认题集（第 0 轮 = 内存重题 8 题）：冻结批次 / 官方 agent 超时（秒），按冻结清单序
@@ -377,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.allow_identity_drift:
             return 2
     else:
-        log('OK 代际身份核验通过（载体 0.5.0 + 适配器锁定值）')
+        log('OK 代际身份核验通过（载体与适配器锁定值一致，版本以 plan 行哈希为准）')
 
     if not args.no_pre_pull:
         if not pre_pull(tasks):
