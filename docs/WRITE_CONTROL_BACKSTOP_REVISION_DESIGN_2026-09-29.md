@@ -190,6 +190,26 @@
     确认 block 文案模型可见路径与 journal 同源＋三层拒绝面文案带可区分来源标识即可
     （L2 文案已带规则 id；L3/工具面为既有形状），不新增机制。
   - **S3**：双平台重建 **0.8.6**＋`run_r0_heavy_official.py` 身份门换装。
+    **2026-09-29 晚完成（121 批）**：源冻结 orz **`f95e1831`**（`397ba7cc` S2＋bump
+    0.8.5→0.8.6，`cargo metadata --locked` exit 0）；Windows `build_orz.ps1
+    -Release -Jobs 2` exit 0（4m17s），换装 MATCH 3/3（`orz.exe cbe39aff…`／
+    `orz-signer.exe 4638fbaf…`／`orz-acaf-provision.exe 363d05f4…`），回滚点
+    `.0.8.5-bak`；ACAF 重 provision exit 0、manifest `binary_sha256=4638fbaf…`
+    ↔ 换装位逐位一致、keystore 两件（`f37556ab…`/`2aa80cb8…`）逐位未动；进体
+    判据＝新规则面字面量四值进体（`carrier:keystore-root`/`carrier:signer-manifest`
+    ＋两 detail 文案）＋退役面字面量零残留（`carrier:install-dir`/`install-file`/
+    carrier self-protection set/CARRIER_PROTECTED_SUBDIRS）＋保底文案在位＋版本串
+    0.8.6；Linux musl（docker `rust:1.97-slim`，ORZ-BUILD-MOUNT-001 契约；
+    **首跑因 Git Bash 路径转换未启动〔`-w /orz/orz`→`B:/Git/orz/orz`〕，
+    `MSYS_NO_PATHCONV=1` 重跑成立**）exit 0（22m23s，`-j 1`），直写换装位
+    MATCH 3/3（`orz 979a38fa…`／`orz-signer c01095eb…`／`orz-acaf-provision
+    16bcf6fb…`）、static-pie×3＋INTERP=0、alpine 3.20/bookworm 双冒烟 0.8.6；
+    回滚点 `.0.8.5-bak`；`run_r0_heavy_official.py` 身份门换装（载体
+    `ecf1d665…` → `979a38fa…`，适配器 `6d55c26e…` 未动）；打包 `rel-121-stage`
+    两侧各 5 entries（zip `8335fdb0…`／tar `63884f1a…`）、容器核证 4/4・4/4・
+    2/2、包内 build-info 双平台 0.8.6、清单活体两态（干净 0 finding／README+1B
+    恰 1 条——核证通道勘误：`--build-info` 在完整性自检**之前**早退，活体两态
+    须经非早退入口触发，如 `--version`）；未推送未发行。
   - **S4**：TB21 线 5 题重跑（**build-pov-ray 第一＝翻盘实锤判据**：`/usr/local/bin/povray`
     安装放行、3/3 测试通过）＋b3-13 断点续跑＋余 44 题续跑；0cb S4 余项合并执行
     （拦截数读数、狗粮回归零误拦）。**重跑线自 2026-09-29 晚暂停至 0.8.6**。
