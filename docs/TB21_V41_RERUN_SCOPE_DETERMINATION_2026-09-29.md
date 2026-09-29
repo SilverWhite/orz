@@ -75,7 +75,7 @@
    `python D:/CLI/scripts/run_r0_heavy_official.py --tasks <题名> --job-name official-v41-rerun-<题名>`
    （一次一题、后台、题毕核对后放下一题）。**顺序：build-pov-ray 第一**——它翻盘＝0cb 修复实锤；
    若它在 0.8.5 上仍 0 分，**停止花钱**，先查原因再决定后续。读数回填：TODO `P1-0cb` S4。
-4. **续跑 b3-13…**：`python D:/CLI/scripts/run_official_v41_full.py --stop-after 1 --deadline "<窗口截止>"`（驱动器自动从 b3-13 断点续，b1-08 靠延后清单跳过）；逐题监督至窗口截止；下窗再续。
+4. **续跑 b3-13…**（**2026-09-30 退役——§10 用户裁决：b3-13 起未跑面直接重跑、不续跑，本步骤不再执行**）：~~`python D:/CLI/scripts/run_official_v41_full.py --stop-after 1 --deadline "<窗口截止>"`（驱动器自动从 b3-13 断点续，b1-08 靠延后清单跳过）；逐题监督至窗口截止；下窗再续。~~
 5. **窗口收口**：到点停新题；进度存档追加进轮次档 §7/§8（表行逐题回填＋收口小结节）。
 6. **全部 89 题处置完毕后**：轮次收尾批——逐题读数汇总、`tb21_round_gate.py`（参照线比对）、
    披露稿（见 §5）、台账入账（0cb S4 勾选、0bz/0by S4 读数、索引滚动回填；**提交/推送仍冻结待令**）。
@@ -99,10 +99,13 @@
 ## 7. 快速状态卡（新窗口起跑前照抄核对）
 
 ```
-载体   D:/tb-eval/orz-linux/orz  = ecf1d665…（0.8.5）   适配器 = 6d55c26e…
-身份门 run_r0_heavy_official.py EXPECTED = ecf1d665…（已换装）
-驱动器 D:/CLI/scripts/run_official_v41_full.py（--stop-after 1 --deadline "<截止>"）
-runner D:/CLI/scripts/run_r0_heavy_official.py（重跑专用：--tasks <题> --job-name official-v41-rerun-<题>）
+载体   D:/tb-eval/orz-linux/orz  = 3332b38f…（0.8.7）   适配器 = 6d55c26e…
+身份门 run_r0_heavy_official.py EXPECTED = 3332b38f…（已换装；旧值 ecf1d665…＝0.8.5／
+       979a38fa…＝0.8.6 留档，见 §3/§8/§9）
+驱动器 （续跑形态已退役——2026-09-30 §10 用户裁决：未跑 44 题改逐题重跑；
+       run_official_v41_full.py 留作历史不再用）
+runner D:/CLI/scripts/run_r0_heavy_official.py（重跑专用：--tasks <题> --job-name official-v41-rerun2-<题>；
+       official-v41-rerun-build-pov-ray 已被 0.8.5 结构性 0 试次占用，0.8.7 重跑起新名）
 总账   D:/tb-eval/jobs-official/official-v41-full-round.log
 延后表 D:/tb-eval/jobs-official/deferred-tasks.txt（qemu-startup）
 挂起题 b1-08（上游腐烂）｜未跑 44 题（b3-13…、B4×18、B5×19）｜重跑 5 题（§2.1）
@@ -131,3 +134,62 @@ bind mount 面保留；Windows 原生面 S1 裁量；批序 S1 设计→S2 落�
 （披露口径 §5 叙事追加第二段：装置修复分两步——0.8.5 保底化＋0.8.6 宿主机保底收窄）；
 ③ b3-13 断点续跑同样等 0.8.6；④ 台账入账（0cb S4 首读＋0cc 立项）已随本批落 BACKLOG/
 TODO/索引（118 批，未提交未推送）。
+
+## 9. 追记（2026-09-30）：0cc S2 审查处理批——0.8.7 在役，重跑线解禁
+
+**审查处置**（设计档 [`WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md`](WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md) v3.1）：
+0cc 三维度全面审查（设计/实现/符合性，物证核证 S1–S3 全部吻合）发现 P2×1＋P3×3，
+同批全部处置——P2＝规则 5 增宿主态**祖先链臂**（`ANCESTOR_SWEEP_VERBS` 删除/搬移
+封闭子集恰 15；`rm -rf <install>` 扫荡不触规则却连带摧毁 keystore 信任锚的缺口闭合）；
+P3-1＝`DESTRUCTIVE_VERBS` 补 `install`/`ln`（37→39）；P3-2/P3-3＝措辞修正与双覆盖
+报告顺序点明。读数 orz-tools lib 2988/0/6、clippy 13 基线持平、契约面零变化。源冻结
+orz `79a3e8e5`（feat `cb88d416`＋bump 0.8.6→0.8.7）。
+
+**0.8.7 双平台重建换装进体（2026-09-30 凌晨，本窗实测核验）**：
+
+| 件 | SHA256 | 备注 |
+|---|---|---|
+| `orz-linux/orz`（在役） | `3332b38f71cd4b635f6a1538bb14266bb8f2d739676e92ba976a26b566dd1362` | **0.8.7**；static-pie；祖先臂两 face 字面量＋版本串进体；退役面 `carrier:install-dir` 零残留 |
+| `orz-linux/orz-signer` | `1defacf83d02243b07213048727fd6e4a6da5ae6fb91e7d838d5aa092f7d41fc` | 直写换装位 MATCH 3/3 |
+| `orz-linux/orz-acaf-provision` | `bc7d55763bccb1acf5ad905281c43dd79639e318b131d3a84b87d524e9e1f733` | 同上 |
+| `tb_agents/orz.py` | `6d55c26ec9415d579961371973504f0d44de8027fe8318bbd8a0e835811b0d17` | 未变（上半场同值） |
+
+Windows 在役三件 `104b9bce…/ed8066b7…/ebf5b3f9…`（`orz-windows/`，与
+`rel-122-stage/_live` 活体集逐位一致；ACAF 重 provision、carrier-manifest 00:57 更新）；
+打包 `rel-122-stage` zip `a6b2c4b1…`／tar `bd68682b…`；两侧回滚点 `.0.8.6-bak`；
+执行器身份门已换装 `3332b38f…`（旧值留注释）。
+
+**对下半场口径的影响**：① §8 的「重跑线暂停至 0.8.6」被本追记取代——「祖先臂与动词
+补齐进体后方跑 S4」判据已满足，**重跑线解禁**；② build-pov-ray 翻盘题改在 **0.8.7** 上
+重跑（新作业名 `official-v41-rerun2-build-pov-ray`；0.8.5 结构性 0 试次
+`official-v41-rerun-build-pov-ray` 留档）；**判据＝`/usr/local/bin/povray` 安装放行＋
+3/3 测试＋reward 1.0；若在 0.8.7 上仍 0 分 ⇒ 止损门再度触发，停止花钱先查原因**；
+③ 剩余 4 题重跑＋b3-13 断点续跑代际统一 0.8.7；④ 本批（0cc S2 审查处理＋0.8.7 重建）
+未提交未推送（用户令 2026-09-30）。
+
+## 10. 追记（2026-09-30）：build-pov-ray 0.8.7 翻盘读数与 b3-13 续跑线退役（用户裁决）
+
+**首题读数（0cc S4 首读，止损门未触发）**：作业 `official-v41-rerun2-build-pov-ray`
+（run `RUN-CLI-6abbf664`，01:33–01:47，14m17s／官方墙钟 12000s 的约 7%，exit 0，一次
+成功无重试），**reward＝1.0（官方验证器，题面 3 测试全过）——翻盘实锤达成**，已公开
+上传 Harbor（`hub.harborframework.com/jobs/0ed4c08a-d124-49b7-9342-e916207ebb4c`）。
+身份门核验通过（载体 `3332b38f…`＝0.8.7、适配器 `6d55c26e…` 未变）。
+
+**写控读数**：拦截恰 **1 条**（0.8.5 结构性 0 试次为 7 条）——且为 v3.1 新祖先链臂
+**实战首拦**：模型探测 `/etc` 写侧被拒（`target /etc is an ancestor of the ACAF
+keystore root (/etc/orz-acaf/keystore)`），按设计开火、未阻碍任务完成；
+`/usr/local/bin` 安装面全放行（journal 中 4 处安装命令均执行）；结束自述
+`reason=completed`（0.8.5 试次为 `reason=blocked`）。0cb/0cc 收窄与 v3.1 祖先臂
+因果链双向闭环：退役面放行、保护面开火、任务翻盘。
+
+**用户裁决（2026-09-30）——b3-13 起未跑面直接重跑、不续跑**：「b3-13 的话，后续
+直接重跑，不续跑，毕竟换版本了，同一道题跨包体版本不太合适」。⇒ §4 步骤 4 的
+`run_official_v41_full.py` 断点续跑形态**退役**（§7 状态卡驱动器行随此作废）；未跑
+44 题（b3-13…b3-19＝7＋B4×18＋B5×19）改以 **0.8.7 代际逐题独立作业**的形态执行
+（与 rerun2 重跑系列区分——未跑题非重跑，作业名不带 rerun 语义，具体系列名执行窗定；
+b1-08 仍按延后清单挂起不动）。
+
+**披露口径（§5）影响**：装置修复叙事追加第三段（0.8.5 保底化 → 0.8.6 宿主机保底
+收窄 → 0.8.7 祖先链臂加固，build-pov-ray 翻盘实锤）；**轮内代际分裂须明示**——
+上半场 44 题＝0.8.4、5 题重跑＋下半场 44 题＝0.8.7，下半场不表述为同一 run 的
+「续跑」；k=1 筛查轮口径不变。

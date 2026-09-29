@@ -1,11 +1,28 @@
 # 写入管控保底化修订（0bw v2 / 0cb / 0cc v3）设计档：宿主机灾难硬边界保底 ＋ 一般写动作归还审批组件
 
-> **状态**：`design v3.0`（2026-09-29 晚 **v3.0＝0cc S1**——用户裁决「继续收窄，把灾难保底
+> **状态**：`design v3.1`（**v3.1＝0cc S2 审查处理批**，2026-09-30——全面审查（设计/
+> 实现/符合性三面，物证核证 S1–S3 全部吻合）发现 P2×1＋P3×3，用户令「补足强度缺口并
+> 处理全部问题」同批处置：① **P2 祖先链臂**＝规则 5 增扫荡动词门控臂（`ANCESTOR_SWEEP_VERBS`
+> ＝删除/搬移封闭子集恰 15）——目标为 keystore 根/signer manifest **严格祖先**同落
+> `carrier-write` block（宿主原生 keystore 实况位于已退役的载体安装目录内
+> 〔`<install>\acaf\keystore`〕，`rm -rf <install>` 扫荡不触任何规则却连带摧毁信任锚
+> ——载体面退役不得连带放行；face id `carrier:keystore-ancestor`/`carrier:signer-manifest-ancestor`
+> 为 L1/L2 文案层，schema 枚举不动＝契约面零变化；`cp`/`mkdir`/`install` 等入位写不毁
+> 祖先、不触发；卷根递归删除仍由规则 1 恰本体比对先行接住）；② **P3-1 动词补齐**＝
+> `DESTRUCTIVE_VERBS` 补 `install`/`ln`（37→39——向宿主态目标落盘/建链接直接命中；
+> `install to /usr/local/bin` 等非宿主态仍放行）；③ **P3-2 措辞修正**＝「装配期解析」
+> 改「装配同源 env 调用点解析」（无行为差——子进程 env 变更不回传父进程）；
+> ④ **P3-3 点明**＝容器面 keystore 落 `.gsa` 域时 C1 先行覆盖、双覆盖报告
+> `carrier:session-volume`。读数＝orz-tools lib **2988/0/6**（＋2）、clippy 13 基线持平、
+> 触碰面 fmt 零 diff；**载体重建（0.8.7）已完成进体**〔2026-09-30 凌晨双平台重建换装＋
+> 身份门＋打包，证据见 §6 S2 审查处理批段〕**——祖先臂与动词补齐已在役，S4 重跑线解禁**）。
+> 2026-09-29 晚 **v3.0＝0cc S1**——用户裁决「继续收窄，把灾难保底
 > 纯粹变成宿主机灾难保底……只要不重建，orz实际上不会被即时破坏」：规则 5 目标集缩为
 > **宿主状态两条窄目标**（`.gsa` 会话卷＋ACAF keystore 根），载体安装目录／三件套／
 > `grok-home`／⊆cwd 降级规则**双面全退役**；**契约面零变化＝schema v0.3 枚举不动**
 > （`carrier-write` id 沿用，目标集收窄属生产语义、枚举值与配对面零 diff））。
-> 沿革：v2.0＝0cb S1 定稿（2026-09-29）；v2.1＝S2 全面审查处理批（同日——用户三项裁决：
+> 沿革：**v3.1＝0cc S2 审查处理批**（2026-09-30）；v3.0＝0cc S1（2026-09-29 晚）；
+> v2.0＝0cb S1 定稿（2026-09-29）；v2.1＝S2 全面审查处理批（同日——用户三项裁决：
 > ① 契约面 **schema 升 v0.3**＋legacy 回放豁免（跨代际回放兼容）；② 实现过严臂进一步收窄
 > （规则 2 PhysicalDrive/mkfs 目标位、规则 1 动词集 `ri` 补齐＋盘符相对根补全、规则 4 蜂巢
 > 目标位）；③ 钉覆盖补全＋证据引用修正）。**权威链**：本档修订
@@ -38,7 +55,7 @@
 | 2 | `raw-device-write` | **block** | `dd`＋`of=` 落**块设备**（`/dev/[sv]d*`、`/dev/vd*`〔virtio，v2.1 登记增补〕、`/dev/nvme*`、`/dev/mmcblk*`、`/dev/mapper*`〔LVM/设备映射器，v2.1 登记增补〕、`\\.\PhysicalDrive*`；**`/dev/null` 显式豁免**）；`mkfs*`＋目标词落上述块设备形态（v2.1 收窄——镜像文件构建〔`mkfs.ext4 disk.img`〕放行）；`format`；`diskpart`（脚本形态）；卷影删除（`vssadmin delete`／`wbadmin delete`）。**目标位判定**（v2.1 收窄）：PhysicalDrive 词元仅在写侧目标位（`of=` 值／`mkfs*` 目标词）命中——读侧 `dd if=\\.\PhysicalDrive0`（备份/取证）与查询类提及放行 | `dd if=x of=/dev/sda`；`mkfs.ext4 /dev/sdb` |
 | 3 | `boot-firmware-flip` | **block** | `bcdedit`；Defender 偏好域（`Set-MpPreference` 等）；防火墙 profile set；`sc/net stop windefend\|mpssvc`；`Set-ExecutionPolicy`；审计清除（`wevtutil cl`／`Clear-EventLog`）；`fltmc unload` | 沿 v1 `safety-mechanism-flip` 全集 |
 | 4 | `registry-hive-delete` | **block** | `reg delete\|add\|import` 落 `HKLM`/`HKCR`/`HKU`——**目标位判定**（v2.1 收窄）：`reg <sub> <target>` 第三词元前缀比对，数据值中的蜂巢提及（`/d hklm-…`）不误拦 | 沿 v1 |
-| 5 | `carrier-write` | **block** | **宿主状态两条窄目标（v3 收窄）**：① `{cwd}/.gsa` 会话卷（容器面＝宿主 bind mount、宿主面＝宿主盘；容器面 ACAF keystore 随卷覆盖——provision 落 `gsa/keystore`）；② **ACAF keystore 根**（keystore 目录＋signer manifest＋key 两件；宿主原生面＝装配期解析的 `<install>\<acaf>\keystore`）。~~orz 安装目录（含 ⊆cwd 降级规则）／三件套／`grok-home/`~~（**v3 双面全退役**，论证见 §2 条 5） | 规则 id 沿用（schema v0.3 枚举零变化＝回放兼容）；目标＝「会话结束后仍存在的宿主状态」 |
+| 5 | `carrier-write` | **block** | **宿主状态两条窄目标（v3 收窄）**：① `{cwd}/.gsa` 会话卷（容器面＝宿主 bind mount、宿主面＝宿主盘；容器面 ACAF keystore 随卷覆盖——provision 落 `gsa/keystore`；双覆盖时 C1 先行、报告 `carrier:session-volume`〔v3.1 点明〕）；② **ACAF keystore 根**（keystore 目录＋signer manifest＋key 两件；宿主原生面＝装配同源 env 解析的 `<install>\<acaf>\keystore`）；③ **祖先链臂（v3.1）**：删除/搬移动词〔`ANCESTOR_SWEEP_VERBS`＝删除＋搬移封闭子集恰 15〕下目标为①②受护目标的**严格祖先**（`rm -rf <install>` 扫荡面）同落本规则——直接命中优先报出，`cp`/`mkdir`/`install` 入位写不触发。~~orz 安装目录（含 ⊆cwd 降级规则）／三件套／`grok-home/`~~（**v3 双面全退役**，论证见 §2 条 5） | 规则 id 沿用（schema v0.3 枚举零变化＝回放兼容；祖先 face id 为文案层）；目标＝「会话结束后仍存在的宿主状态」 |
 
 **文案**：block 拒绝信封含规则 id＋目标＋一句「已越过保底硬边界」；规则 1 按用户原话附
 「需精准删除」指引（写明被拦目标、建议改为具体文件/子目录）。
@@ -96,6 +113,17 @@
   收窄后放行负测补口（raw 读侧/镜像文件/reg 数据值/盘符相对根子目录）。
   **v3 调整**：载体面三表中 `CARRIER_BINARY_NAMES`/`CARRIER_PROTECTED_SUBDIRS` 随 C3 退役
   （清空或删表，行数钉随表改动）；keystore 根解析函数纳入钉覆盖。
+  **v3.1 增补（0cc S2 审查处理批）**：正向放行增补＝`rm -rf /usr/local`（非祖先——
+  build-pov-ray 面在扫荡动词下仍放行）、`cp backup <acaf>/backup-store`／
+  `install -m 644 app.conf <acaf>/app.conf`／`mkdir <acaf>/newdir`（入位写不毁祖先）、
+  `ln -s /etc /w`（软链落他处）；负向集增补＝祖先扫荡两族（`rm -rf <install>`／
+  `rd /s /q <acaf>`／`mv <acaf> <trash>`／`ren <acaf> <old>`／`rm -rf /etc/orz-acaf`／
+  `mv /etc/orz-acaf /tmp/x`／`rename /etc <x>`〔非删除动词故规则 1 不接、落本臂〕）
+  ＋`install`/`ln` 直接命中（`install -m 600 key <keystore>/key`、`ln -sf f <manifest>`）；
+  规则序钉＝`rm -rf D:\` 仍报 `catastrophic-recursive-delete`（规则 1 恰本体先行）；
+  行数钉增补＝`ANCESTOR_SWEEP_VERBS` 恰 15＋「DELETE_VERBS 全体 ⊆ 本表 ⊆
+  `DESTRUCTIVE_VERBS`」包含关系钉＋「`install`/`ln`/`cp`/`mkdir` ∈ 写动词表 ∧ ∉ 本表」
+  （入位写非扫荡），`DESTRUCTIVE_VERBS` 37→39。
 - **不再有车道问题**：保底形状在任何车道都无碍正常任务（没有正经任务会递归删卷根），
   无需基准/真机分档开关；v1 §2.3「无运行时开关、表项变更＝代码变更」原则维持。
 
@@ -210,6 +238,41 @@
     2/2、包内 build-info 双平台 0.8.6、清单活体两态（干净 0 finding／README+1B
     恰 1 条——核证通道勘误：`--build-info` 在完整性自检**之前**早退，活体两态
     须经非早退入口触发，如 `--version`）；未推送未发行。
+  - **S2 审查处理批（v3.1，2026-09-30，用户令「补足强度缺口并处理全部问题」）**：
+    0cc 三维度全面审查（设计/实现/符合性；物证核证＝Windows 在役三件
+    `cbe39aff…/4638fbaf…/363d05f4…`、Linux `979a38fa…/c01095eb…/16bcf6fb…`、打包
+    zip/tar 哈希、清单 1506 条、双平台二进制字面量进体判据、读数自洽、父仓 0cc
+    窗口契约面零 diff——全部吻合）发现 P2×1（C2′ 子树包含不护祖先——宿主原生
+    keystore 在已退役的安装目录内，`rm -rf <install>` 连带摧毁信任锚）＋P3×3
+    （`install`/`ln` 不在写动词表／「装配期解析」措辞／双覆盖报告顺序未点明），
+    同批全部处置：P2＝`HostStateTargets::hit_ancestor`（严格祖先臂，keystore 优先）
+    ＋`ANCESTOR_SWEEP_VERBS`（删除/搬移封闭子集恰 15，含 ⊆ 钉）＋规则 5 接线
+    （直接命中优先、入位写不触发、卷根递归删除规则 1 先行）；P3-1＝
+    `DESTRUCTIVE_VERBS` 补 `install`/`ln`（39 行）；P3-2/P3-3＝措辞修正与 C1/C2′
+    双覆盖报告顺序点明（本档 §1/§3 同步升 v3.1）。读数＝orz-tools lib
+    **2988/0/6**（＋2：祖先扫荡负向集＋入位写放行回归）、clippy 13 基线持平、
+    触碰面 fmt 零 diff；判官/loop 耦合面核证＝仅 rule↔category 配对、无 detail
+    文案断言，契约面零变化。**载体重建 0.8.7 已完成进体（2026-09-30 凌晨；源冻结
+    orz `79a3e8e5`＝`cb88d416` 审查处理＋bump 0.8.6→0.8.7；本段为完成态订正——
+    原稿「待用户令放行」句作废）**：Windows 换装 MATCH 3/3（`orz 104b9bce…`／
+    `orz-signer ed8066b7…`／`orz-acaf-provision ebf5b3f9…`）＋ACAF 重 provision
+    绑新 signer（carrier-manifest 更新 00:57）；Linux musl 直写换装 MATCH 3/3
+    （`orz 3332b38f…`／`orz-signer 1defacf8…`／`orz-acaf-provision bc7d5576…`）、
+    static-pie×3、版本串双平台 0.8.7、祖先臂两 face 字面量进体、退役面
+    `carrier:install-dir` 零残留（双平台实测）；两侧回滚点 `.0.8.6-bak`；
+    `run_r0_heavy_official.py` 身份门换装（载体 `979a38fa…` → `3332b38f…`，
+    适配器 `6d55c26e…` 未动）；打包 `rel-122-stage`（zip `a6b2c4b1…`／tar
+    `bd68682b…`）。**祖先臂与动词补齐已在役，S4 重跑线解禁**；未提交未推送。
   - **S4**：TB21 线 5 题重跑（**build-pov-ray 第一＝翻盘实锤判据**：`/usr/local/bin/povray`
     安装放行、3/3 测试通过）＋b3-13 断点续跑＋余 44 题续跑；0cb S4 余项合并执行
-    （拦截数读数、狗粮回归零误拦）。**重跑线自 2026-09-29 晚暂停至 0.8.6**。
+    （拦截数读数、狗粮回归零误拦）。**重跑线自 2026-09-29 晚暂停，2026-09-30 随
+    0.8.7 在役解禁**（首题 build-pov-ray 改在 0.8.7 上重跑；0.8.5 结构性 0 试次
+    `official-v41-rerun-build-pov-ray` 留档）。
+    **S4 首读达成（2026-09-30，翻盘实锤）**：`official-v41-rerun2-build-pov-ray`
+    〔run `RUN-CLI-6abbf664`，14m17s／12000s，exit 0〕**reward＝1.0**（3 测试全过）；
+    拦截恰 1 条＝**祖先链臂实战首拦**（`/etc` 写侧＝keystore 根 `/etc/orz-acaf/keystore`
+    祖先，新 face 文案），`/usr/local/bin` 安装面全放行（4 处均执行），结束自述
+    `reason=completed`——退役面放行／保护面开火／任务翻盘三面闭环，止损门未触发。
+    **同日用户裁决：b3-13 起未跑面（44 题）直接重跑、不续跑**——载体换版后同一道轮
+    跨包体版本续跑不合适，`run_official_v41_full.py` 断点续跑形态退役（判定档 §10）；
+    余 4 题重跑＋未跑面 44 题逐题重跑待续。
