@@ -160,12 +160,25 @@
   「载体自保护仍有效」由 v3 修正）；ADR-0010 转录随落账批。
 - **0cc 批序（v3.0 起，2026-09-29 晚立项）**：
   - **S1＝本档升 v3.0（2026-09-29 晚完成）**。
-  - **S2 落码（待放行）**：`write_control.rs` 载体集重定义＝C1 保留＋C2′ keystore 根
-    （装配期解析）＋C2/C3 退役（`CARRIER_BINARY_NAMES`/`CARRIER_PROTECTED_SUBDIRS`
-    清空或删表、行数钉随改）＋§3 fixture/钉更新＋判官/Python 镜像/fixture 对拍核证
-    （**枚举零变化，预期契约面零 diff**）；`exec_policy.rs` 规则 5 目标集同步；
-    **L3（Landlock）allow 集同步放行载体面目标（§4 v3 强约束＝S4 成败项）**；
-    工具面 `check_write_target`（`carrier:install-dir` 拒绝面随载体集退役）。
+  - **S2 落码（2026-09-29 晚完成，120 批）**：`write_control.rs` 载体集重定义＝
+    C1 保留＋C2′ keystore 根／signer manifest（`HostStateTargets`，装配 env
+    `ORZ_ACAF_KEYSTORE`/`ORZ_ACAF_MANIFEST` 解析）＋C2/C3 退役
+    （`CARRIER_BINARY_NAMES`/`CARRIER_PROTECTED_SUBDIRS`/`current_install_dir`/
+    `install_dir_hit` 删表）＋§3 fixture/钉更新（退役面放行钉：安装目录三件套/
+    `grok-home`/`_bgprobe`/`/usr/local/bin` 安装/软链指入；负向集增 keystore 根与
+    manifest 两族）＋判官/Python 镜像/fixture 对拍核证（**枚举零变化＝契约面零
+    diff 实证：runtime 378/0＋assurance 278/0**）；`exec_policy.rs` 规则 5 目标集
+    同步；**L3（Landlock）排除集收窄＝灾难防护最小核
+    `LINUX_DISASTER_KERNEL_FACES` 恰 4 项（/boot /dev /proc /sys——规则 2/3
+    内核面），载体面系统树 /etc /usr /lib* /bin /sbin 放行（§4 v3 强约束）**；
+    工具面 `check_write_target`（`carrier:install-dir`/`carrier:install-file`
+    拒绝面退役，新 `carrier:keystore-root`/`carrier:signer-manifest`）＋回退面
+    第四消费点同步。读数＝orz-tools **2986/0/6**（+3）・assurance **278/0**・
+    runtime conformance **378/0**・orz-tui **178/0**・orz-loop 859/0/3（1 失败
+    为存量环境敏感，stash 基线对拍同红）・orz-host 353/0/6（2 失败同上）・
+    clippy tools 13/host 99 基线持平・触碰面 fmt 零 diff；反馈面核证达成＝L2
+    block 文案带规则 id（既有）＋工具面文案带 `carrier:keystore-root`/`carrier:signer-manifest`
+    来源标识（新钉）＋L3 为 shell EPERM 既有形状，不新增机制。
   - **反馈面核证（S2 验收项；2026-09-29 晚用户问询「拒写是否有结果回报」触发）**：
     本轮实证**拒绝结果三层均在回传、无「拒而不报」面**——① L2 保底文案：7 拦全入
     journal `tool_completed` error（与工具结果单一漏斗同源；轨迹档仅记 agent 消息，
