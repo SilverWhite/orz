@@ -1,15 +1,19 @@
-//! 写入管控（0bw v1 → 0cb v2 → **0cc v3 宿主机灾难保底收窄**，2026-09-29）：
-//! 宿主状态两窄目标＋根本树根常量（仅作递归删除目标）。
+//! 写入管控（0bw v1 → 0cb v2 → **0cc v3 宿主机灾难保底收窄**，2026-09-29；
+//! **v3.1 审查处理批**，2026-09-30）：宿主状态两窄目标＋根本树根常量（仅作
+//! 递归删除目标）。
 //!
-//! 设计权威：[`docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md`]（v3.0，
+//! 设计权威：[`docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md`]（v3.1，
 //! 修订 [`WRITE_CONTROL_MECHANICAL_DESIGN_2026-09-26.md`]（v1）的 deny 表范围；
 //! 单一源／三落地点／留痕／补偿架构不变）。**v3 收窄**（用户裁决「把灾难保底
 //! 纯粹变成宿主机灾难保底……只要不重建，orz 实际上不会被即时破坏」）：工具面
 //! [`check_write_target`] 只查**宿主状态两窄目标**——C1 `.gsa` 会话卷＋C2′
-//! ACAF keystore 根（keystore 目录子树＋signer manifest 本体，装配期 env 解析，
-//! 见 [`HostStateTargets`]）；v2 的安装目录／三件套／`grok-home`／⊆cwd 降级
-//! **双面全退役**（设计 §2 条 5 四点论证：守卫自保循环论证／恢复成本分类／
-//! Windows OS 文件锁／keystore 信任锚例外）——载体面写交回审批组件。v1 表
+//! ACAF keystore 根（keystore 目录子树＋signer manifest 本体，装配同源 env
+//! 调用点解析，见 [`HostStateTargets`]）；v2 的安装目录／三件套／`grok-home`／
+//! ⊆cwd 降级**双面全退役**（设计 §2 条 5 四点论证：守卫自保循环论证／恢复成本
+//! 分类／Windows OS 文件锁／keystore 信任锚例外）——载体面写交回审批组件。
+//! **v3.1 补强（审查 P2）**：keystore／manifest 的**祖先链臂** [`HostStateTargets::hit_ancestor`]
+//! ——宿主原生 keystore 实况位于已退役的载体安装目录内，扫荡删除／搬移祖先
+//! 不得因载体面退役而连带放行信任锚。v1 表
 //! A/B「根本性树根」仅以 [`LINUX_DISASTER_TREE_ROOTS`]／[`windows_disaster_tree_roots`]
 //! 的身份保留给命令面规则 1（`catastrophic-recursive-delete`：删除动词＋递归旗＋
 //! 目标**恰为**树根／卷根）的递归删除目标比对（[`path_equals_root`]——子目录级
@@ -57,11 +61,13 @@ pub const LINUX_DISASTER_TREE_ROOTS: [&str; 12] = [
 /// 变更须多处同步。
 pub const LINUX_DISASTER_KERNEL_FACES: [&str; 4] = ["/boot", "/dev", "/proc", "/sys"];
 
-/// deny 表命中结果（v3：宿主状态两族）。
+/// deny 表命中结果（v3：宿主状态两族；v3.1 增祖先链两 face）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DenyHit {
     /// 规则身份：`carrier:session-volume`／`carrier:keystore-root`／
-    /// `carrier:signer-manifest`。
+    /// `carrier:signer-manifest`（直接命中）／`carrier:keystore-ancestor`／
+    /// `carrier:signer-manifest-ancestor`（v3.1 祖先链臂——命令面由扫荡动词
+    /// 门控，见 [`HostStateTargets::hit_ancestor`]）。
     pub rule: &'static str,
     /// 命中的表项（展示形态）。
     pub root: String,
@@ -71,11 +77,14 @@ pub struct DenyHit {
 
 /// v3 规则 5 宿主状态两窄目标（0cc；工具面／命令面／回退面共用单一源）。
 ///
-/// 装配期解析：keystore 根与 signer manifest 由可信启动链在进程启动前注入
-/// （`ORZ_ACAF_KEYSTORE`／`ORZ_ACAF_MANIFEST`——与 `orz-bin` AcafClient 装配
-/// 同源；容器面 keystore 随会话卷落 `.gsa` 域时由 C1 先行覆盖，宿主原生面走
-/// 本结构窄目标）。缺席（env 未设）＝该窄目标不设防——与 AcafClient「未配置
-/// ⇒ 无票据」同形；命中即拒（fail-closed 于命中）。
+/// 装配同源 env 的调用点解析：keystore 根与 signer manifest 取自
+/// `ORZ_ACAF_KEYSTORE`／`ORZ_ACAF_MANIFEST`——与 `orz-bin` AcafClient 装配
+/// 同源的键；各消费点调用 [`Self::from_env`] 时读取（子进程 env 变更不回传
+/// 父进程，运行期内与装配期常量等价）。容器面 keystore 随会话卷落 `.gsa` 域
+/// 时由 C1 先行覆盖——[`check_write_target`] 先查 C1，**双覆盖时报告
+/// `carrier:session-volume`**；宿主原生面走本结构窄目标。缺席（env 未设）＝
+/// 该窄目标不设防——与 AcafClient「未配置 ⇒ 无票据」同形；命中即拒
+/// （fail-closed 于命中）。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HostStateTargets {
     /// ACAF keystore 根（目录子树整体保护——keystore 目录＋key 两件）。
@@ -85,7 +94,8 @@ pub struct HostStateTargets {
 }
 
 impl HostStateTargets {
-    /// 装配 env 解析（`ORZ_ACAF_KEYSTORE`／`ORZ_ACAF_MANIFEST`；空白值视为缺席）。
+    /// 装配同源 env 键解析（调用点读取；`ORZ_ACAF_KEYSTORE`／`ORZ_ACAF_MANIFEST`；
+    /// 空白值视为缺席）。
     pub fn from_env() -> Self {
         let read = |key: &str| -> Option<PathBuf> {
             std::env::var(key)
@@ -100,8 +110,10 @@ impl HostStateTargets {
         }
     }
 
-    /// 候选形态集比对（命令面复用；`forms` 为 [`candidate_forms`] 产出）：
-    /// keystore 根＝子树包含（含本体）；manifest＝恰为本体。keystore 根优先。
+    /// 候选形态集比对（工具面／命令面／回退面共用；`forms` 为 [`candidate_forms`]
+    /// 等候选形态集）：keystore 根＝子树包含（含本体）；manifest＝恰为本体。
+    /// keystore 根优先。祖先形态不进本判定——见 [`Self::hit_ancestor`]（命令面
+    /// 扫荡动词门控下的专用臂；工具面/回退面目标恒为文件，不可能为目录祖先）。
     pub fn hit(&self, forms: &[PathBuf]) -> Option<DenyHit> {
         if let Some(root) = &self.keystore_root {
             let root_norm = strip_verbatim_prefix(root);
@@ -118,6 +130,43 @@ impl HostStateTargets {
             if let Some(target) = forms.iter().find(|f| path_equals_root(&manifest_norm, f)) {
                 return Some(DenyHit {
                     rule: "carrier:signer-manifest",
+                    root: manifest_norm.to_string_lossy().into_owned(),
+                    target: target.to_string_lossy().into_owned(),
+                });
+            }
+        }
+        None
+    }
+
+    /// v3.1 祖先链臂（审查 P2 补强；命令面专用——扫荡动词门控在调用方，
+    /// 见 `exec_policy::ANCESTOR_SWEEP_VERBS`）：目标为受护目标的**严格祖先**
+    /// （直接命中已由 [`Self::hit`] 排除，相等形态不会到达本臂）。
+    ///
+    /// 动机：宿主原生 keystore／manifest 实况位于已退役的载体安装目录内
+    /// （`<install>\acaf\keystore`）——载体面退役后，`rm -rf <install>` 一类
+    /// 扫荡删除／搬移不触任何规则却连带摧毁信任锚（设计 §2 条 5 定类
+    /// 「非平凡可恢复」的本体）。本臂使祖先形态同落 `carrier-write` block；
+    /// `cp`/`mkdir` 等入位写不毁祖先，不入动词门。
+    ///
+    /// 比对方向与 [`Self::hit`] 相反（形态为 base、受护目标为其下）；keystore
+    /// 优先于 manifest。卷根／盘根亦为祖先（命令面规则 1 恰本体比对先行，故
+    /// 卷根递归删除仍报 `catastrophic-recursive-delete`）。
+    pub fn hit_ancestor(&self, forms: &[PathBuf]) -> Option<DenyHit> {
+        if let Some(root) = &self.keystore_root {
+            let root_norm = strip_verbatim_prefix(root);
+            if let Some(target) = forms.iter().find(|f| path_hits_root(f, &root_norm)) {
+                return Some(DenyHit {
+                    rule: "carrier:keystore-ancestor",
+                    root: root_norm.to_string_lossy().into_owned(),
+                    target: target.to_string_lossy().into_owned(),
+                });
+            }
+        }
+        if let Some(manifest) = &self.signer_manifest {
+            let manifest_norm = strip_verbatim_prefix(manifest);
+            if let Some(target) = forms.iter().find(|f| path_hits_root(f, &manifest_norm)) {
+                return Some(DenyHit {
+                    rule: "carrier:signer-manifest-ancestor",
                     root: manifest_norm.to_string_lossy().into_owned(),
                     target: target.to_string_lossy().into_owned(),
                 });
@@ -254,7 +303,9 @@ pub fn path_equals_root(root: &Path, candidate: &Path) -> bool {
 ///
 /// 会话卷形态保持既有文案（0p S2 语义原文；既有测试断言 `not model-writable`）；
 /// keystore／manifest 形态各带规则 id（反馈面核证：三层拒绝面文案带可区分
-/// 来源标识——L2 文案已带规则 id，L3 为 shell EPERM 既有形状）。
+/// 来源标识——L2 文案已带规则 id，L3 为 shell EPERM 既有形状）。v3.1 祖先链
+/// 两 face 仅由命令面产出（扫荡动词门控），此处文案臂保持函数对命中空间全盖
+/// （防御性完备，非生产路径）。
 pub fn write_block_message(model_path: &str, hit: &DenyHit) -> String {
     match hit.rule {
         "carrier:session-volume" => format!(
@@ -270,6 +321,18 @@ pub fn write_block_message(model_path: &str, hit: &DenyHit) -> String {
         "carrier:signer-manifest" => format!(
             "Error: {model_path} is the ACAF signer manifest ({root}), protected by \
              the write control (rule: {rule}); writes here are not permitted.",
+            root = hit.root,
+            rule = hit.rule,
+        ),
+        "carrier:keystore-ancestor" => format!(
+            "Error: {model_path} is an ancestor of the ACAF keystore root ({root}); deleting \
+             or moving it would destroy the protected host state (rule: {rule}).",
+            root = hit.root,
+            rule = hit.rule,
+        ),
+        "carrier:signer-manifest-ancestor" => format!(
+            "Error: {model_path} is an ancestor of the ACAF signer manifest ({root}); deleting \
+             or moving it would destroy the protected host state (rule: {rule}).",
             root = hit.root,
             rule = hit.rule,
         ),
@@ -488,6 +551,82 @@ mod tests {
         // keystore 内目标：两表都可命中形状下报 keystore 根（优先序钉）。
         let forms = candidate_forms(&keystore.join("x.bin"), None);
         assert_eq!(targets.hit(&forms).unwrap().rule, "carrier:keystore-root");
+    }
+
+    /// 0cc v3.1 审查处理批（P2 祖先链臂）：扫荡删除/搬移受护目标的祖先即命中；
+    /// 非祖先不命中；直接命中优先于祖先命中；[`check_write_target`]（工具面）
+    /// 不含祖先臂。
+    #[test]
+    fn ancestor_sweep_hits_and_non_ancestors_stay_allowed() {
+        let keystore = PathBuf::from(r"D:\app\orz\acaf\keystore");
+        let manifest = PathBuf::from(r"D:\app\orz\acaf\signer-manifest.json");
+        let targets = HostStateTargets {
+            keystore_root: Some(keystore.clone()),
+            signer_manifest: Some(manifest.clone()),
+        };
+        // 安装目录＝两受护目标的共同祖先（实况形态：keystore 在已退役的载体
+        // 安装目录内）——命中且报 keystore 祖先（keystore 优先于 manifest）。
+        let install = PathBuf::from(r"D:\app\orz");
+        let hit = targets
+            .hit_ancestor(&candidate_forms(&install, None))
+            .expect("ancestor hit");
+        assert_eq!(hit.rule, "carrier:keystore-ancestor");
+        assert_eq!(hit.root, keystore.to_string_lossy());
+        // 中间父目录（acaf）同命中；manifest 专属祖先形态（keystore 未武装时）
+        // 报 manifest 祖先。
+        let acaf = install.join("acaf");
+        assert_eq!(
+            targets
+                .hit_ancestor(&candidate_forms(&acaf, None))
+                .unwrap()
+                .rule,
+            "carrier:keystore-ancestor"
+        );
+        let manifest_only = HostStateTargets {
+            keystore_root: None,
+            signer_manifest: Some(manifest.clone()),
+        };
+        assert_eq!(
+            manifest_only
+                .hit_ancestor(&candidate_forms(&acaf, None))
+                .unwrap()
+                .rule,
+            "carrier:signer-manifest-ancestor"
+        );
+        // 非祖先：兄弟子树与无关节——放行。
+        for unrelated in [r"D:\app\other", r"D:\app\orz\bin"] {
+            assert!(
+                targets
+                    .hit_ancestor(&candidate_forms(Path::new(unrelated), None))
+                    .is_none(),
+                "non-ancestor must stay allowed: {unrelated}"
+            );
+        }
+        // 直接命中不被祖先臂抢报：keystore 子树形态 hit_ancestor 判 None、
+        // hit 报 keystore-root（调用方先 hit 后 hit_ancestor 的优先序基础）。
+        let direct_forms = candidate_forms(&keystore.join("k.json"), None);
+        assert!(targets.hit_ancestor(&direct_forms).is_none());
+        assert_eq!(
+            targets.hit(&direct_forms).unwrap().rule,
+            "carrier:keystore-root"
+        );
+        // 工具面唯一入口不含祖先臂：祖先目录形态在 check_write_target 判 None
+        // （工具面目标恒为文件；祖先拒面由命令面扫荡动词门控承载）。
+        let cwd = std::env::temp_dir();
+        assert!(
+            check_write_target(&WriteTargetCtx {
+                cwd: &cwd,
+                joined: &install,
+                resolved: None,
+                host_state: &targets,
+            })
+            .is_none(),
+            "tool face has no ancestor arm"
+        );
+        // 祖先命中文案带规则 id 与「ancestor」语义（可区分来源标识钉）。
+        let msg = write_block_message("x", &hit);
+        assert!(msg.contains("ancestor of the ACAF keystore root"));
+        assert!(msg.contains("rule: carrier:keystore-ancestor"));
     }
 
     #[test]

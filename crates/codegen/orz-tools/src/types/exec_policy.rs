@@ -26,10 +26,18 @@
 //!
 //! **0cc v3（2026-09-29 晚，规则 5 宿主机灾难保底收窄）**：规则 5 目标集缩为
 //! **宿主状态两窄目标**（`.gsa` 会话卷＋ACAF keystore 根／signer manifest——
-//! [`write_control::HostStateTargets`] 装配期解析）；v2 的安装目录／三件套／
-//! `grok-home`／⊆cwd 降级**双面全退役**——`/usr/local/bin` 安装、写载体三件套、
-//! 软链指入安装目录全部放行（build-pov-ray 结构性 0 的修复面；契约面零变化＝
-//! schema v0.3 枚举不动，`carrier-write` id 沿用）。
+//! [`write_control::HostStateTargets`] 装配同源 env 调用点解析）；v2 的安装
+//! 目录／三件套／`grok-home`／⊆cwd 降级**双面全退役**——`/usr/local/bin`
+//! 安装、写载体三件套、软链指入安装目录全部放行（build-pov-ray 结构性 0 的
+//! 修复面；契约面零变化＝schema v0.3 枚举不动，`carrier-write` id 沿用）。
+//!
+//! **0cc v3.1 审查处理批（2026-09-30）**：① **祖先链臂（P2）**——扫荡动词
+//! （删除/搬移，[`ANCESTOR_SWEEP_VERBS`]）下目标为 keystore 根／manifest 的
+//! 严格祖先同落 `carrier-write` block（宿主原生 keystore 实况位于已退役的
+//! 载体安装目录内，载体面退役不得连带放行信任锚的扫荡摧毁；入位写不触发）；
+//! ② 动词表补 `install`／`ln`（P3-1——两族可向宿主态目标落盘/建链接）。
+//! 契约面零变化：`carrier-write` id 沿用，祖先 face id（`carrier:*-ancestor`）
+//! 为 L1/L2 文案层，不入 schema 枚举。
 
 use std::path::{Path, PathBuf};
 
@@ -208,6 +216,9 @@ const REG_PROTECTED_HIVES: &[&str] = &[
 ];
 
 /// 规则 5 载体自保护写动词（破坏/修改面；命令内目标命中载体集即 block）。
+/// `install`／`ln` 为 0cc v3.1 审查处理批补齐（P3-1——两族可向宿主态目标
+/// 落盘/建链接：`install -m 600 … <keystore>`、`ln -sf … <manifest>`；
+/// `install to /usr/local/bin` 等非宿主态目标仍放行——目标比对在后）。
 const DESTRUCTIVE_VERBS: &[&str] = &[
     "rm",
     "rmdir",
@@ -230,6 +241,8 @@ const DESTRUCTIVE_VERBS: &[&str] = &[
     "cpi",
     "xcopy",
     "robocopy",
+    "install",
+    "ln",
     "set-content",
     "add-content",
     "out-file",
@@ -258,6 +271,28 @@ const DELETE_VERBS: &[&str] = &[
     "remove-item",
     "ri",
     "rmtree",
+];
+
+/// 祖先扫荡动词（0cc v3.1 审查处理批——宿主态祖先链臂的动词门，P2）：删除＋
+/// 搬移两族——扫荡删除或搬走受护目标的祖先即连带摧毁受护本体；`cp`/`mkdir`/
+/// `install` 等入位写不毁祖先，不入本表。封闭子集：DELETE_VERBS 全体＋搬移族
+/// （均 ∈ [`DESTRUCTIVE_VERBS`]，钉子断言包含关系防漂移）。
+const ANCESTOR_SWEEP_VERBS: &[&str] = &[
+    "rm",
+    "rmdir",
+    "rd",
+    "del",
+    "erase",
+    "remove-item",
+    "ri",
+    "rmtree",
+    "mv",
+    "move",
+    "move-item",
+    "mi",
+    "rename-item",
+    "ren",
+    "rename",
 ];
 
 /// 递归/强制旗（broad-destructive 的递归腿；warn 面，v1 集沿用）。
@@ -476,15 +511,20 @@ pub fn review_command_with(
     //    状态两窄目标**（`.gsa` 会话卷／ACAF keystore 根／signer manifest；
     //    恒拒面）。v2 系统树不进本闸；v3 载体面（安装目录／三件套／
     //    `grok-home`）随 0cc 双面退役——`/usr/local/bin` 安装等载体面写交回
-    //    审批组件（设计 §2 条 5）。
+    //    审批组件（设计 §2 条 5）。v3.1 祖先链臂（P2）：扫荡动词（删除/搬移）
+    //    下目标为受护目标祖先同落本规则——载体面退役不得连带放行 keystore／
+    //    manifest 的扫荡摧毁；入位写（cp/mkdir/install）不触发祖先臂。
     let has_write_verb = entries
         .iter()
         .any(|e| DESTRUCTIVE_VERBS.contains(&e.prog.as_str()) || e.prog == "dd")
         || words.iter().any(|w| w.text == ">" || w.text == ">>");
-    if has_write_verb {
+    let has_sweep_verb = entries
+        .iter()
+        .any(|e| ANCESTOR_SWEEP_VERBS.contains(&e.prog.as_str()));
+    if has_write_verb || has_sweep_verb {
         for w in &words {
             for raw in path_candidates(&w.text) {
-                if let Some(detail) = carrier_target_detail(cwd, &raw, host_state) {
+                if let Some(detail) = carrier_target_detail(cwd, &raw, host_state, has_sweep_verb) {
                     return CommandReview::Block(CommandFinding {
                         rule: "carrier-write",
                         detail,
@@ -592,11 +632,13 @@ pub fn warn_line(finding: &CommandFinding) -> String {
 /// 目标**比对（`.gsa` 会话卷／ACAF keystore 根／signer manifest）。v2 退役面：
 /// 系统树根比对与 `/dev//proc//sys` 前缀词元判不再进本闸（重定向目标、一般
 /// 路径写交回审批组件——设计 §2）；v3 退役面：安装目录／三件套／`grok-home`
-/// 比对随载体集退役（0cc §2 条 5）。
+/// 比对随载体集退役（0cc §2 条 5）。`sweep_verb`＝命令含祖先扫荡动词
+/// （v3.1 P2——祖先链臂仅在此下比对，先直接后祖先）。
 fn carrier_target_detail(
     cwd: &Path,
     raw: &str,
     host_state: &write_control::HostStateTargets,
+    sweep_verb: bool,
 ) -> Option<String> {
     let forms = path_forms(cwd, raw);
     let gsa = cwd.join(".gsa");
@@ -622,6 +664,24 @@ fn carrier_target_detail(
             ),
             _ => format!(
                 "target `{raw}` is inside the host-state protection set (`{}`)",
+                hit.root
+            ),
+        });
+    }
+    if sweep_verb && let Some(hit) = host_state.hit_ancestor(&forms) {
+        return Some(match hit.rule {
+            "carrier:keystore-ancestor" => format!(
+                "target `{raw}` is an ancestor of the ACAF keystore root (`{}`); \
+                 sweeping it would destroy protected host state",
+                hit.root
+            ),
+            "carrier:signer-manifest-ancestor" => format!(
+                "target `{raw}` is an ancestor of the ACAF signer manifest (`{}`); \
+                 sweeping it would destroy protected host state",
+                hit.root
+            ),
+            _ => format!(
+                "target `{raw}` is an ancestor of the host-state protection set (`{}`)",
                 hit.root
             ),
         });
@@ -1145,11 +1205,34 @@ mod tests {
         assert_eq!(FLIP_PHRASES.len(), 17);
         assert_eq!(REG_MODIFY_SUBCOMMANDS.len(), 3);
         assert_eq!(REG_PROTECTED_HIVES.len(), 6);
-        assert_eq!(DESTRUCTIVE_VERBS.len(), 37);
+        assert_eq!(DESTRUCTIVE_VERBS.len(), 39);
         assert_eq!(DELETE_VERBS.len(), 8);
+        assert_eq!(ANCESTOR_SWEEP_VERBS.len(), 15);
         assert_eq!(ELEVATION_PROGRAMS.len(), 4);
         assert_eq!(WRAPPER_WORDS.len(), 32);
         assert_eq!(CONTENT_WORDS.len(), 5);
+        // 0cc v3.1 祖先链臂（P2）：扫荡表＝DELETE_VERBS 全体＋搬移族，且整体
+        // ⊆ DESTRUCTIVE_VERBS；`install`/`ln`（P3-1）为写动词但非扫荡动词
+        // （入位写不毁祖先）。
+        for verb in DELETE_VERBS {
+            assert!(
+                ANCESTOR_SWEEP_VERBS.contains(verb),
+                "sweep set must contain every delete verb: {verb}"
+            );
+        }
+        for verb in ANCESTOR_SWEEP_VERBS {
+            assert!(
+                DESTRUCTIVE_VERBS.contains(verb),
+                "sweep set must stay a subset of the write-verb table: {verb}"
+            );
+        }
+        for positioned in ["install", "ln", "cp", "mkdir"] {
+            assert!(
+                DESTRUCTIVE_VERBS.contains(&positioned)
+                    && !ANCESTOR_SWEEP_VERBS.contains(&positioned),
+                "into-place write verbs must not be sweep verbs: {positioned}"
+            );
+        }
     }
 
     /// 0cb③：`CommandReview::report()` 形状——allow 恒 null 臂、warn/block
@@ -1483,6 +1566,142 @@ mod tests {
                 "carrier install face must allow: {cmd} -> {r:?}"
             );
         }
+    }
+
+    /// 0cc v3.1 审查处理批（P2 祖先链臂＋P3-1 动词补齐）：扫荡动词（删除/搬移）
+    /// 下目标为宿主态受护目标的祖先同落 `carrier-write` block——载体面退役不得
+    /// 连带放行 keystore／manifest 的扫荡摧毁；`install`/`ln` 向宿主态目标
+    /// 落盘/建链接直接命中；入位写（cp/mkdir/install 落非宿主态位）仍放行。
+    #[test]
+    fn host_state_ancestor_sweep_blocks_and_into_place_writes_stay_allowed() {
+        // Windows 祖先扫荡：keystore 根 `D:\acaf\keystore` 的父目录与搬移。
+        for (cmd, kind) in [
+            ("rm -rf D:\\acaf", "ancestor of the ACAF keystore root"),
+            ("rd /s /q D:\\acaf", "ancestor of the ACAF keystore root"),
+            (
+                "Remove-Item D:\\acaf -Recurse",
+                "ancestor of the ACAF keystore root",
+            ),
+            (
+                "mv D:\\acaf D:\\trash",
+                "ancestor of the ACAF keystore root",
+            ),
+            (
+                "ren D:\\acaf acaf-old",
+                "ancestor of the ACAF keystore root",
+            ),
+            ("del D:\\acaf\\signer-manifest.json", "signer manifest"),
+        ] {
+            let r = review(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "ancestor sweep must block: {cmd} -> {r:?}"
+            );
+            assert_eq!(rule_of(&r), Some("carrier-write"), "rule for {cmd}");
+            assert!(
+                match &r {
+                    CommandReview::Block(f) => f.detail.contains(kind),
+                    _ => false,
+                },
+                "detail should name the ancestor face ({kind}): {r:?}"
+            );
+        }
+        // Linux/容器形态：`/etc/orz-acaf`＝keystore 根 `/etc/orz-acaf/keystore`
+        // 的父目录；`rename` 非删除动词（规则 1 不接）故落本臂——搬移族同样
+        // 门控。
+        for cmd in [
+            "rm -rf /etc/orz-acaf",
+            "mv /etc/orz-acaf /tmp/old-acaf",
+            "rename /etc /old-etc",
+        ] {
+            let r = review_linux(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "ancestor sweep must block (linux): {cmd} -> {r:?}"
+            );
+            assert_eq!(rule_of(&r), Some("carrier-write"), "rule for {cmd}");
+            assert!(
+                match &r {
+                    CommandReview::Block(f) => {
+                        f.detail.contains("ancestor of the ACAF keystore root")
+                    }
+                    _ => false,
+                },
+                "detail should name the ancestor face: {r:?}"
+            );
+        }
+        // P3-1：`install`/`ln` 补入写动词表后向宿主态目标直接命中。
+        for (cmd, kind) in [
+            (
+                "install -m 600 key.bin D:\\acaf\\keystore\\installation-key.json",
+                "inside the ACAF keystore root",
+            ),
+            (
+                "ln -sf /tmp/fake.json D:\\acaf\\signer-manifest.json",
+                "signer manifest",
+            ),
+            (
+                "install -m 600 x /etc/orz-acaf/keystore/key.bin",
+                "inside the ACAF keystore root",
+            ),
+        ] {
+            let r = if cmd.contains("/etc/") {
+                review_linux(cmd)
+            } else {
+                review(cmd)
+            };
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "install/ln into host state must block: {cmd} -> {r:?}"
+            );
+            assert_eq!(rule_of(&r), Some("carrier-write"), "rule for {cmd}");
+            assert!(
+                match &r {
+                    CommandReview::Block(f) => f.detail.contains(kind),
+                    _ => false,
+                },
+                "detail should name the host-state face ({kind}): {r:?}"
+            );
+        }
+        // 入位写与规则序回归：祖先臂不外溢——纯入位写仍纯放行；非祖先的
+        // 递归删除不 **block**（至多 broad-destructive 留痕，含 `/usr/local`＝
+        // build-pov-ray 面）；卷根递归删除仍由规则 1 先行接住（报
+        // catastrophic-recursive-delete，不落祖先臂）。
+        for cmd in [
+            "cp backup D:\\acaf\\backup-store",
+            "mkdir D:\\acaf\\newdir",
+            "install -m 644 app.conf D:\\acaf\\app.conf",
+        ] {
+            let r = review(cmd);
+            assert_eq!(
+                r,
+                CommandReview::Allow,
+                "into-place write near (not on) host state must allow: {cmd} -> {r:?}"
+            );
+        }
+        let r = review_linux("ln -s /etc /w");
+        assert_eq!(
+            r,
+            CommandReview::Allow,
+            "symlink elsewhere must allow: {r:?}"
+        );
+        for cmd in ["rm -rf D:\\app\\other", "rm -rf /usr/local"] {
+            let r = if cmd.contains("/usr/") {
+                review_linux(cmd)
+            } else {
+                review(cmd)
+            };
+            assert!(
+                !matches!(r, CommandReview::Block(_)),
+                "non-ancestor sweep must not block (warn-at-most): {cmd} -> {r:?}"
+            );
+        }
+        let volume_root = review("rm -rf D:\\");
+        assert_eq!(
+            rule_of(&volume_root),
+            Some("catastrophic-recursive-delete"),
+            "volume-root recursive delete stays on rule 1: {volume_root:?}"
+        );
     }
 
     /// 0cb §2 退役面一行回归：v1 会拦的系统树一般写动作（整树位置锁／重定向

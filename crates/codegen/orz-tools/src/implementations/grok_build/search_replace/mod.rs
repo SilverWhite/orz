@@ -229,11 +229,12 @@ pub(crate) async fn run_search_replace(
     }
     // 0bw S2①（2026-09-26；0cb v2 保底化 2026-09-29；**0cc v3 宿主状态收窄
     // 同日**）：写面机械门收窄为**宿主状态两窄目标**（C1 `.gsa` 会话卷＋C2′
-    // ACAF keystore 根／signer manifest——装配 env 解析，见
+    // ACAF keystore 根／signer manifest——装配同源 env 调用点解析，见
     // `HostStateTargets::from_env`）。`.gsa` 域判定委派既有窗口函数（语义不
     // 重写、文案保持）。v2 的安装目录／三件套／`grok-home` 拒绝面随 0cc 双面
     // 退役（设计 §2 条 5：载体面写交回审批组件）；v1 的系统核心整树写拒随
-    // 0bw v2 退役。
+    // 0bw v2 退役。祖先链臂（v3.1）为命令面扫荡动词专用，工具面目标恒为
+    // 文件、不接。
     {
         let host_state = crate::types::write_control::HostStateTargets::from_env();
         let hit = crate::types::write_control::check_write_target(
