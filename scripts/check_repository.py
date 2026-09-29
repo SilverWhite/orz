@@ -2826,14 +2826,16 @@ def check_repository() -> dict[str, Any]:
         / "information-sufficiency-assessment.partial-report.valid.json"
     ] = assessment_schema
     # 0bw③ (2026-09-27, WRITE_CONTROL_MECHANICAL_DESIGN §3.2/D5 后续扩展)：
-    # write-control command review 的 allow／warn 正例（与 minimal 的 block
-    # 臂互补，XOR 两臂全覆盖）＋ allow 携 rule 的 XOR 约束反例。
+    # write-control command review 的 allow／warn／legacy-block 正例（与
+    # minimal 的 block 臂互补，XOR 两臂全覆盖＋legacy 回放臂）＋ allow 携
+    # rule 的 XOR 约束反例。schema 随 0cb 审查处理批升 v0.3（2026-09-29）。
     write_control_review_schema = (
-        ROOT / "runtime/write-control-review-event-payload-v0.2.schema.json"
+        ROOT / "runtime/write-control-review-event-payload-v0.3.schema.json"
     )
     for name in (
         "write-control-review.allow.valid.json",
         "write-control-review.warn.valid.json",
+        "write-control-review.legacy-block.valid.json",
     ):
         run_event_v02_payload_positive_contracts[run_event_v02_payload_root / name] = (
             write_control_review_schema

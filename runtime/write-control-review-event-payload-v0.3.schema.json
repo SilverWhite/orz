@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/write-control-review-event-payload-v0.3.schema.json",
+  "title": "Write-control command review event payload (Rust track, v0.3)",
+  "description": "0cb 审查处理批（2026-09-29，用户裁决＝schema 升 v0.3＋legacy 回放豁免）：`run_terminal_cmd` 命令面机械审查（L2，0bw v2 保底化规则集）的专用 journal 事件族——block/warn/allow 三分类逐命令结构化留痕（allow 也落账）。v0.2 枚举随 0cb 保底化收窄（v1 safety-mechanism-flip 更名 boot-firmware-flip；system-core-write 退役拆分为 catastrophic-recursive-delete/raw-device-write/registry-hive-delete），本 v0.3 就地承接该修订并补跨代际回放兼容：warn/block 枚举含 7 个现行值（5 block＋2 warn，与 orz-tools `exec_policy::BLOCK_RULES`/`WARN_RULES` 同形）＋ 2 个 **legacy 回放专值**（`safety-mechanism-flip`／`system-core-write`——0.8.4 及更早生产者写入的历史事件回放豁免；现行生产者被生产侧 5 条封闭集钉死永不产出，判官按原 block 分类配对核证，Rust `verify_write_control_review` ↔ Python `_verify_v02_write_control_review` 同形）。review↔rule 分类配对由判官核证（schema 无法表达跨字段映射）。best-effort 闸边界（设计 §9）不变；设计权威＝WRITE_CONTROL_BACKSTOP_REVISION_DESIGN（0cb v2）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool",
+    "call_id",
+    "review",
+    "rule",
+    "detail",
+    "command_sha256",
+    "command_len"
+  ],
+  "properties": {
+    "tool": {
+      "type": "string",
+      "enum": ["run_terminal_cmd"],
+      "description": "审查所在命令执行入口（v1 唯一接线面；扩展须修订 WRITE_CONTROL_MECHANICAL_DESIGN §3.2 与 0cb v2 设计档）。"
+    },
+    "call_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "review": {
+      "type": "string",
+      "enum": ["allow", "warn", "block"]
+    },
+    "rule": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "detail": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "command_sha256": {
+      "$ref": "#/$defs/sha256_hex",
+      "description": "被审查命令的 sha256（与 tool_started 的原始 args 关联；命令原文不随本事件重复入账）。"
+    },
+    "command_len": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "$defs": {
+    "sha256_hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "review": { "const": "allow" } },
+        "required": ["review"]
+      },
+      "then": {
+        "properties": { "rule": { "type": "null" }, "detail": { "type": "null" } }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "review": { "enum": ["warn", "block"] }
+        },
+        "required": ["review"]
+      },
+      "then": {
+        "properties": {
+          "rule": {
+            "type": "string",
+            "minLength": 1,
+            "enum": [
+              "catastrophic-recursive-delete",
+              "raw-device-write",
+              "boot-firmware-flip",
+              "registry-hive-delete",
+              "carrier-write",
+              "broad-destructive",
+              "elevation",
+              "safety-mechanism-flip",
+              "system-core-write"
+            ]
+          },
+          "detail": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  ]
+}

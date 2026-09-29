@@ -2785,8 +2785,9 @@ EXTRA_V02_PAYLOAD_BADS["tool-completed.cause-shellcode.constraint.invalid"] = {
 
 # ── 0bw③ write-control command review (2026-09-27, WRITE_CONTROL_
 # MECHANICAL_DESIGN §3.2/D5 后续扩展) ── per-command L2 审查留痕
-# （block/warn/allow 全落账）。schema：
-# runtime/write-control-review-event-payload-v0.2.schema.json。
+# （block/warn/allow 全落账）。schema（0cb 审查处理批 2026-09-29 升版，
+# legacy 值回放豁免）：
+# runtime/write-control-review-event-payload-v0.3.schema.json。
 PAYLOAD_GOOD_V02["write_control_review"] = {
     "tool": "run_terminal_cmd",
     "call_id": "call-wc-1",
@@ -2874,6 +2875,19 @@ EXTRA_V02_PAYLOAD_POSITIVES["write-control-review.warn.valid"] = {
     "detail": "broad-destructive: 删除类动词＋根级目标 C:\\",
     "command_sha256": DUMMY_HASH,
     "command_len": 30,
+}
+
+EXTRA_V02_PAYLOAD_POSITIVES["write-control-review.legacy-block.valid"] = {
+    # 0cb 审查处理批（2026-09-29，schema v0.3）：legacy 回放豁免正例——
+    # 0.8.4- 代际规则 id（v0.2 枚举）按原 block 分类配对放行；现行生产者
+    # 永不产出（exec_policy::BLOCK_RULES 恰 5 条封闭集钉）。
+    "tool": "run_terminal_cmd",
+    "call_id": "call-wc-legacy-1",
+    "review": "block",
+    "rule": "system-core-write",
+    "detail": "system-core-write: v0.2-era replay row (0.8.4 carrier)",
+    "command_sha256": DUMMY_HASH,
+    "command_len": 25,
 }
 
 EXTRA_V02_PAYLOAD_BADS["write-control-review.allow-with-rule.constraint.invalid"] = {

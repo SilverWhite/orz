@@ -4173,22 +4173,38 @@ def _verify_v02_resource_limit_hit(events):
 
 _WRITE_CONTROL_RULES = frozenset(
     {
-        "safety-mechanism-flip",
-        "system-core-write",
+        "catastrophic-recursive-delete",
+        "raw-device-write",
+        "boot-firmware-flip",
+        "registry-hive-delete",
         "carrier-write",
         "broad-destructive",
         "elevation",
     }
 )
 
-# review↔rule 分类配对（设计 §4 每规则钉死分类；2026-09-27 复审 P2 加入，
-# 与 Rust `WRITE_CONTROL_RULE_CATEGORIES` 逐条同形）。
+# review↔rule 分类配对（设计 §1 每规则钉死分类；2026-09-27 复审 P2 加入，
+# 与 Rust `WRITE_CONTROL_RULE_CATEGORIES` 逐条同形；0cb v2 保底化
+# 2026-09-29 同步——safety-mechanism-flip → boot-firmware-flip，
+# system-core-write 退役拆分为三条灾难规则）。
 _WRITE_CONTROL_RULE_CATEGORIES = {
-    "safety-mechanism-flip": "block",
-    "system-core-write": "block",
+    "catastrophic-recursive-delete": "block",
+    "raw-device-write": "block",
+    "boot-firmware-flip": "block",
+    "registry-hive-delete": "block",
     "carrier-write": "block",
     "broad-destructive": "warn",
     "elevation": "warn",
+}
+
+# legacy 回放豁免集（0cb 审查处理批，2026-09-29 用户裁决＝schema 升 v0.3
+# ＋跨代际回放兼容）：0.8.4 及更早生产者写入的历史事件携带 v0.2 代际规则
+# id，回放时按原 block 分类配对核证放行。**只读豁免，非生产集**——现行
+# 生产者被 orz-tools `exec_policy::BLOCK_RULES` 恰 5 条封闭集钉死，永不
+# 产出本集；与 Rust `WRITE_CONTROL_LEGACY_RULE_CATEGORIES` 逐条同形。
+_WRITE_CONTROL_LEGACY_RULE_CATEGORIES = {
+    "safety-mechanism-flip": "block",
+    "system-core-write": "block",
 }
 
 
@@ -4221,12 +4237,21 @@ def _verify_v02_write_control_review(events: list[dict[str, Any]]) -> list[str]:
             if rule is None or not isinstance(rule, str):
                 errors.append("write_control_review: warn/block rows carry the rule")
                 continue
-            if rule not in _WRITE_CONTROL_RULES:
+            if (
+                rule not in _WRITE_CONTROL_RULES
+                and rule not in _WRITE_CONTROL_LEGACY_RULE_CATEGORIES
+            ):
                 errors.append(f"write_control_review: unknown rule {rule} (closed set)")
-            elif _WRITE_CONTROL_RULE_CATEGORIES.get(rule) != review:
+            elif (
+                _WRITE_CONTROL_RULE_CATEGORIES.get(rule)
+                or _WRITE_CONTROL_LEGACY_RULE_CATEGORIES.get(rule)
+            ) != review:
+                # 配对核证（2026-09-27 复审 P2）：规则分类必须与 review 一致。
+                # legacy 集同表核证（按原 block 分类；回放豁免≠配对豁免，
+                # 0cb 审查处理批与 Rust 判官同形）。
                 errors.append(
                     f"write_control_review: rule {rule} is a "
-                    f"{_WRITE_CONTROL_RULE_CATEGORIES.get(rule)!r}-class rule, not {review}"
+                    f"{(_WRITE_CONTROL_RULE_CATEGORIES.get(rule) or _WRITE_CONTROL_LEGACY_RULE_CATEGORIES.get(rule))!r}-class rule, not {review}"
                 )
             if not isinstance(detail, str) or not detail:
                 errors.append("write_control_review: warn/block rows carry the detail")

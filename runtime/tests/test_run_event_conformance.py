@@ -363,11 +363,22 @@ class RunEventV02ContractTests(unittest.TestCase):
         self.assertNotIn("checkpoint_response", enum_events)
 
     def test_v02_payload_schema_file_convention(self) -> None:
-        """Every v0.2-payload event maps to a v0.2 schema file in runtime/."""
+        """Every v0.2-payload event maps to a v0.2 schema file in runtime/.
+        Documented exception (0cb 审查处理批，2026-09-29 用户裁决＝schema 升
+        v0.3＋legacy 回放豁免)：`write_control_review` 的 payload schema 随
+        0bw v2 保底化规则集收窄升 v0.3（envelope 轨仍为 v0.2，与
+        `_resolve_payload_schema` 的跨版本复用先例同型）。"""
+        schema_version_overrides = {
+            "write_control_review": "v0.3",
+        }
         for event_type, (slug, schema_path) in _PAYLOAD_SCHEMAS_V02.items():
             with self.subTest(event_type=event_type):
+                expected_version = schema_version_overrides.get(event_type, "v0.2")
                 self.assertTrue(schema_path.is_file(), f"missing schema {schema_path}")
-                self.assertEqual(schema_path.name, f"{slug}-event-payload-v0.2.schema.json")
+                self.assertEqual(
+                    schema_path.name,
+                    f"{slug}-event-payload-{expected_version}.schema.json",
+                )
 
     def test_v02_neutral_inquiry_payloads_are_explicit(self) -> None:
         """§5.1: the neutral inquiry payload pins inquiry_family=neutral

@@ -1,0 +1,9 @@
+{
+  "tool": "run_terminal_cmd",
+  "call_id": "call-wc-legacy-1",
+  "review": "block",
+  "rule": "system-core-write",
+  "detail": "system-core-write: v0.2-era replay row (0.8.4 carrier)",
+  "command_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "command_len": 25
+}

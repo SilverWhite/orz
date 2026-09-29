@@ -295,7 +295,7 @@
         "slug": "resource-limit-hit"
       },
       "write_control_review": {
-        "schema": "runtime/write-control-review-event-payload-v0.2.schema.json",
+        "schema": "runtime/write-control-review-event-payload-v0.3.schema.json",
         "slug": "write-control-review"
       },
       "face_fingerprint": {
