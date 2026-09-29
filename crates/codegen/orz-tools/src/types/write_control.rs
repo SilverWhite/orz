@@ -1,30 +1,47 @@
-//! 写入管控（0bw S2 v1，2026-09-26）：deny 单一源表＋写目标检查。
+//! 写入管控（0bw v1 → **0cb v2 保底化**，2026-09-29）：载体自保护集＋根本树根
+//! 常量（仅作递归删除目标）。
 //!
-//! 设计权威：[`docs/WRITE_CONTROL_MECHANICAL_DESIGN_2026-09-26.md`]（S1）。
-//! 本模块＝「deny 单一源」：**系统核心**（Windows 表 A：systemroot／program
-//! files ×2／programdata；Linux 表 B：`/boot` `/etc` `/usr` `/lib*` `/bin`
-//! `/sbin` `/dev` `/proc` `/sys`）＋**载体自保护**（`.gsa` 会话卷／orz 安装
-//! 目录／三件套文件／`grok-home`）。三处消费（工具面写入路径、`run_terminal_cmd`
-//! 命令面、进程面随 L3）共用本表——落地点不得各自复制表项。
+//! 设计权威：[`docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md`]（v2.0，
+//! 修订 [`WRITE_CONTROL_MECHANICAL_DESIGN_2026-09-26.md`]（v1）的 deny 表范围；
+//! 单一源／三落地点／留痕／补偿架构不变）。**v2 收窄**：自研写控定位＝根本性
+//! **保底**（灾难硬边界），不再做整树位置锁——工具面 [`check_write_target`] 只查
+//! **载体集**（C1 `.gsa` 会话卷／C2 安装目录／C3 三件套＋`grok-home`）；v1 表 A/B
+//! 系统核心整树写拒**退役**，「根本性树根」仅以 [`LINUX_DISASTER_TREE_ROOTS`]／
+//! [`windows_disaster_tree_roots`] 的身份保留给命令面规则 1
+//! （`catastrophic-recursive-delete`：删除动词＋递归旗＋目标**恰为**树根／卷根）
+//! 的递归删除目标比对（[`path_equals_root`]——子目录级精准删除放行）。
 //!
-//! 语义（设计 §2.2）：命中即拒；表项解析失败回退字面默认（**绝不因解析失败
+//! 语义（v1 §2.2 沿用）：命中即拒；表项解析失败回退字面默认（**绝不因解析失败
 //! 放行**）；`\\?\`／`\\.\` 前缀比对前剥除；目标存在走 canonical、不存在走近
 //! 祖先 canonical；Windows 走读面同族的字节级 ASCII 大小写折叠（FR-N01 语义）。
 //!
-//! 已知边界（设计 §9）：8.3 短名／subst／junction 的**未存在面**不保证拦截；
-//! UNC 不在 v1 表内；本模块不构成沙箱——锁死面之外一切照旧（allowlist 不做）。
+//! 已知边界（v1 §9 沿用）：8.3 短名／subst／junction 的**未存在面**不保证拦截；
+//! UNC 不在表内；本模块不构成沙箱——载体集之外一切照旧（allowlist 不做）。
+//!
+//! **L3 边界**：[`LINUX_SYSTEM_CORE`]（v1 表 B 原集）仍被 Landlock 排除集
+//! （`computer/local/terminal.rs`）与 orz-sandbox 测试消费——按设计 §4「本批不动
+//! L3 落码面」，该常量随 L3 批再收窄，本批原样保留。
 
 use std::path::{Path, PathBuf};
 
-/// Windows 系统核心（表 A）env 缺失时的字面回退。
-pub const WINDOWS_SYSTEM_CORE_FALLBACKS: [&str; 4] = [
+/// Windows 根本性树根（v2 规则 1 递归删除目标；v1 表 A 同值）env 缺失时的字面回退。
+pub const WINDOWS_DISASTER_TREE_ROOT_FALLBACKS: [&str; 4] = [
     "C:\\Windows",
     "C:\\Program Files",
     "C:\\Program Files (x86)",
     "C:\\ProgramData",
 ];
 
-/// Linux 系统核心（表 B）。
+/// Linux 根本性树根（v2 规则 1 递归删除目标；设计 §1——较 v1 表 B 增 `/var`、
+/// 去 `/libx32`；`/dev` `/proc` `/sys` 在此仅指「递归删除树根本体」形态，
+/// 一般性路径写/读不涉本表）。
+pub const LINUX_DISASTER_TREE_ROOTS: [&str; 12] = [
+    "/boot", "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/var", "/dev", "/proc",
+    "/sys",
+];
+
+/// L3 Landlock 排除集（v1 表 B 原集，**本批不动**——随 L3 批收窄；消费方＝
+/// `computer/local/terminal.rs` 与 orz-sandbox 测试，变更须两处同步）。
 pub const LINUX_SYSTEM_CORE: [&str; 12] = [
     "/boot", "/etc", "/usr", "/lib", "/lib32", "/lib64", "/libx32", "/bin", "/sbin", "/dev",
     "/proc", "/sys",
@@ -43,10 +60,10 @@ pub const CARRIER_BINARY_NAMES: [&str; 6] = [
 /// 安装目录内随载体保护的子目录（C3）。
 pub const CARRIER_PROTECTED_SUBDIRS: [&str; 1] = ["grok-home"];
 
-/// deny 表命中结果。
+/// deny 表命中结果（v2：载体集两族；`system-core` 臂随整树锁退役）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DenyHit {
-    /// 规则身份：`system-core`／`carrier:session-volume`／`carrier:install-dir`／`carrier:install-file`。
+    /// 规则身份：`carrier:session-volume`／`carrier:install-dir`／`carrier:install-file`。
     pub rule: &'static str,
     /// 命中的表项（展示形态）。
     pub root: String,
@@ -119,8 +136,8 @@ pub fn best_effort_canonical(path: &Path) -> PathBuf {
     }
 }
 
-/// Windows 系统核心根构造（注入式；`None` 走字面回退）。
-pub fn windows_system_core_roots_with(
+/// Windows 根本性树根构造（注入式；`None` 走字面回退）。
+pub fn windows_disaster_tree_roots_with(
     system_root: Option<&str>,
     program_files: Option<&str>,
     program_files_x86: Option<&str>,
@@ -133,17 +150,17 @@ pub fn windows_system_core_roots_with(
         }
     };
     vec![
-        pick(system_root, WINDOWS_SYSTEM_CORE_FALLBACKS[0]),
-        pick(program_files, WINDOWS_SYSTEM_CORE_FALLBACKS[1]),
-        pick(program_files_x86, WINDOWS_SYSTEM_CORE_FALLBACKS[2]),
-        pick(program_data, WINDOWS_SYSTEM_CORE_FALLBACKS[3]),
+        pick(system_root, WINDOWS_DISASTER_TREE_ROOT_FALLBACKS[0]),
+        pick(program_files, WINDOWS_DISASTER_TREE_ROOT_FALLBACKS[1]),
+        pick(program_files_x86, WINDOWS_DISASTER_TREE_ROOT_FALLBACKS[2]),
+        pick(program_data, WINDOWS_DISASTER_TREE_ROOT_FALLBACKS[3]),
     ]
 }
 
-/// Windows 系统核心根（env 读取；缺失回退字面默认）。
-pub fn windows_system_core_roots() -> Vec<PathBuf> {
+/// Windows 根本性树根（env 读取；缺失回退字面默认）。
+pub fn windows_disaster_tree_roots() -> Vec<PathBuf> {
     let get = |key: &str| std::env::var(key).ok();
-    windows_system_core_roots_with(
+    windows_disaster_tree_roots_with(
         get("SystemRoot").as_deref(),
         get("ProgramFiles").as_deref(),
         get("ProgramFiles(x86)").as_deref(),
@@ -151,24 +168,40 @@ pub fn windows_system_core_roots() -> Vec<PathBuf> {
     )
 }
 
-/// Linux 系统核心根（表 B）。
-pub fn linux_system_core_roots() -> Vec<PathBuf> {
-    LINUX_SYSTEM_CORE.iter().map(PathBuf::from).collect()
+/// Linux 根本性树根（规则 1 递归删除目标）。
+pub fn linux_disaster_tree_roots() -> Vec<PathBuf> {
+    LINUX_DISASTER_TREE_ROOTS
+        .iter()
+        .map(PathBuf::from)
+        .collect()
 }
 
-/// 宿主平台的系统核心根（进程面／命令面共用入口）。
-pub fn system_core_roots() -> Vec<PathBuf> {
+/// 宿平台的根本性树根（命令面规则 1 共用入口）。
+pub fn disaster_tree_roots() -> Vec<PathBuf> {
     #[cfg(windows)]
     {
-        windows_system_core_roots()
+        windows_disaster_tree_roots()
     }
     #[cfg(not(windows))]
     {
-        linux_system_core_roots()
+        linux_disaster_tree_roots()
     }
 }
 
-/// 工具面（`search_replace`）机械拒绝文案。
+/// 卷根判定（`/`、`C:\`、`D:\`…；词法 `..` 归一后判——`/usr/../..` 即 `/`）。
+pub fn is_volume_root(path: &Path) -> bool {
+    let norm = orz_paths::normalize_lexically(&strip_verbatim_prefix(path));
+    norm.has_root() && norm.parent().is_none()
+}
+
+/// 目标解析后**恰为** `root` 本体（双向包含＝相等；Windows 折叠语义同
+/// [`path_hits_root`]）。v2 规则 1 的比对形状——子目录级目标放行（「需精准
+/// 删除」硬边界；无路径前缀宽扫）。
+pub fn path_equals_root(root: &Path, candidate: &Path) -> bool {
+    path_hits_root(root, candidate) && path_hits_root(candidate, root)
+}
+
+/// 工具面（`search_replace`）机械拒绝文案（v2＝载体集；系统树写不再拒）。
 ///
 /// 会话卷形态保持既有文案（0p S2 语义原文；既有测试断言 `not model-writable`）。
 pub fn write_block_message(model_path: &str, hit: &DenyHit) -> String {
@@ -177,16 +210,11 @@ pub fn write_block_message(model_path: &str, hit: &DenyHit) -> String {
             "Error: {model_path} is inside the runtime-owned `.gsa` session volume, which is \
              not model-writable."
         ),
-        "carrier:install-dir" | "carrier:install-file" => format!(
+        _ => format!(
             "Error: {model_path} is inside the orz installation carrier ({root}), protected by \
              the write control (rule: {rule}); writes here are not permitted.",
             root = hit.root,
             rule = hit.rule,
-        ),
-        _ => format!(
-            "Error: {model_path} is inside the locked system-core set ({root}), protected by \
-             the write control (rule: system-core); writes here are not permitted.",
-            root = hit.root,
         ),
     }
 }
@@ -208,10 +236,9 @@ pub fn candidate_forms(joined: &Path, resolved: Option<&Path>) -> Vec<PathBuf> {
     forms
 }
 
-/// 写目标机械门（设计 §3.1；工具面唯一入口）。
-///
-/// 顺序：C1 会话卷域（委派既有单一源判定，语义不重写）→ C2/C3 安装目录
-/// （含整树／降级两形态）→ A/B 系统核心。命中返回 [`DenyHit`]。
+/// 写目标机械门（v2；工具面唯一入口）——**载体集专用**：C1 会话卷域（委派既有
+/// 单一源判定，语义不重写）→ C2/C3 安装目录（含整树／降级两形态）。v1 的系统
+/// 核心臂随整树位置锁退役（`0cb` §2/§4：写系统树交回审批组件，本门不再拒）。
 pub fn check_write_target(ctx: &WriteTargetCtx<'_>) -> Option<DenyHit> {
     let forms = candidate_forms(ctx.joined, ctx.resolved);
     let display = forms[0].to_string_lossy().into_owned();
@@ -236,16 +263,6 @@ pub fn check_write_target(ctx: &WriteTargetCtx<'_>) -> Option<DenyHit> {
         && let Some(hit) = install_dir_hit(install, ctx.cwd, &forms)
     {
         return Some(hit);
-    }
-
-    // A/B：系统核心。
-    let roots = system_core_roots();
-    if let Some(root) = first_root_hit(&roots, &forms) {
-        return Some(DenyHit {
-            rule: "system-core",
-            root: root.to_string_lossy().into_owned(),
-            target: display,
-        });
     }
     None
 }
@@ -300,13 +317,6 @@ pub(crate) fn install_dir_hit(install: &Path, cwd: &Path, forms: &[PathBuf]) -> 
     None
 }
 
-/// 首个命中 `roots` 的形态（返回命中的根）。
-fn first_root_hit<'r>(roots: &'r [PathBuf], forms: &[PathBuf]) -> Option<&'r PathBuf> {
-    roots
-        .iter()
-        .find(|root| forms.iter().any(|form| path_hits_root(root, form)))
-}
-
 /// `forms` 中落在 `root` 之下的首个形态。
 fn first_form_hit<'f>(root: &Path, forms: &'f [PathBuf]) -> Option<&'f PathBuf> {
     forms.iter().find(|form| path_hits_root(root, form))
@@ -345,8 +355,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn windows_roots_hit_and_boundaries() {
-        let roots = windows_system_core_roots_with(None, None, None, None);
+    fn disaster_tree_roots_hit_and_boundaries() {
+        let roots = windows_disaster_tree_roots_with(None, None, None, None);
         let windows = &roots[0];
         assert!(path_hits_root(windows, &windows.join("Temp").join("x.txt")));
         assert!(path_hits_root(windows, windows));
@@ -372,8 +382,8 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_case_folding_and_verbatim_prefix_stripping() {
-        let roots = windows_system_core_roots_with(None, None, None, None);
+    fn case_folding_and_verbatim_prefix_stripping() {
+        let roots = windows_disaster_tree_roots_with(None, None, None, None);
         let windows = &roots[0];
         assert!(path_hits_root(windows, Path::new(r"c:\windows\Temp\x")));
         assert!(path_hits_root(windows, Path::new(r"\\?\C:\Windows\Temp\x")));
@@ -382,6 +392,28 @@ mod tests {
             Path::new(r"\\?\C:\Windows"),
             Path::new(r"C:\windows\x")
         ));
+    }
+
+    #[test]
+    fn path_equals_root_matches_only_the_root_itself() {
+        // 规则 1 比对形状：目标**恰为**树根本体；子目录级放行（精准删除）。
+        assert!(path_equals_root(Path::new("/usr"), Path::new("/usr")));
+        assert!(path_equals_root(Path::new("/usr"), Path::new("/usr/")));
+        assert!(!path_equals_root(
+            Path::new("/usr"),
+            Path::new("/usr/local")
+        ));
+        assert!(!path_equals_root(
+            Path::new("/usr"),
+            Path::new("/usr/local/bin/tool")
+        ));
+        assert!(!path_equals_root(Path::new("/usr"), Path::new("/usrx")));
+        assert!(path_equals_root(Path::new("/"), Path::new("/usr/..")));
+        assert!(is_volume_root(Path::new("/")));
+        assert!(is_volume_root(Path::new("C:\\")));
+        assert!(is_volume_root(Path::new("D:/")));
+        assert!(!is_volume_root(Path::new("/usr")));
+        assert!(!is_volume_root(Path::new("relative/x")));
     }
 
     #[test]
@@ -401,16 +433,31 @@ mod tests {
     }
 
     #[test]
-    fn system_core_roots_env_fallback_binds_literals() {
-        let fallback = windows_system_core_roots_with(None, None, None, None);
+    fn disaster_roots_env_fallback_binds_literals_and_closed_sets_hold() {
+        let fallback = windows_disaster_tree_roots_with(None, None, None, None);
         assert_eq!(fallback[0], PathBuf::from(r"C:\Windows"));
         assert_eq!(fallback[3], PathBuf::from(r"C:\ProgramData"));
         let overridden =
-            windows_system_core_roots_with(Some(r"D:\Win"), None, Some("  "), Some(r"E:\PD"));
+            windows_disaster_tree_roots_with(Some(r"D:\Win"), None, Some("  "), Some(r"E:\PD"));
         assert_eq!(overridden[0], PathBuf::from(r"D:\Win"));
         assert_eq!(overridden[2], PathBuf::from(r"C:\Program Files (x86)"));
         assert_eq!(overridden[3], PathBuf::from(r"E:\PD"));
-        assert_eq!(linux_system_core_roots().len(), LINUX_SYSTEM_CORE.len());
+        assert_eq!(
+            linux_disaster_tree_roots().len(),
+            LINUX_DISASTER_TREE_ROOTS.len()
+        );
+        // 封闭集钉（0cb 防膨胀）：根本树根恰 12 项（设计 §1 规则 1 目标集）；
+        // L3 排除集（v1 表 B）本批不动，仍恰 12 项——两表不得混淆。
+        assert_eq!(LINUX_DISASTER_TREE_ROOTS.len(), 12);
+        assert_eq!(LINUX_SYSTEM_CORE.len(), 12);
+        assert!(LINUX_SYSTEM_CORE.contains(&"/libx32"));
+        assert!(!LINUX_DISASTER_TREE_ROOTS.contains(&"/libx32"));
+        assert!(LINUX_DISASTER_TREE_ROOTS.contains(&"/var"));
+        assert!(!LINUX_SYSTEM_CORE.contains(&"/var"));
+        // 0cb 审查处理批（钉覆盖补全）：载体面封闭表行数钉。
+        assert_eq!(WINDOWS_DISASTER_TREE_ROOT_FALLBACKS.len(), 4);
+        assert_eq!(CARRIER_BINARY_NAMES.len(), 6);
+        assert_eq!(CARRIER_PROTECTED_SUBDIRS.len(), 1);
     }
 
     #[test]
@@ -464,18 +511,35 @@ mod tests {
     }
 
     #[test]
-    fn check_write_target_reports_system_core_rule() {
-        let roots = system_core_roots();
-        let target = roots[0].join("Temp").join("0bw-write-control-test.txt");
+    fn check_write_target_is_carrier_only_since_v2() {
+        // v2 收窄钉：系统树写不再被工具面写门拒（交回审批组件）——
+        // `0cb` §2/§4 退役面的一行回归。
         let cwd = std::env::temp_dir();
+        let roots = disaster_tree_roots();
+        let system_target = roots[0].join("Temp").join("0cb-carrier-only-probe.txt");
+        assert!(
+            check_write_target(&WriteTargetCtx {
+                cwd: &cwd,
+                joined: &system_target,
+                resolved: None,
+                install_dir: None,
+            })
+            .is_none(),
+            "system-tree write must not be denied by the carrier-only gate ({})",
+            system_target.display()
+        );
+        // 载体集仍拒（既有语义保持）。
+        let tmp = std::env::temp_dir().join("0cb-write-control-gsa");
+        let _ = std::fs::create_dir_all(tmp.join(".gsa"));
         let hit = check_write_target(&WriteTargetCtx {
-            cwd: &cwd,
-            joined: &target,
+            cwd: &tmp,
+            joined: &tmp.join(".gsa").join("journal").join("x.md"),
             resolved: None,
             install_dir: None,
         })
-        .expect("system core hit");
-        assert_eq!(hit.rule, "system-core");
+        .expect("session volume hit");
+        assert_eq!(hit.rule, "carrier:session-volume");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

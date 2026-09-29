@@ -1928,26 +1928,47 @@ pub fn verify_host_resource_families(events: &[Value]) -> Vec<String> {
 // ---------------------------------------------------------------------------
 // 0bw③ (2026-09-27, WRITE_CONTROL_MECHANICAL_DESIGN §3.2/D5 后续扩展) —
 // write-control command review. Payload shape is pinned by
-// `runtime/write-control-review-event-payload-v0.2.schema.json`; this
-// verifier pins the cross-field contracts the schema cannot express alone
-// (review/rule XOR coupling, tool closed set). Best-effort 闸边界（设计
-// §9）不变：本族只做形状核证，不做覆盖率要求（无命令即无事件）。
+// `runtime/write-control-review-event-payload-v0.3.schema.json`（0cb 审查
+// 处理批 2026-09-29 升版——规则集随 0bw v2 保底化收窄，legacy 值随 schema
+// 回放豁免）; this verifier pins the cross-field contracts the schema
+// cannot express alone (review/rule XOR coupling, tool closed set).
+// Best-effort 闸边界（设计 §9）不变：本族只做形状核证，不做覆盖率要求
+// （无命令即无事件）。
 // ---------------------------------------------------------------------------
 
+/// 规则封闭集（0cb v2 保底化，2026-09-29 同步：v1 `safety-mechanism-flip` →
+/// `boot-firmware-flip`、`system-core-write` 退役拆分为
+/// `catastrophic-recursive-delete`/`raw-device-write`/`registry-hive-delete`；
+/// 与 orz-tools `exec_policy::BLOCK_RULES`/`WARN_RULES` 同形）。
 const WRITE_CONTROL_RULES: &[&str] = &[
-    "safety-mechanism-flip",
-    "system-core-write",
+    "catastrophic-recursive-delete",
+    "raw-device-write",
+    "boot-firmware-flip",
+    "registry-hive-delete",
     "carrier-write",
     "broad-destructive",
     "elevation",
 ];
 
-/// review↔rule 分类配对（设计 §4 每规则钉死分类；schema 无法表达跨字段
+/// legacy 回放豁免集（0cb 审查处理批，2026-09-29 用户裁决＝schema 升 v0.3
+/// ＋跨代际回放兼容）：0.8.4 及更早生产者写入的历史事件携带 v0.2 代际规则
+/// id，回放时按原 block 分类配对核证放行。**只读豁免，非生产集**——现行
+/// 生产者被 orz-tools `exec_policy::BLOCK_RULES` 恰 5 条封闭集钉死，永不
+/// 产出本集；与 Python 镜像 `_WRITE_CONTROL_LEGACY_RULE_CATEGORIES` 逐条
+/// 同形。
+const WRITE_CONTROL_LEGACY_RULE_CATEGORIES: &[(&str, &str)] = &[
+    ("safety-mechanism-flip", "block"),
+    ("system-core-write", "block"),
+];
+
+/// review↔rule 分类配对（设计 §1 每规则钉死分类；schema 无法表达跨字段
 /// 映射，由判官核证——2026-09-27 复审 P2）。与 Python 镜像
 /// `_WRITE_CONTROL_RULE_CATEGORIES` 逐条同形。
 const WRITE_CONTROL_RULE_CATEGORIES: &[(&str, &str)] = &[
-    ("safety-mechanism-flip", "block"),
-    ("system-core-write", "block"),
+    ("catastrophic-recursive-delete", "block"),
+    ("raw-device-write", "block"),
+    ("boot-firmware-flip", "block"),
+    ("registry-hive-delete", "block"),
     ("carrier-write", "block"),
     ("broad-destructive", "warn"),
     ("elevation", "warn"),
@@ -1982,15 +2003,21 @@ pub fn verify_write_control_review(events: &[Value]) -> Vec<String> {
                 errors.push("write_control_review: warn/block rows carry the rule".to_string());
                 continue;
             };
-            if !WRITE_CONTROL_RULES.contains(&rule) {
+            if !WRITE_CONTROL_RULES.contains(&rule)
+                && !WRITE_CONTROL_LEGACY_RULE_CATEGORIES
+                    .iter()
+                    .any(|(name, _)| *name == rule)
+            {
                 errors.push(format!(
                     "write_control_review: unknown rule {rule} (closed set)"
                 ));
             } else {
                 // 配对核证（2026-09-27 复审 P2）：规则分类必须与 review 一致
-                // （`warn + safety-mechanism-flip`、`block + elevation` 拒）。
+                // （`warn + carrier-write`、`block + elevation` 拒）。legacy
+                // 集同表核证（按原 block 分类；回放豁免≠配对豁免）。
                 let expected = WRITE_CONTROL_RULE_CATEGORIES
                     .iter()
+                    .chain(WRITE_CONTROL_LEGACY_RULE_CATEGORIES.iter())
                     .find(|(name, _)| *name == rule)
                     .map(|(_, category)| *category);
                 if expected != Some(review) {
@@ -2339,6 +2366,31 @@ mod tests {
             "{errors:?}"
         );
 
+        // legacy 回放豁免（0cb 审查处理批，schema v0.3）：0.8.4- 代际规则 id
+        // 按原 block 分类配对放行（回放兼容）；配对错配（warn 携 legacy
+        // block 类规则）仍拒——豁免≠配对豁免。
+        let legacy_block = ev(
+            "write_control_review",
+            json!({
+                "tool": "run_terminal_cmd",
+                "call_id": "call-legacy-1",
+                "review": "block",
+                "rule": "system-core-write",
+                "detail": "v0.2-era replay",
+                "command_sha256": hex64(13),
+                "command_len": 21,
+            }),
+        );
+        assert!(verify_write_control_review(std::slice::from_ref(&legacy_block)).is_empty());
+        let mut bad_legacy_pairing = legacy_block.clone();
+        bad_legacy_pairing["payload"]["rule"] = json!("safety-mechanism-flip");
+        bad_legacy_pairing["payload"]["review"] = json!("warn");
+        let errors = verify_write_control_review(std::slice::from_ref(&bad_legacy_pairing));
+        assert!(
+            errors.iter().any(|e| e.contains("-class rule")),
+            "{errors:?}"
+        );
+
         // 关联键负测：sha256 非 64 hex ⇒ 报错。
         let mut bad_sha = warn.clone();
         bad_sha["payload"]["command_sha256"] = json!("nothex");
@@ -2357,7 +2409,7 @@ mod tests {
         // 配对负测（2026-09-27 复审 P2）：分类错配 ⇒ 报错——warn 携 block 类
         // 规则、block 携 warn 类规则各一。
         let mut bad_pairing = warn.clone();
-        bad_pairing["payload"]["rule"] = json!("safety-mechanism-flip");
+        bad_pairing["payload"]["rule"] = json!("carrier-write");
         let errors = verify_write_control_review(std::slice::from_ref(&bad_pairing));
         assert!(
             errors.iter().any(|e| e.contains("-class rule")),
@@ -6089,6 +6141,15 @@ mod tests {
                             "command_sha256": hex64(3), "command_len": 21,
                         }),
                     ),
+                    ev(
+                        "write_control_review",
+                        json!({
+                            "tool": "run_terminal_cmd", "call_id": "wc-7",
+                            "review": "block", "rule": "system-core-write",
+                            "detail": "legacy v0.2-era replay row",
+                            "command_sha256": hex64(7), "command_len": 25,
+                        }),
+                    ),
                 ],
             ),
             (
@@ -6116,7 +6177,7 @@ mod tests {
                         "write_control_review",
                         json!({
                             "tool": "run_terminal_cmd", "call_id": "wc-6",
-                            "review": "warn", "rule": "safety-mechanism-flip",
+                            "review": "warn", "rule": "boot-firmware-flip",
                             "detail": "pairing violation",
                             "command_sha256": hex64(6), "command_len": 9,
                         }),

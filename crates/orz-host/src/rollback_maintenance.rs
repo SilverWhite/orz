@@ -129,8 +129,9 @@ pub fn restore_rollback(cwd: &Path, pointer: &str, target: Option<&str>) -> Resu
     if first.eq_ignore_ascii_case(".gsa") {
         return Err(format!("拒绝以 .gsa 域为回退目标：{resolved}"));
     }
-    // deny 单一源第四消费点（复审 P0 裁决）：回退写面与工具面同表——系统
-    // 核心（表 A/B）与载体面（C2/C3）命中即拒。
+    // deny 单一源第四消费点（复审 P0 裁决；0cb v2 保底化 2026-09-29 收窄）：
+    // 回退写面与工具面同表——v2 起写门＝**载体集**（C2/C3；系统核心臂随
+    // 0bw v2 整树位置锁退役），cwd 边界与上方 C1 判定不变。
     let install_dir = orz_tools::types::write_control::current_install_dir();
     let joined = cwd.join(&resolved);
     if let Some(hit) = orz_tools::types::write_control::check_write_target(

@@ -1,26 +1,49 @@
-//! L2 命令面机械审查（0bw S2② v1，2026-09-26）：`run_terminal_cmd` 的
-//! best-effort 风险闸（block／warn／allow 三分类）与留痕面文案。
+//! L2 命令面机械审查（0bw v1 → **0cb v2 保底化**，2026-09-29）：`run_terminal_cmd`
+//! 的 best-effort 风险闸（block／warn／allow 三分类）与留痕面文案。
 //!
-//! 设计权威：[`docs/WRITE_CONTROL_MECHANICAL_DESIGN_2026-09-26.md`] §4（规则表）
-//! 与 §9（边界）。匹配＝「程序位词元精确」＋「短语」两法；`cmd /c`／
-//! `powershell -Command` 等内容位**递归展开一层**。**不解析完整 shell 语法**
-//! ——变量拼接、别名、`.NET` 直调、脚本内命令、`git rm` 式子命令等不保证覆盖
-//! （best-effort，声明边界；命中即拒、绝不因解析失败放行）。
+//! 设计权威：[`docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md`]（v2.0
+//! §1 规则面）修订 [`docs/WRITE_CONTROL_MECHANICAL_DESIGN_2026-09-26.md`]（v1 §4）。
+//! **v2 定位＝灾难硬边界保底**：block 面收窄为**封闭枚举恰 5 条规则**
+//! （[`BLOCK_RULES`]）——根级递归删除／raw 设备卷毁写／引导固件与安全机制翻转／
+//! 注册表蜂巢修改／载体自保护；v1 的整树位置锁、重定向即写扫系统树、
+//! `/dev//proc//sys` 前缀词元扫**全部退役**（一般写动作——装 `/usr`、清
+//! `SoftwareDistribution`、`>/dev/null`、`+O/dev/null`——交回审批组件，表外恒
+//! allow）。warn 面＝`broad-destructive`（留痕）与 `elevation`（提权）纯留痕。
 //!
-//! 命令内路径 token 经 [`crate::types::write_control`] 的同一绑定归一化后过同一
-//! deny 表（单一源）：系统核心命中＝`system-core-write`；`.gsa`／安装目录命中＝
-//! `carrier-write`；安全机制翻转类命令＝`safety-mechanism-flip`（block）；
-//! 根级/通配删除与提权＝`broad-destructive`／`elevation`（warn）。
+//! 匹配＝「程序位词元精确」＋「短语」两法；`cmd /c`／`powershell -Command` 等
+//! 内容位**递归展开一层**。**不解析完整 shell 语法**——变量拼接、别名、`.NET`
+//! 直调、脚本内命令等不保证覆盖（best-effort，声明边界；命中即拒、绝不因解析
+//! 失败放行）。命令内路径 token 经 [`crate::types::write_control`] 同一绑定归一化；
+//! 规则 1 目标比对＝[`write_control::path_equals_root`]（恰为树根／卷根本体，
+//! 子目录级精准删除放行）；规则 5 载体集比对＝包含语义（恒拒面）。
+//!
+//! **0cb 审查处理批（2026-09-29，用户裁决「过严臂进一步收窄」）**：① 规则 2
+//! PhysicalDrive 词元扫收窄到写侧目标位（`of=` 值／`mkfs*` 目标词）——读侧
+//! `if=` 与查询类提及放行；`mkfs*` 同样目标位判定（镜像文件构建放行），
+//! `/dev/mapper` 增补进块设备形态集；② 规则 1 动词集补 `ri`（Remove-Item
+//! 别名）＋Windows 盘符相对根形态（`\Windows`）按 `%SystemDrive%` 补全比对；
+//! ③ 规则 4 蜂巢判定收窄到目标位词元（数据值提及不误拦）。
 
 use std::path::{Path, PathBuf};
 
 use crate::types::write_control;
 
+/// block 规则封闭集（恰 5 条；v2 设计 §1 表——**新增表项必改本表与测试**）。
+pub const BLOCK_RULES: [&str; 5] = [
+    "catastrophic-recursive-delete",
+    "raw-device-write",
+    "boot-firmware-flip",
+    "registry-hive-delete",
+    "carrier-write",
+];
+
+/// warn 规则封闭集（纯留痕、不阻断）。
+pub const WARN_RULES: [&str; 2] = ["broad-destructive", "elevation"];
+
 /// 命中事实（block／warn 共用）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandFinding {
-    /// 规则身份（稳定字符串：`safety-mechanism-flip` / `system-core-write` /
-    /// `carrier-write` / `broad-destructive` / `elevation`）。
+    /// 规则身份（封闭集：[`BLOCK_RULES`] / [`WARN_RULES`]）。
     pub rule: &'static str,
     /// 机械细节（含命中词元/目标路径与根）。
     pub detail: String,
@@ -92,13 +115,12 @@ pub struct EnqueuedCommandReview {
 /// （`ReportedTaskCompletions` 同型 `State<Vec<_>>`）。
 pub type CommandReviewQueue = crate::types::resources::State<Vec<EnqueuedCommandReview>>;
 
-// ─── 规则表（v1；设计 §4）───────────────────────────────────────────────
+// ─── 规则表（v2 封闭枚举；设计 §1——恰 5 条 block，表外恒 allow）──────────
 
-/// 安全机制翻转类程序（程序位词元精确；`.exe`/`.com` 后缀剥离后比对）。
+// 规则 3 `boot-firmware-flip`：引导／安全机制翻转类程序（程序位词元精确；
+// `.exe`/`.com` 后缀剥离后比对）。format/diskpart/mkfs 等已移规则 2。
 const FLIP_PROGRAMS: &[&str] = &[
     "bcdedit",
-    "diskpart",
-    "format",
     "set-executionpolicy",
     "set-mppreference",
     "add-mppreference",
@@ -107,18 +129,13 @@ const FLIP_PROGRAMS: &[&str] = &[
     "set-netfirewallprofile",
 ];
 
-/// 程序位前缀（`mkfs`、`mkfs.ext4`…）。
-const FLIP_PROGRAM_PREFIXES: &[&str] = &["mkfs"];
-
-/// 短语（程序词元＋紧随参数拼接，前缀匹配）。
+/// 规则 3 短语（程序词元＋紧随参数拼接，前缀匹配）。
 const FLIP_PHRASES: &[&str] = &[
     "netsh advfirewall set",
     "netsh firewall set",
     "wevtutil cl",
     "clear-eventlog",
     "fltmc unload",
-    "vssadmin delete",
-    "wbadmin delete",
     "sc stop windefend",
     "sc config windefend",
     "sc delete windefend",
@@ -133,7 +150,57 @@ const FLIP_PHRASES: &[&str] = &[
     "stop-service -name mpssvc",
 ];
 
-/// 破坏/修改动词（程序位匹配；命中 deny 根目标即 block）。
+/// 规则 2 `raw-device-write`：卷/分区破坏类程序（程序位精确）。
+const RAW_DEVICE_PROGRAMS: &[&str] = &["format", "diskpart"];
+/// 规则 2 短语：卷影/备份删除。
+const RAW_DEVICE_PHRASES: &[&str] = &["vssadmin delete", "wbadmin delete"];
+/// 规则 2 块设备目标前缀（`dd of=` 值与 `mkfs*` 目标词共用；设计 §1 规则 2
+/// 「落块设备」形态集——`/dev/vd*`（virtio，评测容器主盘形态）与
+/// `/dev/mapper*`（LVM/设备映射器根卷）为 0cb 审查处理批登记增补；
+/// `/dev/null` 显式豁免）。
+const BLOCK_DEVICE_PREFIXES: &[&str] = &[
+    "/dev/sd",
+    "/dev/vd",
+    "/dev/nvme",
+    "/dev/mmcblk",
+    "/dev/mapper",
+];
+/// 规则 2 块设备目标的 `\\.\PhysicalDrive*` 形态按子串命中——**仅限写侧
+/// 目标位**（`of=` 值／`mkfs*` 目标词；0cb 审查处理批收窄：位置无关词元扫
+/// 退役，读侧 `dd if=\\.\PhysicalDrive0`（备份/取证）与查询类提及不拦）。
+const PHYSICAL_DRIVE_TOKEN: &str = "physicaldrive";
+/// raw 设备显式豁免（`+O/dev/null`、`>/dev/null`、`dd of=/dev/null` 一律放行）。
+const NULL_DEVICE: &str = "/dev/null";
+
+/// 规则 1 `catastrophic-recursive-delete`：删除动词（封闭；设计 §1——
+/// `rm`/`rmdir`/`rd`/`del`/`erase`/`Remove-Item`＋`ri`（Remove-Item 的
+/// PowerShell 别名，0cb 审查处理批补齐——否则 `ri C:\Windows -Recurse`
+/// 落 warn 不 block））。
+const CATASTROPHIC_DELETE_VERBS: &[&str] =
+    &["rm", "rmdir", "rd", "del", "erase", "remove-item", "ri"];
+
+/// 块设备目标形态判定（规则 2 收窄后唯一判定入口：`dd of=` 值与 `mkfs*`
+/// 目标词共用；`/dev/null` 豁免由调用方先行）。
+fn is_block_device_target(value: &str) -> bool {
+    BLOCK_DEVICE_PREFIXES.iter().any(|p| value.starts_with(p))
+        || value.contains(PHYSICAL_DRIVE_TOKEN)
+}
+
+/// 规则 1 递归旗（封闭；设计 §1——`-r`/`-rf`/`-R`/`--recursive`/`-Recurse`/`/s`）。
+const CATASTROPHIC_RECURSIVE_FLAGS: &[&str] = &["-r", "-rf", "-R", "--recursive", "-recurse", "/s"];
+
+/// 规则 4 `registry-hive-delete`：`reg` 修改子命令（封闭三值）与受保护蜂巢。
+const REG_MODIFY_SUBCOMMANDS: &[&str] = &["add", "delete", "import"];
+const REG_PROTECTED_HIVES: &[&str] = &[
+    "hklm",
+    "hkey_local_machine",
+    "hkcr",
+    "hkey_classes_root",
+    "hku",
+    "hkey_users",
+];
+
+/// 规则 5 载体自保护写动词（破坏/修改面；命令内目标命中载体集即 block）。
 const DESTRUCTIVE_VERBS: &[&str] = &[
     "rm",
     "rmdir",
@@ -186,20 +253,7 @@ const DELETE_VERBS: &[&str] = &[
     "rmtree",
 ];
 
-/// `reg` 修改子命令与受保护蜂巢。
-const REG_MODIFY_SUBCOMMANDS: &[&str] = &[
-    "add", "delete", "import", "copy", "restore", "load", "unload",
-];
-const REG_PROTECTED_HIVES: &[&str] = &[
-    "hklm",
-    "hkey_local_machine",
-    "hkcr",
-    "hkey_classes_root",
-    "hku",
-    "hkey_users",
-];
-
-/// 递归/强制旗（broad-destructive 的递归腿）。
+/// 递归/强制旗（broad-destructive 的递归腿；warn 面，v1 集沿用）。
 const RECURSIVE_FLAGS: &[&str] = &["-r", "-rf", "-fr", "-recurse", "-force", "/s", "/q"];
 
 /// 提权程序（elevation warn）。
@@ -246,23 +300,27 @@ const CONTENT_WORDS: &[&str] = &["-command", "-c", "-lc", "/c", "/k"];
 
 // ─── 公开入口 ───────────────────────────────────────────────────────────
 
-/// 审查一条 `run_terminal_cmd` 命令（生产入口：宿主平台系统根＋当前安装目录）。
+/// 审查一条 `run_terminal_cmd` 命令（生产入口：宿平台根本树根＋当前安装目录）。
 pub fn review_command(cwd: &Path, command: &str) -> CommandReview {
     let install_dir = write_control::current_install_dir();
     review_command_with(
         cwd,
         command,
         install_dir.as_deref(),
-        &write_control::system_core_roots(),
+        &write_control::disaster_tree_roots(),
     )
 }
 
-/// 审查（注入式；测试与跨平台场景）。
+/// 审查（注入式；测试与跨平台场景）。`disaster_roots`＝规则 1 的根本树根目标集。
+///
+/// 规则序＝设计 §1 表序（① catastrophic-recursive-delete → ② raw-device-write
+/// → ③ boot-firmware-flip → ④ registry-hive-delete → ⑤ carrier-write）；
+/// 随后 warn 面（broad-destructive／elevation 纯留痕）。表外恒 `Allow`。
 pub fn review_command_with(
     cwd: &Path,
     command: &str,
     install_dir: Option<&Path>,
-    system_roots: &[PathBuf],
+    disaster_roots: &[PathBuf],
 ) -> CommandReview {
     let scan = crate::util::unicode_confusables::normalize_confusables(command);
     let toks = tokenize(&scan);
@@ -280,14 +338,97 @@ pub fn review_command_with(
         program_entries(seg, 0, &mut entries);
     }
 
-    // ① safety-mechanism-flip（程序位精确／前缀／短语＋dd of=／设备路径）。
+    // ① catastrophic-recursive-delete：删除动词＋递归旗＋目标解析后**恰为**
+    //    卷根／根本性树根本体（子目录级精准删除放行——「需精准删除」硬边界）。
+    let delete_verb_present = entries
+        .iter()
+        .any(|e| CATASTROPHIC_DELETE_VERBS.contains(&e.prog.as_str()));
+    if delete_verb_present
+        && words
+            .iter()
+            .any(|w| CATASTROPHIC_RECURSIVE_FLAGS.contains(&norm_word(&w.text).as_str()))
+    {
+        for w in &words {
+            for raw in path_candidates(&w.text) {
+                for form in disaster_target_forms(cwd, &raw) {
+                    if write_control::is_volume_root(&form) {
+                        return CommandReview::Block(CommandFinding {
+                            rule: "catastrophic-recursive-delete",
+                            detail: format!("recursive delete targets the volume root (`{raw}`)"),
+                        });
+                    }
+                    if let Some(root) = disaster_roots
+                        .iter()
+                        .find(|r| write_control::path_equals_root(r, &form))
+                    {
+                        return CommandReview::Block(CommandFinding {
+                            rule: "catastrophic-recursive-delete",
+                            detail: format!(
+                                "recursive delete targets a fundamental tree root \
+                                 (`{raw}` ⇒ `{}`)",
+                                root.to_string_lossy()
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // ② raw-device-write：卷/分区破坏程序（format/diskpart 程序位）＋卷影
+    //    删除＋`dd of=`/`mkfs*` 目标落块设备（`/dev/null` 显式豁免；目标位
+    //    判定——读侧 `if=` 与查询类提及放行，0cb 审查处理批收窄）。
     for e in &entries {
-        if FLIP_PROGRAMS.contains(&e.prog.as_str())
-            || FLIP_PROGRAM_PREFIXES.iter().any(|p| e.prog.starts_with(p))
+        if RAW_DEVICE_PROGRAMS.contains(&e.prog.as_str()) {
+            return CommandReview::Block(CommandFinding {
+                rule: "raw-device-write",
+                detail: format!("matched the raw-device-write rule (`{}`)", e.prog),
+            });
+        }
+        if e.prog.starts_with("mkfs") {
+            // `mkfs*` 目标须落块设备形态才拦（镜像文件构建——`mkfs.ext4
+            // disk.img`——放行交审批组件；v2.1 收窄）。
+            if e.words.iter().skip(1).any(|w| is_block_device_target(w)) {
+                return CommandReview::Block(CommandFinding {
+                    rule: "raw-device-write",
+                    detail: format!("`mkfs` targeting a raw block device (`{}`)", e.prog),
+                });
+            }
+        }
+        if RAW_DEVICE_PHRASES
+            .iter()
+            .any(|ph| e.phrase == *ph || e.phrase.starts_with(&format!("{ph} ")))
         {
             return CommandReview::Block(CommandFinding {
-                rule: "safety-mechanism-flip",
-                detail: format!("matched the safety-mechanism-flip rule (`{}`)", e.prog),
+                rule: "raw-device-write",
+                detail: format!("matched the raw-device-write rule (`{}`)", e.phrase),
+            });
+        }
+    }
+    if entries.iter().any(|e| e.prog == "dd") {
+        for w in &words {
+            let normalized = norm_word(&w.text);
+            let Some(value) = normalized.strip_prefix("of=") else {
+                continue;
+            };
+            if value == NULL_DEVICE {
+                continue;
+            }
+            if is_block_device_target(value) {
+                return CommandReview::Block(CommandFinding {
+                    rule: "raw-device-write",
+                    detail: format!("`dd` writing a raw block device (`{value}`)"),
+                });
+            }
+        }
+    }
+
+    // ③ boot-firmware-flip（沿 v1 safety-mechanism-flip 全集，去规则 2 移出项）。
+    for e in &entries {
+        if FLIP_PROGRAMS.contains(&e.prog.as_str()) {
+            return CommandReview::Block(CommandFinding {
+                rule: "boot-firmware-flip",
+                detail: format!("matched the boot-firmware-flip rule (`{}`)", e.prog),
             });
         }
         if FLIP_PHRASES
@@ -295,36 +436,35 @@ pub fn review_command_with(
             .any(|ph| e.phrase == *ph || e.phrase.starts_with(&format!("{ph} ")))
         {
             return CommandReview::Block(CommandFinding {
-                rule: "safety-mechanism-flip",
-                detail: format!("matched the safety-mechanism-flip rule (`{}`)", e.phrase),
-            });
-        }
-        if e.words.iter().any(|w| w.contains("physicaldrive")) {
-            return CommandReview::Block(CommandFinding {
-                rule: "safety-mechanism-flip",
-                detail: "raw device path (`physicaldrive`)".to_owned(),
+                rule: "boot-firmware-flip",
+                detail: format!("matched the boot-firmware-flip rule (`{}`)", e.phrase),
             });
         }
     }
 
-    // ② reg 修改受保护蜂巢（HKLM/HKCR/HKU）。
+    // ④ registry-hive-delete：`reg add|delete|import` 落 HKLM/HKCR/HKU。
+    //    目标位判定（0cb 审查处理批收窄）：`reg <sub> <target> …` 的第三词元
+    //    （add/delete＝键路径、import＝脚本文件名）之前缀判定——任何位置的
+    //    蜂巢提及（如 `/d hklm-…` 数据值）不再误拦。
     for e in &entries {
         if e.prog == "reg" {
             let sub = e.words.get(1).map(String::as_str).unwrap_or("");
             let hive = e
                 .words
-                .iter()
-                .any(|w| REG_PROTECTED_HIVES.iter().any(|h| w.starts_with(h)));
+                .get(2)
+                .map(|t| REG_PROTECTED_HIVES.iter().any(|h| t.starts_with(h)))
+                .unwrap_or(false);
             if REG_MODIFY_SUBCOMMANDS.contains(&sub) && hive {
                 return CommandReview::Block(CommandFinding {
-                    rule: "system-core-write",
-                    detail: "registry modification on HKLM/HKCR/HKU".to_owned(),
+                    rule: "registry-hive-delete",
+                    detail: "registry add/delete/import on HKLM/HKCR/HKU".to_owned(),
                 });
             }
         }
     }
 
-    // ③ 写动词 ＋ deny 根目标（命令内路径 token 过同一 deny 表）。
+    // ⑤ carrier-write：写动词（破坏/修改集＋`dd`＋重定向）＋目标命中载体集
+    //    （`.gsa`／安装目录；恒拒面）。系统树不进本闸（v2 退役）。
     let has_write_verb = entries
         .iter()
         .any(|e| DESTRUCTIVE_VERBS.contains(&e.prog.as_str()) || e.prog == "dd")
@@ -332,14 +472,17 @@ pub fn review_command_with(
     if has_write_verb {
         for w in &words {
             for raw in path_candidates(&w.text) {
-                if let Some(finding) = deny_target_finding(cwd, &raw, install_dir, system_roots) {
-                    return CommandReview::Block(finding);
+                if let Some(detail) = carrier_target_detail(cwd, &raw, install_dir) {
+                    return CommandReview::Block(CommandFinding {
+                        rule: "carrier-write",
+                        detail,
+                    });
                 }
             }
         }
     }
 
-    // ④ broad-destructive（warn）。
+    // ⑥ broad-destructive（warn 留痕；v1 臂沿用——根级递归删除已在 ① 转 block）。
     let delete_present = entries
         .iter()
         .any(|e| DELETE_VERBS.contains(&e.prog.as_str()));
@@ -377,7 +520,7 @@ pub fn review_command_with(
         }
     }
 
-    // ⑤ elevation（warn）。
+    // ⑦ elevation（warn 留痕）。
     for seg in &segments {
         if let Some(first) = seg.iter().find(|w| !is_assignment(&w.text)) {
             let n = norm_word(&first.text);
@@ -403,11 +546,23 @@ pub fn review_command_with(
 }
 
 /// block 面向模型的机械拒绝文案（经 `ToolError` 返回；随 tool 结果入 journal）。
+///
+/// v2 文案（设计 §1）：规则 id＋目标＋「已越过保底硬边界」；规则 1 附「需精准
+/// 删除」指引（写明被拦目标、建议改为具体文件/子目录——用户裁决原话）。
 pub fn block_message(finding: &CommandFinding) -> String {
+    let guidance = if finding.rule == "catastrophic-recursive-delete" {
+        "该目标是卷根/根本性树根本体；如需删除，请改为对具体文件或子目录的精准删除。"
+    } else {
+        ""
+    };
     format!(
-        "Error: command blocked by the mechanical write control (rule: {}). {}. \
-         The command was not executed; this is a best-effort risk gate (L2), not a complete sandbox.",
-        finding.rule, finding.detail
+        "Error: command blocked by the mechanical write control backstop (rule: {rule}). \
+         {detail}. 已越过保底硬边界——命令未执行。{guidance}本闸为封闭枚举灾难保底\
+         （{n} 条 block 规则），非沙箱。",
+        rule = finding.rule,
+        detail = finding.detail,
+        guidance = guidance,
+        n = BLOCK_RULES.len(),
     )
 }
 
@@ -419,59 +574,31 @@ pub fn warn_line(finding: &CommandFinding) -> String {
     )
 }
 
-// ─── 目标解析与 deny 表比对 ─────────────────────────────────────────────
+// ─── 目标解析与载体集比对 ───────────────────────────────────────────────
 
-/// 目标解析：展开 → 绝对化 → 词法/近祖先 canonical → 过 deny 表。
-fn deny_target_finding(
-    cwd: &Path,
-    raw: &str,
-    install_dir: Option<&Path>,
-    system_roots: &[PathBuf],
-) -> Option<CommandFinding> {
-    let expanded = expand_word(cwd, raw);
-    if expanded.starts_with("/dev/")
-        || expanded.starts_with("/proc/")
-        || expanded.starts_with("/sys/")
-    {
-        return Some(CommandFinding {
-            rule: "system-core-write",
-            detail: format!("target `{raw}` is a device/kernel path (`{expanded}`)"),
-        });
-    }
+/// 规则 5 目标解析：展开 → 绝对化 → 词法/近祖先 canonical → **载体集**比对
+/// （`.gsa` 会话卷／安装目录）。v2 退役面：系统树根比对与 `/dev//proc//sys`
+/// 前缀词元判不再进本闸（重定向目标、一般路径写交回审批组件——设计 §2）。
+fn carrier_target_detail(cwd: &Path, raw: &str, install_dir: Option<&Path>) -> Option<String> {
     let forms = path_forms(cwd, raw);
-    for root in system_roots {
-        if forms.iter().any(|f| write_control::path_hits_root(root, f)) {
-            return Some(CommandFinding {
-                rule: "system-core-write",
-                detail: format!(
-                    "target `{raw}` resolves inside the locked system-core set (`{}`)",
-                    root.to_string_lossy()
-                ),
-            });
-        }
-    }
     let gsa = cwd.join(".gsa");
     let gsa_canonical = crate::types::resources::session_volume_canonical_root(cwd);
     for form in &forms {
         if write_control::path_hits_root(&gsa, form)
             || write_control::path_hits_root(&gsa_canonical, form)
         {
-            return Some(CommandFinding {
-                rule: "carrier-write",
-                detail: format!("target `{raw}` is inside the `.gsa` session volume"),
-            });
+            return Some(format!(
+                "target `{raw}` is inside the `.gsa` session volume"
+            ));
         }
     }
     if let Some(install) = install_dir
         && let Some(hit) = write_control::install_dir_hit(install, cwd, &forms)
     {
-        return Some(CommandFinding {
-            rule: "carrier-write",
-            detail: format!(
-                "target `{raw}` is inside the carrier self-protection set (`{}`)",
-                hit.root
-            ),
-        });
+        return Some(format!(
+            "target `{raw}` is inside the carrier self-protection set (`{}`)",
+            hit.root
+        ));
     }
     None
 }
@@ -483,6 +610,52 @@ fn path_forms(cwd: &Path, raw: &str) -> Vec<PathBuf> {
     let abs = if p.is_absolute() { p } else { cwd.join(&p) };
     let lexical = orz_paths::normalize_lexically(&abs);
     write_control::candidate_forms(&lexical, None)
+}
+
+/// 规则 1 目标形态：`has_root` 形态（POSIX 风格 `/`、`/usr`——Windows 上
+/// `is_absolute()` 为假）**保持原样不拼 cwd**（跨平台比对卷根/根本树根本体），
+/// 其余同 [`path_forms`]。Windows 上另有盘符相对根形态补全（见
+/// [`push_drive_qualified_forms`]）。
+fn disaster_target_forms(cwd: &Path, raw: &str) -> Vec<PathBuf> {
+    let expanded = expand_word(cwd, raw);
+    let p = PathBuf::from(&expanded);
+    let abs = if p.has_root() { p } else { cwd.join(&p) };
+    let lexical = orz_paths::normalize_lexically(&abs);
+    let mut forms = write_control::candidate_forms(&lexical, None);
+    push_drive_qualified_forms(&mut forms);
+    forms
+}
+
+/// Windows 盘符相对根形态补全（0cb 审查处理批，绕过面闭合）：`\Windows`、
+/// `/usr` 等 `has_root() && !is_absolute()` 形态在 cmd/PowerShell 下
+/// ≡ `%SystemDrive%` 上的同径路径，但与 `C:\Windows` 字面比对必败——按
+/// `%SystemDrive%`（env 缺失回退 `C:`）生成盘符限定孪生形态一并比对。
+/// POSIX 宿不存在该形态（`/` 开头即绝对），零操作。
+fn push_drive_qualified_forms(forms: &mut Vec<PathBuf>) {
+    #[cfg(windows)]
+    {
+        let drive = std::env::var("SystemDrive")
+            .ok()
+            .filter(|v| {
+                let b = v.as_bytes();
+                b.len() == 2 && b[1] == b':' && b[0].is_ascii_alphabetic()
+            })
+            .unwrap_or_else(|| "C:".to_owned());
+        let mut qualified: Vec<PathBuf> = Vec::new();
+        for form in forms.iter() {
+            if form.has_root() && !form.is_absolute() {
+                let twin = PathBuf::from(format!("{drive}{}", form.to_string_lossy()));
+                if !forms.contains(&twin) && !qualified.contains(&twin) {
+                    qualified.push(twin);
+                }
+            }
+        }
+        forms.extend(qualified);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = forms;
+    }
 }
 
 /// 从词元提取路径候选（`of=…`／`-path=…` 取等号右值；引号剥除；含空白词拆片兜底）。
@@ -513,10 +686,14 @@ fn push_candidate(out: &mut Vec<String>, value: &str) {
     }
 }
 
-/// 近似路径形态判定（不追求完备：选项/赋值左值不取，含分隔符或特殊开头即候选）。
+/// 近似路径形态判定（不追求完备：选项/赋值左值不取，含分隔符或特殊开头即候选；
+/// 裸 `..` 取——递归删除目标的父级形态）。
 fn looks_like_path(s: &str) -> bool {
     if s.is_empty() {
         return false;
+    }
+    if s == ".." {
+        return true;
     }
     let b = s.as_bytes();
     if b[0] == b'-' {
@@ -867,12 +1044,16 @@ mod tests {
     use super::*;
 
     fn roots() -> Vec<PathBuf> {
-        write_control::windows_system_core_roots_with(
+        write_control::windows_disaster_tree_roots_with(
             Some(r"C:\Windows"),
             Some(r"C:\Program Files"),
             Some(r"C:\Program Files (x86)"),
             Some(r"C:\ProgramData"),
         )
+    }
+
+    fn linux_roots() -> Vec<PathBuf> {
+        write_control::linux_disaster_tree_roots()
     }
 
     fn review(cmd: &str) -> CommandReview {
@@ -884,6 +1065,15 @@ mod tests {
         )
     }
 
+    fn review_linux(cmd: &str) -> CommandReview {
+        review_command_with(
+            Path::new("/proj"),
+            cmd,
+            Some(Path::new("/app/orz")),
+            &linux_roots(),
+        )
+    }
+
     fn rule_of(review: &CommandReview) -> Option<&'static str> {
         match review {
             CommandReview::Block(f) | CommandReview::Warn(f) => Some(f.rule),
@@ -891,7 +1081,45 @@ mod tests {
         }
     }
 
-    /// 0bw③：`CommandReview::report()` 形状——allow 恒 null 臂、warn/block
+    /// 0cb 防膨胀钉①：deny 形状表＝封闭集恰 5 条 block 规则＋恰 2 条 warn 规则
+    /// （新增表项必改本测试；与判官 `WRITE_CONTROL_RULE_CATEGORIES` 同形）。
+    #[test]
+    fn block_rule_table_is_the_closed_five() {
+        assert_eq!(
+            BLOCK_RULES,
+            [
+                "catastrophic-recursive-delete",
+                "raw-device-write",
+                "boot-firmware-flip",
+                "registry-hive-delete",
+                "carrier-write",
+            ]
+        );
+        assert_eq!(WARN_RULES, ["broad-destructive", "elevation"]);
+    }
+
+    /// 0cb 防膨胀钉①（表级）：各封闭触发表行数钉死——加行必须改测试＋设计档。
+    /// 0cb 审查处理批（2026-09-29）：钉覆盖补全至全部封闭表（warn 面与
+    /// 词法结构表同钉——`DESTRUCTIVE_VERBS` 承载规则 5 block 面）。
+    #[test]
+    fn closed_trigger_tables_hold_their_registered_sizes() {
+        assert_eq!(CATASTROPHIC_DELETE_VERBS.len(), 7);
+        assert_eq!(CATASTROPHIC_RECURSIVE_FLAGS.len(), 6);
+        assert_eq!(RAW_DEVICE_PROGRAMS.len(), 2);
+        assert_eq!(RAW_DEVICE_PHRASES.len(), 2);
+        assert_eq!(BLOCK_DEVICE_PREFIXES.len(), 5);
+        assert_eq!(FLIP_PROGRAMS.len(), 7);
+        assert_eq!(FLIP_PHRASES.len(), 17);
+        assert_eq!(REG_MODIFY_SUBCOMMANDS.len(), 3);
+        assert_eq!(REG_PROTECTED_HIVES.len(), 6);
+        assert_eq!(DESTRUCTIVE_VERBS.len(), 37);
+        assert_eq!(DELETE_VERBS.len(), 8);
+        assert_eq!(ELEVATION_PROGRAMS.len(), 4);
+        assert_eq!(WRAPPER_WORDS.len(), 32);
+        assert_eq!(CONTENT_WORDS.len(), 5);
+    }
+
+    /// 0cb③：`CommandReview::report()` 形状——allow 恒 null 臂、warn/block
     /// 恒 rule+detail 臂（schema XOR 语义的生产侧镜像）。
     #[test]
     fn review_report_shapes_match_schema_xor() {
@@ -903,7 +1131,7 @@ mod tests {
                 detail: None,
             }
         );
-        let warn = review("Remove-Item C:\\ -Recurse -Force");
+        let warn = review("sudo echo hi");
         let report = warn.report();
         assert_eq!(report.review, "warn");
         assert!(report.rule.is_some());
@@ -923,7 +1151,7 @@ mod tests {
             "type C:\\Windows\\win.ini",
             "grep -n foo C:\\Windows\\System32\\drivers\\etc\\hosts",
             // 工作区内清理与复制：放行。
-            "Remove-Item .tmp-0bw-check -Recurse -Force",
+            "Remove-Item .tmp-0cb-check -Recurse -Force",
             "copy src\\a.rs src\\b.rs",
             // 命中短语但只是检索参数（程序位不是翻转类）→ 不误伤。
             "rg \"set-mppreference\" docs",
@@ -932,8 +1160,146 @@ mod tests {
         }
     }
 
+    /// 0cb 防膨胀钉②：**正向放行集 fixture**（设计 §3——必须保持放行，
+    /// 一行回归即红；本集正是 TB 2.1 轮 215 条误拦的高频形状）。
     #[test]
-    fn safety_flip_commands_block() {
+    fn positive_allow_fixture_must_stay_allowed() {
+        for cmd in [
+            "make install",
+            "apt-get install build-essential",
+            "pip install requests",
+            "echo x > /dev/null",
+            "cmake --build . 2>/dev/null",
+            "povray +Iin.pov +Oout.png +O/dev/null",
+            "Remove-Item C:\\Windows\\SoftwareDistribution\\Download\\old",
+            "cat /proc/cpuinfo",
+            "ln -s /etc /w",
+            "dd if=x of=/dev/null",
+        ] {
+            let r = review(cmd);
+            assert_eq!(r, CommandReview::Allow, "must allow: {cmd} -> {r:?}");
+        }
+    }
+
+    /// 0cb 防膨胀钉③（规则 1 负向集）：根级递归删除命中。
+    #[test]
+    fn catastrophic_recursive_delete_blocks() {
+        for cmd in [
+            "rm -rf /",
+            "rd /s C:\\",
+            "Remove-Item C:\\Windows -Recurse",
+            "Remove-Item -Recurse -Force C:\\ProgramData",
+            "rmdir /s /q \"C:\\Program Files\"",
+            "del /s /q C:\\ProgramData",
+            "rm -rf ..",
+            // `ri`＝Remove-Item 的 PowerShell 别名（0cb 审查处理批补齐——
+            // 否则同形灾难只落 warn）。
+            "ri C:\\Windows -Recurse",
+        ] {
+            let r = review(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block: {cmd} -> {r:?}"
+            );
+            assert_eq!(
+                rule_of(&r),
+                Some("catastrophic-recursive-delete"),
+                "rule for {cmd}"
+            );
+        }
+        // Linux 载体（评测容器）同形：POSIX 根与根本树根（`/usr` 属 Linux
+        // 根集——宿平台根集按平台分叉，Windows 根集不含 POSIX 树）。
+        for cmd in ["rm -rf /", "rm -rf /etc", "rm -rf /usr", "rm -rf /var"] {
+            let r = review_linux(cmd);
+            assert!(matches!(r, CommandReview::Block(_)), "must block: {cmd}");
+            assert_eq!(rule_of(&r), Some("catastrophic-recursive-delete"));
+        }
+        // 子目录级精准删除放行（「需精准删除」硬边界；无路径前缀宽扫）。
+        for cmd in [
+            "rm -rf /usr/local/build-cache",
+            "Remove-Item C:\\Windows\\Temp -Recurse -Force",
+        ] {
+            let r = review(cmd);
+            assert!(
+                !matches!(r, CommandReview::Block(_)),
+                "subtree delete must not block: {cmd} -> {r:?}"
+            );
+        }
+    }
+
+    /// 0cb 防膨胀钉③（规则 2 负向集）：raw 设备/卷毁写命中。
+    #[test]
+    fn raw_device_write_blocks() {
+        for cmd in [
+            "dd if=iso.img of=/dev/sda",
+            "dd if=x of=\\\\.\\PhysicalDrive2",
+            "mkfs.ext4 /dev/sdb1",
+            "mkfs /dev/vdb",
+            "format D: /y",
+            "diskpart /s script.txt",
+            "vssadmin delete shadows /all",
+            "wbadmin delete catalog",
+        ] {
+            let r = review(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block: {cmd} -> {r:?}"
+            );
+            assert_eq!(rule_of(&r), Some("raw-device-write"), "rule for {cmd}");
+        }
+    }
+
+    /// 0cb 审查处理批（收窄后负测补口）：raw 设备**读侧**与镜像文件目标放行
+    /// ——`of=` 才是写侧目标位（`dd if=\\.\PhysicalDrive0` 备份/取证读）、
+    /// `mkfs*` 镜像文件构建、查询类 PhysicalDrive 提及（位置无关词元扫
+    /// 已退役）。
+    #[test]
+    fn raw_device_read_side_and_image_targets_stay_allowed() {
+        for cmd in [
+            "dd if=\\\\.\\PhysicalDrive0 of=backup.img",
+            "mkfs.ext4 /tmp/disk.img",
+            "mkfs.ext4 disk.img",
+            "mkfs -t ext4 /var/tmp/img.raw",
+            "Get-PhysicalDisk -DeviceName PhysicalDrive0",
+        ] {
+            let r = review(cmd);
+            assert_eq!(r, CommandReview::Allow, "must allow: {cmd} -> {r:?}");
+        }
+    }
+
+    /// 0cb 审查处理批（绕过面闭合）：Windows 盘符相对根形态
+    /// （`\Windows` ≡ `%SystemDrive%\Windows`）进规则 1 比对——此前与
+    /// `C:\Windows` 字面比对必败、只落 warn。
+    #[cfg(windows)]
+    #[test]
+    fn drive_relative_rooted_forms_are_qualified_against_system_drive() {
+        for cmd in [
+            "rm -rf \\Windows",
+            "del /s /q \\ProgramData",
+            "rd /s \\Windows",
+        ] {
+            let r = review(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block: {cmd} -> {r:?}"
+            );
+            assert_eq!(
+                rule_of(&r),
+                Some("catastrophic-recursive-delete"),
+                "rule for {cmd}"
+            );
+        }
+        // 子目录不拦（精准删除放行）。
+        let r = review("rm -rf \\Windows\\Temp");
+        assert!(
+            !matches!(r, CommandReview::Block(_)),
+            "subtree delete must not block: {r:?}"
+        );
+    }
+
+    /// 0cb 防膨胀钉③（规则 3 负向集）：引导固件与安全机制翻转命中。
+    #[test]
+    fn boot_firmware_flip_blocks() {
         for cmd in [
             "Set-MpPreference -EnableControlledFolderAccess Disabled",
             "powershell -Command \"Set-MpPreference -EnableControlledFolderAccess AuditMode\"",
@@ -942,66 +1308,116 @@ mod tests {
             "wevtutil cl Security",
             "Clear-EventLog -LogName System",
             "bcdedit /set testsigning on",
-            "diskpart",
-            "format D: /y",
-            "mkfs.ext4 /dev/sdb1",
-            "vssadmin delete shadows /all",
+            "Set-ExecutionPolicy Bypass -Scope Process",
             "sc stop WinDefend",
+            "sc config mpssvc start= disabled",
             "net stop mpssvc",
             "Stop-Service -Name WinDefend",
             "fltmc unload X",
-            "wbadmin delete catalog",
         ] {
             let r = review(cmd);
             assert!(
                 matches!(r, CommandReview::Block(_)),
                 "must block: {cmd} -> {r:?}"
             );
-            assert_eq!(rule_of(&r), Some("safety-mechanism-flip"), "rule for {cmd}");
+            assert_eq!(rule_of(&r), Some("boot-firmware-flip"), "rule for {cmd}");
         }
     }
 
+    /// 0cb 防膨胀钉③（规则 4 负向集）：注册表蜂巢修改命中。
     #[test]
-    fn system_core_and_carrier_writes_block() {
-        for (cmd, expected) in [
-            ("del \"C:\\Windows\\Temp\\x.txt\"", "system-core-write"),
-            (
-                "Remove-Item -Recurse -Force C:\\Windows\\System32\\drivers",
-                "system-core-write",
-            ),
-            (
-                "cmd /c del \"C:\\Program Files\\App\\x\"",
-                "system-core-write",
-            ),
-            (
-                "Set-Content C:\\ProgramData\\app\\cfg.json hi",
-                "system-core-write",
-            ),
-            ("echo x > C:\\Windows\\Temp\\y", "system-core-write"),
-            ("reg delete HKLM\\Software\\Foo /f", "system-core-write"),
-            ("dd if=/dev/zero of=/dev/sda", "system-core-write"),
-            (
-                "powershell -Command \"Remove-Item 'C:\\Windows\\Temp\\z' -Force\"",
-                "system-core-write",
-            ),
-            ("Remove-Item D:\\app\\orz\\orz.exe", "carrier-write"),
-            ("Set-Content .gsa\\journal\\x.txt hi", "carrier-write"),
-            ("rm -rf D:\\proj\\.gsa\\*", "carrier-write"),
+    fn registry_hive_delete_blocks() {
+        for cmd in [
+            "reg delete HKLM\\Software\\Foo /f",
+            "reg add HKLM\\SYSTEM\\CurrentControlSet /v x /d y",
+            "reg add HKCR\\.0cb /v a /d b",
+            "reg import hku\\probe.erb",
+            "reg delete HKEY_LOCAL_MACHINE\\SOFTWARE\\X /f",
         ] {
             let r = review(cmd);
             assert!(
                 matches!(r, CommandReview::Block(_)),
                 "must block: {cmd} -> {r:?}"
             );
-            assert_eq!(rule_of(&r), Some(expected), "rule for {cmd}");
+            assert_eq!(rule_of(&r), Some("registry-hive-delete"), "rule for {cmd}");
         }
+        // 用户蜂巢与非修改子命令不拦；数据值中的蜂巢提及不再误拦
+        // （目标位判定，0cb 审查处理批收窄）。
+        assert_eq!(review("reg delete HKCU\\Env /v x"), CommandReview::Allow);
+        assert_eq!(
+            review("reg add HKCU\\Env /v x /d hklm-note"),
+            CommandReview::Allow
+        );
+        assert_eq!(
+            review("reg query HKLM\\SOFTWARE\\Microsoft"),
+            CommandReview::Allow
+        );
+        assert_eq!(
+            review("reg export HKLM\\Software out.reg"),
+            CommandReview::Allow
+        );
+    }
+
+    /// 0cb 防膨胀钉③（规则 5 负向集）：载体自保护命中（恒拒面保持）。
+    #[test]
+    fn carrier_write_still_blocks() {
+        for (cmd, kind) in [
+            ("Set-Content .gsa\\journal\\x.txt hi", "session volume"),
+            ("echo x > .gsa\\runs\\y", "session volume"),
+            ("rm -rf D:\\proj\\.gsa\\*", "session volume"),
+            ("Remove-Item D:\\app\\orz\\orz.exe", "carrier"),
+            ("Remove-Item D:\\app\\orz\\grok-home\\creds.json", "carrier"),
+        ] {
+            let r = review(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block: {cmd} -> {r:?}"
+            );
+            assert_eq!(rule_of(&r), Some("carrier-write"), "rule for {cmd}");
+            assert!(
+                match &r {
+                    CommandReview::Block(f) => f.detail.contains(kind),
+                    _ => false,
+                },
+                "detail should name the carrier face ({kind}): {r:?}"
+            );
+        }
+    }
+
+    /// 0cb §2 退役面一行回归：v1 会拦的系统树一般写动作（整树位置锁／重定向
+    /// 扫系统树／`/dev·/proc·/sys` 前缀词元扫）现不再 **block**——交回审批
+    /// 组件（递归删除类的 warn 留痕臂按设计保留，非阻断）。
+    #[test]
+    fn system_tree_general_writes_retired_to_allow() {
+        for cmd in [
+            "del \"C:\\Windows\\Temp\\x.txt\"",
+            "cmd /c del \"C:\\Program Files\\App\\x\"",
+            "Set-Content C:\\ProgramData\\app\\cfg.json hi",
+            "echo x > C:\\Windows\\Temp\\y",
+            "mkdir C:\\Program Files\\MyApp",
+            "Set-Content /etc/hosts config",
+            "echo note > /proc/self/notes",
+            "icacls C:\\Windows\\Temp\\x /grant Users:F",
+        ] {
+            let r = review(cmd);
+            assert_eq!(
+                r,
+                CommandReview::Allow,
+                "retired deny must allow: {cmd} -> {r:?}"
+            );
+        }
+        // 递归删除系统树子目录：不再 block，仅 warn 留痕（broad-destructive）。
+        let r = review("Remove-Item -Recurse -Force C:\\Windows\\System32\\drivers");
+        assert!(
+            matches!(r, CommandReview::Warn(_)),
+            "retired deny must not block (warn trace stays): {r:?}"
+        );
     }
 
     #[test]
     fn warns_fire_for_broad_and_elevation_shapes() {
         for cmd in [
-            "rm -rf /",
-            "Remove-Item -Recurse -Force D:\\other\\x",
+            "rm -rf D:\\other\\x",
             "del /s /q *",
             "sudo apt-get install foo",
             "Start-Process cmd -Verb RunAs",
@@ -1012,7 +1428,10 @@ mod tests {
                 "must warn: {cmd} -> {r:?}"
             );
         }
-        assert_eq!(rule_of(&review("rm -rf /")), Some("broad-destructive"));
+        assert_eq!(
+            rule_of(&review("rm -rf D:\\other\\x")),
+            Some("broad-destructive")
+        );
         assert_eq!(
             rule_of(&review("sudo apt-get install foo")),
             Some("elevation")
@@ -1021,17 +1440,28 @@ mod tests {
 
     #[test]
     fn block_message_and_warn_line_carry_rule_identity() {
-        let CommandReview::Block(f) =
-            review("Set-MpPreference -EnableControlledFolderAccess Disabled")
+        let CommandReview::Block(f) = review_linux("rm -rf /usr") else {
+            panic!("expected block");
+        };
+        assert_eq!(f.rule, "catastrophic-recursive-delete");
+        let msg = block_message(&f);
+        assert!(msg.contains("catastrophic-recursive-delete"));
+        assert!(msg.contains("blocked by the mechanical write control"));
+        assert!(msg.contains("已越过保底硬边界"));
+        assert!(
+            msg.contains("精准删除"),
+            "rule 1 must carry the precise-delete guidance"
+        );
+
+        let CommandReview::Block(f) = review("Set-MpPreference -DisableRealtimeMonitoring 1")
         else {
             panic!("expected block");
         };
         let msg = block_message(&f);
-        assert!(msg.contains("safety-mechanism-flip"));
-        assert!(msg.contains("blocked by the mechanical write control"));
-        assert!(msg.contains("was not executed"));
+        assert!(msg.contains("boot-firmware-flip"));
+        assert!(!msg.contains("精准删除"), "guidance is rule-1 only");
 
-        let CommandReview::Warn(f) = review("rm -rf /") else {
+        let CommandReview::Warn(f) = review("rm -rf D:\\other") else {
             panic!("expected warn");
         };
         let line = warn_line(&f);

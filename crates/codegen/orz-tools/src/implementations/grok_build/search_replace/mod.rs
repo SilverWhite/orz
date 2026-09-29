@@ -227,11 +227,12 @@ pub(crate) async fn run_search_replace(
             "File path is a directory".to_owned(),
         ));
     }
-    // 0bw S2①（2026-09-26，设计档 §3.1）：写面机械门——deny 单一源
-    // （系统核心＋载体自保护：`.gsa` 会话卷／安装目录／三件套／`grok-home`）。
+    // 0bw S2①（2026-09-26，设计档 §3.1；0cb v2 保底化 2026-09-29）：写面
+    // 机械门收窄为**载体集**（`.gsa` 会话卷／安装目录／三件套／`grok-home`）。
     // `.gsa` 域判定委派既有窗口函数（语义不重写、文案保持）；安装目录由
     // `current_exe` 机械推导，不依赖模型面装配；命中即拒（与 gitignore 拒编
-    // 同一 InvalidInput 形态）。
+    // 同一 InvalidInput 形态）。v1 的系统核心整树写拒随 0bw v2 退役——写
+    // 系统树交回审批组件（0cb 设计 §2/§4）。
     {
         let install_dir = crate::types::write_control::current_install_dir();
         let hit = crate::types::write_control::check_write_target(
@@ -3931,37 +3932,28 @@ neutTest_set);
         );
     }
 
-    /// 0bw S2①（2026-09-26，设计档 §8 判据钉 4）：系统核心目标机械拒绝，
-    /// 且拒绝后目标零存在（未写不建）。
+    /// 0cb §2/§4 退役面一行回归：系统树目标不再被工具面写门拒（载体集之外
+    /// 的拒绝面交回审批组件；本测试只探写门判定，不落真实系统盘写入——
+    /// 目标选临时目录内路径并断言 `check_write_target` 判 `None`）。
     #[tokio::test]
-    async fn search_replace_refuses_system_core_targets() {
+    async fn search_replace_write_gate_no_longer_locks_system_trees() {
         let tmp = TempDir::new().unwrap();
         let ws = dunce::canonicalize(tmp.path()).unwrap();
-        let roots = crate::types::write_control::system_core_roots();
-        let target = roots[0].join("0bw-write-control-must-not-be-created.txt");
-        let target_str = target.to_string_lossy().to_string();
-        let tool = SearchReplaceTool;
-        let output = xai_tool_runtime::Tool::run(
-            &tool,
-            test_ctx(test_resources(&ws).into_shared()),
-            make_input(&target_str, "old text", "new text"),
-        )
-        .await
-        .unwrap();
-        match output {
-            SearchReplaceOutput::InvalidInput(msg) => {
-                assert!(
-                    msg.contains("system-core"),
-                    "system-core write must be refused: {msg}"
-                );
-            }
-            other => panic!("Expected InvalidInput for system-core write, got {other:?}"),
-        }
-        assert!(
-            !target.exists(),
-            "rejection must not create the target: {}",
-            target.display()
+        let roots = crate::types::write_control::disaster_tree_roots();
+        let system_target = roots[0].join("Temp").join("0cb-gate-must-stay-open.txt");
+        let hit = crate::types::write_control::check_write_target(
+            &crate::types::write_control::WriteTargetCtx {
+                cwd: &ws,
+                joined: &system_target,
+                resolved: None,
+                install_dir: crate::types::write_control::current_install_dir().as_deref(),
+            },
         );
+        assert!(
+            hit.is_none(),
+            "system-tree target must not be denied by the carrier-only gate: {hit:?}"
+        );
+        assert!(!system_target.exists(), "probe must not write anything");
     }
 
     /// 0bw S2①（2026-09-26，设计档 §8 判据钉 4）：安装目录（载体自保护）

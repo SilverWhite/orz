@@ -2211,10 +2211,11 @@ impl xai_tool_runtime::Tool for BashTool {
             ));
         }
 
-        // ─── 0bw S2②（2026-09-26，设计档 §3.2）：L2 命令面机械审查 ───
-        // block＝锁死面/安全机制翻转类命中 → 命令不执行（机械拒绝文案随 tool
-        // 结果入 journal）；warn＝留痕（结果头部 `[写入管控·提示]` 行，不阻断）。
-        // best-effort 闸（设计档 §9 边界）。
+        // ─── 0bw S2②（2026-09-26，设计档 §3.2；0cb v2 保底化 2026-09-29）：
+        // L2 命令面机械审查 ───
+        // block＝灾难硬边界保底命中（封闭枚举恰 5 条规则）→ 命令不执行（机械
+        // 拒绝文案随 tool 结果入 journal）；warn＝留痕（结果头部
+        // `[写入管控·提示]` 行，不阻断）。best-effort 闸（设计档 §9 边界）。
         // 空命令防线（2026-09-27 复审 P2）：空/纯空白命令无审查对象——不审
         // 查、不入队（D-7「无命令即无事件」的机械兑现；schema `command_len
         // ≥ 1` 下限由此保证）。
@@ -3919,7 +3920,8 @@ mod tests {
     }
 
     /// 0bw S2②（2026-09-26，设计档 §8 判据钉 4）：block 命中 → 命令不执行，
-    /// 机械拒绝文案随 `ToolError` 返回。
+    /// 机械拒绝文案随 `ToolError` 返回。（0cb v2：规则 id 更名
+    /// boot-firmware-flip。）
     #[tokio::test]
     async fn write_control_blocks_safety_flip_command() {
         let resources = make_resources(MockTerminal::success("", 0));
@@ -3938,7 +3940,7 @@ mod tests {
             "block message expected, got: {err}"
         );
         assert!(
-            err.contains("safety-mechanism-flip"),
+            err.contains("boot-firmware-flip"),
             "rule id expected: {err}"
         );
     }
