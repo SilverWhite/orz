@@ -459,4 +459,35 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **本批登记（2026-09-29 晚，沿 0cc 批序主会话执行）**：**0.8.6 双平台重建换装进体达成**。① **版本冻结**＝orz **`f95e1831`**（`chore(release): bump version 0.8.5 -> 0.8.6`；`crates/orz-bin/Cargo.toml`＋`Cargo.lock` 两行；`cargo metadata --locked` exit 0）。② **Windows 重建换装**＝`build_orz.ps1 -Release -Jobs 2` **exit 0（4m17s）**（唯一警告＝orz-host unused import 既有面）；三件换装进 `D:\tb-eval\orz-windows\`、旧件留 `.0.8.5-bak` 链，**MATCH 3/3**（`orz.exe cbe39aff…`／`orz-signer.exe 4638fbaf…`／`orz-acaf-provision.exe 363d05f4…`）；`--build-info`＝`0.8.6 os=windows`。③ **ACAF 重 provision**＝旧 manifest 留 `signer-manifest.json.bak-20260929-120`；新 provision 件 exit 0、manifest `binary_sha256=4638fbaf…` ↔ 换装位逐位一致；**keystore 两件（`f37556ab…`/`2aa80cb8…`）逐位未动**。④ **Linux musl**＝docker `rust:1.97-slim`＋`build_orz_aliyun_trixie.sh`（ORZ-BUILD-MOUNT-001 契约；**首跑未启动＝Git Bash 路径转换把 `-w /orz/orz` 改写为 `B:/Git/orz/orz`——容器未起、零副作用；`MSYS_NO_PATHCONV=1` 重跑成立，如实记**）**exit 0（22m23s，`-j 1`）**；换装位预置 `.0.8.5-bak` 链后脚本直写，产物与 `orz-target/x86_64-unknown-linux-musl/release` **MATCH 3/3**（`orz 979a38fa…`／`orz-signer c01095eb…`／`orz-acaf-provision 16bcf6fb…`）；alpine 3.20 `file`：三件均 `static-pie linked`＋**INTERP=0**；`--build-info` alpine/bookworm 双冒烟读 **`version=0.8.6 os=linux`**。⑤ **进体判据（字面量核证，Windows 件）**＝新规则面四值进体（`carrier:keystore-root`/`carrier:signer-manifest`＋keystore/manifest 两 detail 文案）＋`ORZ_ACAF_KEYSTORE` 装配键在位＋保底文案「已越过保底硬边界」在位＋退役面字面量零残留（`carrier:install-dir`/`carrier:install-file`/`inside the carrier self-protection set`/`CARRIER_PROTECTED_SUBDIRS`）。⑥ **身份门换装**＝`run_r0_heavy_official.py` `EXPECTED_CARRIER_SHA256` `ecf1d665…` → **`979a38fa…`**（适配器 `6d55c26e…` 未动＝`tb_agents/orz.py` 无改动）。⑦ **打包**＝`rel-121-stage` 两侧各 **5 entries**（三件套＋`README.md`＋`SHA256SUMS`；manifest `kind=orz-carrier-manifest version=0.8.6`）；README 增 0.8.6 增量段（宿主状态收窄＋Landlock 最小核）；zip `8335fdb0…`／tar `63884f1a…`、顶层 `SHA256SUMS` 2/2；容器核证（alpine 3.20）zip 4/4・tar 4/4・顶层 2/2、包内 build-info（tar 侧 in-container）＝0.8.6；**清单活体两态＝解压态干净 0 finding／README+1B 恰 1 条**（`长度不符（清单 35948 ≠ 实际 35949）`；**通道勘误如实记＝`--build-info` 在完整性自检之前早退〔main_inner 首个早退分支〕，活体核证须经非早退入口（`--version`）触发；且 stderr 重定向不得落在被检目录内（否则自指「未列文件」）**）。⑧ **边界与未做**＝**未推送未发行**（沿 0.8.5 同口径；发布面仍停 v0.8.2）；Linux 载体未做 ACAF 重 provision（沿 093/100/109 同口径）；S4 未跑（重跑线自本批起解禁＝0.8.6 在役）。⑨ 台账＝TODO `P1-0cc` S3 勾选＋头部本批行；BACKLOG 头部本批行＋P1 表行＋开放项注记；索引头行 v4.88 → **v4.89**＋`DESIGN-WRITE-CONTROL-BACKSTOP`/pending 清单 0cc 行；本节；设计档 §6 S3 段完成态。
 - 关键词：0cc S3、0.8.6、双平台重建、宿主状态收窄进体、L3 最小核进体、退役面零残留、身份门换装、979a38fa、rel-121-stage、活体两态、路径转换勘误、121 批、计数 58。
 
+### 1.74 2026-09-30 122 批落账、推送与 0.8.7 发行（用户令「请进行提交并推送吧，0.8.7的包体也推送上去」；计数 58 不变）
+
+- **本批登记（2026-09-30，主会话执行）**：**122 批（0cc S2 审查处理批 v3.1＋0.8.7 双平台重建进体＋S4 首题翻盘）
+  全部入仓、推送并发行**。① **orz 子树推送**＝`93625868..79a3e8e5 → feat/fusion-architecture`（`cli` remote）
+  **exit 0**——本批源码提交 `cb88d416`（规则 5 宿主态祖先链臂＋`ANCESTOR_SWEEP_VERBS` 恰 15＋
+  `DESTRUCTIVE_VERBS` 补 `install`/`ln` 37→39）与 `79a3e8e5`（bump 0.8.6→0.8.7）本已在位，
+  本次一并推上（远端此前停 `93625868`＝0.8.2 源冻结点，故一并带上 0.8.3–0.8.7 的 orz 侧提交）。
+  ② **父仓提交与推送**＝**`1f0ad52c`**（9 文件 `+156/−30`：索引／README／TODO／BACKLOG／
+  TB21 重跑范围判定档／写控保底化设计档 v3.1／`orz` pin／源清单／`run_r0_heavy_official.py`）
+  →`8275c598..1f0ad52c → origin/main` **exit 0**；复位读数 `0 0`、工作树 clean。
+  ③ **发行包重建**（README 修正后）＝包内 `README.md` 补 **0.8.6／0.8.7 两节更新说明**、
+  `0.8.7` 改标「相对已发布 `0.8.2` 的正式增量版（含 0.8.3–0.8.6 中间载体）」、版本信息行改
+  `79a3e8e5`／2026-09-30；`.tmp-b122-package.ps1` 沿 117 形态重打——两侧各 **5 entries**＋
+  `carrier-manifest.json version=0.8.7`，包内六件与在役载体 **6/6 MATCH**；zip `28c79942…`
+  （28,013,522 B）／tar `5152b09d…`（37,185,803 B）／顶层 `SHA256SUMS 089f5f0c…`（191 B）；
+  容器核证（alpine 3.20）zip **4/4**・tar **4/4**・顶层 **2/2** OK、双平台 `--build-info`＝0.8.7；
+  **清单活体两态**＝干净 0 finding／`README.md` +1B 恰 1 条（`长度不符（清单 41594 ≠ 实际 41595）`）。
+  ④ **发行**＝**GitHub Release `v0.8.7`**（Latest，tag → 父仓 `1f0ad52c`，轻量 tag）；三资产
+  asset id `598874385`（tar）／`598874384`（zip）／`598874392`（`SHA256SUMS`），**服务端 digest 与
+  本地产物逐位一致**（`sha256:5152b09d…`／`sha256:28c79942…`／`sha256:089f5f0c…`）；
+  **完整回下载复核 `identical=True 3/3`**（字节数逐一相等）⇒ 远端资产＝本地产物。
+  **如实记**：首跑 `--target <短 SHA>` 被 API 拒（`HTTP 422 target_commitish is invalid`），
+  改 `--target main`（＝同值 tip）成立。⑤ **门禁**＝提交前 `valid: true`（`error_count: 0`）＋
+  源清单 `--check` `valid`；推送后复跑 `valid: true`、源清单重生成 1506 条。⑥ **台账**＝索引头行
+  v4.90 → **v4.91**；BACKLOG 计数行与 TODO 计数行同步批号／推送／发行状态；BACKLOG 本批记录指针 →
+  本节；发行档 [`122_SUBMIT_PUSH_AND_RELEASE_2026-09-30`](audits/122_SUBMIT_PUSH_AND_RELEASE_2026-09-30.md)。
+  ⑦ **边界**＝0cc 余 S4（4 题重跑＋未跑面 44 题逐题重跑）未跑、`0cc` 维持 `pending`；b1-08 挂起；
+  0.8.3–0.8.6 中间载体不单独发行；提交／推送冻结令（09-28）由本令解除。
+- 关键词：122 批、提交推送、父仓 `1f0ad52c`、orz 子树 `79a3e8e5`、GitHub Release v0.8.7、
+  rel-122-stage、回下载逐位一致、target_commitish 勘误、计数 58 不变。
+
 
