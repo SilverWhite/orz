@@ -491,3 +491,144 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
   rel-122-stage、回下载逐位一致、target_commitish 勘误、计数 58 不变。
 
 
+
+### 1.75 2026-09-30 123 批 TB21 下半场第一窗——0cc S4 重跑系列 5/5 收官（2 翻盘）＋未跑面前 12 题（用户令「请进行重跑吧，如无问题就顺着进入剩下44题，依旧按照官方口径来且单题起跑，像上半轮跑分一样，并在今天早上9点时的峰值计费时间前停下」；计数 58 不变）
+
+- **本批登记（2026-09-30 02:19–09:0x，主会话执行）**：TB 2.1 V4.1 下半场第一窗全程跑批＋收口落账（判定档 §11＋轮次档 §9 同批追记）。
+  ① **预检**＝Harbor auth OK（SilverWhite）／Docker 容器 0（清理 5 张未用镜像回收 2.06 GB VM 空间）／磁盘 29.15 GiB（低于 35+ GB 参考线，gsa-volumes 8.6 GB 中 r3/r4 旧轮证据卷 7.6 GB 未经裁决不动，按每题快照监控处置）／延后表 `qemu-startup` 在位；全窗身份门核验通过（载体 `3332b38f…`＝0.8.7、适配器 `6d55c26e…`）。
+  ② **重跑系列 5/5 收官（0cc S4）**＝build-pov-ray **1.0 翻盘**（run `RUN-CLI-6abbf664`，14m17s，恰 1 拦＝v3.1 祖先链臂实战首拦，`reason=completed`）＋本窗 4 题：extract-moves-from-video 0.0（31.8 min）／git-multibranch 0.0（16.5 min）／**torch-pipeline-parallelism 1.0 翻盘**（21.2 min）／winning-avg-corewars 0.0（43.6 min）——**2/5 翻盘**，3 题仍 0 属模型侧余量不再追；全部 exit 0、一次成功无重试、逐题 `--upload --public`、逐题 rmi。
+  ③ **下半场专用驱动器**＝[`run_official_v41_second_half.py`](../scripts/run_official_v41_second_half.py) 新写（判定档 §10 续跑形态退役后的执行形态：冻结批序解析＋官方序名 `official-v41-bX-NN-<题>`、`job_done` 骨架防御、残目录 park、延后清单、镜像 last-use 清理、失败 90 s 重试一次、`--deadline` 简单起跑门；独立轮次日志 `official-v41-second-half-round.log` 不写旧总账）；dry-run 45 todo（44＋b1-08 defer）核对后 04:27 起跑、门设 08:50。
+  ④ **下半场第一窗 12 题（04:27–08:57）**＝B3 批 7 题收官：b3-14 cancel-async-tasks **1.0**／b3-15 db-wal-recovery **1.0**／b3-16 password-recovery **1.0**／b3-18 multi-source-data-merger **1.0**／b3-19 modernize-scientific-stack **1.0**／b3-13 adaptive-rejection-sampler 0.0／b3-17 kv-store-grpc 0.0；B4 推进 5/18：b4-01 install-windows-3.11 **1.0**（38.6 min）／b4-02 fix-ocaml-gc **1.0**（43.7 min）／b4-04 circuit-fibsqrt **1.0**（61.3 min）／b4-05 path-tracing **1.0**（8.4 min，**本窗最后一道起跑题** 08:48:54 赶门前沿）／b4-03 train-fasttext 0.0（62.1 min 用满墙钟）。**0 作业失败**；收口容器归零、磁盘 25.18 GiB、09:00 峰值零在跑。
+  ⑤ **轮累计**＝任务级（重跑替换原试次、每题恰一次）已决 **56** 题 **46 过＝82.1%**（上半场 44 含替换后 37 过 7 不过＋下半场 12 题 9 过 3 不过）；试次级 46/61＝75.4%。余 **32 题**（b4-06…b4-18＝13＋B5×19）＋b1-08 挂起；守 80% 需剩余 ≥25/32（78.1%）——剩余题面含上代 unsolved15 池成员 10 道（难度先验偏难，中央预期整轮 72–77%，80% 需非池短题 ≥85% 转化并从池/长题偷 2 道，判定档 §11.3）。
+  ⑥ **0cb S4 随窗达成**＝基准实测判据落地（拦截 215 量级 → 个位数；零误拦）；TODO `P1-0cb` S4 已勾选，**闭合待用户裁决**（57 → 56）。
+  ⑦ **边界**＝0cc 余 S4（32 题下窗续跑）未完、`0cc` 维持 `pending`；本批纯跑批＋台账，零源码零契约变化；收口存档（判定档 §11＋§7 状态卡＋轮次档 §9）未提交待令。
+- 关键词：123 批、下半场第一窗、重跑系列收官、2/5 翻盘、torch-pipeline 翻盘、official-v41-second-half、08:50 峰值门、46/56＝82.1%、计数 58 不变。
+
+### 1.76 2026-09-30 124 批 0cd 死代码清退——COMPACT_SYSTEM_PROMPT 常量与 accessor（用户令「请给清理死代码部分立项吧，并直接开始实施」；立项 58 → 59、同批闭合 59 → 58，净 58 不变）
+
+- **来源与决断链**：123 批后桌面调查「DeepSeek 官方跑分配置开源状态」（DSH MIT 全开源、官方榜单 scaffold「DSH Minimal」即库内 minimal 档、系统提示词以测试快照公开且全文仅一句）对照自身实证：**TB 无头路径系统提示词＝空串在役**——`orz-loop/src/prompt.rs:26` `BASE_SYSTEM_PROMPT = ""`（`base_system_prompt_is_empty` 测试锁死）＋ `agent_loop.rs:2922` 主代理臂 `build_system_prompt(None)`（PromptBuilder 注释明引 THIN-HARNESS-REDESIGN-V2 §9.1「Prompt 全空」2026-08-29 用户裁决；R1 已删常驻预算块）⇒ 本轮 46/56＝82.1% 即零提示词姿态读数；主会话首报误将 product 面模板（orz-agent `templates/prompt.md`，51 行）当作在役系统提示词，追组装链后当轮更正。真正残留两处：`COMPACT_SYSTEM_PROMPT` 两句版常量＋`Agent::compact_system_prompt()` accessor（**全仓零调用方**——压缩后系统提示仍走空串组装，该常量纯死代码）；orz-agent 模板族（不进 eval 二进制路径）。用户令立项并直接实施（0cd，58 → 59）。
+- **落码（S1，orz worktree 态 2 文件）**：`crates/codegen/orz-agent/src/prompt/template.rs` 删常量本体＋doc 注释＋`test_compact_prompt_matches_expected`、`test_mid_session_switch_concise_to_full` 瘦身更名 `test_full_prompt_has_tool_sections`（保留 render_base 工具节覆盖）；`crates/codegen/orz-agent/src/agent.rs` 删 `compact_system_prompt()` accessor。diff＝agent.rs −7／template.rs +1/−21；**源冻结 orz `20e4c574`**（`79a3e8e5` → `20e4c574`，子模块内提交、父仓待令）。
+- **验证（S2 同批，全绿）**：全仓 grep（*.rs/*.py/*.md/*.toml）零残留；orz-agent 测试 **573→572/0**（stash 基线对拍恰 −1）；orz-workspace `cargo check` 过（`orz-subagent-resolution` 经查＝无工作区成员资格且无消费方的孤儿 crate，不进编译图）；clippy orz-agent 本体 **0**（依赖闭包 16 条＝存量基线：orz-tools 10＋orz-assurance 5＋xai-tty-utils 1）；触碰面 fmt 零 diff、行尾 LF 干净；源清单重生成 1506 条、门禁 `valid: true`。
+- **影响面**：载体 **0.8.7 在役二进制零重建**、TB 轮身份门（载体 `3332b38f…`／适配器 `6d55c26e…`）不受影响，余 32 题下窗续跑照旧；源态前移随下次重建进体（0.8.8 代）。TB 提示词姿态维持零句（用户令「tb维持无提示词即可」；加一句「请彻底完成这一任务」与否留 0.8.8 代裁决）。未提交未推送（待令）。
+- **闭合**：0cd `pending` → `implemented`（2026-09-30，124 批，立项即实施即闭合；59 → 58）。BACKLOG 第一卷 0cd 条＋计数行＋指针行、TODO `P2-0cd` 三勾闭合、索引头 v4.93 同批。
+- 关键词：124 批、0cd、死代码清退、COMPACT_SYSTEM_PROMPT、零调用方、TB 零提示词在役、573→572、载体零重建、净 58 不变。
+
+### 1.77 2026-09-30 125 批 0ce 立项登记——死代码面勘定清退（用户令「剩下的无消费死内容也明确立项吧，但暂不实施」；58 → 59；零代码零子仓改动）
+
+- **范围两面（0cd 同日调查边界另案转正；在役消费面已实证）**：① **orz-agent 模板族**＝`templates/prompt.md`（51 行 base）＋CODEX apply-patch 加密模板＋SUBAGENT 加密模板＋`PROMPT_SEEDS`/decrypt 族＋`ORCHESTRATOR_PROMPT_BODY`＋`Agent`/TemplateOverride 渲染路径——本批补钉消费链全景：**orz-bin →（orz-assurance/orz-loop/orz-host/orz-tui/orz-web）；其中 orz-host → orz-workspace → orz-agent，而 orz-workspace 对 orz_agent 的消费仅 `plugins::discovery`/`plugins::trust`/`prompt::skills::list_skills`/`SkillsConfig` 四面（discovery.rs）** ⇒ 模板/Agent/config 机制零服务消费（不在 eval 二进制路径、去人格已做 2026-08-15/16）。② **orz-subagent-resolution 整 crate**＝3,018 行/7 文件，无工作区成员资格、无消费方，仅 root `[workspace.dependencies]` 注册行悬空。
+- **登记内容**：BACKLOG 0ce 条（P2；批序 S1 勘定 per-module 消费表钉→S2 落码清退→S3 验证＋源清单→S4 闭合 59 → 58；边界＝skills/plugins 在役面零触碰、加密模板转写不留存〔0bs 先例〕、TB 零提示词姿态不动）＋P2 开放项行 `/ 0ce`＋优先级总览 P2 行＋TODO 路由行＋`P2-0ce` 四勾待实施条目＋索引 v4.94＋§8 pending 桶 `ORZ-DEAD-SURFACE-RETIREMENT`。
+- **触发时机＝用户令或 0.8.8 代窗口**（不进当前工作集）；实施时 0.8.7 在役载体零重建、TB 轮身份门不动。
+- **附带订正**：0cd 的 TODO id `P1-0cd` → `P2-0cd`（P2 项目命名惯例对齐 P2-0at/P2-0av/P2-0bb；BACKLOG 入口行与 §1.76 引用同步）。
+- **门禁**：`valid: true`（本批纯台账；零源码零子仓改动）。
+- 关键词：125 批、0ce、立项暂缓实施、orz-agent 模板族、orz-subagent-resolution 孤儿 crate、消费面实证、59 项、计数 58→59。
+
+### 1.78 2026-09-30 126 批 裁决入账——TB 成绩归因讨论收束与提分杠杆裁决（用户四条裁决；计数 59 不变；零代码）
+
+- **背景**：用户对 82.1% 中程成绩与官方 90.6／第三方 ~87.9 差距提出质疑（「没道理官方可以我们不行」）。主会话以 journal 实测回应：墙钟解剖（train-fasttext 60 min 中 53.3 min 为工具执行〔8 min 训练跑 ×2〕模型侧仅 5.4 min；adaptive-rejection 15 min 思考 153K token〔8.1K/轮〕、撞墙前零交付）＋墙钟可见性实证（`--max-wallclock` → session PULL 面〔`WALLCLOCK_ELAPSED/LIMIT/REMAINING`＋T̂ 剩余轮数估计，TER T1.8＋0am〕，PULL-only 零 PUSH，本窗四题 `section=session` 拉取合计 **0 次**——钟在墙上、模型从没看过表）。
+- **模型事实更正（用户告知）**：`deepseek-v4-flash` 已全面路由 **V4.1 Flash**——「模型代际差」归因撤回，差距归因收敛 harness 侧（时间轴失败形状：撞墙无交付 4/6）。
+- **四条裁决（2026-09-30，判定档 §11.4 全文）**：①墙钟阈值 PUSH 注入——**不做**（「纯粹就是跑分产物，日常使用非常少，做在黑板里就已经足够甚至有点过了……没必要做单独的注入式机制」；可选形态＝跑分题目提示词加一句墙钟值＋黑板可查，适配器级、随下轮窗口再议）；②前台长命令提示——**不做**（不加重模型负担）；③短题思考档——**不改**；④slim eval 档——未裁决维持现状。⇒ **0.8.8 提分批收缩为零新机制**，时间轴管理维持黑板 PULL 现状。
+- **落点**：判定档 §11.4 追记；索引 v4.94 → v4.95；BACKLOG/TODO/子仓零改动；门禁 `valid: true`。
+- 关键词：126 批、裁决入账、V4.1 Flash 路由、墙钟 PULL 面零拉取、撞墙无交付、零新机制、计数 59 不变。
+
+### 1.79 2026-09-30 127 批 下窗续跑起跑＋跑完计划入账＋0cf 立项（用户令；59 → 60；零代码）
+
+- **下窗续跑起跑（12:19）**：低谷价格窗（12:00–14:00）用户令「可再次起跑至下午两点」——`run_official_v41_second_half.py --deadline "2026-09-30 13:50"`（起跑门设 13:50＝峰值 14:00 前十分钟余量，沿上窗 08:50/09:00 先例；在跑题自然跑完）；自动跳过 done 面，起跑 b4-06 mailman，b1-08 照延后清单挂起。
+- **跑完后执行计划（判定档 §11.4 追加，用户令「后续等到跑完以后再修改适配器的提示词，将撞了墙钟的题目单独拉出来重新跑着试试」）**：①适配器题目提示词加一句「本轮墙钟为 N 秒，可在黑板中即时查询」（§11.4 可选形态激活；适配器 sha256 随实验换装、身份门同步更新）；②撞墙钟题目单独拉出重跑对照验证；③blackboard_read 补 guide 注解＝**0cf 立项**。
+- **0cf 立项（59 → 60）**：blackboard_read 工具描述末尾补一句 guide 分区简注（用户令「框架使用说明书在黑板上但目前这件事没有交代，后续在工具栏的 blackboard_read 后面再加一句简短的注解进行标注」；背景＝0bh ⑭⑮ 已实施在役但模型面零交代，与本窗 section=session 拉取 0 次同构）。批序 S1 措辞勘定＋落码→S2 文案钉→S3 随 0.8.8 代重建进体→S4 闭合（60 → 59）；边界＝不加 PUSH 不加注入、其余工具描述零触碰。落点＝BACKLOG 0cf 条＋计数行＋指针行＋P2 开放项行＋总览表、TODO 路由＋P2-0cf 条目＋计数锚点、索引 v4.96。
+- 关键词：127 批、下窗续跑 12:19、13:50 起跑门、0cf、guide 注解、撞墙钟题重跑计划、60 项、计数 59→60。
+
+### 1.80 2026-09-30 128 批 第二窗收口——7 题 5 过 2 不过、0 撞墙（计数 60 不变）
+
+- **执行（12:19–13:58，起跑门 13:50）**：低谷窗用户令「可再次起跑至下午两点」；驱动器单题串行照官方口径；**mailman 1.0〔24.7 min〕／crack-7z-hash 1.0〔6.0 min〕／large-scale-text-editing 1.0〔12.4 min〕／pytorch-model-cli 0.0〔55 轮 16.2 min，自完判负〕／pypi-server 0.0〔16 轮 5.4 min，自完判负〕／regex-log 1.0〔13.2 min〕／torch-tensor-parallelism 1.0〔21.4 min〕**；全部 exit 0、Harbor 公开上传；逐题 rmi、13:58 门控收口（在飞 b4-12 自然完）。
+- **读数**：**0 作业失败、0 撞墙**（两道 0 分均自完判负——撞墙死法本窗零再现，与判定档 §11.4 墙钟分析形成对照样本）；B4 推进 12/18（9 过 3 不过）；**轮累计任务级 53/63＝84.1%**（试次级 51/68＝75.0%）；**80% 账＝剩余需 19/25（b1-08 挂起口径 18/25）**；剩余 25 题（b4-13…18＋B5×19）下窗续跑，下一题 b4-13 make-doom-for-mips（unsolved15 池成员）。
+- 落点＝判定档 §11.5＋轮次档 §10＋索引 v4.97；BACKLOG/TODO 计数描述行随批刷新（计数 60 不变）。
+- 关键词：128 批、第二窗、5/7、零撞墙、自完判负、53/63＝84.1%、80% 账 19/25、b4-13 下窗。
+
+### 1.81 2026-09-30 129 批 夜间长窗起跑＋单题收果模式＋job_done 判定修正（计数 60 不变）
+
+- **起跑**：18:21 夜间低谷窗（用户确认至次日 09:00）门限 2026-10-01 08:50；b4-13 make-doom-for-mips **0.0**（17.1 min 自完判负，池成员未翻盘）⇒ **轮累计任务级 53/64＝82.8%**。
+- **单题收果模式（用户令「不仅仅是单题跑，而是单题跑且单题收结果，这样出现异常问题后能尽快发现」）**：新驱动器 [`run_official_v41_inspected.py`](../scripts/run_official_v41_inspected.py)——复用基础驱动器全部纪律（冻结批序/骨架防御/延后清单/逐题 rmi/重试一次/起跑门），每题完成立即裁决 reward＋死法＋轮数并落 `[verdict]` 行、操作性异常落 `[ALERT]` 行。
+- **job_done 判定修正（129 批，b4-14/b1-01 双实证）**：harbor 0.20 作业汇总无 `trials` 数组、完成实体＝试次级 `verifier_result.rewards.reward`；旧实现「试次级文件存在即完成」旁路对 kill 骨架（b1-01 首半场遗留）与僵尸汇总（b4-14 双杀后 `n_completed=1` 但 `verifier_result=None`）误判完成。终版口径＝**见到 reward 实体才算完成**＋`RERUN_JOBS` 权威映射（build-pov-ray/torch-pipeline-parallelism/extract-moves-from-video/git-multibranch/winning-avg-corewars 五题以 rerun2 作业为准）。dry-run 判定面＝todo 26/89。过程误起跑（b1-01 ~1 min、b4-14 两度、b4-15 ~3 min）即时清理未产生官方结果。
+- 落点＝判定档 §11.6＋索引 v4.98；基础驱动器与收果驱动器同批修正。
+- 关键词：129 批、夜间长窗、单题收果、job_done 修正、reward 实体判定、RERUN_JOBS 映射、b4-13 0.0、53/64＝82.8%、todo 26。
+
+### 1.82 2026-09-30 130 批 裁决入账——墙钟透传与超时题重跑取消（用户令「透传墙钟不是标准做法……修改适配器后做超时重跑的设计取消吧」；计数 60 不变；零代码）
+
+- **取消两件**（判定档 §11.4 裁决取消行）：①适配器题目提示词加墙钟一句（§11.4 可选形态废止）；②撞墙钟题单独拉出重跑对照（chess-best-move/train-fasttext/adaptive-rejection 等撞墙结果**维持原样计入**，不再重跑）。墙钟可见性维持黑板 PULL 面现状。
+- **全轮实测（89 作业全扫，本批）**：`blackboard_read section=session` 共 **8 次/7 作业**（b1-12／b2-06／b3-06／b3-09／b4-06 mailman／b5-08 protein-assembly／rerun-build-pov-ray ×2；≈8% 作业）；分区分布＝plan 217／notes 82／external_ret 45／exec 16／actions 7／session 8／guide **1**——墙钟面「挂在墙上、极少被看」（撞墙题 train-fasttext/chess-best-move 均 0 拉取），与「非标准做法」裁决吻合；guide 仅 1 次＝0cf 立项依据同源实测。
+- 落点＝判定档 §11.4 裁决取消行＋BACKLOG/TODO 计数行＋索引 v4.99；轮次档 §10 历史存档不动。
+- 关键词：130 批、裁决取消、透传墙钟非标准、超时重跑废止、session 面 8 次/89 作业、guide 仅 1 次、计数 60 不变。
+
+### 1.83 2026-09-30 131 批 0cg 立项——session 面墙钟提示拆除（用户令「黑板的墙钟提示部分要拆下去才行，新立项这一部分吧」；60 → 61；登记随 0.8.8 代窗口实施；零代码）
+
+- **范围**：session 面四行墙钟行拆除（`WALLCLOCK_ELAPSED`／`WALLCLOCK_LIMIT`／`WALLCLOCK_REMAINING`＋`WALLCLOCK_REMAINING_ROUNDS` T̂ 估计行）；`TOOL_ROUND_*` 行与 status 行保留；**机械硬门不动**（`--max-wallclock`→`run_invalidated` 仍生效，墙钟回到 model-invisible）。接线拆除点＝`orz-loop` `prompt.rs`／`controller.rs render_session_section`（`run_elapsed_wallclock_secs`／`main_wallclock_limit_secs_override`）；TER T1.8／0am S1 Part A 测试退役。
+- **实测依据（7 拉取作业收敛读数，本批）**：b1-12 1.0/11.9 min、b2-06 1.0/17.8 min、b3-06 0.0/30.3 min、**b3-09 0.0/19.6 min（看表仍撞墙）**、b4-06 1.0/24.0 min、b5-08 1.0/19.2 min、rerun-povray 0.0/36.1 min（拉取 2 次；自完判负）——4 过 3 不过，**拉取与收敛无正相关性**，拆支持平。
+- **顺带治账**：BACKLOG 计数行与 TODO 计数锚点各有历史编辑残留尾巴（0cd 期旧文／重复句尾），随本批整体重写治净；BACKLOG 指针行→§1.83、P2 开放项行/总览表＋0cg、TODO 路由行/计数行/P2-0cg 条目、索引 v4.100。
+- 关键词：131 批、0cg、session 面墙钟拆除、7 拉取作业 4 过 3 不过、看表仍撞墙、61 项、计数 60→61。
+
+### 1.84 2026-09-30 132 批 无墙钟对照实验立项（用户担忧「有墙钟导致成功收敛，分数高了」；计数 61 不变；零代码）
+
+- **担忧与不可区分性**：四个拉取通过题按构造＝看过表的题；b1-12 仅剩 3 分钟余量、mailman 拉表后 24/30 收束——「钟驱动收敛」与「本来就会收敛」现有数据不可区分（131 批无尾巴读数只排除拖延）。若担忧成立 ⇒ 官方分数部分为墙钟可见性产物，且 0cg 拆除反向影响收敛。
+- **对照实验**：[`run_puller_control.py`](../scripts/run_puller_control.py)——7 拉取题无 `--ak max_wallclock` 重跑（harbor 官方超时仍为外边界）；**不 `--upload` 不 `--public`**、前缀 `official-v41-xp-`、输出 `jobs-xp/`；官方窗退出后运行（夜间低谷）。判读表＝四 1.0 题无墙钟仍 1.0 且用时相当 ⇒ 0cg 照常实施；不收敛或大幅变慢 ⇒ 0cg 实施重议。**0cg S3 进体门控于此读数**（BACKLOG/TODO 条目已注）。
+- 落点＝判定档 §11.7＋0cg/TODO 条目门控注＋索引 v4.101。
+- **设计修正（同日深夜用户三条件，脚本 [`run_puller_control.py`](../scripts/run_puller_control.py) 已按此改版）**：①**等当前官方跑批完全结束再议/再跑**——拉取集须官方轮全部落定后定稿（后续题仍可能拉取，实测即证：b5-15 count-dataset-tokens 跑中也拉取，动态集已 7→8）；②**不与官方跑批抢资源**；③**官方墙钟不去掉**（harbor task 级官方超时保留执行），**去掉的＝黑板上的墙钟部分**（无 `--ak max_wallclock` ⇒ orz 内部门与 `WALLCLOCK_LIMIT/REMAINING` 显示消失）。脚本启动时**动态重扫**全轮 journal 得最终拉取集（干跑验证：当前 8 题）；**未获用户令不启动**。
+- 关键词：132 批、无墙钟对照、收敛成因裁决、xp 前缀不上传、0cg 门控、计数 61 不变。
+
+### 1.86 2026-10-01 134 批 裁决入账——两代包体口径定案＋拉取题无黑板墙钟重跑（用户令「0.8.5/0.8.6 都是修复后自动重建的中间版本，直接刨出去」「维持 0.8.4 和 0.8.7 两代包体，只移除后重跑拉取了墙钟的题目即可」；计数 61 不变；零代码）
+
+- **0.8.5 来历答问**：＝0cb S3 修复重建（写控保底化修订验证载体）；rerun-build-pov-ray 为其修复验证跑（仍结构性 0 → 触发 0cc 立项）；0.8.6＝0cc S2 审查处理后重建（零服役即被 0.8.7 取代）。
+- **两代包体口径定案**：官方轮主表＝**0.8.4**（`87941130…`）×45（首半场 b1-01…b3-12）＋**0.8.7**（`3332b38f…`）×46（重跑系列与下半场全部）；0.8.5 ×1 与 0.8.6 零服役**降为谱系脚注**（0.8.5 验证跑结果已被 rerun2 权威替换，刨出零分数影响）。判定档 §11.8 已改两代主表＋脚注。
+- **移除黑板墙钟＝env 级不涉及重建**（无 `--ak max_wallclock` ⇒ `WALLCLOCK_LIMIT/REMAINING` 消失；ELAPSED 行仍渲染——披露注明此边界；harbor 官方超时照常执行）⇒ 两代包体维持。**拉取墙钟的题目移除后重跑，结果替换原试次**（任务级口径沿例）；重跑集＝官方轮落定后动态重扫（脚本干跑已证 b5-15 半程拉取即入集）；`run_puller_control.py` 改官方级形态＝前缀 `official-v41-rerun3-`＋`--upload --public`＋`jobs-official/`。启动仍守三条件（官方批结束/不抢资源/动态重扫），未获令不启动。
+- 落点＝判定档 §11.8 两代主表＋脚注＋重跑口径＋索引 v4.103。
+- 关键词：134 批、两代包体、0.8.5/0.8.6 刨出、env 级移除、rerun3 官方级、拉取题重跑替换、计数 61 不变。
+
+### 1.87 2026-10-01 135 批 第三窗收口与全轮收官（夜间长窗 24 题 21 过 3 负；计数 61 不变；零代码）
+
+- **第三窗收口（18:21–01:38）**：`run_official_v41_inspected.py` 单题收果模式；**24 题出结果＝21 过 3 负**（负＝b4-13 make-doom／b4-14 chess 撞墙／b5-17 hf-model-inference，均自完判负或撞墙）＋b5-13 作业级失败；**b5-19 overfull-hbox 1.0＝全场收官题**；容器归零、逐题 rmi、全程公开上传。
+- **全轮收官读数**：**任务级 74/87＝85.1%**（89 口径 83.1%、挂起口径 84.1%、试次级 75% 上下）——大幅越过 80% 目标与 §11.3 中央预期（72–77%）；**unsolved15 池成员 7/8 转化**（仅 make-doom 未翻）；风险名单 5/5 翻盘；擦墙交付 ×4。
+- **b5-13/b1-08 死因更正**（用户问镜像源触发取证）：两题同族＝**适配器 agent setup 装依赖撞 Debian security 源 404**（22 s 级 `NonZeroAgentExitCodeError`；非 QEMU 启动、非任务镜像源，此前归因更正）；处置选项＝直接重试（CDN 刷新）或适配器加 APT 换源 fallback（身份门换装）；随收口批裁决。
+- 待令＝rerun3（动态重扫就绪）＋收口批（§4 步骤 6 含 §11.8 披露强制明细）。落点＝判定档 §11.9＋轮次档 §11＋索引 v4.104。
+- 关键词：135 批、第三窗收口、全轮收官、74/87＝85.1%、池 7/8、风险名单 5/5、死因更正 apt 404、计数 61 不变。
+
+### 1.88 2026-10-01 136 批 裁决入账——b1-08/b5-13 并入墙钟批（rerun3）同条件重跑（用户令「b1-08+b5-13跟着墙钟批一起重新跑」「先定下来裁决，不直接进行动作」；计数 61 不变；零代码）
+
+- **裁决**：两题并入 rerun3 批同条件重跑（无 `--ak max_wallclock`＝黑板墙钟显示拆除＋rerun3 前缀＋upload＋替换原试次）；两题 setup 即死零轮次、显示条件无差，并批只为一次性收口。脚本已加 `EXTRA_TASKS` 接线（恒入集＋动态拉取集并集）。**不直接执行——启动随用户令**（届时三条件复查：官方批已结束✓、无资源争用✓、拉取集定稿✓）。
+- 落点＝判定档 §11.9 裁决行＋脚本接线＋索引 v4.105。
+- 关键词：136 批、b1-08/b5-13 并入 rerun3、同条件重跑、裁决落定不执行、计数 61 不变。
+
+### 1.89 2026-10-01 137 批 墙钟暴露核查入账——16 题固定重跑集＋权威试次过滤＋ps 泄漏处置（用户令「做最笨的方式来确定重跑范围吧，扫具体留档，把墙钟影响的都拿出来」「请固定下来这16题的题集吧，并顺手处理掉「权威试次过滤」和 ps 泄漏两条」；计数 61 不变；零载体改动）
+
+- **三通道留档核查（只读，全 95 作业卷）**：A＝`blackboard_read section=session`（墙钟面被渲染）；C＝模型正文自述时间压力；**P＝留档出现 `max-wallclock`**——本批新增发现：`pgrep -af`／`ps` 能从 orz 自己的启动命令行读到 `--max-wallclock`（14 卷实证；b3-05 那句「沙箱墙钟预算接近耗尽（约 1244s/1800s）」即出自此，该题一次黑板未读）。按**权威试次**过滤（0cc S4 已替换原试次的 5 题取 rerun2）后，**受影响 16 题＝12 通过／4 失败**；`build-pov-ray`（rerun2＝1.0）与 `extract-moves-from-video`（rerun2）权威试次干净，剔出本批；`sam-cell-seg` 的「预算耗尽」经核实为检索候选额度，判误报剔除。
+- **口径更正（本批认知）**：adapter 原注释即写明 `--max-wallclock`「Model-invisible by design」；本轮官方读数实为**日常形态**（含墙钟读数），非 Terminal Bench 惯例口径（TB 惯例＝agent 不见墙钟）。留档只是**下界**——常驻「轮次预算」行不落 journal（资格面 93/93 作业），无法由留档判定；另有 1 例看表驱动通过的实证（configure-git-webserver：读表 430s/900s 自述「Time is tight (~8 min left)」→ 收 partial 仍得 1.0）。
+- **落码**：`scripts/run_puller_control.py` 改为**固定题集**——`FIXED_TASKS` 16 题（逐题标注 A/C/P 通道）＋`EXTRA_TASKS` 2 题（qemu-startup／qemu-alpine-ssh，136 批并入）＝**18 题**；**不再动态重扫**，改为启动时一次只读复核 `audit_scope()`（与固定集比对，出现计划外受影响题记 `[WARN]` 列出待裁决）；argv 增加 wallclock 断言（命中即 `[FATAL]` 中止）。落实自查：`audit_scope()` 复现 16 题与固定集零漂移；门禁 `valid: true`。
+- **ps 泄漏处置（不重建）**：评测形态不传 `--ak max_wallclock` ⇒ `--max-wallclock`（argv）与 `ORZ_MAX_WALLCLOCK`（env）双通道均无上限，泄漏随构造关闭，无需改码或重建；日常形态墙钟本就是有意可见读数，不构成泄漏。
+- **用户裁决（本批）**：墙钟**保留**为日常功能性组件（「在一定时间内完成任务，就当小定时器了」）。⇒ **0cg（131 批立项，原目标＝拆 session 面四行墙钟行）与此冲突，处置待裁决**：撤回／收窄为「仅评测形态不暴露」／维持原目标三选一。
+- **边界（披露必须写明）**：撤到 env 级后 session 面仍渲染 `WALLCLOCK_ELAPSED: Ns` 与 `WALLCLOCK_LIMIT: none (评测墙钟未施加…)`——「跑了多久」仍可见且被明确告知无上限，彻底消除需 0cg 改码重建。
+- 落点＝`scripts/run_puller_control.py`＋扫描件 `D:/tb-eval/rerun3-wallclock-scope-2026-10-01.{json,txt}`＋索引 v4.106。
+- 关键词：137 批、三通道核查、ps/pgrep 泄漏、16 题固定集、权威试次过滤、TB 不暴露墙钟、0cg 待裁决、计数 61 不变。（0cg 处置已于 138 批定案，见 §1.90。）
+
+### 1.90 2026-10-01 138 批 裁决入账——0cg 定案：撤掉墙钟可见性设计（用户令「日常中墙钟的用途还是太窄了，还是直接撤掉这一设计吧」；计数 61 不变；零载体改动）
+
+- **裁决**：不保留「墙钟＝日常功能性组件」路线，**撤掉墙钟可见性设计**；0cg 由 137 批的「处置待裁决」转为**定案执行**，仍登记随 **0.8.8 代窗口**（与 0ce／0cf 同窗）。
+- **范围三件（较 131 批原范围扩两件）**：① 两渲染面拆除——session 面四行（`WALLCLOCK_ELAPSED`／`LIMIT`／`REMAINING`＋T̂ `WALLCLOCK_REMAINING_ROUNDS`）与常驻 `[任务状态]` 的「轮次预算」行（同源：`prompt.rs`／`controller.rs`）；② **上限不再出现在 argv**——`--max-wallclock` 改由不可见通道读取、或启动后擦写自身 argv（137 批实证 `pgrep`／`ps` 可读到该旗标，14 卷命中）；③ **env 同源收口**——`ORZ_MAX_WALLCLOCK` 不再对被派生 shell 可见（`env`／`/proc/self/environ` 面）。
+- **机械硬门口径（同日追加）**：`--max-wallclock`→`run_invalidated` 优雅终态——**当前使用硬杀形式即可**（用户 2026-10-01「当前使用硬杀形式即可」：不追求「读数不可见＋收尾保留」组合，harbor task 级超时＝唯一外边界，无 orz 侧兜底）；该项去留随 S1 落码一并定。⇒ 0cg 的「读数不可见」可先由**启动参数路线**（不传 `--ak max_wallclock`；rerun3 即此形态）达成，两渲染面拆除与 argv/env 收口仍随 0.8.8 窗口作为产品态清理。
+- **前置撤销**：131 批所设「S3 进体前置＝无墙钟对照读数」已由 137 批三通道核查与 rerun3 承载（证据：configure-git-webserver 看表后自述「Time is tight (~8 min left)」并收 partial 仍得 1.0；pytorch-model-recovery 看表仍撞墙 0.0），不再另行阻断 S3。
+- 落点＝BACKLOG `### 0cg.` 范围改写＋TODO `P2-0cg` 路由注＋索引 v4.107。
+- 关键词：138 批、0cg 定案、撤掉墙钟可见性、argv/env 收口、机械硬门口径＝当前用硬杀形式、0.8.8 同窗、计数 61 不变。
+
+### 1.91 2026-10-01 139 批 提交与推送——123–138 批累积件（用户令「请先进行提交与推送吧」；09-28 起冻结解除；计数 61 不变）
+
+- **冻结解除**：自 09-28 起「提交/推送冻结」随本批解除（落账批已到齐）。
+- **提交范围（123–138 批累积台账＋工具）**：索引 v4.91→v4.108、第二卷 §1.75–§1.90、BACKLOG 指针/计数/0cg 条目、TODO 计数与 P2 路由、判定档与轮次档更新；新增工具 `scripts/run_official_v41_inspected.py`（129 批单题收果驱动器）、`scripts/run_official_v41_second_half.py`（下半场驱动器）、`scripts/run_puller_control.py`（137 批：固定 16 题＋2 qemu＋启动只读复核 `audit_scope()`＋argv wallclock 断言）；`orz_source_manifest.sha256` 随源态重生成并过门禁核验。
+- **子模块**：orz `feat/fusion-architecture` 由 `79a3e8e5` 前移至 **`20e4c574`**（0cd 死代码清退：删 `COMPACT_SYSTEM_PROMPT` 常量与 accessor，全仓零调用方，orz-agent 573→572/0）——**先推 `cli` 远端同一分支**，父仓再记录指针。
+- **核验**：`check_repository.py` `valid: true`／`error_count: 0`；`git diff --check` 干净；未跟踪件 `tb_tree.json`（GitHub API 404 探针残留）不入仓。
+- 落点＝父仓 `main` → `origin/main`（＋orz 子树 `20e4c574`）；索引 v4.108。
+- 关键词：139 批、提交推送、冻结解除、123–138 累积件、orz `20e4c574`、0cd 死代码清退、计数 61 不变。
+
+### 1.85 2026-10-01 133 批 裁决入账——披露稿强制明细（用户令「最后的跑分报告需要详细写明才行」；计数 61 不变；零代码）
+
+- **背景**：用户指出——若再实施 0cg（撤墙钟提示）＋0cf（说明书注解）需再打安装包，本轮跑分即成**三个版本包体混合**且有两轮重跑；虽不涉及框架根本性机制，**最后跑分报告必须详细写明**。
+- **机械提取证实（判定档 §11.8 全表）**：官方轮逐作业载体＝**0.8.4**（`87941130…`）×45（首半场 b1-01…b3-12）＋**0.8.5**（`ecf1d665…`）×1（rerun-build-pov-ray 首次重跑仍 0）＋**0.8.7**（`3332b38f…`）×46（下半场全部＋rerun2）；0.8.6 零服役；**三代包体混合坐实**。两轮重跑＝0cc S4 重跑系列（build-pov-ray 三代谱系 0.8.4→0.8.5→0.8.7 翻盘）＋未跑面整体重跑（续跑退役）。
+- **澄清**：对照实验（xp）＝0.8.7 同包体 env 级条件（无 `--ak max_wallclock`），**无需新包体**、不 upload、不入本轮分数；0.8.8（0ce/0cf/0cg）为轮后线，不入本轮。
+- 落点＝判定档 §11.8 披露稿强制明细（含协议面/job 级失败/执行形态演进/未决题处置全清单，缺一收尾批门禁不通过）＋索引 v4.102。
+- 关键词：133 批、披露稿强制明细、三代包体混合（0.8.4/0.8.5/0.8.7）、两轮重跑、0.8.6 零服役、xp 无需新包体、计数 61 不变。

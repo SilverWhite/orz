@@ -102,13 +102,14 @@
 载体   D:/tb-eval/orz-linux/orz  = 3332b38f…（0.8.7）   适配器 = 6d55c26e…
 身份门 run_r0_heavy_official.py EXPECTED = 3332b38f…（已换装；旧值 ecf1d665…＝0.8.5／
        979a38fa…＝0.8.6 留档，见 §3/§8/§9）
-驱动器 （续跑形态已退役——2026-09-30 §10 用户裁决：未跑 44 题改逐题重跑；
-       run_official_v41_full.py 留作历史不再用）
-runner D:/CLI/scripts/run_r0_heavy_official.py（重跑专用：--tasks <题> --job-name official-v41-rerun2-<题>；
-       official-v41-rerun-build-pov-ray 已被 0.8.5 结构性 0 试次占用，0.8.7 重跑起新名）
-总账   D:/tb-eval/jobs-official/official-v41-full-round.log
+驱动器 D:/CLI/scripts/run_official_v41_second_half.py（下半场专用：--deadline "<窗口截止>"；
+       done 题按 result.json 自动跳过＝断点续跑；run_official_v41_full.py 已退役留作历史）
+runner D:/CLI/scripts/run_r0_heavy_official.py（重跑专用：--tasks <题> --job-name official-v41-rerun2-<题>）
+总账   D:/tb-eval/jobs-official/official-v41-full-round.log（上半场）
+       D:/tb-eval/jobs-official/official-v41-second-half-round.log（下半场，2026-09-30 起）
 延后表 D:/tb-eval/jobs-official/deferred-tasks.txt（qemu-startup）
-挂起题 b1-08（上游腐烂）｜未跑 44 题（b3-13…、B4×18、B5×19）｜重跑 5 题（§2.1）
+挂起题 b1-08（上游腐烂）｜重跑 5/5 完毕（2 翻盘，§11.1）｜下半场 12/44 完毕（§11.2），
+       余 32 题＝b4-06…b4-18（13）＋B5×19（§11.3）
 ```
 
 ## 8. 追记（2026-09-29 晚）：build-pov-ray 重跑读数与 0cc 立项——重跑线暂停至 0.8.6
@@ -193,3 +194,231 @@ b1-08 仍按延后清单挂起不动）。
 收窄 → 0.8.7 祖先链臂加固，build-pov-ray 翻盘实锤）；**轮内代际分裂须明示**——
 上半场 44 题＝0.8.4、5 题重跑＋下半场 44 题＝0.8.7，下半场不表述为同一 run 的
 「续跑」；k=1 筛查轮口径不变。
+
+## 11. 追记（2026-09-30 晨）：下半场第一窗收口——重跑系列 5/5 完毕（2 翻盘）＋未跑面前 12 题（9 过）
+
+**执行形态**：用户令「进行重跑，如无问题就顺着进入剩下 44 题，依旧官方口径且单题起跑，
+像上半轮跑分一样，并在今天早上 9 点的峰值计费时间前停下」。重跑 4 题逐题直调
+`run_r0_heavy_official.py --job-name official-v41-rerun2-<题>`；未跑面按 §10 裁决绕过
+已退役驱动器、新写下半场专用驱动器 [`run_official_v41_second_half.py`](../scripts/run_official_v41_second_half.py)
+（冻结批序＋`official-v41-bX-NN-<题>` 官方序名、job_done 骨架防御、残目录 park、
+延后清单、镜像 last-use 清理、失败 90 s 重试一次、`--deadline` 简单起跑门——纪律逐条
+同退役驱动器，独立轮次日志不写旧总账）；窗口门设 **08:50**（9:00 峰值前留安全余量）。
+全窗身份门核验通过（载体 `3332b38f…`＝0.8.7、适配器 `6d55c26e…`）；逐题 `--upload --public`。
+
+### 11.1 重跑系列收官（0cc S4 第 2–5 题；build-pov-ray 见 §10）
+
+| 题 | 0.8.5 试次 | 0.8.7 重跑（rerun2） | 用时 |
+|---|---|---|---|
+| build-pov-ray | 0（结构性 7 拦） | **1.0 翻盘** | 14m17s（前窗，§10） |
+| extract-moves-from-video | 0（10 拦） | 0.0 | 31.8 min |
+| git-multibranch | 0（8 拦） | 0.0 | 16.5 min |
+| torch-pipeline-parallelism | 0（6 拦） | **1.0 翻盘** | 21.2 min |
+| winning-avg-corewars | 0（5 拦） | 0.0 | 43.6 min |
+
+重跑线收官：**2/5 翻盘**（build-pov-ray、torch-pipeline-parallelism），3 题重跑后仍 0
+（属模型侧余量，重跑不再追）；全部 exit 0、一次成功无重试、Harbor 公开上传。
+0cb/0cc S4 读数面就此完备（收窄因果链多题实证）。
+
+### 11.2 下半场第一窗 12 题（04:27–08:57，全部 0.8.7 代际公开上传）
+
+| 题 | reward | 用时 | | 题 | reward | 用时 |
+|---|---|---|---|---|---|---|
+| b3-13 adaptive-rejection-sampler | 0.0 | 17.1 min | | b4-01 install-windows-3.11 | **1.0** | 38.6 min |
+| b3-14 cancel-async-tasks | **1.0** | 11.4 min | | b4-02 fix-ocaml-gc | **1.0** | 43.7 min |
+| b3-15 db-wal-recovery | **1.0** | 5.8 min | | b4-03 train-fasttext | 0.0 | 62.1 min |
+| b3-16 password-recovery | **1.0** | 7.8 min | | b4-04 circuit-fibsqrt | **1.0** | 61.3 min |
+| b3-17 kv-store-grpc | 0.0 | 3.8 min | | b4-05 path-tracing | **1.0** | 8.4 min |
+| b3-18 multi-source-data-merger | **1.0** | 5.3 min | | b3-19 modernize-scientific-stack | **1.0** | 4.3 min |
+
+B3 批下半场 7 题收官（5 过 2 不过）；B4 进行至 5/18（4 过 1 不过）。**b4-05 path-tracing
+＝本窗最后一道起跑题**（08:48:54，赶在 08:50 门前沿），08:57 自然收尾后驱动器门控退出
+（本窗 12 题、0 作业失败、逐题 rmi、收口容器归零、磁盘 25.18 GiB）。
+
+### 11.3 轮累计与下窗姿态
+
+- **任务级口径（每题恰一次，重跑替换原试次）**：已决 **56** 题＝上半场 44（含 5 题重跑
+  替换后 37 过 7 不过）＋下半场 12（9 过 3 不过）⇒ **46/56＝82.1%**。试次级口径
+  （重跑计额外试次）＝61 试次 46 过（75.4%）。披露时以任务级为准并明示替换关系。
+- 剩余 **32 题**（b4-06…b4-18＝13＋B5×19）＋b1-08 挂起不动；下窗照抄 §7 状态卡起跑
+  （驱动器换 `run_official_v41_second_half.py --deadline "<截止>"`，轮次日志
+  `official-v41-second-half-round.log` 自动断点续跑——done 题按 result.json 跳过）。
+- **难度先验与 80% 账（2026-09-30 晨复盘，用户问「剩下的题目难度如何，能看到过 80% 的希望吗」）**：
+  守 80% 需剩余 **≥25/32（78.1%）**（b1-08 挂起时 71/88；若 b1-08 跑且挂则 71/89＝79.8%
+  惜败，跑且过需 26/33）。结构＝短题 ≤900s×20／1200–1800s×8／2400–3600s×4；**上代
+  unsolved15 池成员 10 道**（dna-insert、gcode-to-text、make-doom-for-mips、
+  make-mips-interpreter、model-extraction-relu-logits、protein-assembly、filter-js-from-html、
+  extract-elf 等，占 31%）——池成员本轮实测 1/4（path-tracing 过；adaptive-rejection、
+  train-fasttext 挂；extract-moves 重跑仍 0），旧池标签有真实预测力。有利面＝非池短题
+  ~15 道为最高转化段、build-pmars 结构性拦截已被 0cc 拆除（povray 同构翻盘先例）、
+  torch-tensor-parallelism 与刚翻盘的 pipeline 同族、extract-elf 0.6.x 代 r3 拿过 1.0；
+  风险面＝regex-chess／distribution-search／bn-fit-modify（三道 3600s）＋compile-compcert
+  （2400s）＋qemu-alpine-ssh（b1-08 同族 QEMU 环境）。**中央预期剩余 19–22/32（59–69%），
+  整轮落点约 72–77%；80% 可达但需偏乐观情形**（非池短题 ≥85% 转化＋从池/长题偷 2 道）。
+  口径内无杠杆（k=1 不择优、官方环境不补强为已裁线）。
+- **离线摩擦扫描结论（2026-09-30 晨，用户问「是否依旧存在可能致题目失败的框架摩擦」）**＝
+  **无致败级摩擦，跑批不停车**：今晚 16 试次拦截税 0–3 条/题（全部 6 条拦截逐一核证均按
+  设计开火——`.gsa` 会话卷 ×3／规则 1 `/dev` ×2／祖先臂 `/` ×1），6 道 0 分题全部归因
+  模型侧（4 道 `run_invalidated{wallclock}` 未交付＋2 道自认完成验证器判负）；哨兵 0、
+  ACAF 拒绝 0、web_search 零失败、浏览器 27 败为容器无浏览器已裁边界。残余两条均不动
+  分数：① wallclock 终局竞速（harbor `AgentTimeoutError` vs orz 优雅收尾，exception.txt
+  ＋journal 不收割进作业目录〔卷内完好〕，上半场撞墙钟题已有、非 0.8.7 新增）；② 专用读
+  工具 `outside_workspace` 拒绝 ~40 条/62 试次（shell 车道可绕，已知形态）。
+  **①经用户裁决不修**（2026-09-30「那就没必要修了，就这样即可」）。
+- 本追记为窗口收口存档（§4 步骤 5）；轮次收尾批（§4 步骤 6：读数汇总＋round gate＋
+  披露稿＋台账入账）待全部 89 题处置完毕后进行，提交/推送待令。
+
+### §11.4 成绩归因讨论收束与提分杠杆裁决（2026-09-30 晨后，126 批；纯裁决入账零代码）
+
+- **模型事实更正（用户告知）**：官方 `deepseek-v4-flash` 已**全面路由至 V4.1 Flash**——
+  本轮在跑即 V4.1 代，「模型代际差」归因**撤回**；与本窗 46/56＝82.1% 对照，官方榜单
+  DSH Minimal 90.6 与第三方 dsh-minimal ~87.9 的差距若实，**归因收敛到 harness 侧**。
+- **墙钟可见性实证（代码＋journal 双侧）**：适配器 `--max-wallclock` → `ORZ_MAX_WALLCLOCK`
+  双消费＝orz-bin 硬门（到点 `run_invalidated{status:wallclock}`）＋**session PULL 面**
+  （`blackboard_read section=session` 渲染 `WALLCLOCK_ELAPSED/LIMIT/REMAINING`＋T̂ 剩余
+  轮数估计行，TER T1.8＋0am S1 Part A 接线）——**PULL-only，零 PUSH**；本窗四题抽查
+  （train-fasttext／adaptive-rejection／circuit-fibsqrt／install-windows）`blackboard_read
+  section=session` **合计 0 次**——钟在墙上、模型从没看过表。墙钟解剖读数：
+  train-fasttext 60 min 中 53.3 min 为工具执行（含 8 min 训练跑 ×2，模型侧仅 5.4 min）、
+  adaptive-rejection 15 min 中思考 153K token（8.1K/轮）＋疑在飞长命令、撞墙前零交付动作。
+- **提分杠杆四条提议与用户裁决（2026-09-30）**：①墙钟阈值 PUSH 注入——**不做单独的
+  注入式机制**（用户裁决原话「墙钟部分实际上这个纯粹就是跑分产物，日常使用非常少，我觉得
+  做在黑板里就已经足够甚至有点过了，实在不行跑分前的题目提示词里面加一句本轮墙钟为多少
+  多少，可在黑板中进行即时查询，没必要做单独的注入式机制」）⇒ 黑板 PULL 面即终态；
+  **可选形态＝跑分题目提示词加一句**（本轮墙钟 N 秒＋黑板可即时查询），属适配器级、
+  随下轮窗口再议（适配器受身份门钉死，本轮不动）；②前台长命令提示——**不做**（「长命令
+  不额外做提示来加重模型负担」）；③短题思考预算档——**不改**（「思考深度不改」）；
+  ④slim eval 档——未裁决、维持现状。
+- **结论**：0.8.8 提分批按裁决**收缩为零新机制**；时间轴管理维持「黑板 PULL」现状；
+  剩余 32 题照官方口径续跑（判定档 §7 状态卡），harness 侧差距以整轮最终读数为准再评估。
+- **裁决后追加执行计划（2026-09-30 午，用户令）**：①**本轮全部跑完后**修改适配器题目提示词——
+  加一句「本轮墙钟为 N 秒，可在黑板中即时查询」（§11.4 可选形态激活；适配器 sha256 随实验
+  换装、身份门同步更新）；②**将撞墙钟的题目单独拉出重跑**对照验证（「将撞了墙钟的题目单独
+  拉出来重新跑着试试」）；③blackboard_read 工具描述补 guide 分区简注——已立项 **0cf**
+  （59 → 60，随 0.8.8 代窗口）。下窗续跑 12:19 起跑（起跑门 13:50，峰值 14:00 前十分钟
+  余量沿 08:50 先例；在跑题自然跑完）。
+- **裁决取消（2026-09-30 深夜用户令「透传墙钟不是标准做法……修改适配器后做超时重跑的
+  设计取消吧」）**：①适配器提示词加墙钟一句——**取消**；②撞墙钟题单独拉出重跑对照——
+  **取消**；墙钟可见性维持黑板 PULL 面现状（不迁移、不加注）。**全轮实测
+  （89 作业全扫，130 批）**：`blackboard_read section=session` 共 **8 次/7 作业**
+  （b1-12／b2-06／b3-06／b3-09／b4-06 mailman／b5-08 protein-assembly／rerun-build-pov-ray
+  ×2，≈8% 作业拉取过至少一次）；各分区拉取分布＝plan 217／notes 82／external_ret 45／
+  exec 16／actions 7／session 8／guide **1**——墙钟面「挂在墙上、极少被看」，透传取消的
+  判断与此吻合；guide 分区仅 1 次拉取（0cf 立项依据同此实测）。
+
+### §11.5 第二窗收口存档（2026-09-30 12:19–13:58，128 批；低谷价格窗 12:00–14:00，起跑门 13:50）
+
+- **7 题＝5 过 2 不过，0 作业失败、0 撞墙**（两道 0 分均为**自完判负**：b4-09
+  pytorch-model-cli 55 轮/16.2 min、b4-10 pypi-server 16 轮/5.4 min，无 exception 无
+  invalidated；本窗未再现撞墙死法）：
+
+  | 题 | reward | 用时 |
+  |---|---|---|
+  | b4-06 mailman | **1.0** | 24.7 min |
+  | b4-07 crack-7z-hash | **1.0** | 6.0 min |
+  | b4-08 large-scale-text-editing | **1.0** | 12.4 min |
+  | b4-09 pytorch-model-cli | 0.0 | 16.2 min |
+  | b4-10 pypi-server | 0.0 | 5.4 min |
+  | b4-11 regex-log | **1.0** | 13.2 min |
+  | b4-12 torch-tensor-parallelism | **1.0** | 21.4 min |
+
+- 13:58 门控收口（b4-12 在飞自然跑完）；逐题 rmi、容器归零；下一题 b4-13
+  make-doom-for-mips（unsolved15 池成员）及其后 25 题（b4-13…18＝6＋B5×19）下窗续跑。
+- **轮累计任务级 53/63＝84.1%**（试次级 51/68＝75.0%）；B4 推进 12/18（9 过 3 不过）。
+  **80% 账更新**：整轮 89 题需 72 过（b1-08 挂起则 88 题需 71）——已 53，剩余需
+  **19/25（76%）**（b1-08 挂起口径 18/25＝72%）；§11.3 中央预期 19–22/32 中已兑 5/7，
+  剩余 25 题需 14–17 过即落中央带。
+
+### §11.6 第三窗（夜间长窗 2026-09-30 18:21 起，129 批）与执行形态升级
+
+- 用户确认夜间低谷至次日 09:00 ⇒ 门限 **2026-10-01 08:50**；**b4-13 make-doom-for-mips
+  0.0**（17.1 min 自完判负；unsolved15 池成员未翻盘，与池先验一致）⇒ 轮累计任务级
+  **53/64＝82.8%**。
+- **执行形态升级（用户令「不仅仅是单题跑，而是单题跑且单题收结果」）**：新驱动器
+  [`run_official_v41_inspected.py`](../scripts/run_official_v41_inspected.py)——复用全部
+  作业纪律＋每题完成**立即裁决**（reward／死法形态／轮数，ALERT 行即时浮出异常）。
+- **job_done 判定修正（b4-14/b1-01 双实证，129 批）**：本版 harbor 0.20 作业汇总无
+  `trials` 数组（完成标记曾误读），旧实现靠「试次级文件存在」旁路碰巧工作——对
+  kill 骨架（b1-01 首半场遗留、b4-14 双杀僵尸汇总 `n_completed=1` 但
+  `verifier_result=None`）误判完成。正确口径＝**见到 reward 实体
+  （`verifier_result.rewards.reward` 递归）才算完成**；另立 `RERUN_JOBS` 权威映射
+  （5 题重跑替换原试次，主批扫描以 rerun2 作业为准）。判定面验证＝dry-run
+  todo 26/89（25 待跑＋b4-14 僵尸回队列）。过程误起跑（b1-01 ~1 min／b4-14 两度／
+  b4-15 ~3 min）均即时停车清理，**未产生任何官方结果、不计入任何口径**。
+
+### §11.7 无墙钟对照实验立项（2026-09-30 深夜，132 批；用户担忧「有墙钟导致成功收敛，分数高了」）
+
+- **担忧实质**：四个拉取通过题恰恰是「看过表」的题（拉取集按构造＝看过表），b1-12 仅剩
+  3 分钟余量交付、mailman 拉表后在 24/30 分钟处收束——「钟驱动收敛」与「本来就会收敛」
+  两种解释在现有数据上**不可区分**（131 批的无尾巴读数只排除拖延，不排除钟的收敛成因
+  作用）。若担忧成立 ⇒ 官方轮分数部分是墙钟可见性的产物，且 **0cg（拆除 session 面墙钟
+  行）实施将反向影响收敛**。
+- **对照实验（[`run_puller_control.py`](../scripts/run_puller_control.py)，132 批）**：
+  7 拉取题（configure-git-webserver／mteb-retrieve／extract-moves-from-video／
+  pytorch-model-recovery／mailman／protein-assembly／build-pov-ray）无 `--ak max_wallclock`
+  重跑——orz 内部墙钟门关闭（harbor task 级官方超时仍为外边界）、**不 `--upload` 不
+  `--public`**（非官方口径对照，不占官方记录）、作业前缀 `official-v41-xp-`、输出
+  `jobs-xp/`；官方窗退出后运行（夜间低谷）。
+- **判读表**：四道 1.0 拉取题无墙钟仍 1.0 且用时相当 ⇒ 墙钟非收敛原因，0cg 照常实施；
+  不收敛或大幅变慢 ⇒ 墙钟可见性为收敛成因之一，**0cg 实施重议**（§11.4 拆除裁决门控
+  于此读数）。
+- **0cg 实施门控**：S1/S2 落码可照做，S3 进体前置＝本对照读数。
+
+### §11.8 披露稿强制明细（2026-10-01 凌晨，133 批；用户令「最后的跑分报告需要详细写明才行」——包体混合与两轮重跑虽不涉及框架根本性机制，但披露必须完整）
+
+- **逐作业包体代际表（机械提取自各作业 plan 日志 `carrier_orz_sha256`；两代口径
+  2026-10-01 用户裁决定案「0.8.5/0.8.6 都是修复后自动重建的中间版本，直接刨出去」）**：
+  **主表两代＝0.8.4**（`87941130…`）×45 作业＝首半场 b1-01…b3-12 ＋ **0.8.7**
+  （`3332b38f…`）×46 作业＝重跑系列与下半场全部。**谱系注记（脚注，不入主表）**：
+  0.8.5（`ecf1d665…`）×1＝0cb S3 修复重建的验证跑
+  （`official-v41-rerun-build-pov-ray`，仍结构性 0——该跑直接触发 0cc 立项；其结果
+  已被 0.8.7 rerun2 权威替换）；0.8.6 零服役（被 0.8.7 取代）。⇒ 本轮官方分数＝
+  **两代包体**（0.8.4＋0.8.7）。
+- **对照实验口径（用户裁决「如果移除黑板墙钟不涉及重建，那就维持 0.8.4 和 0.8.7
+  两代包体，只移除后重跑拉取了墙钟的题目即可」）**：移除黑板墙钟＝**env 级、不涉及
+  重建**（无 `--ak max_wallclock` ⇒ `WALLCLOCK_LIMIT/REMAINING` 显示消失；ELAPSED 行
+  按载体现状仍渲染——披露如实注明此边界；官方期限由 harbor task 级超时照常执行）。
+  **拉取墙钟的题目在移除后重跑，结果替换原试次**（任务级口径沿重跑系列先例）；重跑
+  集＝官方轮全部落定后动态重扫（[`run_puller_control.py`](../scripts/run_puller_control.py)
+  已具动态重扫，作业前缀改 `official-v41-rerun3-`、`--upload --public` 官方级）。
+- **两轮重跑（用户令口径）**：①**0cc S4 重跑系列**——build-pov-ray 三代谱系
+  （0.8.4 原跑结构性 0 → 0.8.5 rerun 仍 0 → 0.8.7 rerun2＝**1.0 翻盘**）；重跑替换
+  原试次（任务级口径，每题恰计一次）；②**b3-13 起未跑面整体重跑**（`run_official_
+  v41_full.py` 续跑形态退役，判定档 §10）。
+- **评测协议面**：k=1 不择优、单题串行、官方数据集 pin（`sha256:7d7bdc1c…`）、
+  官方环境不补强、任务级口径＋试次级口径双列。
+- **job 级失败与未决（如实列明）**：b5-13 qemu-alpine-ssh 两试均环境即死（零轮次
+  无 result，上游 QEMU 腐烂，b1-08 同族）；b1-08 轮内挂起；b4-14 僵尸汇总作废重跑；
+  129 批误起跑（b1-01/b4-14×2/b4-15）均无官方结果。未决题处置随轮收尾批裁决。
+- **执行形态演进如实列明**：批量驱动器→单题收果模式（129 批）＋job_done 判定修正
+  （reward 实体口径）；峰谷计费分窗（08:50／13:50／08:50 三门）。
+- 以上全部进披露稿正文（§4 步骤 6）；缺一即轮收尾批门禁不通过（用户令）。
+
+### §11.9 第三窗收口与全轮收官读数（2026-10-01 01:38，135 批）
+
+- **第三窗（夜间长窗）收口**：18:21–01:38，**24 题出结果＝21 过 3 负**
+  （负＝b4-13 make-doom 0.0／b4-14 chess 撞墙 0.0／b5-17 hf-model-inference 0.0
+  自完判负）＋1 作业级失败（b5-13 qemu-alpine-ssh 两试 setup 即死）；**b5-19
+  overfull-hbox 1.0＝全场最后一题**；驱动器 `== 结束：本窗完成 23 题 ==` 干净退出
+  （23＋前驱动器 b4-13＝24 出结果），容器归零、逐题 rmi、全程公开上传。
+- **全轮收官读数（89 题全部处置）**：**任务级 74/87＝85.1%**（全 89 口径 83.1%；
+  b1-08 挂起口径 84.1%；试次级 75% 上下）——**大幅越过 80% 目标**（§11.3 中央
+  预期 72–77% 证伪）；**unsolved15 池成员 7/8 转化**（仅 make-doom 未翻，池悲观
+  先验证伪）；§11.3 风险名单五拦路虎全部翻盘；擦墙交付 1.0 ×4（fibsqrt／
+  filter-js／query-optimize／model-extraction）＝rerun3 研究对象集齐。
+- **b5-13/b1-08 死因更正（2026-10-01 用户问「存在其他镜像源吗」触发取证）**：
+  两题同族死因＝**适配器 agent setup 装依赖环节 `NonZeroAgentExitCodeError`**
+  （22 s 级即死，非 QEMU 启动、非任务镜像源——镜像均正常拉取；此前「上游 QEMU
+  腐烂」归因**更正**）。实锤＝容器内 `apt-get install curl ca-certificates procps`
+  撞 **Debian security 源 404**（`deb.debian.org` Fastly CDN 旧索引＋上游包轮换；
+  b1-08 同为 22 s `NonZeroAgentExitCodeError`）。处置选项：①直接重试（CDN 旧索引
+  会刷新，22 s 级失败重试成本极低）；②适配器 install 命令加 APT 换源 fallback
+  （USTC/阿里/腾讯 Debian 镜像；适配器改动→身份门换装）。**未决题两题随收口批
+  用户裁决**。
+- **b1-08＋b5-13 处置裁决（2026-10-01 凌晨用户令「跟着墙钟批一起重新跑」「先定下来
+  裁决，不直接进行动作」）**：两题**并入 rerun3 批同条件重跑**（无 `--ak max_wallclock`
+  ＋rerun3 前缀＋upload＋替换原试次；两题 setup 即死零轮次，显示条件对其无差，
+  并批只为一次性收口）；`run_puller_control.py` 已加 `EXTRA_TASKS` 接线（qemu-startup／
+  qemu-alpine-ssh 恒入集）。**不直接执行**——rerun3 启动随用户令。
+- 待令：rerun3 启动（裁决已定，随令）；收口批（§4 步骤 6：读数汇总＋round gate＋
+  披露稿＋台账入账）。
