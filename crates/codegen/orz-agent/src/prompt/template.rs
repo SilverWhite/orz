@@ -51,10 +51,6 @@ pub(crate) fn subagent_template() -> Zeroizing<String> {
     decrypt(SUBAGENT_PROMPT_ENC, PROMPT_SEEDS[2])
 }
 
-/// The compact system prompt used after conversation compaction.
-pub const COMPACT_SYSTEM_PROMPT: &str = "You are an AI coding agent. You operate in a workspace with a provided codebase.\n\n\
-     Your main goal is to complete the user's request, denoted within the <user_query> tag.";
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,26 +367,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_compact_prompt_matches_expected() {
-        assert_eq!(
-            COMPACT_SYSTEM_PROMPT,
-            "You are an AI coding agent. You operate in a workspace with a provided codebase.\n\n\
-             Your main goal is to complete the user's request, denoted within the <user_query> tag.",
-        );
-    }
-
     // ── Mid-session mode switching ──────────────────────────────────
 
     #[test]
-    fn test_mid_session_switch_concise_to_full() {
-        let compact = COMPACT_SYSTEM_PROMPT;
-        assert!(!compact.contains("read_file"), "Compact has no tool names");
-        assert!(
-            !compact.contains("<tool_calling>"),
-            "Compact has no tool section"
-        );
-
+    fn test_full_prompt_has_tool_sections() {
         let full = render_base(&default_renderer(), &default_placeholders());
         assert!(
             full.contains("<tool_calling>"),

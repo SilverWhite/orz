@@ -111,13 +111,6 @@ impl Agent {
         &self.system_prompt
     }
 
-    /// Compact system prompt for post-compaction use.
-    ///
-    /// Returns a static string — the compact prompt never changes at runtime.
-    pub fn compact_system_prompt(&self) -> &str {
-        crate::prompt::template::COMPACT_SYSTEM_PROMPT
-    }
-
     /// The tool bridge for this agent.
     pub fn tool_bridge(&self) -> &Arc<ToolBridge> {
         &self.tool_bridge
