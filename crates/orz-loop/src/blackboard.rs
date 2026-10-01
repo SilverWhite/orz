@@ -1668,12 +1668,11 @@ mod tests {
             sections.iter().any(|v| v.as_str() == Some("guide")),
             "guide must be declared in the section enum: {sections:?}"
         );
+        // 0cl（2026-10-02）描述瘦身：以「名词解释与组件关系」指认说明书内容形态。
         assert!(
-            bb_def
-                .description
-                .contains("framework usage manual lives on the blackboard")
-                && bb_def.description.contains("section=guide"),
-            "blackboard_read description must carry the 0cf guide note: {}",
+            bb_def.description.contains("section=guide")
+                && bb_def.description.contains("名词解释与组件关系"),
+            "blackboard_read description must point at the guide partition: {}",
             bb_def.description
         );
 

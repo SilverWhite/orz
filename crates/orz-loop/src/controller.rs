@@ -1910,14 +1910,19 @@ impl AgentLoopController {
     /// **空表**口径（不为本面新增豁免）。文案逐字不变 ⇒ digest 不变。
     fn board_guide_body() -> String {
         format!(
-            "黑板＝会话的可读工作记忆：plan/notes（模型可写）＋ \
-             edits/exec/actions/entities/deps/processes/env/temporal/rli（机械分区）。\
-             读：blackboard_read section=<分区>；写：{}。\n\
-             定位符（分块表／压缩回执的「指针」行）：`r<轮>·b<块>·s<seq>`（s＝journal 事件\
-             行号，可带 #sha8）——回查：blackboard_read section=journal anchor=r5·b1·s123\
-             （返回该事件机械摘要 ≤512 B；#sha8 不符＝已过期提示）。\n\
-             压缩与回放：被压块逐字原文在本地全量档案＋按块回放档案；较早内容用「域位置＋\
-             轮号」导航；压缩只有建议不设强制（是否压缩由模型决定）。",
+            "【名词】黑板＝会话工作记忆：plan/notes 模型可写，其余分区机械只读。\
+             journal＝本 run 事件链（逐行、sha 连锁）；轮 r＝决策轮，块 b＝压缩分块，\
+             s＝journal 行号；定位符 `r<轮>·b<块>·s<seq>[#sha8]`＝事件指针\
+             （分块表/压缩回执里直接复制；section=journal anchor=… 点读 ≤512B）。\
+             压缩＝旧上下文换摘要（原文在本地档案、可回放；是否压缩由模型决定，\
+             机械不强制）。域（start/normal/pressure/low_progress/stuck）＝机械给\
+             时间段打的进程标签。
+\
+             【组件关系】模型提议工具 → 机械层校验与门禁 → 执行 → 结果回流黑板与 \
+             journal；终答经两阶段交付（请求→确认）＋机械审计。时间与压力由机械层\
+             替模型记账（section=temporal / rli 按需查，fires 不注入）。检索由子代理\
+             执行（派发返回指针时读 internal_ret/external_ret）。写计划/笔记用 {}\
+             （单条 ≤8K）。",
             crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME,
         )
     }
@@ -3714,85 +3719,38 @@ impl AgentLoopController {
             }
             tool_defs.push(ToolDef {
                 name: "blackboard_read".to_string(),
-                description: "Read a blackboard partition. `section` is one \
-                     of: entities (R2 half-assistant entity states — \
-                     process/file/environment stable views with anchors and \
-                     availability; 黑板=框架状态区，分区保存实体状态/检索结果/\
-                     审计留痕), plan (current goal + step statuses; each step line \
-                     starts with its id: `- [状态] <step_id>: <目标> ...` — \
-                     use that id for the step_id binding when writing console \
-                     orders), edits (file-edit records: file, line-range \
-                     delta, timestamp), tool_actions (executed tool calls \
-                     folded by category read/edit/terminal/retrieval with \
-                     timestamps), exec (tool results — the full accumulated \
-                     log; read_file still works for files), actions (P0-C \
-                     console: current registration board buttons, the pending \
-                     action-bar order and recent result receipts), session \
-                     (live tool-round budget — used/remaining — plus the \
-                     resident 状态行; read it on demand to gauge how many \
-                     tool rounds are left; the controller enforces the cap \
-                     mechanically either way), internal_ret / external_ret \
-                     (live retrieval partitions — the subagent's full result \
-                     text, parsed entries and source ledger; read them when a \
-                     web_search / web_fetch / retrieve_project_docs dispatch \
-                     returns a pointer summary instead of inline text), deps \
-                     (P2-11 dependency graph — the file anchor chain: read→write \
-                     anchor edges and tool→entity mutation edges for \
-                     read_file/search_replace; D3 command/retrieval side effects \
-                     are NOT graphed; live-only), processes \
-                     (TER T1.6 live terminal process board — reading recomputes \
-                     a fresh ≤1s snapshot from the terminal: task_id / 命令摘要 \
-                     / elapsed / status / 输出字节 / CPU / killable; live-only, \
-                     nothing archived; kill 经既有 PID 中断语义), env \
-                     (TER T1.12 W-F11 live code-tool environment snapshot — \
-                     tool/language/package/version presence, key input presence, \
-                     connectivity verdicts; ≤5s recompute, PULL whitelist face, \
-                     nothing archived), rli (0am 改造四项③ (2026-09-20) + 0be \
-                     四项 (2026-09-21): RLI 影子参考面 — 谐振二阶通道锚点 \
-                     (u/v/分通道 pred(H·T̂) 闭式预测/短视锚点 p1(1T̂)/E/r/θ/hits; \
-                     `prog` 另有在线到达率 λ̂ 与期望注入修正) + 自判动作域 + \
-                     同轮域一致性读数 + 繁杂度（会话内预测准确性相对前段基线 \
-                     的放大 c 与自校准阈值 θ85/95/99，未就绪机械如实）; \
-                     selector now|recent|history (k≤20); env 门控 \
-                     (ORZ_LIF_RLI_SHADOW), live-only ≤1 KiB, \
-                     零注入, nothing archived). 0cf (2026-10-01): the \
-                     framework usage manual lives on the blackboard too — \
-                     `section=guide` reads it (mechanism-only, live-only, \
-                     zero badges). \
-                     Optional `since_timestamp` (RFC 3339, e.g. the timestamp \
-                     this tool returned earlier) filters the edits / tool_actions \
-                     entries to those at or after that time. Optional \
-                     `receipt_id` (an order_id from the actions results board, \
-                     e.g. ORD-000012) point-reads ONE result receipt's full \
-                     response/error content (bounded ≤8K chars) that the slim \
-                     board hides — only valid with `section=actions`; \
-                     `since_timestamp` is ignored when `receipt_id` is \
-                     present. B2 折叠视图 (P2-13): 当分区很大（exec/edits/\
-                     tool_actions 达到阈值）时，live 读取默认只展开 \
-                     “当前域段 + 最近 K 轮 + 最近 20% 行”，更早内容折叠为 \
-                     `[域段 normal r1–r30 · N 条 · 摘要]` 标注行；要精读某段\
-                     历史，给 `domain`（start|normal|pressure|low_progress|\
-                     stuck）+ `round_from`/`round_to`（含边界、相等=单轮）——\
-                     三者必须同时给，且与 `receipt_id`/`since_timestamp` 互斥\
-                     （显式报错）；pre-stamp 旧行（无轮号）只能\
-                     用 since/receipt_id 展开。自历史按需面 (0p S1, \
-                     2026-09-07): 失败总览（哪些目标反复失败、错误码集、\
-                     发生轮段）用 `failures_only=true`（F4 失败目标聚合行集，\
-                     整响应 ≤3K、截断显式标注）；在全部历史里找关键词（早期\
-                     报错文本、文件名、命令片段）用 `search=<literal>`（大小写\
-                     不敏感字面子串，非正则；扫 exec 动作/结果摘要与 actions \
-                     receipt 摘要，命中 ≤20 行，行 = 轮号 + exit + 摘要 + \
-                     order_id 指针（exit=N 为命令真实退出码，N≠0 即命令级\
-                     失败；exit=ok/err 为工具级成功/失败）；二者仅与 \
-                     section=exec 组合，且彼此及与 \
-                     receipt_id/since_timestamp/expand/epoch 互斥（显式报错）。\
-                     Call this when you need to \
-                     recall what changed or what you did earlier — it costs \
-                     nothing when you do not call it. Every live response \
-                     starts with an optional `[黑板增量]` line listing \
-                     per-partition change counts since their last read (and \
-                     the latest temporal domain migration) — read a \
-                     partition to clear its unread badge."
+                description: "Read one blackboard partition (PULL — costs nothing when you do not call it). \
+                     `section` is one of: plan (goal + step statuses; step lines start \
+                     `- [状态] <step_id>:` — use that id for step_id binding in \
+                     console orders), notes (your own scratch notes, written via the \
+                     blackboard write tool), exec (accumulated tool-result log; find \
+                     earlier errors with search=<literal> (≤20 hit rows) or \
+                     failures_only=true (failed-target aggregation) — both exec-only), \
+                     edits / tool_actions (file-edit records / executed calls folded \
+                     by category; since_timestamp filters to entries at/after a time \
+                     this tool returned earlier), actions (console registration board \
+                     + pending order + result receipts; receipt_id point-reads ONE \
+                     full receipt, actions-only), session (live tool-round budget \
+                     used/remaining — read on demand to gauge rounds left; the cap is \
+                     enforced mechanically either way), entities (entity states with \
+                     anchors and availability), deps (read→write anchor chain; \
+                     command/retrieval side effects are NOT graphed; live), \
+                     processes (live terminal process board), env (live toolchain \
+                     snapshot), internal_ret / external_ret (retrieval partitions — \
+                     read them when a dispatch returns a pointer summary instead of \
+                     inline text), temporal (time face: selector \
+                     now|recent|history|feature), rli (RLI 参考面: 节奏/错误/停滞压力 \
+                     走向，env 门控; selector now|recent|history|feature, rli also \
+                     channels), journal (locator point-read: \
+                     anchor=r<轮>·b<块>·s<seq>[#sha8] → that event’s mechanical \
+                     summary ≤512B), guide (框架说明书: 名词解释与组件关系，\
+                     section=guide — read it once when unsure what a framework \
+                     term means). Folded partitions \
+                     show `[域段 r1–r30 · N 条 · 摘要]` markers; expand one round \
+                     range with domain+round_from+round_to (all three together; \
+                     exec/edits/tool_actions only). Every live response starts with \
+                     an optional `[黑板增量]` line of per-partition unread counts — \
+                     reading a partition clears its badge."
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
@@ -3815,30 +3773,40 @@ impl AgentLoopController {
                                 "env",
                                 "temporal",
                                 "rli",
+                                "journal",
+                                "notes",
                             ],
-                            "description": "P2-10 F2 §3.3 (2026-08-30): temporal 分区是 LIF 时间观测面——每决策轮域标签/特征行（Now/Recent(k≤20)/History/Feature(name,k≤20)，渲染 ≤1 KiB、fires 不渲染、零注入 PULL 面）。selector 默认 now；recent/feature 可带 k（≤20）；feature 另需 name（u_prog|u_err|u_stuck|t_hat|err10|succ10）。",
+                            "description": "Partition to read — see the tool description for one-line usage per partition.",
                         },
                         "selector": {
                             "type": "string",
                             "enum": ["now", "recent", "history", "feature"],
-                            "description": "P2-10 F2 §3.3 (2026-08-30): temporal 查询面选择器——now（当前决策轮行，默认）/ recent（最近 k 行）/ history（域迁移日志 ≤20）/ feature（name 特征序列，k≤20）。仅与 section=temporal 组合有效（0bg S2 起 rli 参考面支持 now|recent|history|feature|channels——now 面头一行固定符号表；`channels`＝分通道明细折叠面）；其余分区忽略（审查处理 R4 / F7）。",
+                            "description": "temporal/rli only: now (default) | recent | history | feature; rli additionally channels. Ignored by other partitions.",
                         },
                         "k": {
                             "type": "integer",
                             "minimum": 1,
                             "maximum": 20,
-                            "description": "P2-10 F2 §3.3 (2026-08-30): temporal 行/序列窗口大小（recent/feature，默认 20，≤20）。仅与 section=temporal 组合有效（审查处理 R4 / F7）。",
+                            "description": "recent/feature window size (default 20, max 20). temporal/rli only.",
                         },
                         "name": {
                             "type": "string",
                             "enum": feature_enum,
-                            "description": "P2-10 F2 §3.3 (2026-08-30)：Feature 查询的特征名（selector=feature 时必填）。仅与 section=temporal|rli 组合有效：temporal = u_prog|u_err|u_stuck|t_hat|err10|succ10；rli（0am 补充项④＋模态分离批，2026-09-20；0be 四项②，2026-09-21）= u_err|v_err|pred_err|pred1_err|env_err|r_err|u_prog|v_prog|pred_prog|pred1_prog|r_prog ＋ slow_prog|fast_prog（实极点分支的模态对：慢/快分量；复极点分支无定义）。**锚点序列为事件级采样**（决策轮＋每个工具事件，cap 20）；`pred_*`＝分通道 horizon 闭式前推（`pred1_*`＝短视 1·T̂ 独立档；prog 的 pred 含 λ̂ 期望注入修正——0be 四项①②）；`env_prog` 因恒等于 `u_prog` 已撤名（`env_err` 保留）。",
+                            "description": "Required with selector=feature. temporal = u_prog|u_err|u_stuck|t_hat|err10|succ10; rli = see enum (per-channel anchors and closed-form predictions).",
                         },
-                         "since_timestamp": {"type": "string"},
+                         "anchor": {
+                             "type": "string",
+                             "minLength": 1,
+                             "description": "Journal locator r<轮>·b<块>·s<seq>[#sha8]; point-reads that event’s mechanical summary (≤512B). journal section only.",
+                         },
+                         "since_timestamp": {
+                             "type": "string",
+                             "description": "RFC 3339; filters edits/tool_actions to entries at/after this time (use a timestamp this tool returned earlier).",
+                         },
                          "receipt_id": {
                              "type": "string",
                              "minLength": 1,
-                             "description": "Optional single-receipt point-read: an order_id from the actions results board (e.g. ORD-000012). Returns that receipt's full response/error content, bounded at 8000 chars. Only valid with section=actions; since_timestamp is ignored when present.",
+                             "description": "order_id from the actions board (e.g. ORD-000012): point-read that receipt’s full content (≤8K). actions section only; overrides since_timestamp.",
                          },
                         "domain": {
                             "type": "string",
@@ -3849,26 +3817,26 @@ impl AgentLoopController {
                                 "low_progress",
                                 "stuck",
                             ],
-                             "description": "B2 fold expansion target domain (exec/edits/tool_actions). Must be given together with round_from/round_to; mutually exclusive with receipt_id and since_timestamp.",
+                             "description": "Fold-expansion target domain (exec/edits/tool_actions only). Must be given together with round_from/round_to; exclusive with receipt_id and since_timestamp.",
                         },
                         "round_from": {
                             "type": "integer",
                             "minimum": 1,
-                            "description": "B2 fold expansion round lower bound (inclusive; session-relative). Must be given together with domain and round_to.",
+                            "description": "Fold-expansion round lower bound (inclusive; session-relative). Required with domain and round_to.",
                         },
                         "round_to": {
                             "type": "integer",
                             "minimum": 1,
-                            "description": "B2 fold expansion round upper bound (inclusive; equal to round_from reads one round). Must be given together with domain and round_from.",
+                            "description": "Fold-expansion round upper bound (inclusive; equal to round_from reads one round). Required with domain and round_from.",
                         },
                         "failures_only": {
                             "type": "boolean",
-                            "description": "0p S1 (2026-09-07): 失败聚合按需面——true 时返回 F4 失败目标聚合行集（P2-12 行语义：(kind,id) 身份、累计计数、错误码集、首末墙钟、行内域段），整响应 ≤3K、截断显式标注。仅与 section=exec 组合有效；与 search/receipt_id/since_timestamp/expand/epoch 互斥（显式报错）。",
+                            "description": "true: failed-target aggregation rows (≤3K, truncation marked). exec section only; exclusive with search/receipt_id/since_timestamp/expand/epoch.",
                         },
                         "search": {
                             "type": "string",
                             "minLength": 1,
-                            "description": "0p S1 (2026-09-07): 自历史字面检索——大小写不敏感字面子串（非正则）扫 exec 动作/结果摘要与 actions receipt 摘要，命中 ≤20 行（行 = 轮号 + exit + 摘要 + order_id 指针；exit=N 为命令真实退出码，N≠0 即命令级失败，exit=ok/err 为工具级成功/失败），截断显式标注。仅与 section=exec 组合有效；与 failures_only/receipt_id/since_timestamp/expand/epoch 互斥（显式报错）。",
+                            "description": "Case-insensitive literal substring (non-regex) over exec/action summaries; ≤20 hit rows (round + exit + summary + order_id). exec section only; exclusive with the other filters.",
                         },
                     },
                     "required": ["section"],
