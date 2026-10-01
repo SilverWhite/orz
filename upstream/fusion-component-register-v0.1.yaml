@@ -195,9 +195,10 @@ components:
 - id: orz-subagent-resolution
   capability_group: codegen-support
   code_path: orz/crates/codegen/orz-subagent-resolution
-  status: audit_required
+  status: retired
   adoption_tier: not_assessed
   ownership: not_assessed
+  note: 2026-10-01 0ce 死代码清退整 crate 删除（3,018 行/7 文件；无成员资格无消费方；orz `be4f90ff`）
   origin: {kind: unassessed}
   notes: "pending per-crate audit (V11-IMPL-008)"
 - id: orz-telemetry

@@ -1,6 +1,11 @@
-# 写入管控保底化修订（0bw v2 / 0cb / 0cc v3）设计档：宿主机灾难硬边界保底 ＋ 一般写动作归还审批组件
+# 写入管控保底化修订（0bw v2 / 0cb / 0cc v3 / **0ch v4**）设计档：宿主机灾难硬边界保底 ＋ 一般写动作归还审批组件
 
-> **状态**：`design v3.1`（**v3.1＝0cc S2 审查处理批**，2026-09-30——全面审查（设计/
+> **状态**：`design v4.0`（**v4.0＝0ch S1 L3 粒度精准化定档**，2026-10-01——用户令「灾难兜底
+> 还存在摩擦啊，考虑进一步放大权限？能不能将灾难兜底做的更加精准一些？毕竟主要是防删除
+> 破坏」；L3 Landlock 授权面在目录排除集〔恰 4 项零变更〕之外增设两族**精准授权**——设备面
+> 安全节点**文件级**写授权＋`/` 本体 **make 族子集**授权，消除 L3 比 L1/L2 粒度更粗的两大
+> 摩擦面（`>/dev/null` 内核拒／`mkdir /git` 恒拒）；定档全文见 **§7**，Landlock union 语义
+> 硬边界与三项否决备选一并登记）。沿革：v3.1＝0cc S2 审查处理批（2026-09-30——全面审查（设计/
 > 实现/符合性三面，物证核证 S1–S3 全部吻合）发现 P2×1＋P3×3，用户令「补足强度缺口并
 > 处理全部问题」同批处置：① **P2 祖先链臂**＝规则 5 增扫荡动词门控臂（`ANCESTOR_SWEEP_VERBS`
 > ＝删除/搬移封闭子集恰 15）——目标为 keystore 根/signer manifest **严格祖先**同落
@@ -16,12 +21,13 @@
 > `carrier:session-volume`。读数＝orz-tools lib **2988/0/6**（＋2）、clippy 13 基线持平、
 > 触碰面 fmt 零 diff；**载体重建（0.8.7）已完成进体**〔2026-09-30 凌晨双平台重建换装＋
 > 身份门＋打包，证据见 §6 S2 审查处理批段〕**——祖先臂与动词补齐已在役，S4 重跑线解禁**）。
-> 2026-09-29 晚 **v3.0＝0cc S1**——用户裁决「继续收窄，把灾难保底
+> **v3.0＝0cc S1**（2026-09-29 晚）——用户裁决「继续收窄，把灾难保底
 > 纯粹变成宿主机灾难保底……只要不重建，orz实际上不会被即时破坏」：规则 5 目标集缩为
 > **宿主状态两条窄目标**（`.gsa` 会话卷＋ACAF keystore 根），载体安装目录／三件套／
 > `grok-home`／⊆cwd 降级规则**双面全退役**；**契约面零变化＝schema v0.3 枚举不动**
 > （`carrier-write` id 沿用，目标集收窄属生产语义、枚举值与配对面零 diff））。
-> 沿革：**v3.1＝0cc S2 审查处理批**（2026-09-30）；v3.0＝0cc S1（2026-09-29 晚）；
+> 沿革：v4.0＝0ch S1（2026-10-01）；v3.1＝0cc S2 审查处理批（2026-09-30）；
+> v3.0＝0cc S1（2026-09-29 晚）；
 > v2.0＝0cb S1 定稿（2026-09-29）；v2.1＝S2 全面审查处理批（同日——用户三项裁决：
 > ① 契约面 **schema 升 v0.3**＋legacy 回放豁免（跨代际回放兼容）；② 实现过严臂进一步收窄
 > （规则 2 PhysicalDrive/mkfs 目标位、规则 1 动词集 `ri` 补齐＋盘符相对根补全、规则 4 蜂巢
@@ -276,3 +282,167 @@
     **同日用户裁决：b3-13 起未跑面（44 题）直接重跑、不续跑**——载体换版后同一道轮
     跨包体版本续跑不合适，`run_official_v41_full.py` 断点续跑形态退役（判定档 §10）；
     余 4 题重跑＋未跑面 44 题逐题重跑待续。
+
+## §7 0ch：L3 粒度精准化（v4.0 定档，2026-10-01）
+
+> **触发**（140 批 rerun3 十八题逐题复算）：11/18 题出现「设备目录写入被拒」痕迹、
+> 3 题叠加「根目录不可新建」，模型为绕开 `/dev/null` 写拒逐个改系统二进制
+> （apt／dpkg／git／sshd 全线受损）。用户令「灾难兜底还存在摩擦啊，考虑进一步放大
+> 权限？能不能将灾难兜底做的更加精准一些？毕竟主要是防删除破坏……两条框架摩擦跟着
+> 立项成灾难兜底改良的子项」。**定案口径**：灾难兜底防的是**删除／毁写／引导与内核
+> 机制翻转**，不是一般性写入；**L3 粒度不得比 L1/L2 粗**（L1/L2 拒的 L3 必拒；L1/L2
+> 放行的一般性安全写 L3 尽量放行；L3 允许在内核面**更严**＝灾难面保底）。
+
+### §7.1 子项① 设备面文件级放行（`DEVICE_SAFE_NODES` 恰 7 项封闭表）
+
+- **病根**：L3 排除集把 `/dev` 整棵子树列为不授权（`LINUX_DISASTER_KERNEL_FACES` 恰
+  4 项含 `/dev`），写族在内核层对 `/dev` 下一切路径 EACCES——`>/dev/null` 亦然；而
+  L1/L2 规则 2 对 `/dev/null` **显式豁免**（`exec_policy.rs::NULL_DEVICE`，块设备形态集
+  仅 `/dev/sd*` `/dev/vd*` `/dev/nvme*` `/dev/mmcblk*` `/dev/mapper*`）。同一条灾难兜底
+  两层粒度不一致——0cb v2 已定「`>/dev/null` 交回审批组件、表外恒 allow」，L3 却在
+  内核面拒掉；评测面几乎所有装包/构建/服务链第一步（apt／dpkg／git／sshd 均以写打开
+  `/dev/null`）即失败。
+- **定档**：新增封闭表 `write_control::DEVICE_SAFE_NODES` **恰 7 项**——`/dev/null`
+  `/dev/zero` `/dev/full` `/dev/tty` `/dev/random` `/dev/urandom` `/dev/ptmx`；装挂时对
+  每项 `open(O_PATH|O_CLOEXEC|O_NOFOLLOW)` 后加 **PATH_BENEATH 文件级规则**，
+  `allowed_access＝WRITE_FILE（＋TRUNCATE，ABI≥v3）`（Landlock 对非目录 fd 仅接受
+  文件族权利，MAKE_\* 会 EINVAL）。缺席节点/symlink ⇒ 该项跳过不加规则＝默认拒
+  （fail-closed 方向）。
+- **仍拒面（保底不松）**：`/dev` 目录树本身维持无规则——块设备节点（`sd*`/`vd*`/
+  `nvme*`/`mmcblk*`/`mapper*`）与危险 char 节点（`/dev/mem` `/dev/kmem` `/dev/port`）
+  **open-write 仍内核拒**；节点删除（`rm /dev/null`——REMOVE 不在文件级授权集）仍拒；
+  设备节点制造（`mknod`——MAKE_CHAR/MAKE_BLOCK 见 §7.2 不授予）仍拒；表外任意
+  既有节点写仍拒（封闭表，`/dev/console` 等不在表内）。
+- **一致性钉**：表 ∩ 规则 2 块设备形态集＝∅（`is_block_device_target` 逐项断言）；
+  表内不得含 `sd`/`vd`/`nvme`/`mmcblk`/`mapper`/`mem`/`kmem`/`port`/`loop` 任一形态；
+  恰 7 项行数钉（新增表项必改测试）。
+
+### §7.2 子项② `/` 本体 make 族子集授权（`ROOT_MAKE_GRANT`）
+
+- **病根**：L3 授权表由 `/` 顶层条目枚举生成（`enumerate_writable_top_dirs`），`/` 自身
+  永不在表内 ⇒ Landlock make 族（`FS_MAKE_DIR`/`MAKE_REG`/`MAKE_SYM`…）在 `/` 上不
+  成立 ⇒ `mkdir /git` 一类顶层新条目恒 EACCES；题面直接要求顶层路径（如
+  `configure-git-webserver` 的 `/git/server`）时模型只能改道。
+- **定档**：装挂时对 `/` 本体加一条 PATH_BENEATH 规则，`allowed_access＝ROOT_MAKE_GRANT
+  恰 5 位`——`MAKE_DIR|MAKE_REG|MAKE_SOCK|MAKE_FIFO|MAKE_SYM`。**排除四位**：
+  - `MAKE_CHAR`/`MAKE_BLOCK`：设备节点制造权（mknod）**全树仍拒**——自造块设备节点
+    ＝绕道 raw 设备访问，是规则 2 的内核面保底对象；
+  - `WRITE_FILE`/`TRUNCATE`/`REMOVE_DIR`/`REMOVE_FILE`/`REFER`：改写/截断/删除/
+    跨目录搬移**全树维持默认拒**（各顶层目录规则不受影响）。
+- **Landlock 硬边界登记（union 语义）**：PATH_BENEATH 无深度概念——`/` 规则的授权
+  **全树生效**（「仅顶层」不可表达），且层内多规则取并集、被覆盖子树无更窄规则可用。
+  **已接受后果**：① `/boot`、`/dev` 内**新建条目**放行——评估为 inert：引导翻转需
+  **改写既有** grub/kernel 文件（仍拒，`WRITE_FILE` 不覆盖），grub 只读固定路径配置，
+  新文件不生效；`/dev` 新条目可建但**不可写**（无 `WRITE_FILE` covering，§7.1 的
+  目录树无规则不变）；② `/proc`、`/sys` 由 procfs/sysfs 本身不支持常规创建，实质不变；
+  ③ 新建条目的**删除**仍拒（REMOVE 不在 `/` 授权集）。
+- **`WRITE_FILE` 绝不上 `/`（否决主因）**：若 `/` 规则含 `WRITE_FILE`，union 语义下
+  宿主 `/dev/sda` 等**既有块设备节点**的 open-write 随之放行——宿主机扬盘保底失守，
+  直接违反「防删除/毁写」定案口径。
+
+### §7.3 子项③ `/proc` `/sys` `/boot` 写需求复核（维持不授权）
+
+- 三树目录排除维持（`LINUX_DISASTER_KERNEL_FACES` 恰 4 项零变更）。评测题面对三树的
+  **写需求为零**（16 失败解剖无一涉三树既有文件写）；`/proc/sys/...`（sysctl）与
+  `/sys` 机制位写＝规则 3 家族内核面，L3 拒 vs L1/L2 表外恒 allow 的差异为**有意更严**
+  （v2.1 §2 条 2 已接受后果的反向登记：L1/L2 侧 sysctl 放行如未来需要收紧，列规则 3
+  候选，不随 0ch 放开 L3）。§7.2 已接受后果 ① 使 `/boot` 新建面放宽，但既有文件写
+  面不变——引导机制翻转所需的最小写入集（grub.cfg/kernel/initrd 改写）仍内核拒。
+
+### §7.4 子项④ 枚举期快照边界判（登记为已知边界，不随本批解决）
+
+- 授权规则绑定**spawn 时存在的对象**：本批放行的 `/` make 授权使「新建顶层条目」
+  本 spawn 即可创建，但新条目自身**不在枚举快照内**、无自有规则 ⇒ 其内**写文件**
+  （`WRITE_FILE`）同 spawn 不可用（`/` 规则刻意不含 `WRITE_FILE`，§7.2）——即
+  `mkdir /git && git init /git/server` 单命令链内 `git init` 的文件写仍 EACCES，
+  **拆两个 spawn**（下一轮命令枚举时 `/git` 已在顶层表内获全权）即正常。此为 Landlock
+  ABI 硬边界（无法表达「含新建子树的写授权」），e2e 以边界钉固定；S4 重跑复验
+  真实影响，如构成实际摩擦另案立项（候选形态：分态授权，见 §7.6-③）。
+
+### §7.5 落码面与钉子（S2）
+
+- `orz-tools::write_control`：新增 `DEVICE_SAFE_NODES`（恰 7 项；表钉＝行数＋前缀＋
+  危险形态负向集；一致性钉在 `exec_policy.rs` 测试＝逐项 `!is_block_device_target`）。
+- `orz-sandbox::child_write_guard`：`prepare_allow_dirs(deny)` 升格
+  `prepare_allow_set(deny, safe_nodes) -> Option<ChildWriteAllowSet>`（机制 crate 不依赖
+  策略 crate，两表由调用方传入）；`install_child_write_guard` 三段规则＝目录（全写族
+  baseline，不变）＋文件（`WRITE_FILE`＋`TRUNCATE`(v3+)）＋`/` 根（`ROOT_MAKE_GRANT`
+  恰 5 位）；权限集钉×2（根集不含 `WRITE_FILE`/`REMOVE_*`/`MAKE_CHAR`/`MAKE_BLOCK`/
+  `REFER`/`TRUNCATE`；文件集不含 MAKE_\*/REMOVE_\*）。
+- `terminal.rs` 三 spawn 点收敛单一装配 helper（消除三份重复块）。
+- e2e（`child_write_guard_exec.rs`，真机内核读数、探测 None 显式跳过）：安全节点写 ✓
+  （`echo ok >/dev/null`）／顶层 `mkdir`＋`touch` ✓／`mknod` 拒／`/dev/console`（表外
+  节点）写拒／`rm /dev/null` 拒（对照臂＋无条件恢复）／新建子树同 spawn 写拒（§7.4
+  边界钉）／`/proc` 创建拒（fs 固有，对照臂同败跳过）。**既有 e2e 的 `/dev` 新建文件
+  负探针随 §7.2 已接受后果 ① 失效，改为表外节点（console）写探针**。
+- **不动面**：`LINUX_DISASTER_KERNEL_FACES` 恰 4；L1/L2 五条 block 规则与
+  `BLOCK_DEVICE_PREFIXES`；契约面 schema v0.3；判官／Python 镜像；身份门与评测口径。
+  S3 随 0.8.8 代窗口重建进体（与 0ce／0cf／0cg 同窗）；S4 以
+  `configure-git-webserver`／`caffe-cifar-10`／`git-multibranch` 三题重跑复验。
+
+> **S2 完成态（2026-10-01，143 批）**：落码面全数落地——`DEVICE_SAFE_NODES` 恰 7 项
+> （write_control.rs，表钉＋危险形态负向钉）；`child_write_guard.rs` 装配升格
+> `prepare_allow_set(deny, safe_nodes) -> ChildWriteAllowSet`（旧 `prepare_allow_dirs`
+> 退役零残留）＋装挂三段规则（目录 baseline／文件 `WRITE_FILE`＋`TRUNCATE`(v3+)／
+> `/` 根 `ROOT_MAKE_GRANT` 恰 5 位，共用装配点 `add_path_beneath_rule`——缺席/
+> symlink 跳过＝默认拒 fail-closed）＋权限集钉×2（根集恰 5 位不含
+> `WRITE_FILE`/`TRUNCATE`/`REMOVE_*`/`MAKE_CHAR`/`MAKE_BLOCK`/`REFER`；文件集仅文件族
+> 位、目录族位零混入）；`terminal.rs` 三 spawn 点收敛单一装配 helper
+> `attach_child_write_guard`（三份重复块消除）；exec_policy 一致性钉＝
+> `DEVICE_SAFE_NODES` 逐项 `!is_block_device_target`＋`/dev/null` 豁免锚双面同族。
+> **读数**：Windows＝orz-tools lib **2990/0/6**（＋2：表钉＋一致性钉）、orz-sandbox
+> **23/0**（Windows +0——三钉为 Linux-gated 不入 Windows 读数、Linux 侧 73→76 实跑）；
+> Linux（docker `rust:1.97-slim`，ORZ-BUILD-MOUNT-001
+> 契约，WSL2 内核 6.6.87）＝orz-sandbox 全套件绿〔lib **76/0**・child_write_guard_exec
+> **2/0**・deny_paths_e2e 8/0(1 ignored)・integration 5/0・doc 1/0〕＋ **e2e 真机内核
+> 读数 ABI v3 双测试全过**——`>/dev/null` 写 ✓、顶层 `mkdir`＋`touch` ✓、同 spawn
+> 新建子树写拒（§7.4 边界钉）✓、`mknod` 拒 ✓、`rm /dev/null` 拒 ✓、`/dev/console`
+> （表外节点）写拒 ✓、表外块设备（sd\* 形态；root 门＋形态门、仅守卫臂）写拒 ✓
+> 〔容器无块设备节点＝skip 路径实测〕、`/proc` 实质不变 ✓；触碰面 fmt 零 diff、
+> clippy 触碰面零新增
+> （filtered 比对）。**探针方法学注记（如实记）**：`Command::output()` 的 stdin＝
+> `Stdio::null()`＝open("/dev/null")——`rm /dev/null` 对照臂删除后的窗口内，任何
+> `output()` 形态 spawn 均死于 ENOENT（e2e 前两轮实败于此）；修正＝e2e spawn helper
+> 全改 `stdin(Stdio::piped())`（pipe2，零 /dev/null 依赖）＋「对照删除→先恢复→
+> 守卫删除」探针序。该现象同时是「/dev/null 缺席则 spawn 面全线溺死」的活体证据
+> （0.8.7 在役摩擦＝guard 拒 write，与此异源；生产 spawn 的 `Stdio::null()` open
+> 发生在 parent 侧、装挂前，无此坑）。
+>
+> **审查处理（同批，2026-10-01）**：全面审查（设计/实现/符合性三面＋账面读数独立
+> 复现——Windows 2990/0/6・fmt・clippy filtered・Linux lib 76/0・e2e ABI v3 逐项复跑
+> 吻合）裁决**通过**，P2×1＋P3×4 同批处置：P2＝README 五处未提交改动（写入管控段对
+> 齐 0cb/0cc v3、新增评测节、上下文措辞对齐滑窗、protoc 构建前置注记、维护者单点提
+> 交声明）未入落点→第二卷 §1.95／索引头行补记；P3-1＝`terminal.rs` doc 注释拼接错位
+> （helper 插入切断 `try_read_nonblocking` doc）→归位；P3-2＝「23+3/0」记法→
+> Windows 23/0 勘正（本段）；P3-3＝TODO 立项「`/dev/sd*` 类仍不可写」条款→e2e 补表
+> 外块设备写拒探针（root 门＋块设备形态门、仅守卫臂——对照臂真写盘面＝灾难不设；
+> `file_type` 不跟随 symlink 防软链冒充）；P3-4＝e2e 恢复臂无条件断言依赖 CAP_MKNOD
+> →断言收敛 root 分支（非 root 分支 best-effort 恢复防假红）。补证＝Linux
+> `cargo check -p orz-tools --lib` exit 0（`attach_child_write_guard` 为 cfg(linux)、
+> Windows 读数不覆盖其编译）；处置后复验＝e2e Linux 重跑 2/0（sd 探针 skip 路径
+> 实测）、Windows orz-sandbox lib 23/0、触碰面 fmt 复检零 diff。
+>
+> **S3 完成态（2026-10-01，144 批）**：0.8.8 双平台载体重建进体——源冻结 orz
+> **`2da7dba0`**（`60b21a37` S2＋审查处理＋bump；**0cd 随行进体**）；Windows
+> `build_orz.ps1 -Release` exit 0（2m49s）换装 MATCH 3/3＋ACAF 重 provision 绑
+> `f651f7ba…`（keystore 两件逐位未动）；Linux docker musl 直写换装位 MATCH 3/3
+> （`orz 874df6ca…`）static-pie×3＋INTERP=0＋alpine/bookworm 双冒烟 0.8.8；进体
+> 判据＝Linux 件 `DEVICE_SAFE_NODES` **全表 7 项可达**（Python 逐字节核证：
+> zero/full/ptmx 0→1、urandom 1→2、`/dev/` 族 +6；Windows 件 cfg(linux) 死引用
+> 消除如实记）＋版本串滚动＋L1/L2 五规则 id 与保底文案零变化；身份门
+> `3332b38f…`→`874df6ca…`；rel-144-stage 双包 6/6 MATCH＋容器核证 4/4・4/4・
+> 2/2＋清单活体两态（干净 0 finding／README+1B 恰 1 条）全过；未推送未发行；
+> 0ce/0cf/0cg 无代码随行＝落点顺延 **0.8.9 代窗口**。余 S4＝三题重跑复验
+> （0.8.8 已在役＝重跑线解禁）。证据见 [`144 批档`](audits/144_CARRIER_REBUILD_V088_0CH_S3_2026-10-01.md)
+> 与第二卷 §1.96。
+
+### §7.6 否决备选（留档防复活）
+
+1. **`/` 授权含 `WRITE_FILE`**：宿主既有块设备 open-write 随 union 语义放行，扬盘
+   保底失守（§7.2）——否决。
+2. **`allowed_access＝0` 钉 `/dev` 压住 `/` 规则**：Landlock 层内规则只加不减，
+   `landlock_add_rule` 空授权集 EINVAL——不可表达，否决。
+3. **容器/宿主分态授权**（spawn 时扫描 `/dev` 块节点存在性，无块节点面授 `WRITE_FILE`
+   全量）：容器内 `mknod` 已被 §7.2 排除位挡死、宿主面保守——机制可行，但引入
+   行为两态漂移与双态钉负担；S4 复验后如 §7.4 边界构成实际摩擦再议——本批不采。
+

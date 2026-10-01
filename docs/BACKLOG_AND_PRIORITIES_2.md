@@ -11,8 +11,10 @@
 > 更早（2026-09-16 之前）流水另在
 > [`存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md`](../存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md)
 > 与 [`存档/todo/`](../存档/todo/)；本卷起点＝该快照之后的批次。
-> 与 [`BACKLOG2.md`](BACKLOG2.md)／[`TODO2.md`](../TODO2.md) **不同**：那一对是 TER 专项卷（按项分卷），
-> 本卷是**计数流水卷**（按时间分卷）。
+> 与 [`BACKLOG2.md`](BACKLOG2.md)／[`TODO2.md`](../TODO2.md) 的关系：`BACKLOG2.md` 仍是 TER 专项卷
+> （按项分卷）；**`TODO2.md` 自 2026-10-02（149 批）起改形态为 [TODO 第二部分](../TODO2.md)**
+> （承接已闭合核对节／近期已闭合／历史整理轮段，TER 树收编其 §4）——本卷与 TODO 第二部分同为
+> 「主文件＋第二部分」留档件，本卷是**计数流水卷**（按时间分卷）。
 
 ## 1. 主 BACKLOG 计数行移出段（2026-09-22 分卷）
 
@@ -674,3 +676,148 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **披露要件九条**（报告 §9 逐条落位）：k=1 定性／装置缺陷中途修复＋机械阈值重跑替换／逐作业身份哈希留档／**两代包体混装**（0.8.4×40＋0.8.7×49；0.8.5 一跑为谱系注记、0.8.6 零服役）／**两轮重跑均替换非择优**／**环境偏差仅 qemu 两题**／协议面（不择优・单题串行・官方 pin・环境不补强・任务级＋试次级双列）／job 级失败与误起跑如实列明／执行形态演进与峰谷分窗。
 - 落点＝索引 v4.110 → **v4.111**＋§6 新条 `EVAL-TB21-V41-89-ROUND-REPORT`＋§8 `reference` 桶；BACKLOG 指针行与计数行、TODO 路由计数行同步；判定档 §11.5／§11.9 与轮次档 §11 各加勘误块；本卷本节。
 - 关键词：142 批、89 题整轮成绩报告、机械读数、73/89＝82.0%、任务级/试次级双列、两代包体混装、rerun2/rerun3 替换、无墙钟净效应恰为零、擦墙通过 8、账目更正偏高 2 题、三处勘误、披露九条、计数 62 不变。
+
+### 1.95 2026-10-01 143 批 0ch S1 设计勘定＋S2 落码＋钉子——L3 粒度精准化（用户令「先开始0ch吧，请直接实现S1与S2」；计数 62 不变；**载体 0.8.7 在役不动、零重建零契约面改动**；主会话执行，未走狗粮轮）
+
+- **S1＝设计档升 v4.0**：[`WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md`](../docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md) 新增 **§7**（0ch 定档）——
+  - **子项① `DEVICE_SAFE_NODES` 恰 7 项封闭表**（`/dev/null` `/dev/zero` `/dev/full` `/dev/tty` `/dev/random` `/dev/urandom` `/dev/ptmx`）：Landlock **文件级** PATH_BENEATH 规则、`allowed_access＝WRITE_FILE`（＋`TRUNCATE` 仅 ABI≥v3——allowed 必须为 handled 子集）；`/dev` 目录树维持无规则 ⇒ 块设备/危险节点（`/dev/mem` 等）写、节点删除、`mknod` 仍内核拒；缺席/symlink 跳过＝默认拒（fail-closed）。
+  - **子项② `/` 本体 `ROOT_MAKE_GRANT` 恰 5 位 make 子集**（`MAKE_DIR|MAKE_REG|MAKE_SOCK|MAKE_FIFO|MAKE_SYM`）：**Landlock union 语义硬边界勘定**——PATH_BENEATH 无深度概念，`/` 规则全树生效且层内并集；`WRITE_FILE`/`TRUNCATE`/`REMOVE_*`/`MAKE_CHAR`/`MAKE_BLOCK`/`REFER` **排除**（`WRITE_FILE` 上 `/` 即放行宿主既有块设备 open-write＝扬盘保底失守，绝不上 `/`；mknod 制造权全树拒＝raw 设备绕道挡死）。**已接受后果**＝`/boot`、`/dev` 新建条目放行（inert：引导翻转需改写既有文件仍拒、`/dev` 新条目可建不可写）、`/proc` `/sys` 由 procfs/sysfs 语义实质不变。
+  - **子项③ 复核结论**＝`/proc` `/sys` `/boot` 三树维持不授权；sysctl 写 L3 拒 vs L1/L2 表外 allow ＝**有意更严**（规则 3 内核面，v2.1 已接受后果反向登记）。
+  - **子项④ 枚举期快照边界判**＝新建顶层条目**同 spawn 内写文件不可用**（新对象不在快照、无 WRITE_FILE covering rule；拆两 spawn 即解）——登记为 Landlock ABI 硬边界已知项，e2e 边界钉固定，S4 复验真实影响。
+  - **否决备选三项留档**（§7.6）：`WRITE_FILE`-on-`/`（宿主扬盘面）／`allowed_access=0` 钉压（Landlock 只加不减，EINVAL）／容器-宿主分态授权（两态漂移；S4 后如边界成实际摩擦再议）。
+- **S2 落码**：`orz-tools::write_control` 新增 `DEVICE_SAFE_NODES`（恰 7 表钉＋危险形态负向钉）；`orz-sandbox::child_write_guard` 装配升格 `prepare_allow_set(deny, safe_nodes) -> ChildWriteAllowSet`（**旧 `prepare_allow_dirs` 退役零残留**）＋装挂三段规则（目录 baseline／文件级／`/` 根；共用 `add_path_beneath_rule`）＋`ROOT_MAKE_GRANT`/`file_node_grant`；`terminal.rs` 三 spawn 点收敛单一装配 helper `attach_child_write_guard`（三份 26 行重复块消除）；`exec_policy` 一致性钉＝`DEVICE_SAFE_NODES` 逐项 `!is_block_device_target`＋`/dev/null` 豁免锚双面同族。**L1/L2 五规则、`LINUX_DISASTER_KERNEL_FACES` 恰 4、schema v0.3、判官/Python 镜像、身份门全零变更**。
+- **钉子**：权限集钉×2（`root_make_grant_is_precise_five_bit_subset` 恰 5 位＋七类禁入位逐一为零；`file_node_grant_is_file_family_only` v1–v5 全版本目录族位零混入、TRUNCATE 随 v3 出现）＋装配钉（files 段与表逐项对应）＋e2e 探针集（见下）。
+- **读数**：Windows＝orz-tools lib **2990/0/6**（＋2：表钉＋一致性钉）・orz-sandbox **23/0**（Windows +0——三钉为 Linux-gated 不入 Windows 读数、Linux 侧 73→76 实跑；旧 API 零残留）；clippy＝触碰面零新增（filtered 比对：child_write_guard 零告警；terminal/exec_policy 命中行均为存量位置）；触碰面 fmt 零 diff。**Linux（docker `rust:1.97-slim`，ORZ-BUILD-MOUNT-001 契约 `MSYS_NO_PATHCONV=1`，WSL2 内核 6.6.87）**＝orz-sandbox 全套件绿〔unittests **76/0**・child_write_guard_exec **2/0**・deny_paths_e2e 8/0(1 ignored)・integration 5/0・doc 1/0，pipefail exit 0〕＋**e2e 真机内核读数 ABI v3 双测试全过**——`>/dev/null` 写 ✓／顶层 `mkdir`＋`touch` ✓／同 spawn 新建子树写拒（§7.4 边界钉）✓／`mknod` 拒 ✓／`rm /dev/null` 拒 ✓／`/dev/console`（表外既有节点）写拒 ✓／表外块设备写拒（sd\* 形态；root 门＋形态门、仅守卫臂——审查处理补钉）✓〔容器无块设备节点＝skip 路径实测〕／`/proc` 实质不变 ✓。
+- **方法学注记（如实记）**：`Command::output()` 的 stdin＝`Stdio::null()`＝**open("/dev/null")**——`rm /dev/null` 对照臂删除后的窗口内任何 `output()` 形态 spawn 均死于 ENOENT（e2e 前两轮实败于此：第一轮死于守卫臂、第二轮死于恢复臂）；修正＝e2e spawn helper 全改 `stdin(Stdio::piped())`（pipe2 零 /dev/null 依赖）＋「对照删除→先恢复→守卫删除」探针序＋恢复臂 `mknod c 1 3` 兜底。该现象同时是「**/dev/null 缺席则 spawn 面全线溺死**」的活体证据，与 0.8.7 在役摩擦（guard 拒 write）异源；生产 spawn 的 `Stdio::null()` open 发生在 parent 侧、装挂前，无此坑。
+- **审查处理（同批，2026-10-01）**：全面审查（设计/实现/符合性三面＋账面读数独立复现：Windows 2990/0/6・fmt・clippy filtered・Linux lib 76/0・e2e ABI v3 逐项复跑吻合）裁决**通过**——P2×1＝README 五处未提交改动（写入管控段对齐 0cb／0cc v3・新增评测节・上下文措辞对齐滑窗・protoc 构建前置注记・维护者单点提交声明）未入落点→本节落点＋索引头行补记；P3-1＝`terminal.rs` doc 注释拼接错位（helper 插入切断 `try_read_nonblocking` doc）→归位；P3-2＝「23+3/0」记法→Windows 23/0 勘正（见读数行）；P3-3＝TODO 立项「/dev/sd\* 类仍不可写」条款→e2e 补表外块设备写拒探针（root 门＋块设备形态门、仅守卫臂——对照臂真写盘面＝灾难不设；`file_type` 不跟随 symlink 防软链冒充）；P3-4＝e2e 恢复臂无条件断言依赖 CAP_MKNOD→断言收敛 root 分支（非 root 分支 best-effort 恢复防假红）。补证＝Linux `cargo check -p orz-tools --lib` exit 0（`attach_child_write_guard` 为 cfg(linux)、Windows 读数不覆盖其编译）；处置后复验＝e2e Linux 重跑 2/0（sd 探针 skip 路径实测）・Windows orz-sandbox lib 23/0・触碰面 fmt 复检零 diff。
+- **落点**：设计档 §7.5 完成态＋本节；BACKLOG `0ch` 状态推进（`pending`，S1/S2 达成段）＋指针行/计数行；TODO `P1-0ch` 勾选；索引头行 v4.111 → **v4.112**；**README 发布面对齐**（写入管控段 0bw→0cb／0cc v3 收窄口径、新增评测节〔142 批 89 题报告口径〕、上下文滑窗措辞对齐、protoc 构建前置 IMPORTANT 注记、维护者单点提交声明——审查处理 P2 补记）。**余项**＝S3 随 0.8.8 代窗口重建进体（与 0ce／0cf／0cg 同窗）＋S4 三题（configure-git-webserver／caffe-cifar-10／git-multibranch）重跑复验。
+- 关键词：143 批、0ch S1/S2、L3 粒度精准化、DEVICE_SAFE_NODES、ROOT_MAKE_GRANT、make 族子集、union 语义、文件级授权、`prepare_allow_set`、attach_child_write_guard、mknod 拒、`rm /dev/null` 拒、枚举期快照边界、否决备选三项、Stdio::null 溺死、同批审查处理 P2×1＋P3×4、表外块设备探针、README 发布面对齐、计数 62 不变。
+
+### 1.96 2026-10-01 144 批 0ch S3 双平台载体重建 0.8.8 进体（用户令「请进行重建吧」；计数 62 不变；**未推送未发行**；沿 117/121 批形态，主会话执行）
+
+- **源冻结**＝orz **`2da7dba0`**（`60b21a37` 0ch S2 feat〔5 文件 +608/−170，含审查处理 P3-1/P3-3/P3-4 修复〕＋`2da7dba0` bump 0.8.7→0.8.8〔Cargo.toml＋Cargo.lock 两行，`cargo metadata --locked` exit 0〕）；**0cd（`20e4c574` 死代码清退）随行进体**——「源态前移随下次重建进体」承诺本批兑现；0ce 暂缓、0cf/0cg 未实施＝无代码随行，三者落点**顺延 0.8.9 代窗口**（BACKLOG/TODO 对应节已注记）。
+- **Windows 重建换装**＝`build_orz.ps1 -Release -Jobs 2` **exit 0（2m49s）**（唯一警告＝orz-host unused import 既有面）；三件换装 `D:\tb-eval\orz-windows\`、旧件预置 `.0.8.7-bak` 链，**MATCH 3/3**（`orz.exe 82c37eaa…`／`orz-signer.exe f651f7ba…`／`orz-acaf-provision.exe 3c520cdf…`；尺寸 Δ0）；换装基线实证＝现役 0.8.7 三件哈希 `104b9bce…`/`ed8066b7…`/`ebf5b3f9…` 与 122 批账面逐位吻合；`--build-info`＝`0.8.8 os=windows`。**ACAF 重 provision**＝旧 manifest 留 `signer-manifest.json.bak-20261001-144`；provision **exit 0**、manifest `binary_sha256=f651f7ba…` ↔ 换装位逐位一致；**keystore 两件（`f37556ab…`/`2aa80cb8…`）前后逐位未动**。
+- **Linux musl**＝docker `rust:1.97-slim`＋`build_orz_aliyun_trixie.sh`（ORZ-BUILD-MOUNT-001 契约 `MSYS_NO_PATHCONV=1`；脚本仓库副本＝tb-eval 副本 diff 一致预检）**exit 0（约 23 分钟）**；`/out` 直写换装位（旧件预置 `.0.8.7-bak` 链），与 `orz-target/x86_64-unknown-linux-musl/release` **MATCH 3/3**（`orz 874df6ca…`〔−544 B〕／`orz-signer 8991589e…`〔+72〕／`orz-acaf-provision 87c88423…`〔+32〕）；alpine 3.20 `file`：三件 **static-pie linked**＋**INTERP=0**；alpine/bookworm 双冒烟 `version=0.8.8 os=linux`。
+- **进体判据**＝**Windows 件**：版本串滚动（`0.8.8` 12→13・`0.8.7` 8→7）＋五规则 id（1/2/2/1/1）与保底文案「已越过保底硬边界」逐位不变；**如实记**＝`DEVICE_SAFE_NODES` 七串与 0cd 退役串在 Windows 件两侧均为 0——表唯一消费点 `attach_child_write_guard` 为 cfg(linux)，Windows 侧死引用被链接器消除（0cd 常量在 0.8.7 Windows 件即不可达），**0ch 字面量判据主场在 Linux 件**。**Linux 件**（Python `bytes.count` 逐字节权威核证）：`DEVICE_SAFE_NODES` 全表 7 项可达＝`/dev/zero` 0→1・`/dev/full` 0→1・`/dev/ptmx` 0→1・`/dev/urandom` 1→2・`/dev/random` 5→6・`/dev/null` 45→46・`/dev/tty` 1→1（表项与既有串 linker 串合并复用）、`/dev/` 前缀族 69→**75**（+6）；0cd 退役串两侧均 0（纯死代码全周期未达二进制，如实记）。**方法学如实记**＝MSYS `grep -a -o` 对大体积二进制模式计数不可靠（`/dev/zero` 等误读 0），以 Python 逐字节定案；清单活体核证须在 Linux 容器内做（解压态 exit=1 为容器无 tty 的 `tui io error` 两态同现，判据只看 carrier-integrity finding 有无）。
+- **身份门换装**＝`run_r0_heavy_official.py` `EXPECTED_CARRIER_SHA256` `3332b38f…` → **`874df6ca…`**（注释行同步 0.8.8＝0ch S3 源冻结 `2da7dba0`；适配器 `6d55c26e…` 未动＝`tb_agents/orz.py` 无改动）；语法解析＋`--help` 加载通过。
+- **打包**＝`rel-144-stage` 两侧各 **5 entries**（三件套＋`README.md`＋`SHA256SUMS`；manifest `kind=orz-carrier-manifest version=0.8.8`；包内 README＝`.tmp-b144-readme.md`：新增 0.8.8 增量段〔L3 粒度精准化六节〕、0.8.7 改标「已发布」基线、版本信息行 `2da7dba0`/2026-10-01）；包内六件与在役载体 **6/6 MATCH**；zip `a8bd1ab5…`（28,018,926 B）／tar `5e2c24cb…`（37,189,320 B）；容器核证（alpine 3.20）zip **4/4**・tar **4/4**・顶层 **2/2**、包内 build-info（tar 侧 in-container）＝**0.8.8**；**清单活体两态**（`--version` 通道、stderr 落被检目录外，沿 121 批勘误）＝解压态干净 **0 finding**／README+1B **恰 1 条**＝`长度不符（清单 45665 ≠ 实际 45666）`。
+- **边界与未做**＝**未推送未发行**（沿 113/116/121 惯例，随推送批一并；发布面仍停 v0.8.7）；Linux 载体未做 ACAF 重 provision（沿 093/100/109/122 同口径）；S4 未跑＝`configure-git-webserver`／`caffe-cifar-10`／`git-multibranch` 三题重跑复验随下一批（**0.8.8 已在役＝重跑线解禁**）。
+- **落点**＝本节＋[`144 批档`](../docs/audits/144_CARRIER_REBUILD_V088_0CH_S3_2026-10-01.md)＋设计档 §7.5 S3 完成态注记＋TODO `P1-0ch` S3 勾选＋0cf/0cg 顺延注记＋BACKLOG `0ch` 状态推进（余 S4）＋指针行/计数行＋索引头行 v4.112 → **v4.113**＋`orz_source_manifest.sha256` 重生成 1506 条（`--check` valid）。
+- 关键词：144 批、0ch S3、0.8.8 重建、源冻结 `2da7dba0`、0cd 进体、DEVICE_SAFE_NODES 进体、static-pie×3、`874df6ca…` 身份门、rel-144-stage、清单活体两态、0.8.9 顺延、未推送未发行、计数 62 不变。
+
+### 1.97 2026-10-01 145 批 0ch S4 首题复验（configure-git-webserver・0.8.8）＋0cc 闭合＋dpkg 根符号链接边界注记（用户令「找一道目前指令被拒绝，摩擦最大的题目来跑就行」→「作为边界注记吧，作为已知代价」「请进行落账吧」；计数 62 → **61**；**零代码／零载体／零身份门改动**；未提交未推送；主会话执行）
+
+- **选题（摩擦最大题）**：rerun3 十八题会话卷三通道定向扫描（`/dev` 节点写拒报错行／根 `/git` mkdir 拒行／`sed -i … /usr/(bin|sbin)/*` 改系统二进制）——`configure-git-webserver` **唯一三通道全占**（dev 写拒 327／根 mkdir 拒 2〔原始命中 13〕／改系统二进制 4）且**唯一死亡螺旋**（rerun3 同题把 `/usr/bin/apt-key`、`/usr/sbin/sshd`〔先 `cp -a` 留 orig〕、`/usr/sbin/nginx`、`/usr/bin/ucf` 逐个 sed 替换 `/dev/null`）；原始 1.0 → rerun3 0.0 的翻转即摩擦所致。
+- **跑批**：作业 `official-v41-rerun3-configure-git-webserver-0chs4`（`--job-suffix` 防覆写 rerun3 留档卷）；身份门核验过＝carrier `874df6ca…`（0.8.8 在役件逐位）／adapter `6d55c26e…`；预拉本地已有（digest `sha256:9e48389b…`）；条件与 rerun3 一致（**无 agent 侧墙钟**、官方 900s 唯一外边界、`--upload --public`、跑完即 rmi）；19:20:08–19:36:13 rc=0 elapsed 16.0 min；**[rerun3-verdict] reward=0.0 mode=harbor-timeout(exception)**（逐试次口径）；**[rerun3-check] PASS**（files=33 泄漏 0 上限读数 0 session 面读取=1 模型时间自述 0）；镜像 rmi rc=0；D 盘 11.49 GiB 前后持平。
+- **0ch 两目标摩擦实证消除**：① `/dev` 写拒 **0**（全卷唯一 "denied" 为模型自行 grep apt 日志的检索词）；② 根目录放行**轮内亲测全过**＝`mkdir -p /git` 成功＋`probe-write-in-/git OK`＋`rm-in-/git OK`（`ROOT_MAKE_GRANT` 5 位＋目录 baseline 写族按设计生效）；③ **零改系统二进制**（rerun3 同题 4 处 sed ⇒ 0），死亡螺旋消失。
+- **新露第三摩擦＋差分定因（用户裁决＝0ch 已接受边界注记〔已知代价〕，不立项不放行）**：apt 装 git/openssh-server 时 `libcryptsetup12 2:2.7.0-1ubuntu4.2` 解包失败＝`unable to install new version of './lib': Permission denied`——**差分测试**＝同镜像无守卫 `docker run` 直装 rc=0 干净通过 ⇒ 镜像/软件源健康、拒绝来自 orz L3 守卫侧；机制＝镜像 `/lib -> usr/lib` 根级符号链接（usrmerge）替换需 `/` 本体 REMOVE/rename 权，恰为 `ROOT_MAKE_GRANT` 刻意排除面（union 语义下即扬盘保底失守；根级删除＝规则 1 威胁模型本体）；**非 0ch 回归**（0.8.7 同拒更严；rerun3 卷零 `libcryptsetup` 痕迹＝apt 当时死在 `/dev/null` 走不到解包，0.8.8 放行 apt 自身后才首次到达此墙）；模型绕行面（`--no-install-recommends git nginx` 瘦装避开 systemd→libcryptsetup12 链／`dpkg-deb -x` 侧解包落 `/usr`）未尝试。
+- **判 0 形态如实记**：已从「写摩擦死亡螺旋」变为「apt 环境墙＋**检索偏航**」——模型修 dpkg 未果后转上网查题面规范（浏览器车道不可用走 fetch；发现 terminal-bench 上游改名 `harbor-framework`、api.github.com 未取得逐字规范）＋翻 `/logs/verifier`，烧尽剩余分钟；与 0ch 修复不矛盾。`/zlink_at_root` 查明＝**模型自身 rename 探针残留**（`ln -s usr/bin` make 成功＝0.8.8 放行正确 → rename 被拒＝保底正确），非框架残留。
+- **0cc 闭合（62 → 61，用户裁决「0cc 已经做完了，89 题已经完成」）**：S1–S3（119/120/121 批）＋v3.1 审查处理＋0.8.7 进体（122 批）＋S4 重跑系列 5/5＝2/5 翻盘＋下半场第一窗 12/44（123 批）＋未跑面并入 89 题整轮直接重跑（续跑形态退役）→ 整轮收官＝**73/89＝82.0%**（142 批报告，官方轮读数以报告口径为准）；`pending` → `implemented`。
+- **落点**：本节＋[`145 批档`](../docs/audits/145_0CH_S4_FIRST_RERUN_V088_2026-10-01.md)＋BACKLOG（指针行/计数行 61/P1 总览行/P1 开放项行去 0cc/0cc 闭合 bullet/0ch S4＋边界 bullet）＋TODO（计数行/P1 路由行去 0cc token/P1-0cc 两勾/P1-0ch S4 注记）＋索引 v4.113 → v4.114（头行＋§8 pending 桶去 0cc、implemented 桶增 0cc、0ch 更新）。
+- **边界**：S4 余两题（`caffe-cifar-10`／`git-multibranch`）未跑，0ch 维持 `pending`（计数 61 含 0ch）；0.8.8 发布面仍未推送未发行；单题单跑不外推统计结论。
+- 关键词：145 批、0ch S4 首题、configure-git-webserver、`-0chs4` 作业后缀、reward 0.0 硬杀、目标摩擦实证消除、零改系统二进制、libcryptsetup12 `./lib` EACCES、差分定因框架侧、根级符号链接 REMOVE 拒、已接受边界（已知代价）、检索偏航、zlink 探针残留、0cc 闭合、计数 62 → 61。
+
+### 1.98 2026-10-01 146 批 0ce 闭合＋0cf/0cg S1/S2 落码（0.8.9 代窗口）（用户令「请直接进行0ce/0cf/0cg三项吧」；计数 61 → **60**；零载体/零身份门改动；**未提交未推送**〔orz 侧批提交 `be4f90ff`，父仓随推送批〕；主会话执行）
+
+- **0ce 死代码清退（闭合，61 → 60）**：S1 勘定＝全仓消费表（外部消费实证**六边**：plugins／prompt::skills／prompt::agents_md／repo::RepoDirChain／discovery::project_agent_dirs_in／config::workspace_grok_build_toolset——原「仅 plugins＋skills 两面」为低估；`apply_patch_template_source()` 产品出口已不存在随族退役）；S2 落码＝删除面 15 文件（templates/ 3＋encrypt_templates.py＋prompt/{template,prompt_encrypted,context,subagent_prompts,user_message}.rs＋{agent,builder,compaction,system_reminder,error}.rs）＋**orz-subagent-resolution 整 crate**（3,018 行/7 文件，无成员资格无消费方）＋root `[workspace.dependencies]` 注册行＋config.rs 2,587→装配最小件/discovery.rs 1,501→目录枚举两函数＋2 钉/lib.rs 六模块/README 重写/skills.rs 三个新死注入函数随批退役/orz-memory 文档注记；Cargo.toml 剪七依赖；加密模板连 plaintext 源零转写清退。S3＝workspace check 绿＋orz-agent 302/0＋orz-workspace 1,500/0＋orz-host 350/0＋clippy 104↔104 逐文件一致（触碰面零新增）＋fmt＋源清单 1,485 条（1506−21 恰合删除面）＋门禁 valid。S4＝`pending` → `implemented`。
+- **连带修复（如实记）＝serde_json `preserve_order` 特性统一链断裂**：该特性原经 orz-agent→orz-sampling-types 隐式统一开启；orz-agent 剪依赖后（resolver v2 下 build-dep 的 tree-sitter 使能不回流）orz-workspace 权限金样键序翻转 3 败（`{"args,…}` 字典序 vs 插入序）；修复＝orz-workspace/orz-host serde_json 边显式声明（消费事实落边）；cargo tree 差分定因。
+- **0cf（S1/S2 达成，S3 待 0.8.9 代重建）**：blackboard_read 描述分区段末尾补一句（framework usage manual / `section=guide` / mechanism-only, live-only, zero badges）＋section enum 增 `guide`（tool_run.rs 验证面本就放行，enum 缺位为文档缺口）＋blackboard F-012 测试双钉。
+- **0cg（S1/S2 达成，S3 待 0.8.9 代重建）**：① 两渲染面拆除＝session_face_block_with_wallclock 退役（session_face_block 收敛三参）＋build_status_line 去 rounds_line 参＋T̂ 换算函数族（WALLCLOCK_ROUNDS_PREFIX/DISCLAIMER/ROUNDS_BUDGET_LABEL/ladder_floor/bucket/wallclock_rounds_line/rounds_budget_line）与 controller wallclock_rounds_line 方法全退役（run_elapsed_wallclock_secs 保留＝F6 push 仍消费）；TOOL_ROUND_*/status 行保留；F6 push（默认 off）与 retrieval 保留量机械面不动；到期硬门 `run_invalidated{status: wallclock}` 语义不变。②③ orz-bin argv/env 收口＝argv→env 桥（P0-2 形态）退役；`MAX_WALLCLOCK_INPUT` OnceLock 启动期一次解析（argv 优先、宿主常驻 env 次之＝F-012 兼容）＋`remove_var`＋Linux `argv_scrub`（/proc/self/stat 48–51 定界＋/proc/self/mem 原位零化；best-effort fail-soft；纯函数四钉跨平台实跑）；**非 Linux 平台无原位等价语义＝已知边界**（评测在 Linux 容器内）。测试＝prompt.rs 五件 0am Part A 钉子退役＋session 面负向钉＋controller/blackboard 断言改造。
+- **预存漂移对齐三处（stash 差分实证＝先于本批）**：0bz face_fingerprint 逐轮事件（09-28 落码）晚于 0bi 对齐（09-23）——orz-host acp_server 两处 9→10、orz-bin stdio_e2e 11→10；在 0.8.8 源冻结（2da7dba0）上同形失败；counterexample_gate/第二轮 model_output 在极小流不触发的 gate 触发面漂移**另记观察项**（不在本批定因）。
+- **环境面如实记**：rustc 0xc0000409（STATUS_STACK_BUFFER_OVERRUN）三次（rmcp metadata／orz-bin 双 bin 链接）＝-j 2/-j 1 重跑通过；D 盘两次耗尽（target 67.9 GB＋Linux check 产物，清 incremental 31.5 GB＋linux-gnu debug 后 17.7 GB 续行）；Docker Desktop 守护进程一次崩溃重启；protoc 走 `D:\CLI\orz\bin\protoc.exe` 显式 PROTOC（dotslash 包装路径失效）；orz-host 并行负载敏感族（timeout/process-tree/job/symlink/volume-hint）失败集逐次漂移、逐件复跑全过＝09-18 严格审查先例形态。
+- **落点**：本节＋[`146 批档`](../docs/audits/146_0CE_0CF_0CG_DEADCODE_GUIDE_WALLCLOCK_2026-10-01.md)＋BACKLOG（指针行/计数行 60/P2 总览行/P2 开放项行去 0ce/0ce 闭合＋0cf/0cg S1/S2 bullet）＋TODO（计数行 60/P2 路由行/P2-0ce 四勾闭合/P2-0cf/P2-0cg S1/S2 勾）＋索引 v4.114 → v4.115（头行＋§8 implemented 桶增 0ce、0cf/0cg 注记更新）＋[`0am 设计档 §2 拆除注记`](../docs/LIF_DYNAMICS_PROJECTION_AND_ROUND_BUDGET_DESIGN_2026-09-16.md)＋[`组件册 orz-subagent-resolution 退役注记`](../upstream/fusion-component-register-v0.1.yaml)。
+- **边界**：0cf/0cg 维持 `pending`（计数 60 含两者；S3＝0.8.9 代载体重建进体后闭合，0.8.8 在役件无新面）；载体 0.8.8 在役不动、发布面仍未推送未发行；orz 侧批提交 `be4f90ff` 已落、父仓提交随推送批。
+- 关键词：146 批、0ce 闭合、死代码清退、orz-agent 模板族、orz-subagent-resolution 孤儿 crate、preserve_order 特性统一、0cf guide 简注、0cg 墙钟拆除、argv_scrub、/proc/self/mem、0bz face_fingerprint 漂移对齐、stash 差分、计数 61 → 60。
+
+### 1.99 2026-10-01 147 批 0.8.9 双平台载体重建进体——0cf/0cg 进体并闭合（用户令「请进行重建吧」；计数 60 → **58**；未提交未推送〔orz 侧 `e87b0630` 止三提交，父仓随推送批〕；主会话执行）
+
+- **源冻结**：orz `6295b3dc`（bump 0.8.8→0.8.9）＋`e87b0630`（argv_scrub 实弹修复）＋`be4f90ff`（146 批落码）；`cargo metadata --locked` exit 0。
+- **argv_scrub 实弹修复（本批核心事件，如实记）**：初建 0.8.9 Linux 载体的 `/proc/self/mem` 通道容器实弹探针失败（ps 仍见完整 argv，fail-soft 静默未达）；最小 musl 探针差分证实**直接裸指针写自身 argv 区有效** ⇒ `scrub_linux` 重设计为 stat 定界＋原位零化（setproctitle 标准形态，orz `e87b0630`）；两平台重建/换装/门/包随新哈希全部重做（中间态身份门 `00b37193…` 被取代）。修复后实弹探针双绿：ps cmdline＝`/v/orz --stdio`（旗标＋值消失）、宿主注入 `ORZ_MAX_WALLCLOCK=77777` 启动后 `/proc/<pid>/environ` 读数 0。
+- **Windows**：`build_orz.ps1 -Release -Jobs 2` exit 0（5m19s 初建＋29s 修复重链）；换装 MATCH 3/3（`fadb4f13…`/`fc38e48d…`/`5f31bf0d…`）＋回滚点 `.0.8.8-bak`＋ACAF 重 provision exit 0（`binary_sha256=fc38e48d…` 逐位、keystore `f37556ab…`/`2aa80cb8…` 未动）＋`--build-info` 0.8.9＋**安装根载体清单刷新 0.8.9**（144 批遗留缺口＝清单滞留 0.8.7，本批顺手闭合）。
+- **Linux musl**：docker `rust:1.97-slim`＋ORZ-BUILD-MOUNT-001（首挂失败一次＝脚本未按契约挂 `/build.sh`，修正后二建 exit 0）；换装 MATCH 3/3（`4e35f410…`/`27f94fe9…`/`bc119e2d…`）；static-pie×3（Python ELF 解析：ET_DYN＋PT_INTERP=0；alpine 无 file/readelf 如实记）；alpine 3.20/bookworm 双冒烟 `version=0.8.9 os=linux` exit 0；安装根 manifest 同步刷新。
+- **进体判据（Python bytes.count 两平台）**：Windows＝版本串 0.8.9 10→11/残留 0.8.8 1→0、墙钟三串 1/2/1→0/0/0、0cf 简注 0→5×2、保留面 F6_BUDGET_CUE 2→2/TOOL_ROUND_BUDGET 5→5、五规则 id＋保底文案逐位不变；Linux＝版本串 7→8、墙钟三串→0、`/proc/self/stat` 0→1（argv_scrub 进体）、0ch 面 `/dev/null` 46→46・`/dev/` 族 75→75 零回归；`Orchestrator Mode` 两代均 0＝DCE（0ce 字符串级判据主场缺位，如实记——其证据主体为 146 批源删除＋编译＋302 测试）。
+- **身份门**：`EXPECTED_CARRIER_SHA256` `874df6ca…` → **`4e35f410…`**（0.8.9＝源冻结 `e87b0630`；适配器 `6d55c26e…` 未动）；语法＋`--help` 通过。
+- **打包 rel-147-stage**：两侧各 6 files（三件套＋README 0.8.9 版＋SHA256SUMS＋carrier-manifest 0.8.9）；归档 `orz-0.8.9-windows-x86_64.zip`＝`813acfb6…`／`orz-0.8.9-linux-x86_64.tar.gz`＝`f5955cbf…`；容器核证 zip/tar 6 files＋tar 侧 in-container build-info 0.8.9 exit 0；清单活体两态＝干净 0 finding／README+1B 恰 1 条（49309≠49310）。
+- **0cf/0cg 闭合（60 → 58）**：两批序 S4＝闭合，判据＝进体字节判据在两平台在役件成立＋0cg 实弹探针双绿；`pending` → `implemented`。
+- **落点**：本节＋[`147 批档`](../docs/audits/147_CARRIER_REBUILD_V089_0CF_0CG_2026-10-01.md)＋BACKLOG（指针行/计数行 58/P2 总览行/P2 开放项行去 0cf・0cg/两节闭合 bullet）＋TODO（计数行 58/P2 路由行/P2-0cf・0cg 四勾）＋索引 v4.115 → v4.116（头行＋§8 implemented 增 0cf/0cg）。
+- **边界**：0.8.8/0.8.9 发布面均未推送未发行（发布面停 v0.8.7）；0ch S4 余两题（caffe-cifar-10/git-multibranch）重跑线解禁未跑；Linux 载体未做 ACAF 重 provision（沿例）；0cg 非 Linux 平台原位擦写缺位＝已知边界不变。
+- 关键词：147 批、0.8.9 重建、argv_scrub 实弹修复、直接指针写、实弹探针双绿、`4e35f410…` 身份门、rel-147-stage、清单活体两态、安装根清单缺口闭合、0cf/0cg 闭合、计数 60 → 58。
+
+### 1.100 2026-10-02 148 批 审查处置——F6 push 档与 0au 尾部派发保留量随 0cg 尾巴退役（用户裁决「墙钟本身都已经退役了，F6/保留量不涉及其他部分的话，就进行记录，一起退役即可」；计数 58 → **57**〔0au `pending` → `withdrawn`〕；未提交未推送〔orz 侧 `e1c373ec` 止四提交，父仓随推送批〕；主会话执行）
+
+- **缘起（P2 符合性缺口）**：对 0ce/0cf/0cg（146/147 批）三维度全面审查查明——0cg ②③ 的 argv/env 收口（argv→env 桥退役＋启动期 `remove_var`）把两处账面声称「保留/不动」的机械面断了供流：**F6 push 档**（`maybe_push_f6_budget_cue` 的 `f6_push_limit_secs ← main_wallclock_limit_secs_override() ← env ORZ_MAX_WALLCLOCK`——启用也永不注入＝静默配置陷阱）与 **0au 尾部派发保留量**（agent_loop 预扫描 `wallclock_reserved` 同源——官方评测形态 `--ak max_wallclock` 透传 argv 时 0.8.8 在役为活机制、0.8.9 起恒不触发＝未记录的行为面变化）；字节级进体判据 `F6_BUDGET_CUE 2→2` 只证字符串在体、未证供流活性（教训留档：保留面宜加供流核对）。
+- **前提核验（用户裁决条件）**：「不涉及其他部分」成立——F6 消费面＝agent_loop 调用点＋prompt 注册臂＋3 测试；保留量消费面＝agent_loop 预扫描/保留臂/`reserved_retrievals`/post-batch 重述＋batch_close 判定族＋5 测试；**契约面零变化**（`budget_cue_injected` 事件枚举/schema v0.2/`verify_budget_cue_injected` 校验族保留服务历史 journal）；D2 单批墙钟（`BatchCloseKind::WallclockBound`）/子代理档位墙钟（180/300/450）/0z 硬门（`run_invalidated{status: wallclock}`）零触碰。
+- **退役落码（orz `e1c373ec`，9 文件 +48/−737）**：F6 面（`F6_BUDGET_CUE_PREFIX`/`f6_budget_cue_block`/`f6_push_cue_for_remaining`/controller 开关·上限·跨阈记账·push 方法·run 复位臂/agent_loop 调用点）＋0au 面（三常数/`wallclock_reserved`/agent_loop 接线全族）＋供流线（`parse_main_wallclock_limit_secs`/`main_wallclock_limit_secs_override`/`run_wallclock_limit_secs`/`with_run_wallclock_limit_secs`〔零调用方〕/`run_elapsed_wallclock_secs`〔唯一消费者即 F6〕）；退役注记四处；0au `withdrawn` 闭合、S1 曾在役/S4 从未实机如实记。
+- **连带（P3×3）**：P3-1＝147 批档 §1 `be4f90ff` 统计勘误（初稿「37 文件 +181/−14,109」→ 实际 41 files +389/−14,114，原位注记）；P3-2＝0ce 注释级幽灵引用对齐六处（orz-tools ×5＋orz-config-types ×1）；P3-3＝scrub 后 argv 重读点（`main.rs:471` run_tui）登记为今日无害观察。
+- **读数**：`cargo check --workspace` 绿（PROTOC 显式；rustc `0xc0000409` 闪退一次重跑过＝146 先例）；orz-loop lib **847/0**（总 850＝858−恰 8 退役测试）＋integration **2/0**；orz-bin 全靶 **60/0** 逐靶同 146 账面；clippy 触碰三 crate 差分 **100→99 恰 −1**；触碰文件 fmt 零新增（agent_loop 尾空行恰修）；**如实记**＝`user_cancel_closes_pending_activations_before_run_cancelled` 竞态用例全量首跑失败（stash 差分实证基线同形＝先于本批，复跑自愈）＋提交态预存 fmt 漂移约 47 处散布未触碰面（acaf/compact/console 等，留触碰批收口）＋D 盘耗尽一次（清 incremental 12G 续行）；源清单重生成 1,485 条；门禁 `valid: true`。
+- **落点**：本节＋[`148 批档`](../docs/audits/148_0CG_TAIL_F6_RESERVE_RETIREMENT_2026-10-02.md)＋147 批档勘误＋BACKLOG（指针行/计数行 57/P1 总览行/开放项行去 0au/0au 闭合 bullet/0cg 尾巴 bullet/0ce 注释 bullet）＋TODO（计数行 57/P1 路由行去 0au/P1-0au 三勾闭合）＋索引 v4.116 → v4.117（头行＋0au 条目 `withdrawn`＋§8 0cg 补尾巴）＋[`LIF_DYNAMICS 设计档 §0 同族注记`](../docs/LIF_DYNAMICS_PROJECTION_AND_ROUND_BUDGET_DESIGN_2026-09-16.md)。
+- **边界**：0.8.9 在役载体不受影响（F6/保留量在役已是断供死配置，`F6_BUDGET_CUE` 2→0 随下一代重建自然进体）；零重建零 bump；0.8.8/0.8.9 发布面仍未推送未发行（停 v0.8.7）；0ch S4 余两题重跑线解禁未跑；父仓未提交未推送（沿惯例待令）。
+- 关键词：148 批、审查处置、P2 断供、F6 push 退役、0au 退役闭合、withdrawn、供流线清退、budget_cue_injected 契约面保留、计数 58 → 57、stash 差分预存失败、fmt 预存漂移、be4f90ff 统计勘误、orz `e1c373ec`。
+
+### 1.101 2026-10-02 149 批 TODO 分卷改形态——TODO2.md 转为 TODO 第二部分（用户令「todo2改一下形态，直接变成第二部分，给todo腾地方用，就和index的第二部分一样」；计数不变 **57**；纯台账形态批、零代码零子仓改动；主会话执行）
+
+- **改形态内容**：`TODO2.md` 自「TER 专项实施树（2026-09-03 建立，309 行）」改形态为 **TODO 第二部分**（`# TODO 卷 2 — 已闭合核对与历史段`，918 行）——§1 主 TODO 头部历史整理轮记录（2026-08-31—2026-09-19 十四则，原样移入）／§2 近期已闭合单行核对（原「## 近期已闭合」节移入）／§3 已闭合项核对节（**58 个** `###` 闭合节按 P0/P1/P2/P3 分组、原序原样移入，510 行）／§4 TER 树收编（标题降一级、正文零改）。主 [TODO.md](../TODO.md) 1584 → **1150 行**：头部换「分卷口径＋历史指针」三行，删除项＝仅上述移出件；**开放项勾选节（59 个）与开放项路由行逐字未动**，路由行「已闭合分组」指针改指第二部分。
+- **门禁机械边界（本批实证）**：`check_repository.py` 的 ledger 检查只解析主 TODO 的计数行/开放项路由行/`###` 勾选节（勾选核对只对 BACKLOG 开放集），闭合节整体移出**不触碰任何检查**——门禁复跑 `valid: true`；TODO2 不在 LEDGER 解析集内（不受 1200 字符行限约束）。
+- **守恒自证**：58 闭合节标题全数在卷 2（0 缺失）／卷 2 §1–§3 零未勾行（未勾仅 TER §4 五条）／开放节抽查全在／勾选行数差分对 HEAD 的表观不平＝146–148 批未提交台账改动（0ce/0cf/0cg/0au 勾选与计数），非本批丢失。
+- **落点**：本节＋TODO/TODO2 两件本批改形＋BACKLOG（指针行/计数行）＋索引 v4.117 → v4.118（头行＋AUTH-TODO 条目补第二部分注记）。
+- **边界**：TODO2.md 文件名与既有全仓引用链接不变（引用面零断链）；`BACKLOG2.md` 仍为 TER 专项卷不动；0ce/0cf/0cg/0au 等已闭合内容的**权威叙述仍在 BACKLOG 条目与各批档**，卷 2 仅勾选核对面。
+- 关键词：149 批、TODO 分卷、TODO 第二部分、TODO2 改形态、TER 树收编、闭合节迁移、门禁边界实证、计数不变 57。
+
+### 1.102 2026-10-02 150 批 0ch S4 余两题重跑收官——caffe-cifar-10／git-multibranch 双 1.0 翻盘（用户令「请进行0ch剩余两题重跑吧」；计数不变 **57**〔0ch 闭合待裁决〕；零代码／零载体／零身份门改动；主会话执行）
+
+- **跑批**：`run_puller_control.py caffe-cifar-10 git-multibranch --job-suffix -0chs4`（rerun3 同条件＝无 agent 侧墙钟、官方 task 级超时唯一外边界、`--upload --public`、预拉＋跑完即 rmi；逐题收单检查）；身份门 carrier `4e35f410…`（0.8.9）／adapter `6d55c26e…` OK；预拉 2/2。
+- **读数**：caffe-cifar-10（BATCH3/3600s）**reward 1.0 self-completed**（29.3 min，run `RUN-CLI-6abe9839`，51 轮/83 工具；rerun3 同题 0.0 harbor-timeout＝翻盘）；git-multibranch（BATCH1/900s）**reward 1.0 self-completed**（15.1 min，run `RUN-CLI-6abe9f15`，15 轮/26 工具；权威试次 rerun2 同题 0.0＝翻盘）；两题 `[rerun3-check]` PASS（泄漏 0／上限读数 0／剩余读数 0／轮次换算 0／残留全 0）；run 均以 `run_finished reason=completed` 收官。
+- **0ch S4 判读＝两目标摩擦三题一致消除**：`/dev` 零摩擦（caffe 零提及；git-multibranch `/dev/null` 类 21 处零拒 vs rerun3 同题写拒 179）＋根级 make 实战放行（git-multibranch `/git` 建仓全程；caffe probe make ✓／REMOVE·rename 拒＝保底正确）＋零改系统二进制（两题 sed=0）；caffe 29.3 min 完成构建＋训练＋评测管线（rerun3 同题烧尽 3600s）＝摩擦消除直接转化为任务完成。
+- **保底保留实证**：caffe 写控审查 allow 49／warn 5／block 3（`carrier-write` .gsa 会话卷域×2＋**keystore 祖先臂**×1〔v3.1 祖先臂实战〕，三拦全为保底目标面、模型绕行后 1.0 收官）；git-multibranch allow 17／warn 1；审批面 permission_decision 全 allow_once 零拒绝。
+- **残余摩擦观察三点（不立项，如实记）**：① dpkg usrmerge 根条目（`/lib.usr-is-merged.dpkg-new`）REMOVE 拒再现＝145 批已接受边界家族，caffe 模型黑板记坑绕行未螺旋；② git-multibranch pty 分配拒（`/dev/ptmx` open FAIL、ssh 密码登录面）＝`DEVICE_SAFE_NODES` 文件级授权不覆盖 /dev/pts 分配链，非 0ch 回归（0.8.7 同拒），模型绕行后 1.0；③ hook cp 到 `/git/project/hooks/` denied 机制未定谳、未阻断任务。
+- **边界**：0ch S4 三题全部跑完，闭合（57 → 56）待用户裁决；0.8.8/0.8.9 发布面仍未推送未发行（停 v0.8.7）；父仓未提交未推送（沿惯例待令）。
+- **落点**：本节＋[`150 批档`](../docs/audits/150_0CH_S4_REMAINING_TWO_RERUNS_V089_2026-10-02.md)＋BACKLOG（指针行/计数行/P1 总览行/0ch 条目 S4 收官 bullet）＋TODO（计数行/P1 路由行/P1-0ch S4 注记）＋索引 v4.118 → v4.119（头行＋§8 0ch 条目）。
+- 关键词：150 批、0ch S4 收官、caffe-cifar-10、git-multibranch、0.8.9 在役复验、双 1.0 翻盘、self-completed、零改系统二进制、ROOT_MAKE_GRANT 实战、keystore 祖先臂实战、carrier-write 保底拦截、dpkg usrmerge 已接受边界、pty 分配拒观察、闭合待裁决、计数不变 57。
+
+### 1.103 2026-10-02 151 批 0ch 闭合——灾难兜底精准化 `pending` → `implemented`（用户裁决「证据足够了那0ch就可以进行闭合了」；计数 57 → **56**；纯闭合落账批、零代码零子仓改动；主会话执行）
+
+- **闭合判据（S1–S4 全达成）**：S1/S2＝143 批（设计档 v4.0 §7 三子项定档＋落码＋钉子＋e2e ABI v3 真机全过）；S3＝144/147 批（0.8.8/0.8.9 双平台载体重建进体、0.8.9 在役）；S4＝145/150 批三题复验（首题 configure-git-webserver 两目标摩擦实证消除＋第三摩擦已裁接受边界；余两题 caffe-cifar-10/git-multibranch 双 1.0 self-completed 翻盘、`/dev` 零摩擦、根级 make 实战、零改系统二进制、保底保留实证〔keystore 祖先臂实战〕）。
+- **处置**：`pending` → `implemented`；计数 57 → **56**；BACKLOG/TODO/索引 §8 三面同步。
+- **随项留档**：dpkg usrmerge 根级条目 REMOVE 拒＝「保底换来的已知代价」注记于 0ch（设计档 §7 粒度），不立项不放行；pty 分配拒（非 0ch 回归）与 hook cp denied（未定谳）两观察随闭合归档（150 批档 §0/§3），不占计数不设后续项。
+- **边界**：0.8.9 在役不动；0.8.8/0.8.9 发布面仍未推送未发行（停 v0.8.7）；父仓未提交未推送（沿惯例待令）；orz 侧零改动（`e1c373ec` 仍为最新）。
+- **落点**：本节＋[`151 批档`](../docs/audits/151_0CH_CLOSURE_2026-10-02.md)＋BACKLOG（指针行/计数行 56/P1 总览行去 0ch/开放项行去 0ch＋闭合注记/0ch 条目状态行＋标题行＋150 批 bullet 尾句对齐）＋TODO（计数行 56/P1 路由行去 0ch＋已闭合流水增 0ch/P1-0ch 四处勾选与标题注记）＋索引 v4.119 → v4.120（头行＋§8 pending 桶去 0ch、implemented 桶增 0ch）。
+- 关键词：151 批、0ch 闭合、灾难兜底精准化、implemented、计数 57 → 56、用户裁决、S1–S4 全达成、双 1.0 翻盘、已接受边界留档、纯闭合落账批。
+
+### 1.104 2026-10-02 152 批 评测线裁决与双立项＋0b 全项退役（用户裁决「Frontier-Bench 顺位跑；SlopCodeBench 先挑题并且作为摩擦任务来跑；TB 2.1 刷分收官直接进新的」「0b 本身就不做，我们不刷分，分数不重要，只是一个评判而已，用题目找bug和不足才重要」；计数 56 → **57**〔0ci/0cj 立项＋0b `pending` → `withdrawn`〕；纯台账批、零代码零子仓改动；主会话执行）
+
+- **评估**：只读评估四基准（HarnessBench 两家同名消歧／Frontier-Bench／SlopCodeBench／CursorBench），成本锚＝142 批 33.8h 实测（估算口径如实记）；裁决档＝[`152 批档`](../docs/audits/152_FRONTIER_BENCH_SLOPCODEBENCH_ADJUDICATION_2026-10-02.md)。
+- **立项**：0ci Frontier-Bench 试点线（Harbor 同管线第二证据轴、k=1 筛查、S0 钉数据集仓库 pin 为第一项）＋0cj SlopCodeBench 挑题摩擦探针线（RLI 观测场；只观测不改造、RLI 数学归 0am）。
+- **0b 全项退役**：验证③④⑤不做、机制面（Benchmark 轴/探针/console 注册/CLI 旗标）在役不退役；`pending` → `withdrawn`；TB 2.1 成绩线收官（任务级 73/89＝82.0% 定档、不再刷分）；评测哲学入档＝题目是找 bug 与不足的工具、分数只是评判。
+- **RLI 可见性定案（152 档 §5/§9）**：注解先行且精简；注入式不再增加（第三层出局）；0bd ⑦ 在役面维持不扩展；判据＝0cj S4 消费率（对照基线 0bf S3 的 0/3）。
+- **门禁**：`valid: true`／error_count 0（两子批后各一次）；方法论注记＝路由行裸 token 两踩两修＋行长核量须用 Python unicode 计数。
+- **落点**：152 批档＋BACKLOG（指针行/计数行/P0·P1 总览行/P0·P1 锚点行/0b 节退役闭合/0ci·0cj 两节）＋TODO（计数行/P0·P1 路由行/P0-F 节退役闭合/P1-0ci·P1-0cj 两勾选节）＋索引 v4.120 → v4.121（头行＋§8：pending 桶＋EVAL 两 ID、withdrawn 桶＋0b）。
+- 关键词：152 批、评测线、Frontier-Bench、SlopCodeBench、CursorBench 不跑、0b 退役、TB 2.1 收官、RLI 可见性、注解先行、注入式出局、k=1 筛查。
+
+### 1.105 2026-10-02 153 批 0ck RLI 模型面注解单独立项＋落码（用户令「先把RLI注解做了，然后再进入新一轮验证，请进行单独立项」；计数 57 → **58**；单独立项单独批〔0bn 同形〕；主会话执行）
+
+- **落码**：`orz-loop` controller.rs `blackboard_read` 描述串 rli 分区括注后插入一句（0cf guide 句之前）：`如需时间/动作连续性与节奏压力走向等信息，请查看 RLI 参考面（section=rli）。`（用户令修订定稿——首版带批次号考古已撤：模型不需要 0ck，只留「何时读＋去哪读」）；描述串全仓单源核证（`Read a blackboard partition` 唯一命中）、无测试钉原文。
+- **读数**：触碰面 fmt 零 diff（controller.rs rustfmt --check 干净；全仓 fmt 漂移在案、工具链注记明示不拒批）；`cargo test -p orz-loop --lib` **终态 847 过／0 挂全绿**（首跑 1 挂＝`user_cancel_closes_pending_activations_before_run_cancelled` dispatch.rs:4002，连挂 3 次后整套复跑自愈＝**既存 flaky**；stash 差分定因干净 HEAD 同挂＝与 0ck 无因果，登记留裁决不扩批）；clippy stash 前后 73/73 行 warning＝**新增 0**；同批附工具面描述测量＝blackboard_read 5,593 字符＋约 10 处批次考古引用（重灾区，瘦身候选留裁决），其余工具克制。
+- **边界**：S3 重建进体随代窗口裁决（建议与 0cj/0ci 开跑前同窗，使新一轮验证自带注解；进体判据＝描述串字节进体核证）；S4 消费率读数归 0cj；未提交未推送；orz 子树脏（controller.rs 一处）＝既知开发态（0ay 批先例）。
+- **落点**：153 批档＋BACKLOG（指针行/计数行 58/P1 总览行/P1 锚点行/0cj 措辞句改指 0ck/新增 0ck 节）＋TODO（计数行 58/P1 路由行/0cj 追加裁决句/新增 P1-0ck 节）＋索引 v4.121 → v4.122（头行＋§8 pending 桶＋`RLI-TOOL-ANNOTATION`）。
+- 关键词：153 批、0ck、RLI 注解、blackboard_read、模型面可见性、消费率 0/3 基线、单独立项、既存 flaky 登记、字节判据待进体、工具面描述测量。
+
+### 1.106 2026-10-02 154 批 0cl 黑板模型面瘦身单独立项＋落码——blackboard_read 描述＋guide 说明书简明化（用户令「请先进行黑板瘦身吧，说明书也要简明扼要，可以做成框架内部名词解释和组件关系交代」；计数 58 → **59**；单独立项单独批〔0ck 同族〕；主会话执行）
+
+- **落码**（orz 子树 controller.rs＋blackboard.rs 两处）：① 主描述 5,593 → **2,492 字符**（每 section 一句「何时读」；批次引用 **10＋ → 0**）；② 十条参数描述去考古保留全部行为语义；③ **模型面与派发器一致性修复**＝section 枚举补 `journal`/`notes`（派发器本就支持、guide 在教，唯 enum 未声明）＋补声明 `anchor` 参数（journal 点读入口）；④ guide 正文重写＝【名词】（黑板/journal/轮块 seq/定位符/压缩与回放/域五值）＋【组件关系】（提议→门禁→执行→回流→两阶段交付＋机械审计；temporal/rli 机械记账按需查；检索子代理指针回读）＝**621 字符**（≤1 KiB 内）；⑤ 测试钉同步（blackboard.rs：0cf 句断言 → `section=guide`＋「名词解释与组件关系」）。
+- **读数**：触碰面 fmt 零 diff（controller.rs＋blackboard.rs）；`cargo test -p orz-loop --lib` **847 过／0 挂**全绿。落码当轮自纠三处＝guide 闭引号弯引号、断言格式收行、描述补字面 `section=guide`（均当轮修复、如实记）。
+- **边界**：只动 blackboard_read 工具面＋guide 正文；其余工具描述不动（read_file 2,172 属 orz-tools 系另案）；枚举/参数增补＝既支持面的模型面交代、非工具面扩张；S3 进体与 0ck S3 同代窗口（进体判据＝新描述串＋enum＋anchor 字节核证）；未提交未推送（子树脏两处＝既知开发态）。
+- **落点**：154 批档＋BACKLOG（指针行/计数行 59/P1 总览行/P1 锚点行/新增 0cl 节）＋TODO（计数行 59/P1 路由行/新增 P1-0cl 节）＋索引 v4.122 → v4.123（头行＋§8 pending 桶＋`BLACKBOARD-FACE-SLIMMING`）。
+- 关键词：154 批、0cl、黑板瘦身、blackboard_read、guide 说明书、名词解释与组件关系、批次引用清零、journal/notes 枚举、anchor 声明、字节判据待进体。
+
+### 1.107 2026-10-02 155 批 0.8.10 双平台载体重建进体——0ck/0cl S3 达成（用户令「请进行重建吧」；计数不变 **59**〔0ck/0cl S4 真机核证待续、两项维持开放〕；主会话执行）
+
+- **源冻结**：orz 三提交＝`d5632248`（153/154 落码，2 files +70/−103）→ `41ab8f8e`（bump 0.8.9→0.8.10，Cargo.toml＋Cargo.lock 两行）→ `55d61c47`（重建判据补笔）；`cargo metadata --locked` exit 0；未推送（分支 ahead 9 commits）。
+- **重建与换装**：Windows `build_orz.ps1 -Release -Jobs 2`（初建 rustc 0xc0000409 崩 orz_tui＝已知闪退家族＋**管道 tail 掩蔽假 exit 0** 方法学注记；重试 Finished 1m28s exit 0）换装 `D:\tb-eval\orz-windows\` MATCH 3/3＋`.0.8.9-bak` 链；Linux docker `rust:1.97-slim`＋`build_orz_aliyun_trixie.sh`（ORZ-BUILD-MOUNT-001、`MSYS_NO_PATHCONV=1`；首挂中途叫停＝判据拦截后修复重跑）二建 exit 0、`/out` 直写换装位 MATCH 3/3、Python ELF 解析三件 **ET_DYN（PIE）＋PT_INTERP=0（static-pie）**。
+- **§2-A 判据拦截事件**：初建 Windows 件字节判据 `RLI_ANNO`=0——**0cl 瘦身整段替换描述时静默丢失 0ck 注解句**；换装前拦截，源修复 `55d61c47`（rli 条目后补回用户裁决句原文）→ 双平台重build 终态 `RLI_ANNO`=5。教训双条＝①整段替换类改动必须携前批新增面清单核对；②后台构建退出码不得经管道取。
+- **进体字节判据（两平台同形，旧→新）**：RLI_ANNO 0→5／GUIDE_NOUNS 0→5／ANCHOR_PARAM 0→5／OCF_OLD_GONE（0cf 英文旧句）5→0／版本串 0.8.10=1、0.8.9 残留仅注释（WIN 11→10・LIN 8→7）／保留面零回归（`/dev/null` WIN 3→3・LIN 46→46、`carrier-write` 1→1）／JOURNAL_LOC 27→37。
+- **ACAF 重 provision（Windows）**：manifest 备份 `.bak-20261002-155`；provision exit 0；`binary_sha256=b4b5d87b…` ↔ 换装位 signer 逐位一致；keystore 两件（`f37556ab…`/`2aa80cb8…`）逐位未动。Linux 侧沿例不做。
+- **身份门换装**：`run_r0_heavy_official.py` `EXPECTED_CARRIER_SHA256` `4e35f410…` → **`4ed531e8…`**（注释同步 0.8.10＝源冻结 `55d61c47`；适配器 `6d55c26e…` 未动）；语法解析＋`--help` 过。
+- **冒烟**：alpine 3.20/bookworm 双 `--build-info`＝`version=0.8.10 os=linux` exit 0；Windows `--fake-provider -p hello` 整轮 rc=0（run `RUN-CLI-6abec694`）；`--version` 完整性通道 Windows 无 tty 落 TUI 挂起（147 已知形态）——以构造性保证替代（manifest 同批文件生成 3 entries rc 0）。
+- **边界**：未推送未发行；**打包顺延发行批**（0ck/0cl S4 未完无发行压力，偏差如实记）；0ck/0cl 维持开放（S4＝消费率读数随 0cj S3/S4 收取）；载体现役 0.8.10、发布面停 v0.8.7。
+- **落点**：155 批档＋BACKLOG（指针行/0ck・0cl 批序 S3 bullet）＋TODO（计数行/P1-0ck・P1-0cl S3 勾选）＋索引 v4.123 → v4.124（头行）。
+- 关键词：155 批、0.8.10 重建、源冻结 `55d61c47`、字节判据拦截、`4ed531e8…` 身份门、ACAF 重 provision、static-pie×3、双容器冒烟、打包顺延、假 exit 0 方法学注记。

@@ -78,10 +78,12 @@ MANIFEST = (
 PULL_LOG = JOBS_DIR / 'preroll-images.log'
 PULL_TRIES = 4
 
-# 载体锁定值（2026-09-30 换装 0.8.7＝0cc S2 审查处理批宿主态祖先链臂重建源冻结 orz `79a3e8e5`；
-# 旧值 0.8.6 = 979a38fad9ea903fef98fa10fc6036a1db7b94c198aed2b7b5dffc49f48aeea9〔0cc S2〕）
+# 载体锁定值（2026-10-02 换装 0.8.10＝0ck/0cl 0.8.10 代窗口重建源冻结 orz `55d61c47`
+# 〔`d5632248` 批落码＋`41ab8f8e` bump＋`55d61c47` 重建判据补笔：0ck RLI 模型面注解＋
+# 0cl 黑板模型面瘦身（描述 5,593→2,492＋guide 重写「名词解释＋组件关系」＋enum 补 journal/notes＋anchor 补声明）〕；
+# 旧值 0.8.9 = 4e35f4101f26a8e6c91ab14dbb871dc715ce983f1cf7c6d0edd76396710d2385〔0ce/0cf/0cg 代窗口〕）
 EXPECTED_CARRIER_SHA256 = (
-    '3332b38f71cd4b635f6a1538bb14266bb8f2d739676e92ba976a26b566dd1362'
+    '4ed531e837df68896a8d5c340e1df42a54fa9d63aa96de8bd91705eb7903b310'
 )
 # 适配器锁定值（现行 tb_agents/orz.py，含 F1 试次隔离＋0ax ORZ_WEB_SEARCH_LOCAL 透传；
 # 旧值 2737cfadc5c43603b73164b51343e58a671c0efeee8d9ab7a626dda8dae51490）
