@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use orz_tools::util::grok_home::grok_home;
 
 /// Scope for a memory write operation.
-/// Write-operation scope. Distinct from `orz_agent::config::MemoryScope` (agent memory dir).
+/// Write-operation scope (0ce: orz-agent 定义机制已清退，无跨 crate 同名域).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryScope {
     /// Global memory — shared across all workspaces.

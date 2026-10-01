@@ -1,29 +1,18 @@
-//! Agent builder, definition parsing, and system prompt assembly.
+//! Skills/plugins/agents-md discovery surfaces and workspace toolset
+//! assembly, shared with `orz-workspace`.
 //!
-//! This crate extracts a first-class `Agent` type from `xai-grok-shell`.
-//! An `Agent` bundles tools, system prompt, system-reminder policy,
-//! compaction policy, and model configuration into a single, portable
-//! object that any host can consume.
+//! 0ce (2026-10-01) 死代码清退后的保留面：本 crate 曾承载 Agent 构建、
+//! 模板渲染与 agent 定义机制（Agent/AgentBuilder/AgentDefinition/
+//! PromptContext/加密模板族）——服务消费面为零，已整体退役；在役消费面
+//! 仅 plugins / skills / agents_md / repo / 目录发现 / 工具集装配六面
+//! （消费方 orz-workspace：folder_trust、project_config、discovery、handle）。
+//! TB 无头路径零提示词姿态不变（0cd 已钉）。
 
-pub mod agent;
-pub mod builder;
-pub mod compaction;
 pub mod config;
 pub mod discovery;
-pub mod error;
 pub mod plugins;
 pub mod prompt;
 pub mod repo;
-pub mod system_reminder;
 pub mod timing;
 
-pub use agent::Agent;
-pub use builder::AgentBuilder;
-pub use compaction::CompactionPolicy;
-pub use config::AgentDefinition;
-pub use config::preset_names;
-pub use config::toolset_for_preset;
 pub use config::workspace_grok_build_toolset;
-pub use error::AgentBuildError;
-pub use prompt::context::{DEFAULT_SYSTEM_PROMPT_LABEL, PromptContext};
-pub use system_reminder::ReminderPolicy;

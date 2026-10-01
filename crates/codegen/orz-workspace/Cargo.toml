@@ -26,7 +26,11 @@ md5 = { workspace = true }
 regex = { workspace = true }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { workspace = true }
-serde_json = { workspace = true }
+# preserve_order 须本 crate 边上显式声明——0ce（2026-10-01）清退 orz-agent
+# 模板族前，本特性经 orz-agent→orz-sampling-types 依赖链隐式统一开启；链断
+# 后（resolver v2 下 build-dep 的 tree-sitter 不回流）金样键序翻转，故按消费
+# 事实落回显式声明。
+serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = [
     "fs",

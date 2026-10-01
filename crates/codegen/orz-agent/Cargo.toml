@@ -3,33 +3,26 @@ license = "Apache-2.0"
 name = "orz-agent"
 version = "0.1.0"
 edition.workspace = true
-description = "Agent builder, definition parsing, and system prompt assembly"
+description = "Skills/plugins/agents-md discovery surfaces and workspace toolset assembly"
 
 [dependencies]
+chrono = { workspace = true }
 dunce = { workspace = true }
-orz-assurance = { path = "../../orz-assurance" }
-orz-hooks = { path = "../orz-hooks" }
-orz-sampling-types = { path = "../orz-sampling-types" }
-orz-tools = { path = "../orz-tools" }
-xai-tty-utils = { workspace = true }
-xai-token-estimation = { workspace = true }
-minijinja = { version = "2", features = ["custom_syntax"] }
+dirs = "6"
 git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
+ignore = { workspace = true }
+orz-assurance = { path = "../../orz-assurance" }
+orz-config = { workspace = true }
+orz-hooks = { path = "../orz-hooks" }
+orz-tools = { path = "../orz-tools" }
 regex = { workspace = true }
 serde = { workspace = true }
-serde_yaml = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync"] }
 tracing = { workspace = true }
-chrono = { workspace = true }
-ignore = { workspace = true }
-dirs = "6"
-orz-config = { workspace = true }
-sha2 = { workspace = true }
-strum = { workspace = true }
-thiserror = { workspace = true }
-zeroize = "1"
-xai-tool-types.workspace = true
+xai-tty-utils = { workspace = true }
 
 [features]
 default = []
@@ -37,7 +30,6 @@ default-bazel = []
 
 [dev-dependencies]
 tempfile = { workspace = true }
-serde_json = { workspace = true }
 serial_test = { workspace = true }
 
 [lints]

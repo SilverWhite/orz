@@ -3275,7 +3275,11 @@ mod tests {
                 // 11 → 9。实测序列：preflight / availability×2 / started /
                 // prompt_submitted / header_change / model_output /
                 // snapshot / finished。
-                assert_eq!(replay.event_count, 9);
+                // 0.8.9 代窗口差分（146 批，0ce/0cf/0cg）：0bz S1 的逐轮
+                // `face_fingerprint` 事件（2026-09-28 落码，晚于 0bi 对齐）
+                // 入列 ⇒ 9 → 10；在 0.8.8 源冻结（2da7dba0，本批改动 stash
+                // 对照）上同形失败＝漂移先于本批，本批仅对齐实现事实。
+                assert_eq!(replay.event_count, 10);
                 assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -3344,8 +3348,10 @@ mod tests {
                     // 已提交批合法事件（检索族探针 / 请求头指纹 /
                     // 资源档位快照）。0bi ⑩（2026-09-23）：纯文本短答跳过
                     // 反例门省一轮——`counterexample_gate` + 第二个
-                    // `model_output` 消失：11 → 9。
-                    assert_eq!(replay.event_count, 9, "preflight + turn events");
+                    // `model_output` 消失：11 → 9。146 批差分（0.8.9 代
+                    // 窗口）：0bz S1 逐轮 `face_fingerprint` 事件入列
+                    // ⇒ 9 → 10（0.8.8 冻结位同形失败＝漂移先于本批）。
+                    assert_eq!(replay.event_count, 10, "preflight + turn events");
                     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
                 }
 

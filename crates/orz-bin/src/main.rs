@@ -8,8 +8,18 @@
 // `--stdio` ACP server) arrives in Phase 2-4.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+
+// 纯函数钉子跨平台跑测试；仅 Linux 擦写 wrapper 在非 Linux 下无调用方
+// （条件 dead_code allow，不掩盖其它平台的真实死代码）。
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod argv_scrub;
+
+/// 0cg (2026-10-01)：墙钟预算原始取值（`--max-wallclock` argv 优先，其次
+/// 宿主常驻 `ORZ_MAX_WALLCLOCK`）——main() 启动期一次解析进本静态，进程
+/// 可见面（argv/env）随即可擦写（见 `argv_scrub`）；此后派生 shell 不可见。
+static MAX_WALLCLOCK_INPUT: OnceLock<Option<String>> = OnceLock::new();
 
 use orz_host::session::{SessionHandle, bootstrap_session};
 use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
@@ -213,22 +223,37 @@ fn main_inner() {
             std::process::exit(2);
         }
     }
-    // P0-2 (2026-08-08 stall guards): `--max-wallclock <sec>` → env
-    // (precedent: `--allow-write` → `ORZ_ALLOW_WRITE`). Model-invisible
-    // total-time budget for headless runs; on expiry the run ends itself
-    // with a `run_invalidated{status: wallclock}` terminal instead of the
-    // harness's process-out hard kill (no terminal, no journal).
-    if let Some(pos) = args.iter().position(|a| a == "--max-wallclock") {
-        let secs = match args.get(pos + 1) {
-            Some(s) => s.clone(),
-            None => {
-                eprintln!("error: --max-wallclock requires a number of seconds");
+    // 0cg (2026-10-01) 墙钟输入通道收口：`--max-wallclock <sec>` 不再经
+    // env 桥（原 P0-2 形态 `--max-wallclock` → `ORZ_MAX_WALLCLOCK` 退役）。
+    // 取值一次性解析进进程内静态——argv 优先，其次宿主常驻 env（F-012：
+    // 本机实测宿主可常驻 ORZ_MAX_WALLCLOCK）；随后 `remove_var`（派生 shell
+    // 的 `env` 与 `/proc/self/environ` 继承面收口），并在 Linux 上对 argv/
+    // environ 内存区做 best-effort 零化（`ps`/`pgrep` 读 `/proc/*/cmdline`
+    // 137 批实证 14 卷命中；见 `argv_scrub`）。非 Linux 平台无原位擦写
+    // 等价语义——已知边界（评测在 Linux 容器内）。到期硬门（headless 的
+    // `run_invalidated{status: wallclock}` 终态）语义不变。
+    {
+        let from_argv = args.iter().position(|a| a == "--max-wallclock").map(|pos| {
+            args.get(pos + 1)
+                .cloned()
+                .ok_or_else(|| "--max-wallclock requires a number of seconds".to_string())
+        });
+        let resolved = match from_argv {
+            Some(Ok(raw)) => Some(raw),
+            Some(Err(missing)) => {
+                eprintln!("error: {missing}");
                 std::process::exit(2);
             }
+            None => std::env::var("ORZ_MAX_WALLCLOCK").ok(),
         };
+        let _ = MAX_WALLCLOCK_INPUT.set(resolved);
+        // SAFETY: single-threaded before any runtime starts（edition 2024，
+        // `--allow-write` → `ORZ_ALLOW_WRITE` 先例同点）。
         unsafe {
-            std::env::set_var("ORZ_MAX_WALLCLOCK", secs);
+            std::env::remove_var("ORZ_MAX_WALLCLOCK");
         }
+        #[cfg(target_os = "linux")]
+        argv_scrub::scrub_linux("--max-wallclock", "ORZ_MAX_WALLCLOCK");
     }
     // 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): `--retrieval-enabled` —
     // 会话级独立检索启用门（默认 false = fail-closed；三值模式退役后唯一
@@ -1156,7 +1181,8 @@ async fn record_plan_event(
         .map_err(|e| e.to_string())
 }
 
-/// Parse the max-wallclock budget from a raw value (`ORZ_MAX_WALLCLOCK`).
+/// Parse the max-wallclock budget from the startup static raw value
+/// (`--max-wallclock` argv → resident env, resolved once in main; 0cg).
 /// `None`/`0` = unbounded (default); anything non-numeric is an error
 /// (fail-closed — a typo must not silently disable the guard).
 fn parse_max_wallclock(raw: Option<String>) -> Result<Option<Duration>, String> {
@@ -1173,8 +1199,12 @@ fn parse_max_wallclock(raw: Option<String>) -> Result<Option<Duration>, String> 
 }
 
 /// The resolved max-wallclock budget (from `--max-wallclock` → env).
+/// The resolved max-wallclock budget — from the startup static (`--max-wallclock`
+/// argv, else resident env), never from the live environment (0cg: the env
+/// var is removed at startup so derived shells cannot inherit it). Unset
+/// static (direct-test binaries) falls back to None — same shape as unbounded.
 fn max_wallclock() -> Result<Option<Duration>, String> {
-    parse_max_wallclock(std::env::var("ORZ_MAX_WALLCLOCK").ok())
+    parse_max_wallclock(MAX_WALLCLOCK_INPUT.get().and_then(|inner| inner.clone()))
 }
 
 /// Parse the stall-watchdog timeout from `ORZ_STALL_TIMEOUT` (seconds).

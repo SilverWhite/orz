@@ -296,7 +296,6 @@ orz-hooks = { path = "crates/codegen/orz-hooks" }
 orz-paths = { path = "crates/codegen/orz-paths" }
 orz-chat-state = { path = "crates/codegen/orz-chat-state" }
 orz-sampling-types = { path = "crates/codegen/orz-sampling-types" }
-orz-subagent-resolution = { path = "crates/codegen/orz-subagent-resolution" }
 orz-secrets = { path = "crates/codegen/orz-secrets" }
 orz-sandbox = { path = "crates/codegen/orz-sandbox" }
 orz-compaction = { path = "crates/common/orz-compaction" }

@@ -1520,10 +1520,9 @@ impl AgentLoopController {
     /// is a pure function of plan state, so it is byte-identical across
     /// rounds while the plan is unchanged (prefix-cache discipline).
     pub(crate) fn render_status_line(&self) -> Option<String> {
-        // 0am S1 Part A（2026-09-17）：轮次预算档搭乘常驻状态行（设计 §2.2
-        // 第二渲染面）。投影行先算（只读 LIF），再取黑板读锁——不在黑板
-        // 锁内取 LIF 锁（锁序纪律见本文件 2026-08-31 B2 复审登记）。
-        let rounds_line = self.wallclock_rounds_line();
+        // 0cg（2026-10-01）墙钟可见性拆除：原 0am S1 Part A 的轮次预算档
+        // 搭载（LIF 投影行）退役——状态行只渲染计划推进事实，取黑板读锁
+        // 前无 LIF 锁交互（锁序纪律见本文件 2026-08-31 B2 复审登记）。
         let bb = self.blackboard.read();
         if bb.plan.goal.is_none() && bb.plan.steps.is_empty() {
             return None;
@@ -1531,7 +1530,6 @@ impl AgentLoopController {
         Some(crate::prompt::build_status_line(
             bb.plan.goal.as_deref(),
             &bb.plan.steps,
-            rounds_line.as_deref(),
         ))
     }
 
@@ -2236,21 +2234,12 @@ impl AgentLoopController {
                     .to_string(),
             );
         }
-        // TER T1.8 (2026-09-04)：F6 pull——session 面补 wallclock
-        // （elapsed / limit / remaining）；limit 来源 =
-        // `ORZ_MAX_WALLCLOCK`（评测墙钟单一化见 M2 T2.1）。
-        let wallclock = Some((
-            self.run_elapsed_wallclock_secs(),
-            main_wallclock_limit_secs_override(),
-        ));
-        // 0am S1 Part A（2026-09-17）：轮次换算行——墙钟已施加且 T̂ 就绪时
-        // 渲染，否则省略整行（fail-soft）。
-        let rounds_line = self.wallclock_rounds_line();
-        Ok(crate::prompt::session_face_block_with_wallclock(
+        // 0cg（2026-10-01）墙钟可见性拆除：原 TER T1.8 的 wallclock 三行与
+        // 0am S1 Part A 的轮次换算行退役——session 面只渲染轮预算与状态行；
+        // 评测墙钟回归纯机械面（orz-bin 硬门 + F6 push 默认 off）。
+        Ok(crate::prompt::session_face_block(
             tool_rounds,
             self.max_tool_rounds,
-            wallclock,
-            rounds_line.as_deref(),
             self.render_status_line().as_deref(),
         ))
     }
@@ -2265,24 +2254,10 @@ impl AgentLoopController {
         }
     }
 
-    /// 0am S1 Part A (2026-09-17, LIF_DYNAMICS_PROJECTION_AND_ROUND_BUDGET
-    /// §2)：T̂ → 墙钟?轮次换算的投影行（SESSION PULL 面 + resident 状态行
-    /// 共用）。渲染条件：评测墙钟已施加（`ORZ_MAX_WALLCLOCK`）**且** T̂
-    /// 就绪（采样 ≥ 8，`estimate_opt`）。其余情形（无上限 / T̂ 未就绪 /
-    /// 读数异常）返回 `None`——fail-soft，调用方省略整行（不渲染占位符、
-    /// 不报错、不打断）。本面 advisory：不接 `budget_insufficient` 预检、
-    /// 不与硬超时 / 资源门 / orientation 阈值 / 轮预算硬门联动。
-    pub(crate) fn wallclock_rounds_line(&self) -> Option<String> {
-        let limit_secs = main_wallclock_limit_secs_override()?;
-        let remaining_secs = limit_secs.saturating_sub(self.run_elapsed_wallclock_secs());
-        let t_hat_secs = self
-            .lif
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .estimator()
-            .estimate_opt()?;
-        crate::prompt::wallclock_rounds_line(remaining_secs, t_hat_secs)
-    }
+    // 0cg（2026-10-01）墙钟可见性拆除：原 `wallclock_rounds_line`（0am S1
+    // Part A 的 T̂→轮次换算投影行，SESSION PULL 面与 resident 状态行共用）
+    // 随渲染面同拆退役；`run_elapsed_wallclock_secs` 保留——仍服务 F6 push
+    // 档与 retrieval 派发保留量（机械面，模型不可见）。
 
     /// TER T1.9 (2026-09-04)：F6 push 档——每轮模型请求前调用；仅当
     /// 显式开启（`f6_push_enabled`）且配置了评测墙钟上限时，剩余跨
@@ -3898,7 +3873,10 @@ impl AgentLoopController {
                      的放大 c 与自校准阈值 θ85/95/99，未就绪机械如实）; \
                      selector now|recent|history (k≤20); env 门控 \
                      (ORZ_LIF_RLI_SHADOW), live-only ≤1 KiB, \
-                     零注入, nothing archived). \
+                     零注入, nothing archived). 0cf (2026-10-01): the \
+                     framework usage manual lives on the blackboard too — \
+                     `section=guide` reads it (mechanism-only, live-only, \
+                     zero badges). \
                      Optional `since_timestamp` (RFC 3339, e.g. the timestamp \
                      this tool returned earlier) filters the edits / tool_actions \
                      entries to those at or after that time. Optional \
@@ -3946,6 +3924,7 @@ impl AgentLoopController {
                                 "exec",
                                 "actions",
                                 "session",
+                                "guide",
                                 "internal_ret",
                                 "external_ret",
                                 "entities",

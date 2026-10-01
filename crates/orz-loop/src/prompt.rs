@@ -236,14 +236,9 @@ pub const STATUS_LINE_PREFIX: &str = "[任务状态";
 /// already arrive via the `[本轮编辑]` push; totals are one blackboard_read
 /// (edits partition) away.
 ///
-/// 0am S1 Part A (2026-09-17)：`rounds_line` = 预算投影行（
-/// [`rounds_budget_line`]）——仅当墙钟已施加且 T̂ 就绪时由调用方给出；`None`
-/// 时块字节不变（前缀缓存/尾随追加纪律不变）。
-pub fn build_status_line(
-    goal: Option<&str>,
-    steps: &[crate::blackboard::PlanStep],
-    rounds_line: Option<&str>,
-) -> String {
+/// 0cg（2026-10-01）墙钟可见性拆除：原 0am S1 Part A 的「轮次预算:」
+/// 投影行参数退役——本块只渲染目标/步骤推进事实。
+pub fn build_status_line(goal: Option<&str>, steps: &[crate::blackboard::PlanStep]) -> String {
     let goal = goal.unwrap_or("（无）");
     let mut lines = vec![format!("{STATUS_LINE_PREFIX} v0.1]")];
     if steps.is_empty() {
@@ -272,9 +267,6 @@ pub fn build_status_line(
             done,
             steps.len() - done,
         ));
-    }
-    if let Some(line) = rounds_line {
-        lines.push(line.to_string());
     }
     lines.push("[/任务状态]".to_string());
     lines.join("\n")
@@ -321,81 +313,12 @@ pub fn f6_push_cue_for_remaining(remaining_secs: u64, crossed: &mut [bool; 3]) -
     None
 }
 
-/// 0am S1 Part A (2026-09-17; LIF_DYNAMICS_PROJECTION_AND_ROUND_BUDGET_DESIGN
-/// §2)：T̂ → 墙钟?轮次换算面的渲染件。纪律（设计 §2.3–§2.5）：
-/// - **1-2-5 阶梯向下取整**：渲染值 `≤N` 恒取 ≤ 真值的最大阶梯值——渲染值
-///   永不高估剩余轮数（保守方向）；
-/// - **行尾固定免责短语** + 中性事实（不给建议、不接任何硬门/预检）；
-/// - **fail-soft**：输入不可用即省略整行，不渲染占位符、不报错、不打断。
+/// 0cg（2026-10-01）墙钟可见性拆除：原 0am S1 Part A 的 T̂→墙钟↔轮次
+/// 换算渲染件（`WALLCLOCK_REMAINING_ROUNDS` 行、resident `[任务状态]`
+/// 「轮次预算:」行、1-2-5 阶梯投影纯函数族）已整体退役——设计权威见
+/// BACKLOG 0cg（138 批用户裁决「直接撤掉这一设计」）；`ORZ_MAX_WALLCLOCK`
+/// 硬超时、轮预算硬门、0z 资源门、orientation 阈值语义不变。
 ///
-/// 本面是 advisory——与 SESSION 面既有「advisory, never a correctness
-/// premise」注记同格：`ORZ_MAX_WALLCLOCK` 硬超时、轮预算硬门、0z 资源门、
-/// orientation 阈值全部维持原语义，本面不与之联动。
-pub const WALLCLOCK_ROUNDS_PREFIX: &str = "WALLCLOCK_REMAINING_ROUNDS:";
-
-/// 行尾静态免责短语（设计 §2.3 逐字固定）：T̂ 为中位数而决策间隔呈双峰
-/// 重尾（典型轮 3–8s vs 长工具轮 100–1000s），换算天然粗，本行只作参考量。
-pub const WALLCLOCK_ROUNDS_DISCLAIMER: &str = "(coarse estimate; long tool rounds consume faster)";
-
-/// resident `[任务状态 v0.1]` 内的轮次预算档标签（设计 §2.2 第二渲染面）。
-pub const ROUNDS_BUDGET_LABEL: &str = "轮次预算:";
-
-/// 1-2-5 阶梯（`{1,2,5} × 10^k`，k ≥ 0 延伸）向下取整：返回 ≤ `raw` 的最大
-/// 阶梯值。`raw < 1`（不足一个中位轮）返回 0——`≤0` 仍是保守方向（永不高
-/// 估剩余轮数），不是「应当收尾」的建议。非有限输入返回 0（防御；调用方
-/// 已先经 [`round_budget_bucket`] 把关）。阶梯溢出（实际不可达）停在已取得
-/// 的最大值。
-pub fn round_budget_ladder_floor(raw: f64) -> u64 {
-    if !raw.is_finite() || raw < 1.0 {
-        return 0;
-    }
-    let mut best = 1u64;
-    let mut decade = 1u64;
-    while let Some(next_decade) = decade.checked_mul(10) {
-        for step in [1u64, 2, 5] {
-            let Some(candidate) = step.checked_mul(decade) else {
-                return best;
-            };
-            if candidate as f64 <= raw {
-                best = candidate;
-            } else {
-                return best;
-            }
-        }
-        decade = next_decade;
-    }
-    best
-}
-
-/// 轮次预算投影（设计 §2.1）：`remaining_rounds_raw = remaining_secs / T̂` 的
-/// 阶梯取整。`t_hat_secs` 非法（非有限 / ≤ 0，即 T̂ 读数不可用）返回 `None`
-/// ——fail-soft，调用方省略整行。T̂ 的就绪判定在调用方（采样 ≥ 8）。
-pub fn round_budget_bucket(remaining_secs: u64, t_hat_secs: f64) -> Option<u64> {
-    if !t_hat_secs.is_finite() || t_hat_secs <= 0.0 {
-        return None;
-    }
-    let raw = remaining_secs as f64 / t_hat_secs;
-    Some(round_budget_ladder_floor(raw))
-}
-
-/// SESSION PULL 面渲染行（设计 §2.2 第一渲染面）：
-/// `WALLCLOCK_REMAINING_ROUNDS: ≤N (coarse estimate; long tool rounds consume
-/// faster)`。行内的 N 与同面 `WALLCLOCK_REMAINING` 秒数由同一 T̂ 值换算，
-/// 不会出现字面自相矛盾的口径（0af 教训）。
-pub fn wallclock_rounds_line(remaining_secs: u64, t_hat_secs: f64) -> Option<String> {
-    let bucket = round_budget_bucket(remaining_secs, t_hat_secs)?;
-    Some(format!(
-        "{WALLCLOCK_ROUNDS_PREFIX} ≤{bucket} {WALLCLOCK_ROUNDS_DISCLAIMER}"
-    ))
-}
-
-/// resident `[任务状态 v0.1]` 内的轮次预算档（设计 §2.2 第二渲染面）。
-/// 中文标签 + 设计逐字英文免责短语（混排＝有意选择，同 0af「机械读数随附」
-/// 先例）。
-pub fn rounds_budget_line(bucket: u64) -> String {
-    format!("{ROUNDS_BUDGET_LABEL} ≤{bucket} {WALLCLOCK_ROUNDS_DISCLAIMER}")
-}
-
 /// IP2a denial-circuit-breaker message (D-3, FIX_PLAN 2026-08-06; ADR-0010
 /// §3.5.4 / V11-IMPL-012): injected after 3 CONSECUTIVE TOOL ROUNDS whose
 /// denials share one normalized key (tool, reason_code, policy_revision) —
@@ -426,23 +349,13 @@ pub fn tool_policy_breaker_block(tool_name: &str, consecutive: u32) -> String {
 /// block (`None` when no plan is set). The mechanical hard gates
 /// (`budget_insufficient` precheck, exhaustion block, `run_invalidated`)
 /// stay untouched — this face is advisory, never a correctness premise.
+///
+/// 0cg（2026-10-01）墙钟可见性拆除：原 TER T1.8 的
+/// `session_face_block_with_wallclock`（`WALLCLOCK_ELAPSED` /
+/// `WALLCLOCK_LIMIT` / `WALLCLOCK_REMAINING` 三行）与 0am S1 Part A 的
+/// `WALLCLOCK_REMAINING_ROUNDS` 换算行同源退役；`TOOL_ROUND_*` 行与
+/// status 行保留。
 pub fn session_face_block(used: u32, budget: u32, status_line: Option<&str>) -> String {
-    session_face_block_with_wallclock(used, budget, None, None, status_line)
-}
-
-/// TER T1.8 (2026-09-04)：session 面扩展入口——`wallclock` =
-/// `(elapsed_secs, limit_secs)`；`limit_secs=None` = 评测墙钟未施加
-/// （渲染 elapsed + limit none，不虚构 remaining）。
-/// 0am S1 Part A (2026-09-17)：`rounds_line` = 预渲染的轮次换算行（
-/// [`wallclock_rounds_line`]）——`None` = 省略（墙钟未施加 / T̂ 未就绪 /
-/// 读数异常；不渲染占位符）。
-pub fn session_face_block_with_wallclock(
-    used: u32,
-    budget: u32,
-    wallclock: Option<(u64, Option<u64>)>,
-    rounds_line: Option<&str>,
-    status_line: Option<&str>,
-) -> String {
     // TER T1.7 (2026-09-04)：默认 `budget == 0` = 无硬限——模型面不再宣示
     // 一个并不存在的 120 轮静态上限，改为 unlimited（显式配置非零上限时
     // 才渲染数字档与 remaining）。
@@ -463,29 +376,6 @@ pub fn session_face_block_with_wallclock(
          counts when it completes)\n\
          TOOL_ROUNDS_REMAINING: {remaining}\n",
     );
-    if let Some((elapsed_secs, limit_secs)) = wallclock {
-        out.push_str(&format!("WALLCLOCK_ELAPSED: {elapsed_secs}s\n"));
-        match limit_secs {
-            Some(limit_secs) => {
-                let remaining = limit_secs.saturating_sub(elapsed_secs);
-                out.push_str(&format!(
-                    "WALLCLOCK_LIMIT: {limit_secs}s\nWALLCLOCK_REMAINING: {remaining}s\n"
-                ));
-                // 0am S1 Part A：轮次换算行紧随 remaining 行（同一 T̂ 换算，
-                // 两行口径自洽）；`None` 时整行省略（fail-soft）。
-                if let Some(line) = rounds_line {
-                    out.push_str(line);
-                    out.push('\n');
-                }
-            }
-            None => {
-                out.push_str(
-                    "WALLCLOCK_LIMIT: none (评测墙钟未施加；配置 \
-                     ORZ_MAX_WALLCLOCK 后显示档位)\n",
-                );
-            }
-        }
-    }
     if let Some(line) = status_line {
         out.push_str(line);
         out.push('\n');
@@ -639,174 +529,15 @@ mod tests {
     }
 
     #[test]
-    fn session_face_wallclock_renders_elapsed_limit_remaining() {
-        // TER T1.8 (2026-09-04)：F6 pull——有限评测墙钟时渲染
-        // elapsed/limit/remaining。
-        let capped = session_face_block_with_wallclock(3, 120, Some((123, Some(900))), None, None);
-        assert!(capped.contains("WALLCLOCK_ELAPSED: 123s"), "{capped}");
-        assert!(capped.contains("WALLCLOCK_LIMIT: 900s"), "{capped}");
-        assert!(capped.contains("WALLCLOCK_REMAINING: 777s"), "{capped}");
-
-        // 未施加墙钟：elapsed + limit none，不虚构 remaining。
-        let open = session_face_block_with_wallclock(3, 120, Some((45, None)), None, None);
-        assert!(open.contains("WALLCLOCK_ELAPSED: 45s"), "{open}");
-        assert!(open.contains("WALLCLOCK_LIMIT: none"), "{open}");
-        assert!(!open.contains("WALLCLOCK_REMAINING"), "{open}");
-    }
-
-    /// 0am S1 Part A 钉子 A2（桶保真）：渲染桶 == 阶梯（`{1,2,5}×10^k`）中
-    /// ≤ raw 的最大值——既不高估，也不做二次折扣；且对剩余秒数单调不减
-    /// （读数不倒退）。
-    #[test]
-    fn rounds_ladder_floor_is_largest_step_below_raw() {
-        fn ladder() -> Vec<u64> {
-            let mut out = Vec::new();
-            let mut decade = 1u64;
-            while let Some(next) = decade.checked_mul(10) {
-                for step in [1u64, 2, 5] {
-                    out.push(step * decade);
-                }
-                decade = next;
-            }
-            out
+    fn session_face_carries_no_wallclock_after_0cg() {
+        // 0cg（2026-10-01）墙钟可见性拆除钉：session 面任何形态都不得再
+        // 出现 WALLCLOCK_* 行（原 TER T1.8 三行与 0am S1 Part A 换算行
+        // 已退役；评测墙钟回归纯机械面——orz-bin 硬门 + F6 push 默认 off）。
+        let capped = session_face_block(3, 120, Some("[任务状态 v0.1] x\n[/任务状态]"));
+        let unlimited = session_face_block(7, 0, None);
+        for face in [capped, unlimited] {
+            assert!(!face.contains("WALLCLOCK"), "{face}");
         }
-        let steps = ladder();
-        for raw in [
-            0.0, 0.4, 0.999, 1.0, 1.5, 2.0, 4.99, 5.0, 9.9, 10.0, 12.5, 19.99, 20.0, 49.0, 50.0,
-            99.0, 100.0, 225.0, 1234.5, 5000.0, 5001.0, 999_999.0,
-        ] {
-            let expect = steps
-                .iter()
-                .copied()
-                .filter(|v| (*v as f64) <= raw)
-                .max()
-                .unwrap_or(0);
-            assert_eq!(round_budget_ladder_floor(raw), expect, "raw={raw}");
-        }
-        // 单调性：raw 越大桶不减（同一 T̂ 下剩余墙钟越多，档位不减）。
-        let mut prev = 0u64;
-        for millis in 0..=60_000u64 {
-            let bucket = round_budget_ladder_floor(millis as f64 / 1000.0);
-            assert!(bucket >= prev, "monotonicity broke at {millis}ms");
-            prev = bucket;
-        }
-    }
-
-    /// 0am S1 Part A 钉子 A1（方向安全）：渲染桶 ≤ 真值 `remaining / T̂`
-    /// 在（剩余秒数 × T̂）全网格 100% 成立——阶梯向下取整保证渲染值永不
-    /// 高估剩余轮数。
-    #[test]
-    fn rounds_ladder_never_overestimates_direction_safety() {
-        let mut checked = 0u32;
-        for t_hat in [3.0, 3.7, 8.0, 12.5, 60.0, 300.0, 600.0] {
-            for remaining in [0u64, 1, 5, 30, 60, 300, 777, 900, 3_600, 36_000, 360_000] {
-                let bucket = round_budget_bucket(remaining, t_hat).expect("legal T̂");
-                let raw = remaining as f64 / t_hat;
-                assert!(
-                    bucket as f64 <= raw,
-                    "over-estimate: bucket {bucket} > raw {raw} \
-                     (remaining={remaining}s, t_hat={t_hat}s)"
-                );
-                checked += 1;
-            }
-        }
-        assert_eq!(checked, 7 * 11, "grid must be exhaustive");
-    }
-
-    /// 0am S1 Part A 钉子 A1（按实际消耗回算）：合成消耗序列——实际轮时长
-    /// 不慢于中位节奏 T̂ 时，渲染桶 ≤ 墙钟内实际完成的轮数 100% 成立。
-    /// 实际轮时长慢于 T̂（长工具轮占比高）是设计 §6.1 明示的已知粗粒度
-    /// 边界，不在本钉子内虚构保证。
-    #[test]
-    fn rounds_ladder_is_safe_against_realized_consumption() {
-        const T_HAT: f64 = 10.0;
-        let mut cases = 0u32;
-        for remaining_secs in (0..=3_600u64).step_by(7) {
-            let bucket = round_budget_bucket(remaining_secs, T_HAT).unwrap();
-            // 实际完成轮数：各轮时长 d_i ∈ [4, 10]s（≤ T̂），逐轮消耗到装不下。
-            let mut spent = 0u64;
-            let mut rounds = 0u64;
-            let mut i = 0u64;
-            loop {
-                let d = 4 + (i * 3) % 7;
-                if spent + d > remaining_secs {
-                    break;
-                }
-                spent += d;
-                rounds += 1;
-                i += 1;
-            }
-            assert!(
-                bucket <= rounds,
-                "rendered ≤{bucket} exceeds realized {rounds} rounds \
-                 (remaining={remaining_secs}s, T̂={T_HAT}s)"
-            );
-            cases += 1;
-        }
-        assert_eq!(cases, 515, "consumption grid must be exhaustive");
-    }
-
-    /// 0am S1 Part A：SESSION 面渲染位置 + 两种 fail-soft（未施加墙钟 →
-    /// 不渲染；T̂ 读非法 → 纯函数 `None`，调用方省略整行）。
-    #[test]
-    fn session_face_rounds_line_rides_wallclock_remaining() {
-        let line = wallclock_rounds_line(777, 8.0).expect("T̂ ready");
-        assert_eq!(
-            line,
-            "WALLCLOCK_REMAINING_ROUNDS: ≤50 \
-             (coarse estimate; long tool rounds consume faster)"
-        );
-        let face =
-            session_face_block_with_wallclock(3, 120, Some((123, Some(900))), Some(&line), None);
-        let remaining_idx = face.find("WALLCLOCK_REMAINING: 777s").expect("remaining");
-        let rounds_idx = face
-            .find("WALLCLOCK_REMAINING_ROUNDS: ≤50")
-            .expect("rounds line rides the remaining line");
-        assert!(
-            remaining_idx < rounds_idx,
-            "rounds line must follow WALLCLOCK_REMAINING: {face}"
-        );
-
-        // 未施加墙钟 → 即使给了行也不渲染（不虚构档位）。
-        let open = session_face_block_with_wallclock(3, 120, Some((45, None)), Some(&line), None);
-        assert!(!open.contains("WALLCLOCK_REMAINING_ROUNDS"), "{open}");
-
-        // T̂ 读非法 → `None`（fail-soft，不渲染占位符）。
-        for bad in [f64::NAN, 0.0, -3.0, f64::INFINITY] {
-            assert!(wallclock_rounds_line(777, bad).is_none(), "bad T̂ {bad}");
-        }
-        // raw < 1（不足一个中位轮）→ `≤0`：仍是保守方向，不是收尾建议。
-        assert!(
-            wallclock_rounds_line(0, 8.0)
-                .unwrap()
-                .starts_with("WALLCLOCK_REMAINING_ROUNDS: ≤0 "),
-            "sub-round remainder renders ≤0"
-        );
-    }
-
-    /// 0am S1 Part A：行内自洽（0af 教训）——轮次行与同面 remaining 秒数
-    /// 由同一 T̂ 换算，不出现字面自相矛盾；中性事实（无建议措辞）。
-    #[test]
-    fn rounds_line_is_self_consistent_and_neutral() {
-        let line = wallclock_rounds_line(30, 8.0).expect("T̂ ready");
-        assert!(
-            line.contains("≤2"),
-            "30s / 8s = 3.75 → 阶梯向下取整 2: {line}"
-        );
-        assert!(
-            2.0 <= 30.0 / 8.0 && 30.0 / 8.0 < 5.0,
-            "bucket boundary sanity"
-        );
-        for banned in ["建议", "请", "should", "recommend", "must"] {
-            assert!(
-                !line.to_lowercase().contains(banned),
-                "rounds line carries a suggestion word '{banned}': {line}"
-            );
-        }
-        assert!(
-            line.ends_with(WALLCLOCK_ROUNDS_DISCLAIMER),
-            "static disclaimer must be the fixed suffix: {line}"
-        );
     }
 
     #[test]
@@ -1024,7 +755,7 @@ mod tests {
                 status: StepStatus::Pending,
             },
         ];
-        let line = build_status_line(Some("修复 bug"), &steps, None);
+        let line = build_status_line(Some("修复 bug"), &steps);
         assert!(line.starts_with("[任务状态 v0.1]"));
         assert!(line.ends_with("[/任务状态]"));
         assert!(line.contains("目标: 修复 bug"));
@@ -1033,24 +764,10 @@ mod tests {
         assert!(line.contains("待办 2 步"));
 
         // No plan section → fallback goal text.
-        let bare = build_status_line(None, &[], None);
+        let bare = build_status_line(None, &[]);
         assert!(bare.contains("目标: （无）"));
         assert!(bare.contains("无计划步骤"));
 
-        // 0am S1 Part A：轮次预算档搭乘状态行（无该行时块字节不变）。
-        let rounds = rounds_budget_line(10);
-        let with_rounds = build_status_line(Some("修复 bug"), &steps, Some(&rounds));
-        assert!(with_rounds.contains(&rounds), "{with_rounds}");
-        assert!(
-            with_rounds.ends_with("[/任务状态]"),
-            "closing tag stays last: {with_rounds}"
-        );
-        let plan_only = with_rounds.replace(&format!("\n{rounds}"), "");
-        assert_eq!(
-            plan_only,
-            build_status_line(Some("修复 bug"), &steps, None),
-            "轮次行是纯追加——移除后与无预算档形态逐字节相同"
-        );
     }
 
     #[test]
@@ -1085,7 +802,7 @@ mod tests {
                 status: StepStatus::Pending,
             },
         ];
-        let line = build_status_line(Some("修复 bug"), &steps, None);
+        let line = build_status_line(Some("修复 bug"), &steps);
         assert!(line.contains("已完成 1"));
         assert!(line.contains("当前第 2 步 [step-2]「实施」"));
         assert!(line.contains("待办 2 步"));

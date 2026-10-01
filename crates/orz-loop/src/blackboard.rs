@@ -1631,24 +1631,17 @@ mod tests {
             .iter()
             .find(|m| m.tool_call_id.as_deref() == Some("call-se1"))
             .expect("session tool result message");
-        // F-012（2026-09-14）：宿主环境可常驻 ORZ_MAX_WALLCLOCK（本机实测
-        // 3600）——会话面的限额字段随环境取值；本测试钉「会话面渲染口径」，
-        // 不承担「环境无预算」的断言义务（并行测试下改进程 env 不可靠）。
-        // 期望值走与渲染同一解析入口，环境事实不再误报成产品回归。
-        let expected_wallclock_limit = match crate::controller::main_wallclock_limit_secs_override()
-        {
-            Some(secs) => format!("WALLCLOCK_LIMIT: {secs}s"),
-            None => "WALLCLOCK_LIMIT: none".to_string(),
-        };
+        // 0cg（2026-10-01）墙钟可见性拆除：session 面只渲染轮预算与状态行，
+        // 不再有任何 WALLCLOCK_* 行（无论宿主环境是否常驻 ORZ_MAX_WALLCLOCK
+        // ——F-012 的环境取值问题随面拆除一并消失）。
         assert!(
             reply.content.contains("TOOL_ROUNDS_USED: 0")
                 && reply.content.contains("TOOL_ROUNDS_REMAINING: 120")
                 && reply
                     .content
                     .contains("TOOL_ROUND_BUDGET: 120 tool rounds per turn")
-                && reply.content.contains("WALLCLOCK_ELAPSED:")
-                && reply.content.contains(&expected_wallclock_limit)
-                && reply.content.contains("[任务状态 v0.1]"),
+                && reply.content.contains("[任务状态 v0.1]")
+                && !reply.content.contains("WALLCLOCK_"),
             "session reply: {:?}",
             round.messages
         );
@@ -1668,6 +1661,20 @@ mod tests {
         assert!(
             sections.iter().any(|v| v.as_str() == Some("session")),
             "session must be declared in the section enum: {sections:?}"
+        );
+        // 0cf（2026-10-01）黑板说明书简注：描述面点名 guide 分区、枚举含
+        // guide——模型面从此可发现说明书分区（0bh ⑭⑮ 的模型面交代缺口）。
+        assert!(
+            sections.iter().any(|v| v.as_str() == Some("guide")),
+            "guide must be declared in the section enum: {sections:?}"
+        );
+        assert!(
+            bb_def
+                .description
+                .contains("framework usage manual lives on the blackboard")
+                && bb_def.description.contains("section=guide"),
+            "blackboard_read description must carry the 0cf guide note: {}",
+            bb_def.description
         );
 
         let _ = std::fs::remove_dir_all(&dir);

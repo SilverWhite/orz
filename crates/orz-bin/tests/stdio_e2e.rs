@@ -149,14 +149,19 @@ fn session_new_and_prompt_over_real_frames() {
     // ——preflight + tool_availability（main_agent_work_tools）
     // + tool_availability（retrieval_family，检索未启用的探针面）
     // + started + prompt_submitted + request_header_change
-    // (ORZ-CACHE-CONTEXT-COST 2026-08-15) + model_output + counterexample_gate
-    // + model_output + host_resource_snapshot（0z 资源安全 run_start 快照）
-    // + finished
+    // (ORZ-CACHE-CONTEXT-COST 2026-08-15) + face_fingerprint（0bz S1
+    // 逐轮指纹插桩） + model_output + host_resource_snapshot（0z 资源安全
+    // run_start 快照） + finished
     // (GAP-INQUIRY-SPLIT: no per-turn orientation event — the
     // orientation producer fires only on the session-level trigger)
     // 2026-09-19 勘误：期望集自 6cc8586c（2026-08-28）后未随 0z 资源面与
     // retrieval_family 探针面更新，属预存测试漂移；本批仅对齐实现事实。
-    assert_eq!(replay.event_count, 11);
+    // 0.8.9 代窗口差分（146 批，0ce/0cf/0cg）：在 0.8.8 源冻结（2da7dba0，
+    // 本批改动 stash 对照）上同形失败（10≠11）＝漂移先于本批；旧期望中的
+    // counterexample_gate＋第二轮 model_output 在极小 stdio 流上不再出现、
+    // 0bz 的 face_fingerprint 已在——按实现事实对齐为 10；gate 触发面漂移
+    // 的根因另记观察项，不在本批定因。
+    assert_eq!(replay.event_count, 10);
     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
     let _ = std::fs::remove_dir_all(&dir);
