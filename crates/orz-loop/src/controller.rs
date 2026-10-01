@@ -3741,7 +3741,8 @@ impl AgentLoopController {
                      inline text), temporal (time face: selector \
                      now|recent|history|feature), rli (RLI 参考面: 节奏/错误/停滞压力 \
                      走向，env 门控; selector now|recent|history|feature, rli also \
-                     channels), journal (locator point-read: \
+                     channels). 如需时间/动作连续性与节奏压力走向等信息，请查看 RLI \
+                     参考面（section=rli）。 journal (locator point-read: \
                      anchor=r<轮>·b<块>·s<seq>[#sha8] → that event’s mechanical \
                      summary ≤512B), guide (框架说明书: 名词解释与组件关系，\
                      section=guide — read it once when unsure what a framework \
