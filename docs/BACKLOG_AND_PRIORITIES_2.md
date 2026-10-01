@@ -632,3 +632,45 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **澄清**：对照实验（xp）＝0.8.7 同包体 env 级条件（无 `--ak max_wallclock`），**无需新包体**、不 upload、不入本轮分数；0.8.8（0ce/0cf/0cg）为轮后线，不入本轮。
 - 落点＝判定档 §11.8 披露稿强制明细（含协议面/job 级失败/执行形态演进/未决题处置全清单，缺一收尾批门禁不通过）＋索引 v4.102。
 - 关键词：133 批、披露稿强制明细、三代包体混合（0.8.4/0.8.5/0.8.7）、两轮重跑、0.8.6 零服役、xp 无需新包体、计数 61 不变。
+
+### 1.92 2026-10-01 140 批 rerun3 收官——固定 18 题**单题单跑＋每题收单检查**，同批 0ch 灾难兜底精准化立项（用户令「请进行rerun3吧，单题单题跑，并且每题结束后都收一次单题结果并进行检查」＋「灾难兜底还存在摩擦啊，考虑进一步放大权限？能不能将灾难兜底做的更加精准一些？毕竟主要是防删除破坏」「两条框架摩擦跟着立项成灾难兜底改良的子项吧」「结果不被可见墙钟抬升就好」；计数 61 → 62）
+
+- **执行形态**：冻结 18 题**逐题独立作业**（单题一跑、跑完即收单，不在同一进程里连跑），作业前缀 `official-v41-rerun3-<题>`、`-k 1 -n 1 --upload --public -y`、官方数据集 pin、每题镜像 `docker pull` 预检＋**跑完即 rmi**（宿主盘余量硬约束）；**agent 侧墙钟不施加**（不传 `--ak max_wallclock`）。起止 02:25–08:21（约 **5 h 56 min**）；每题落 `[rerun3-verdict]`（判分/终态/耗时）＋`[rerun3-check]`（单题检查）两行到 `D:/tb-eval/jobs-official/official-v41-rerun3-round.log`。
+- **逐题读数（本次 / 权威原始）**：configure-git-webserver **0.0/1.0**（硬杀 16.0 min，砍杀时 8080 仍 404）｜count-dataset-tokens 1.0/1.0（10.5）｜mailman 1.0/1.0（27.8）｜mteb-retrieve 1.0/1.0（15.9）｜protein-assembly 1.0/1.0（17.7）｜pytorch-model-recovery **1.0/0.0**（14.6，自然收尾）｜gpt2-codegolf 0.0/0.0（硬杀 16.3，原始同为硬杀）｜headless-terminal 1.0/1.0（14.1）｜rstan-to-pystan 1.0/1.0（24.7）｜caffe-cifar-10 **0.0/1.0**（硬杀 61.2；原始 47.4 min 自然完成）｜fix-ocaml-gc 1.0/1.0（31.9）｜git-multibranch 0.0/0.0（硬杀 16.4，权威＝rerun2 亦硬杀）｜install-windows-3.11 1.0/1.0（34.0）｜kv-store-grpc **1.0/0.0**（8.9）｜sqlite-with-gcov 1.0/1.0（9.2）｜torch-tensor-parallelism 1.0/1.0（agent 阶段被硬杀 21.4，交付已完整仍判 1.0）｜qemu-startup、qemu-alpine-ssh **无成绩/无成绩**（作业级失败，见下）。
+- **总账**：**与原始同数 12/18**，但**进出各两题**——升＝pytorch-model-recovery、kv-store-grpc（原始均硬超时 0.0）；降＝configure-git-webserver、caffe-cifar-10（原始 1.0，本次硬杀）。⇒ **净效应为零**：没有时间信号既让两题「不再提前收尾反而做完」，也让两题「不收拢而被砍」，两向抵消。
+- **墙钟条件核验（18/18 成立）**：全库扫描——**零** `max-wallclock` 残留（argv/env 泄漏通道关闭）、**零** 时间读数落档（`WALLCLOCK_LIMIT: <数字>`／`WALLCLOCK_REMAINING`／`WALLCLOCK_REMAINING_ROUNDS` 全 0）、**零** 模型正文时间压力自述（C 通道 0）；仅 2 题（kv-store-grpc／sqlite-with-gcov）主动读过 session 面一次，读到的是「未施加上限」形态（且正文未落档）。**口径提醒**：工具返回正文不落 journal（`tool_completed` 只记 section），故「读数不可见」的可核面＝启动参数＋全库字面残留，而非逐轮回放。
+- **用户裁决面**：「结果不被可见墙钟抬升就好」——按上条核验成立，**结论＝原分数不是被可见墙钟抬升的**（进出对冲、净数一致）；本结论只覆盖这 18 题，不外推到全 89 题。
+- **能力型失败形态（4 题）**：全部为「做到被官方时限硬杀」（AgentTimeoutError），**无一次「做完主动收尾」**——configure-git-webserver（15 min 里死磕改系统二进制绕 `/dev/null`）、gpt2-codegolf、caffe-cifar-10（60 min 内未完成训练）、git-multibranch；其中 2 题与原始同形（既有失败），2 题由通过转失败。
+- **环境型失败（2 题，与 orz 无关）**：qemu-startup／qemu-alpine-ssh 均在**框架装基础依赖**阶段作业级失败（`NonZeroAgentExitCodeError`，`apt-get install curl ca-certificates procps` 报 `deb.debian.org/debian-security/pool/updates/...` **404**）；与原始 b5-13 逐字同类 ⇒ 任务镜像 rot，非本轮条件产物。
+- **工具修正（本批落码，未提交）**：① **起跑参数错误修复**——`run_puller_control.py` 原先手搓 argv 把「镜像」当 `-i` 传入，而 harbor 0.20 的 `-i`＝`--include-task-name` ⇒ 筛出零任务即 rc=1 秒退（首题实证，8 s 失败）；改为**复用官方起跑器** `run_r0_heavy_official.build_argv`＋代际身份门＋预拉纪律（单一真源）。② **逐题驱动**——位置参数限定冻结 18 题子集，跑完即落 `[rerun3-check]` 单题检查、跑完即 rmi 镜像。③ **判分读数口径修正**——作业级 `result.json` 的 `stats` 里是 reward **直方图**（`{'0.0': [trial]}` 形态），不可当分数；改为逐试次 `verifier_result.rewards.reward`。
+- **框架层发现（本批实证，转 0ch）**：① **设备目录写入被拒**——**11/18 题**留档出现该摩擦（apt／dpkg／git／sshd 均以写打开 `/dev/null`），模型为绕开它逐个改系统二进制（`sed` 替换 `/usr/bin/git`／apt-key／sshd 等）；② **根目录不可新建**——**3 题**出现（`mkdir /git` EACCES，只能改道 `/srv/...`）。**机制级实锤**：L3 Landlock 授权表由 `/` 顶层条目枚举生成（`orz-sandbox::enumerate_writable_top_dirs`，**`/` 自身永不在表内**）⇒ make 族在 `/` 上不成立；同时 `LINUX_DISASTER_KERNEL_FACES` 把 `/dev` **整树**列为不授权，而 **L1/L2 规则 2 对 `/dev/null` 显式豁免**（`exec_policy.rs`）——**同一灾难兜底在两层粒度不一致，L3 比 L1/L2 更粗**。
+- **0ch 立项（61 → 62）**：`HOST-DISASTER-BACKSTOP-PRECISION`＝**灾难兜底精准化（防删除破坏口径）**，范围恰两子项（① 设备目录写入被拒／② 根目录不可新建）＋四条候选（设备面文件级放行安全节点／`/` 本体授予 make 族／`/proc` `/sys` `/boot` 需求复核／枚举期快照边界判）；批序 S1 勘定 → S2 落码＋钉子 → S3 随 **0.8.8 代窗口**进体（与 0ce／0cf／0cg 同窗）→ S4 以 `configure-git-webserver`／`caffe-cifar-10`／`git-multibranch` 三题复验后闭合（62 → 61）。**不做**「全放开再靠事后追责」；规则 1 与规则 5 仍由 L1/L2 承载。
+- **披露边界**：本批载体＝**0.8.7**（`3332b38f…`）＋适配器 `6d55c26e…`（身份门起跑前逐次核验通过）；结果与原始（0.8.4／0.8.5／0.8.7 混代）**非同代对照**，跨代差异与「无墙钟」条件在本轮未做分离（分离实验未做，不外推归因）；「墙钟条件成立」只声明条件与残留面，不声明因果。
+- 落点＝BACKLOG `### 0ch.`＋P1 计数/开放项/总览行＋TODO `P1-0ch`＋索引 v4.109＋§8 `pending` 桶；证据＝`D:/tb-eval/jobs-official/official-v41-rerun3-round.log`＋逐题 `*-console.log`＋`jobs-official/official-v41-rerun3-*/…/result.json`。
+- 关键词：140 批、rerun3 收官、单题单跑、每题收单检查、12/18 进出各两题、墙钟不可见条件成立、原分数未被可见墙钟抬升、4 题硬杀型失败、qemu 镜像 404、0ch 灾难兜底精准化、L3 粒度对齐 L1/L2、计数 61 → 62。
+
+- **追记（141 批，2026-10-01）**：qemu 两题经**软件源修正挂载**后重跑取得**真实试次**（qemu-startup 0.0／qemu-alpine-ssh 1.0）——本节「qemu 两题 无成绩/无成绩」读数据此更正，见 §1.93。
+
+### 1.93 2026-10-01 141 批 qemu 两题软件源修正后重跑——作业级失败换成真实试次（用户令「先试试换源能不能拉下来镜像，适配器一定需要修改吗？」→「请开始起跑吧」；计数 62 不变；**零载体／零适配器／零身份门改动**）
+
+- **根因勘定（换源实证，全部可复现）**：① 原样重放适配器命令（`deb.debian.org`）**稳定 404**（数小时后重试仍同）；② 换 USTC 中文源**拿到新鲜索引仍 404**（同一批文件名）、换 `snapshot.debian.org` 存档亦无效（该套源 `InRelease` 已过期 339 天被 apt 忽略）⇒ **问题在 suite 而不在站点**——镜像 `bullseye-security` 索引 advertise 的 `curl_7.74.0-1.3+deb11u16`／`libcurl4_…u16`／`libnghttp2-14_…u3`／`ca-certificates_…deb12u1` 在仓库池中**已不存在**（索引与池不一致）；③ **绕开该 suite**（仅 `bullseye main`＋`bullseye-updates`）⇒ curl 7.74.0-1.3+deb11u13＋procps 2:3.3.17-5 可装。
+- **适配器是否需要修改：不需要**——用**挂载修正软件源**（容器内 `/etc/apt/sources.list` ← `scripts/aptfix-bullseye-sources.list`）即让适配器 `install()` 原样通过；端到端探针（不上传）实测 **`orz install check: orz-ready`**＋完整试次 **10m25s**＋**0 异常**（此前 22–38 s 作业级 `NonZeroAgentExitCodeError`）。**不动镜像／适配器／身份门／数据集 pin／任务文件**。通用兜底（适配器装包失败降级或换源重试）判为**另一件**（须换身份门），不在本轮。
+- **两题重跑（带公开上传；作业名 `-aptfix` 区分）**：**qemu-startup 0.0**（自然收尾 15.0 min、0 异常——真实测量，取代原 22 s 作业级失败）；**qemu-alpine-ssh 1.0**（verifier `test_sshpass` PASSED；agent 阶段被官方时限硬杀 16.1 min，交付已完整故判分不受影响）。两题墙钟条件照旧成立（零 argv 泄漏；上限／剩余读数全 0）。
+- **残留面实证（本批首次落档）**：qemu-alpine-ssh 那次模型读过 `blackboard_read section=session` **一次**，读数为 **`WALLCLOCK_ELAPSED: 0s`＋`WALLCLOCK_LIMIT: none (评测墙钟未施加…)`**（该段被压缩块留档于 `.gsa/**/compaction/blocks/*.md`）——**残留面真实可达**（此前 18 题扫描全 0 是因为该段未被归档），但本轮读数**不含上限／剩余、elapsed 为 0** ⇒ 无可用时间信号；0cg 的两渲染面拆除仍应做（残留彻底消除）。
+- **总账更正（§1.92 追记）**：18 题口径由「12 通过／4 失败＋2 题无成绩」更正为 **13 通过／5 失败／0 无成绩**（qemu-startup 计失败、qemu-alpine-ssh 计通过）；原始对照面两题仍为作业级失败（无成绩），故「与原始同数」的表述改为「16 题口径同数 12/12＋2 题新增真实读数 1 过 1 不过」。
+- **披露偏差（必须写入成绩披露）**：这两题跑批时**容器内软件源被替换过**（仅 `/etc/apt/sources.list` 一个文件；镜像其余内容、任务文件、测试与数据集 pin 未动）；其余 16 题无此偏差。本批仍为 0.8.7 载体＋适配器 `6d55c26e…`（身份门起跑前逐次核验通过）。
+- 落点＝第二卷 §1.93＋BACKLOG/TODO 计数行与指针（**计数 62 不变**）＋判定档 §11.11＋索引 v4.110；脚本接线＝`scripts/run_puller_control.py` 的 `APT_FIX_TASKS`＋`--job-suffix`＋`scripts/aptfix-bullseye-sources.list`（本批落码，未提交）。
+- 关键词：141 批、qemu 两题、软件源修正、bullseye-security 索引/池不一致、换源无效、适配器零改动、挂载接线、qemu-startup 0.0、qemu-alpine-ssh 1.0、真实试次取代作业级失败、残留面首次落档、计数 62 不变。
+
+### 1.94 2026-10-01 142 批 TB 2.1 V4.1 整轮 89 题成绩报告落档＋账目更正＋提交推送（用户令「请根据本次89题重跑表现和具体情况，写一份报告文档吧」→「请将这份报告进行登记吧，然后进行提交推送」；计数 62 不变；**零代码／零载体改动**）
+
+- **新档**：[`TB21_V41_89_FULL_ROUND_REPORT_2026-10-01.md`](TB21_V41_89_FULL_ROUND_REPORT_2026-10-01.md)——轮次成绩与情况报告（对外披露底稿／对内收尾件），覆盖 2026-09-28 18:32 – 10-01 14:23 的官方 89 题整轮＋两轮定向重跑。
+- **读数口径（本批立规矩）**：逐题读数**不引任何二手账面**，全部由 `D:/tb-eval/jobs-official/<作业名>/result.json` 的 `stats.evals.*.reward_stats.reward` 逐试次实体机械提取；提取脚本 `.tmp-report-89.py`／`.tmp-report-build.py`／`.tmp-scan-all-jobs.py`／`.tmp-report-time.py`（`.tmp-*` 不入仓）。
+- **收官总账**：任务级 **73/89＝82.0%**（首轮账面 72/87＝82.8%、全 89 口径 80.9%；试次级 85/110＝77.3%）；批分布 B1–B5＝**13/16・14/17・15/19・13/18・18/19**；规模＝115 作业目录（114 含试次读数＋1 骨架）、累计墙钟 33.8 h、平均 17.8 min、最长单作业 63.9 min。
+- **对照与目标**：轮前软目标「k=1 ≥ R1 65.2% 且争取越过 80%」**达成**（R1 代同口径全轮 58/89＝65.2%；官方 V4.1-Flash 公布值 90.6 属异口径参照，不作达标判据）。
+- **两轮重跑账**：rerun2（5 题，机械阈值「0 分题被写控拦截 ≥5 条」）**2 翻盘**（build-pov-ray／torch-pipeline-parallelism）；rerun3（18 题＝墙钟暴露面全集＋2 道 qemu 并批题，**不施加 agent 侧墙钟**）**13 通过／5 失败／0 无成绩**——升 pytorch-model-recovery／kv-store-grpc、降 configure-git-webserver／caffe-cifar-10 ⇒ **净效应恰为零**；qemu-alpine-ssh 经软件源修正挂载由作业级失败转 1.0（**唯一环境偏差＝ `/etc/apt/sources.list` 一个文件**）。
+- **失败解剖**：16 题＝撞官方时限 **10**（configure-git-webserver、git-multibranch、tune-mjcf、gpt2-codegolf、caffe-cifar-10、extract-moves-from-video、adaptive-rejection-sampler、train-fasttext、make-doom-for-mips、chess-best-move）／自完判负 **5**（qemu-startup、winning-avg-corewars、pytorch-model-cli、pypi-server、hf-model-inference）／异常退出 **1**（fix-code-vulnerability）；另**擦墙通过 8 题**（交付完整且判分通过）；历史未解池 **7/8** 翻盘（仅 make-doom-for-mips 未翻）。
+- **账目更正（本批执行，加勘误块不删原文）**：判定档 §11.5「53/63＝84.1%」、判定档 §11.9「74/87＝85.1%（89 口径 83.1%）」、轮次档 §11「74/87＝85.1%」——三处**各偏高 2 题**（§9 已计入的 2 道翻盘题被重复计入）；机械复核值＝**51/63＝81.0%**／**72/87＝82.8%**／收官 **73/89＝82.0%**。
+- **披露要件九条**（报告 §9 逐条落位）：k=1 定性／装置缺陷中途修复＋机械阈值重跑替换／逐作业身份哈希留档／**两代包体混装**（0.8.4×40＋0.8.7×49；0.8.5 一跑为谱系注记、0.8.6 零服役）／**两轮重跑均替换非择优**／**环境偏差仅 qemu 两题**／协议面（不择优・单题串行・官方 pin・环境不补强・任务级＋试次级双列）／job 级失败与误起跑如实列明／执行形态演进与峰谷分窗。
+- 落点＝索引 v4.110 → **v4.111**＋§6 新条 `EVAL-TB21-V41-89-ROUND-REPORT`＋§8 `reference` 桶；BACKLOG 指针行与计数行、TODO 路由计数行同步；判定档 §11.5／§11.9 与轮次档 §11 各加勘误块；本卷本节。
+- 关键词：142 批、89 题整轮成绩报告、机械读数、73/89＝82.0%、任务级/试次级双列、两代包体混装、rerun2/rerun3 替换、无墙钟净效应恰为零、擦墙通过 8、账目更正偏高 2 题、三处勘误、披露九条、计数 62 不变。

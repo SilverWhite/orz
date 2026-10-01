@@ -308,6 +308,10 @@ B3 批下半场 7 题收官（5 过 2 不过）；B4 进行至 5/18（4 过 1 �
 
 ### §11.5 第二窗收口存档（2026-09-30 12:19–13:58，128 批；低谷价格窗 12:00–14:00，起跑门 13:50）
 
+> **勘误（2026-10-01，142 批）**：本节「轮累计任务级 53/63＝84.1%」**偏高 2 题**——§9 已计入的 2 道翻盘题
+> （build-pov-ray／torch-pipeline-parallelism）被重复计入；逐作业 `result.json` 机械复核值＝**51/63＝81.0%**。
+> 以 [`89 题整轮成绩报告 §10`](TB21_V41_89_FULL_ROUND_REPORT_2026-10-01.md) 口径为准。
+
 - **7 题＝5 过 2 不过，0 作业失败、0 撞墙**（两道 0 分均为**自完判负**：b4-09
   pytorch-model-cli 55 轮/16.2 min、b4-10 pypi-server 16 轮/5.4 min，无 exception 无
   invalidated；本窗未再现撞墙死法）：
@@ -396,6 +400,10 @@ B3 批下半场 7 题收官（5 过 2 不过）；B4 进行至 5/18（4 过 1 �
 
 ### §11.9 第三窗收口与全轮收官读数（2026-10-01 01:38，135 批）
 
+> **勘误（2026-10-01，142 批）**：本节「任务级 74/87＝85.1%（全 89 口径 83.1%）」**偏高 2 题**（同一重复计入）；
+> 逐作业 `result.json` 机械复核值＝首轮账面 **72/87＝82.8%（全 89 口径 80.9%）**；收官（含 rerun3 与 qemu
+> 软件源修正重跑）＝**73/89＝82.0%**。以 [`89 题整轮成绩报告 §10`](TB21_V41_89_FULL_ROUND_REPORT_2026-10-01.md) 口径为准。
+
 - **第三窗（夜间长窗）收口**：18:21–01:38，**24 题出结果＝21 过 3 负**
   （负＝b4-13 make-doom 0.0／b4-14 chess 撞墙 0.0／b5-17 hf-model-inference 0.0
   自完判负）＋1 作业级失败（b5-13 qemu-alpine-ssh 两试 setup 即死）；**b5-19
@@ -422,3 +430,76 @@ B3 批下半场 7 题收官（5 过 2 不过）；B4 进行至 5/18（4 过 1 �
   qemu-alpine-ssh 恒入集）。**不直接执行**——rerun3 启动随用户令。
 - 待令：rerun3 启动（裁决已定，随令）；收口批（§4 步骤 6：读数汇总＋round gate＋
   披露稿＋台账入账）。
+
+### §11.10 rerun3 收官——固定 18 题单题单跑读数（2026-10-01 08:21，140 批）
+
+- **执行形态（用户令）**：「请进行rerun3吧，单题单题跑，并且每题结束后都收一次
+  单题结果并进行检查」⇒ 18 题**逐题独立作业**（一题一跑、跑完即收单，不在同一
+  进程连跑）；`official-v41-rerun3-<题>`／`-k 1 -n 1 --upload --public`／官方数据集
+  pin／每题预拉＋跑完 rmi；**agent 侧墙钟不施加**（不传 `--ak max_wallclock`）。
+  02:25–08:21（≈5 h 56 min）；每题落 `[rerun3-verdict]`＋`[rerun3-check]`。
+- **逐题读数（本次／权威原始）**：configure-git-webserver **0.0/1.0**（硬杀 16.0，
+  砍杀时 8080 仍 404）｜count-dataset-tokens 1.0/1.0｜mailman 1.0/1.0｜mteb-retrieve
+  1.0/1.0｜protein-assembly 1.0/1.0｜**pytorch-model-recovery 1.0/0.0**｜gpt2-codegolf
+  0.0/0.0（原始同为硬杀）｜headless-terminal 1.0/1.0｜rstan-to-pystan 1.0/1.0｜
+  **caffe-cifar-10 0.0/1.0**（硬杀 61.2；原始 47.4 自然完成）｜fix-ocaml-gc 1.0/1.0｜
+  git-multibranch 0.0/0.0（权威＝rerun2 亦硬杀）｜install-windows-3.11 1.0/1.0｜
+  **kv-store-grpc 1.0/0.0**｜sqlite-with-gcov 1.0/1.0｜torch-tensor-parallelism 1.0/1.0
+  （agent 阶段被硬杀，交付已完整仍判 1.0）｜qemu-startup／qemu-alpine-ssh 无成绩/无成绩。
+- **总账＝与原始同数 12/18，但进出各两题**（升＝pytorch-model-recovery／kv-store-grpc；
+  降＝configure-git-webserver／caffe-cifar-10）——**净效应为零**：无时间信号既让两题
+  「不再提前收尾反而做完」，也让两题「不收拢而被砍」，两向抵消。**用户裁定口径**
+  「结果不被可见墙钟抬升就好」⇒ 本 18 题范围内成立，**原分数不是被可见墙钟抬升的**；
+  **不外推到全 89 题**（本研究集是墙钟暴露面全集＋2 题并批，非全轮抽样）。
+- **墙钟条件核验（18/18）**：零 `max-wallclock` 残留（argv/env 通道关闭）＋零时间读数
+  落档（LIMIT 数值／REMAINING／REMAINING_ROUNDS 全 0）＋零模型时间自述；仅 2 题读过
+  session 面（读到「未施加上限」形态，正文不落 journal——**可核面＝启动参数＋全库字面
+  残留**，非逐轮回放）。**因果边界**：本轮载体 0.8.7 与原始（0.8.4/0.8.5/0.8.7 混代）
+  **非同代对照**，跨代差异与「无墙钟」条件未做分离实验 ⇒ 只声明条件成立与进出读数，
+  不声明单因归因。
+- **失败形态**：能力型 4 题**全部为「做到被官方时限硬杀」**（无一次「做完主动收尾」）；
+  环境型 2 题为**作业级 setup 失败**——`apt-get install curl ca-certificates procps`
+  再次撞 Debian security 源 **404**（与 §11.9 同族、逐字同类）⇒ **§11.9 处置选项①
+  「直接重试（CDN 旧索引会刷新）」被本轮实测否定**（≥1 次重试后仍 404）；余下选项②
+  「适配器 install 加 APT 换源 fallback（需身份门换装）」留裁决。
+- **工具修正（本批落码，未提交）**：① 起跑参数错误——原手搓 argv 把镜像当 `-i`
+  （harbor 0.20 `-i`＝`--include-task-name`）⇒ 筛零任务 rc=1 秒退（首题实证）；改复用
+  `run_r0_heavy_official.build_argv`＋代际身份门＋预拉纪律。② 逐题驱动＋每题
+  `[rerun3-check]`＋跑完 rmi。③ 判分读数改用逐试次 `verifier_result.rewards.reward`
+  （作业级 `stats` 是 reward 直方图，不可当分数）。
+- **框架层摩擦（转 0ch 立项 61 → 62）**：① **11/18 题**「设备目录写入被拒」（apt／dpkg／
+  git／sshd 均写 `/dev/null`）；② **3 题**「根目录不可新建」（`mkdir /git` EACCES）。
+  机制实锤＝L3 Landlock 授权表由 `/` 顶层条目枚举生成（`/` 自身不在表内 ⇒ make 族在 `/`
+  不成立）＋`LINUX_DISASTER_KERNEL_FACES` 把 `/dev` **整树**不授权，而 L1/L2 规则 2 对
+  `/dev/null` **显式豁免** ⇒ **同一条灾难兜底两层粒度不一致**。详见 BACKLOG `0ch`／第二卷 §1.92。
+- 待令：收口批（§4 步骤 6）；0ch S1 勘定（随 0.8.8 代窗口）；本轮台账提交与推送。
+
+### §11.11 qemu 两题软件源修正重跑——作业级失败换成真实试次（2026-10-01 14:23，141 批）
+
+- **用户裁决**：「先试试换源能不能拉下来镜像，适配器一定需要修改吗？」→「请开始起跑吧」。
+- **换源实证（三条，全部可复现）**：① 原样重放适配器命令（`deb.debian.org`）**稳定
+  404**；② 换 USTC 源（**拿到新鲜索引**）仍 **404**（同一批文件名）、换
+  `snapshot.debian.org` 存档无效（`InRelease` 过期 339 天被忽略）⇒ **根因在 suite
+  而非站点**：镜像 `bullseye-security` 索引 advertise 的 `curl_7.74.0-1.3+deb11u16`／
+  `libcurl4_…u16`／`libnghttp2-14_…u3`／`ca-certificates_…deb12u1` 在仓库池中已不存在；
+  ③ 绕开该 suite（仅 `bullseye main`＋`bullseye-updates`）⇒ curl 7.74.0-1.3+deb11u13
+  ＋procps 2:3.3.17-5 可装。
+- **适配器是否需要修改：不需要**。改「挂载修正软件源」（容器 `/etc/apt/sources.list`
+  ← `scripts/aptfix-bullseye-sources.list`）即让适配器 `install()` 原样通过；端到端探针
+  （不上传）实测 **`orz install check: orz-ready`**＋完整试次 10m25s＋**0 异常**（此前
+  22–38 s 作业级 `NonZeroAgentExitCodeError`）。**不动镜像／适配器／身份门／数据集 pin／
+  任务文件**。通用兜底（适配器装包失败降级或换源重试）判为另一件（须换身份门）。
+- **两题重跑（带公开上传；作业名 `-aptfix` 区分）**：**qemu-startup 0.0**（自然收尾
+  15.0 min、0 异常）／**qemu-alpine-ssh 1.0**（`test_sshpass` PASSED；agent 阶段被官方
+  时限硬杀 16.1 min，交付已完整故判分不受影响）。两题墙钟条件照旧成立。
+- **总账更正（§11.10 追记）**：18 题口径由「12 通过／4 失败＋2 题无成绩」更正为
+  **13 通过／5 失败／0 无成绩**；与原始对照口径＝「16 题同数 12/12＋2 题新增真实读数
+  1 过 1 不过」（原始两题仍为作业级失败，无基线）。
+- **残留面首次落档（对 0cg 的证据）**：qemu-alpine-ssh 那次模型读 session 面**一次**，
+  读数＝**`WALLCLOCK_ELAPSED: 0s`＋`WALLCLOCK_LIMIT: none (评测墙钟未施加…)`**（留档于
+  `.gsa/**/compaction/blocks/*.md`）⇒ 残留面**真实可达**（此前 18 题扫描全 0 系该段未
+  被归档），但**无上限／无剩余、elapsed 为 0** ⇒ 无可用时间信号；0cg 两渲染面拆除仍应做。
+- **披露偏差（必须写入成绩披露）**：这两题跑批时容器内软件源被替换过（仅
+  `/etc/apt/sources.list` 一个文件；镜像其余内容、任务文件、测试与 pin 未动）；
+  其余 16 题无此偏差。载体 0.8.7＋适配器 `6d55c26e…`（身份门起跑前逐次核验通过）。
+- 待令：本批台账提交与推送；0ch S1 勘定（随 0.8.8 代窗口）。

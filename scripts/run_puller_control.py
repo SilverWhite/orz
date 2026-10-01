@@ -23,11 +23,18 @@ TER T1.8（session 面墙钟行）与 0am S1 Part A（常驻 `[任务状态]` �
 启动纪律：
   * **等当前官方跑批完全结束**；
   * **不与官方跑批抢资源**。
+
+驱动形态（2026-10-01 用户令「单题单题跑，每题结束后都收一次单题结果并进行检查」）：
+  位置参数给一个/多个题名 ⇒ 只跑这些题（必须是冻结 18 题集的子集），每题跑完
+  即落一条 `[rerun3-check]` 单题检查记录到轮次日志；缺省（不带参数）＝跑完整
+  冻结题集，并在起跑前做一次留档三通道复核。
 """
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -35,11 +42,11 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import run_official_v41_second_half as base  # noqa: E402  (复用 manifest/纪律)
+# 命令构造/身份门/预拉纪律一律复用官方起跑器（2026-10-01 修：先前手搓 argv 把
+# `-i <镜像>` 当任务名筛选传进去，harbor 0.20 的 `-i`＝`--include-task-name`，
+# 结果筛出零任务即刻 rc=1 退出——首题实证，改回单一真源）。
+import run_r0_heavy_official as heavy  # noqa: E402
 
-HARBOR = r'D:\tb-eval\venv\Scripts\harbor.exe'
-DATASET = ('terminal-bench/terminal-bench-2-1@'
-           'sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a')
 OUT_DIR = Path('D:/tb-eval/jobs-official')
 LOG = OUT_DIR / 'official-v41-rerun3-round.log'
 
@@ -75,6 +82,9 @@ FIXED_TASKS: list[str] = [
 # 136 批用户裁决：b1-08/b5-13（setup apt 404 作业级失败）并入本批同条件重跑
 EXTRA_TASKS: list[str] = ['qemu-startup', 'qemu-alpine-ssh']
 
+# 冻结题集（逐题模式只允许在其内取值，防计划外扩面）
+FROZEN_TASKS: list[str] = FIXED_TASKS + EXTRA_TASKS
+
 # 0cc S4 重跑系列已替换原试次的题 → 权威试次作业名（供留档复核用）
 AUTHORITATIVE_JOB = {
     'build-pov-ray': 'official-v41-rerun2-build-pov-ray',
@@ -94,6 +104,18 @@ TIME_TEXT = re.compile(
 
 # 泄漏标记：一旦出现在启动命令行里，pgrep/ps 就能读到
 WALLCLOCK_LEAK_MARK = 'max-wallclock'
+
+# 软件源修正挂载（2026-10-01 实证；**仅 qemu 两题**）：镜像 bullseye-security 的
+# 索引与仓库池不一致 ⇒ 适配器 install() 装 curl/procps 404 ⇒ 作业级死；换镜像站
+# 无效、换 snapshot 无效，绕开该 suite 可通。挂载=/etc/apt/sources.list，不动
+# 镜像/适配器/身份门/数据集 pin。**偏差须在成绩披露写明**。
+APT_FIX_TASKS: set[str] = {'qemu-startup', 'qemu-alpine-ssh'}
+APT_FIX_SOURCES = Path('D:/CLI/scripts/aptfix-bullseye-sources.list')
+
+# 单题检查面：上限读数一旦可见即失败；载体现状残留面（elapsed / limit none）
+# 只计数、不作失败判据（披露边界见 0cg 与轮次日志起跑行）。
+LIMIT_NUMERIC = re.compile(r'WALLCLOCK_LIMIT:\s*\d+s')
+LIMIT_NONE = re.compile(r'WALLCLOCK_LIMIT:\s*none')
 
 
 def log(msg: str) -> None:
@@ -170,29 +192,27 @@ def audit_scope() -> set[str]:
     return tasks
 
 
-def collect_rewards(obj, out: list) -> None:
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if k == 'reward' and v is not None:
-                out.append(v)
-            else:
-                collect_rewards(v, out)
-    elif isinstance(obj, list):
-        for v in obj:
-            collect_rewards(v, out)
-
-
 def verdict(job: str, task: str, elapsed_min: float) -> None:
+    """单题判分读数：**逐试次** result.json 的 verifier_result.rewards.reward
+    （作业级 result.json 里 `stats` 的 reward 直方图不可当作分数——2026-10-01
+    首两题实证：作业级会给出 {'0.0': [trial]; '1.0': [trial]} 这类分布）。"""
     job_dir = OUT_DIR / job
     rewards: list = []
     if job_dir.is_dir():
         for rp in job_dir.rglob('result.json'):
+            if rp.parent == job_dir:
+                continue
             try:
                 d = json.loads(rp.read_text(encoding='utf-8'))
             except (OSError, ValueError):
                 continue
-            if d.get('finished_at'):
-                collect_rewards(d, rewards)
+            vr = d.get('verifier_result')
+            if isinstance(vr, dict) and isinstance(vr.get('rewards'), dict):
+                r = vr['rewards'].get('reward')
+            else:
+                r = d.get('reward')
+            if r is not None:
+                rewards.append(float(r))
     has_exception = bool(job_dir.is_dir() and list(job_dir.rglob('exception.txt')))
     invalidated = None
     for j in Path('D:/tb-eval/gsa-volumes').glob(f'{job}/*/runs/*/events.jsonl'):
@@ -215,59 +235,215 @@ def verdict(job: str, task: str, elapsed_min: float) -> None:
         f'mode={mode} elapsed={elapsed_min:.1f} min')
 
 
-def main() -> int:
-    index = base.manifest_index()
-    missing = [t for t in FIXED_TASKS if t not in index]
-    if missing:
-        log(f'== 固定题集有 {len(missing)} 题不在 manifest：{missing}——退出，不跑 ==')
-        return 1
-    tasks = list(FIXED_TASKS)
-    for t in EXTRA_TASKS:
-        if t in index and t not in tasks:
-            tasks.append(t)
-    log(f'== 墙钟重跑固定题集 {len(tasks)} 题（16 固定 + 2 qemu 由令并入）：{tasks} ==')
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return ''
+
+
+def inspect_volume(job: str, task: str) -> bool:
+    """单题结果检查（每题跑完即收一次；返回是否通过硬判据）。"""
+    vol_root = Path('D:/tb-eval/gsa-volumes') / job
+    if not vol_root.is_dir():
+        log(f'[rerun3-check] {task} FAIL 卷目录缺失：{vol_root}')
+        return False
+    leak_files: list[str] = []
+    limit_numeric = limit_none = remaining = rounds = elapsed = 0
+    session_pulls = 0
+    text_hits: list[str] = []
+    file_count = 0
+    for path in vol_root.rglob('*'):
+        if not path.is_file():
+            continue
+        file_count += 1
+        body = _read_text(path)
+        if WALLCLOCK_LEAK_MARK in body:
+            leak_files.append(path.name)
+        # 时间面标记：扫**全部留档文件**（工具返回内容不落 journal —— 2026-10-01
+        # 实证 blackboard_read 的 tool_completed 只记 section 不记正文，故只在
+        # journal 文本里计数会漏；全库扫描＝「有没有任何留档把时间面带出来」）。
+        limit_numeric += len(LIMIT_NUMERIC.findall(body))
+        limit_none += len(LIMIT_NONE.findall(body))
+        remaining += body.count('WALLCLOCK_REMAINING:')
+        rounds += body.count('WALLCLOCK_REMAINING_ROUNDS')
+        elapsed += body.count('WALLCLOCK_ELAPSED:')
+        if path.name != 'events.jsonl':
+            continue
+        for line in body.splitlines():
+            if '"event_type":"model_output"' not in line:
+                continue
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            payload = ev.get('payload') or {}
+            for call in payload.get('tool_calls') or []:
+                if not isinstance(call, dict):
+                    continue
+                args = call.get('arguments') or {}
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except ValueError:
+                        args = {}
+                if (call.get('name') == 'blackboard_read'
+                        and (args or {}).get('section') == 'session'):
+                    session_pulls += 1
+            text = payload.get('text') or ''
+            if text and '[SEMANTIC_SUMMARY]' not in text:
+                m = TIME_TEXT.search(text)
+                if m:
+                    text_hits.append(m.group(0))
+    ok = not leak_files and not limit_numeric and not remaining and not rounds
+    log(f'[rerun3-check] {task} {"PASS" if ok else "FAIL"} '
+        f'files={file_count} 泄漏文件={len(leak_files)}{leak_files[:3]} '
+        f'上限读数={limit_numeric} 剩余读数={remaining} 轮次换算行={rounds} '
+        f'| 残留（披露边界，非失败）：limit-none={limit_none} '
+        f'elapsed行={elapsed} session面读取={session_pulls} '
+        f'| 模型时间自述={len(text_hits)}{sorted(set(text_hits))[:3]}')
+    return ok
+
+
+def snapshot(tag: str) -> None:
+    """起跑资源快照（宿主视角；读数口径同官方起跑器，落本批轮次日志）。"""
+    try:
+        usage = shutil.disk_usage('D:/')
+        disk = (f'D: free {usage.free / 2**30:.2f} GiB / '
+                f'total {usage.total / 2**30:.2f} GiB')
+    except OSError as exc:
+        disk = f'D: free <unavailable: {exc}>'
+    counts: dict[str, str] = {}
+    for key, argv in (
+        ('images', ['docker', 'images', '-q']),
+        ('containers', ['docker', 'ps', '-aq']),
+    ):
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+            items = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+            counts[key] = (str(len(items)) if proc.returncode == 0
+                           else f'<rc={proc.returncode}>')
+        except (OSError, subprocess.SubprocessError) as exc:
+            counts[key] = f'<unavailable: {exc}>'
+    log(f'[snapshot:{tag}] {disk} | docker images={counts["images"]} '
+        f'containers={counts["containers"]}')
+
+
+def main(argv: list[str] | None = None) -> int:
+    raw = list(sys.argv[1:] if argv is None else argv)
+    job_suffix = ''
+    if '--job-suffix' in raw:  # 同名作业目录不覆盖：给作业名加后缀（显式、入日志）
+        i = raw.index('--job-suffix')
+        job_suffix = raw[i + 1] if i + 1 < len(raw) else ''
+        del raw[i:i + 2]
+    requested = [a for a in raw if not a.startswith('-')]
+    index = heavy.manifest_index()
+    if requested:
+        unknown = [t for t in requested if t not in index]
+        nonfrozen = [t for t in requested if t not in FROZEN_TASKS]
+        if unknown or nonfrozen:
+            log(f'== 指定题非法（不在 manifest：{unknown}；不在冻结 '
+                f'{len(FROZEN_TASKS)} 题集：{nonfrozen}）——退出，不跑 ==')
+            return 1
+        tasks = list(dict.fromkeys(requested))
+        log(f'== 逐题模式：本次仅跑 {len(tasks)} 题 {tasks}'
+            f'（冻结题集共 {len(FROZEN_TASKS)} 题） ==')
+    else:
+        missing = [t for t in FIXED_TASKS if t not in index]
+        if missing:
+            log(f'== 固定题集有 {len(missing)} 题不在 manifest：'
+                f'{missing}——退出，不跑 ==')
+            return 1
+        tasks = list(FIXED_TASKS)
+        for t in EXTRA_TASKS:
+            if t in index and t not in tasks:
+                tasks.append(t)
+        log(f'== 墙钟重跑固定题集 {len(tasks)} 题'
+            f'（16 固定 + 2 qemu 由令并入）：{tasks} ==')
+        drift = sorted(audit_scope() - set(tasks))
+        if drift:
+            log(f'[WARN] 留档复核发现计划外受影响题（本次未纳入，需裁决）：{drift}')
+        else:
+            log('== 留档复核：三通道（A/C/P）受影响集与固定题集一致 ==')
     log('== 条件：不带 --ak max_wallclock ⇒ session 面 WALLCLOCK_LIMIT/REMAINING '
         '与常驻「轮次预算」行均无上限读数，启动命令行不含 --max-wallclock'
         '（ps/pgrep 泄漏通道随之关闭）；harbor task 级官方超时仍是唯一外边界 ==')
-    drift = sorted(audit_scope() - set(tasks))
-    if drift:
-        log(f'[WARN] 留档复核发现计划外受影响题（本次未纳入，需裁决）：{drift}')
-    else:
-        log('== 留档复核：三通道（A/C/P）受影响集与固定题集一致 ==')
-    for task in tasks:
-        job = f'official-v41-rerun3-{task}'
-        image = index[task]['image']
-        vol = f'D:/tb-eval/gsa-volumes/{job}'
-        cmd = [
-            HARBOR, 'run',
-            '-d', DATASET,
-            '-i', str(image),
-            '-a', 'tb_agents.orz:Orz',
-            '-m', 'deepseek-v4-flash',
-            '--ak', 'orz_binary=D:/tb-eval/orz-linux/orz',
-            '--ak', 'model_id=deepseek-v4-flash',
-            '--ak', f'gsa_volume={vol}',
-            '--mounts',
-            json.dumps([{'type': 'bind', 'source': vol, 'target': '/orz-gsa'}]),
-            '--env-file', 'D:/tb-eval/.env',
-            '--job-name', job,
-            '-o', str(OUT_DIR),
-            '-k', '1', '-n', '1', '--upload', '--public', '-y',
-            # 无 --ak max_wallclock：黑板 WALLCLOCK_LIMIT/REMAINING 显示消失
-            # （对照条件）；官方期限由 harbor task 级超时保留执行。
-            # --upload --public：官方级重跑，结果按任务级口径替换原试次。
-        ]
-        if any('wallclock' in str(a).lower() for a in cmd):
+    # 代际身份门（排期 §2 代际纪律；同官方起跑器锁定值）——不符即中止
+    carrier = heavy.sha256_file(heavy.ORZ)
+    adapter = heavy.sha256_file(heavy.ADAPTER)
+    if (carrier != heavy.EXPECTED_CARRIER_SHA256
+            or adapter != heavy.EXPECTED_ADAPTER_SHA256):
+        log('FAIL 代际身份不符：carrier '
+            f'{"OK" if carrier == heavy.EXPECTED_CARRIER_SHA256 else "DRIFT"} / '
+            'adapter '
+            f'{"OK" if adapter == heavy.EXPECTED_ADAPTER_SHA256 else "DRIFT"}'
+            '（本批冻结为 0.8.7 代际；确认后再改锁定值）')
+        return 2
+    log(f'OK 代际身份核验通过：carrier {carrier[:8]}… / adapter {adapter[:8]}…')
+
+    planned: list[tuple[str, str, int]] = []
+    for t in tasks:
+        meta = index[t]
+        planned.append((t, str((meta.get('batches') or ['?'])[0]),
+                        int(meta.get('agent_timeout_sec') or 0)))
+    if not heavy.pre_pull(planned):
+        log('FAIL 预拉未全绿——按用户裁决不带残批起跑，已中止')
+        return 3
+
+    snapshot('pre')
+    rc_all = 0
+    for task, batch, timeout in planned:
+        job = f'official-v41-rerun3-{task}{job_suffix}'
+        vol = heavy.VOL_ROOT / job
+        vol.mkdir(parents=True, exist_ok=True)
+        mount_list = [{
+            'type': 'bind', 'source': vol.as_posix(), 'target': '/orz-gsa',
+        }]
+        if task in APT_FIX_TASKS:
+            mount_list.append({
+                'type': 'bind', 'source': APT_FIX_SOURCES.as_posix(),
+                'target': '/etc/apt/sources.list',
+            })
+        mounts = json.dumps(mount_list)
+        # 复用官方起跑器 argv（含 `-i terminal-bench/<题>`）；wallclock=None ⇒
+        # 不传 --ak max_wallclock（agent 侧墙钟不施加，官方 task 级超时保留）。
+        hargv = heavy.build_argv(vol, mounts, [(task, batch, timeout)], job, None)
+        if any('wallclock' in str(a).lower() for a in hargv):
             log(f'[FATAL] {job} 的 argv 含 wallclock——会重开 ps/pgrep 泄漏，中止')
             return 1
-        log(f'[rerun3] ==> {job}')
+        log(f'[rerun3] ==> {job}（题 {task}｜批 {batch}｜官方 agent 超时 '
+            f'{timeout}s｜agent 侧墙钟：不施加）')
+        if task in APT_FIX_TASKS:
+            log(f'[rerun3] 软件源修正挂载（本批偏差，须披露）：'
+                f'/etc/apt/sources.list ← {APT_FIX_SOURCES}')
+        console_log = OUT_DIR / f'{job}-console.log'
         t0 = time.time()
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        env = {**os.environ, 'PYTHONPATH': heavy.TB_EVAL.as_posix()}
+        with open(console_log, 'wb') as f:
+            rc = subprocess.run(
+                [str(heavy.HARBOR), *hargv], stdout=f, stderr=subprocess.STDOUT,
+                env=env,
+            ).returncode
         elapsed = (time.time() - t0) / 60.0
-        log(f'[rerun3] <-- {job} rc={proc.returncode} elapsed={elapsed:.1f} min')
+        log(f'[rerun3] <-- {job} rc={rc} elapsed={elapsed:.1f} min '
+            f'控制台={console_log.name}')
+        if rc and not rc_all:
+            rc_all = rc
         verdict(job, task, elapsed)
+        inspect_volume(job, task)
+        # 每题镜像清理（官方跑批纪律：题目镜像只在本题用一次）——宿主盘余量
+        # 是本批的硬约束，残图堆到中途爆盘会打断整批。
+        image = str(index[task].get('image') or '')
+        if image:
+            try:
+                p = subprocess.run(['docker', 'rmi', image],
+                                   capture_output=True, text=True, timeout=300)
+                log(f'[rerun3] 镜像清理 {image} rc={p.returncode}')
+            except (OSError, subprocess.SubprocessError) as exc:
+                log(f'[rerun3] 镜像清理失败（不阻断）{image}: {exc}')
+    snapshot('post')
     log('== rerun3 结束 ==')
-    return 0
+    return rc_all
 
 
 if __name__ == '__main__':
