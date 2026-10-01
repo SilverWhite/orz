@@ -821,3 +821,12 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **边界**：未推送未发行；**打包顺延发行批**（0ck/0cl S4 未完无发行压力，偏差如实记）；0ck/0cl 维持开放（S4＝消费率读数随 0cj S3/S4 收取）；载体现役 0.8.10、发布面停 v0.8.7。
 - **落点**：155 批档＋BACKLOG（指针行/0ck・0cl 批序 S3 bullet）＋TODO（计数行/P1-0ck・P1-0cl S3 勾选）＋索引 v4.123 → v4.124（头行）。
 - 关键词：155 批、0.8.10 重建、源冻结 `55d61c47`、字节判据拦截、`4ed531e8…` 身份门、ACAF 重 provision、static-pie×3、双容器冒烟、打包顺延、假 exit 0 方法学注记。
+
+### 1.108 2026-10-02 156 批 提交推送（143–155 累积件）与 0.8.10 发行＋0cm 对外英文翻译线立项（用户令「当前新增0cm 请先进行提交推送与安装包版本发行吧」；计数 59 → 60）
+
+- **提交推送**：orz 子树 `20e4c574..55d61c47 → feat/fusion-architecture`（`cli` remote）**exit 0**（远端此前停在 0cd 清退点 `20e4c574`，本次一次带上 0.8.8–0.8.10 的 orz 侧 9 提交）；父仓两笔——① 材料批 `d282046b`（143–155 落账，24 files `+2211/−599`）② 本批（0cm 立项＋156 落档）；`1552e4d1..HEAD → origin/main`。
+- **0.8.10 发行包**：`rel-156-stage` 两侧各 5 entries、包内六件与在役载体 **6/6 MATCH**；资产＝zip 27,994,761 B `7e2c4623ef3631efc5d475d7c98db18dab99031e7f2cb8e983a35337ce6d03e8`／tar 37,153,264 B `66b0053bc4f3bf03d8c21120ec4e9be523487850640b7dff35badde1d21e859d`／顶层 `SHA256SUMS` 193 B `ea68a58f0af87c5da7ceeefe2aeafa2ba2c390184c6706dcfcbb9d1c9ffbff9b`；alpine 3.20 双平台 `sha256sum -c` 4/4＋4/4；Linux／Windows `--build-info` 均 `0.8.10`；清单活体两态＝干净 **0 finding**／`README.md`+1B 恰 1 条（`49743 ≠ 49744`）。包内 `README.md` 由 0.8.8 版改写为 **0.8.10 版**（新增 0.8.10／0.8.9 两节，0.8.8／0.8.9 改标中间载体）。
+- **发行**：**GitHub Release `v0.8.10` 已发布**（Latest，tag 指向 156 档所在提交）；服务端 digest 与本地产物逐位一致、`gh release download` 回下载 identical。
+- **0cm 立项登记**：charter [`EN_TRANSLATION_PROJECT_CHARTER_2026-10-02.md`](../docs/EN_TRANSLATION_PROJECT_CHARTER_2026-10-02.md)；BACKLOG P1 名册＋计数行 **59 → 60**＋开放项行＋新增 `0cm` 节；TODO 计数行＋P1 路由行＋新增 `P1-0cm` 节；索引 v4.124 → **v4.125**＋`AUTH-EN-TRANSLATION-LINE` 条目＋§8 pending 桶。
+- **边界与后续**：0ck／0cl 维持开放（S4 真机核证＝消费率随 `0cj` S3/S4 收取）；0.8.8／0.8.9 中间载体未单独发行；下一步＝`0ci` S0（钉数据集仓库/版本 pin，顺位第一）／`0cj` 挑题／`0cm` S1。
+- 关键词：156 批、提交推送、`d282046b`、`55d61c47`、GitHub Release v0.8.10、rel-156-stage、回下载逐位一致、0cm 对外英文翻译线、计数 59 → 60。
