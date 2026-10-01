@@ -33,6 +33,14 @@
 //! `/usr/local/bin` 安装仍死于内核 EPERM（run `RUN-CLI-6abbb013` 实证 L3 在
 //! 容器在役）。消费方＝`computer/local/terminal.rs` 与 orz-sandbox，变更须
 //! 多处同步。
+//!
+//! **L3 粒度精准化（0ch v4，2026-10-01）**：目录排除集恰 4 项零变更之外，
+//! 新增设备面安全节点封闭表 [`DEVICE_SAFE_NODES`]（恰 7 项——文件级
+//! `WRITE_FILE`(＋TRUNCATE) 授权，消除「`>/dev/null` 被 L3 拒而 L1/L2 豁免」
+//! 的两层粒度差）；`/` 本体 make 族子集授权（`ROOT_MAKE_GRANT`，机制侧
+//! orz-sandbox 常量——消除 `mkdir /git` 恒拒）由 S1 设计档 §7.2 定档。
+//! L3 粒度不得比 L1/L2 粗；设计权威＝[`docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md`]
+//! §7。
 
 use std::path::{Path, PathBuf};
 
@@ -60,6 +68,23 @@ pub const LINUX_DISASTER_TREE_ROOTS: [&str; 12] = [
 /// 由 L1/L2 承载。消费方＝`computer/local/terminal.rs` 与 orz-sandbox 测试，
 /// 变更须多处同步。
 pub const LINUX_DISASTER_KERNEL_FACES: [&str; 4] = ["/boot", "/dev", "/proc", "/sys"];
+
+/// L3 设备面安全节点表（**0ch v4 子项①**；封闭表——Landlock 文件级
+/// `WRITE_FILE`(＋TRUNCATE) 授权，恰好 7 项）。`/dev` 目录树维持整树不授权
+/// （块设备／`/dev/mem` 等写、节点删除、`mknod` 仍内核拒），本表只对**单个
+/// 安全节点**放写——L1/L2 规则 2 对 `/dev/null` 显式豁免、块设备形态集仅
+/// `sd*`/`vd*`/`nvme*`/`mmcblk*`/`mapper*`，本表与该形态集零交集（一致性钉
+/// 在 `exec_policy.rs` 测试）。缺席节点/symlink 由装挂面跳过＝默认拒
+/// （fail-closed）。行数钉＋危险形态负向钉见本模块测试，新增表项必改测试。
+pub const DEVICE_SAFE_NODES: [&str; 7] = [
+    "/dev/null",
+    "/dev/zero",
+    "/dev/full",
+    "/dev/tty",
+    "/dev/random",
+    "/dev/urandom",
+    "/dev/ptmx",
+];
 
 /// deny 表命中结果（v3：宿主状态两族；v3.1 增祖先链两 face）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -503,6 +528,57 @@ mod tests {
             assert!(
                 !LINUX_DISASTER_KERNEL_FACES.contains(&retired),
                 "{retired} must be retired from the L3 exclusion set"
+            );
+        }
+    }
+
+    /// 0ch v4 子项①封闭表钉：恰 7 项、全为 `/dev/` 前缀单节点、危险节点
+    /// 形态不入表（新增表项必改本测试）。
+    #[test]
+    fn device_safe_nodes_closed_set_holds() {
+        assert_eq!(DEVICE_SAFE_NODES.len(), 7);
+        for node in [
+            "/dev/null",
+            "/dev/zero",
+            "/dev/full",
+            "/dev/tty",
+            "/dev/random",
+            "/dev/urandom",
+            "/dev/ptmx",
+        ] {
+            assert!(
+                DEVICE_SAFE_NODES.contains(&node),
+                "{node} must stay in DEVICE_SAFE_NODES"
+            );
+        }
+        for node in DEVICE_SAFE_NODES {
+            assert!(
+                node.starts_with("/dev/") && !node[5..].contains('/'),
+                "table entries must be single /dev nodes: {node}"
+            );
+        }
+        // 危险形态负向集：块设备族、原始内存/端口族、帧缓冲/回环不入表
+        //（这些写面维持 L3 内核拒——规则 2 灾难面）。
+        for bad in [
+            "/dev/sd",
+            "/dev/vd",
+            "/dev/nvme",
+            "/dev/mmcblk",
+            "/dev/mapper",
+            "/dev/mem",
+            "/dev/kmem",
+            "/dev/port",
+            "/dev/loop",
+            "/dev/fb",
+            "/dev/console",
+        ] {
+            assert!(
+                !DEVICE_SAFE_NODES.contains(&bad),
+                "{bad} must NOT be in DEVICE_SAFE_NODES"
+            );
+            assert!(
+                !DEVICE_SAFE_NODES.iter().any(|n| n.starts_with(bad)),
+                "no {bad}* form may enter DEVICE_SAFE_NODES"
             );
         }
     }

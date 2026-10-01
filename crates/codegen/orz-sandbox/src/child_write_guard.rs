@@ -1,14 +1,25 @@
-//! Landlock: child write guard (pre_exec) — 0bw① (2026-09-27).
+//! Landlock: child write guard (pre_exec) — 0bw① (2026-09-27)；**0ch v4 粒度
+//! 精准化（2026-10-01）**。
 //!
 //! 形态＝spawn 时（pre_exec，与 [`crate::child_net`] seccomp 同型接线）把
-//! 「已枚举的可写顶层目录 allowlist」装进子进程 Landlock ruleset：写族
-//! （write／remove／make／refer／truncate）默认拒、`allow_dirs` 逐项放行、
-//! 读不设限（读族不入 `handled_access_fs`）。
+//! 授权集装进子进程 Landlock ruleset：写族（write／remove／make／refer／
+//! truncate）默认拒、读不设限（读族不入 `handled_access_fs`），授权三段——
+//! ① **目录段**：`/` 顶层逐目录全写族 baseline（deny 排除集已在枚举时剔除）；
+//! ② **文件段**（0ch 子项①）：设备面安全节点逐个文件级 `WRITE_FILE`(＋
+//! TRUNCATE v3+) 授权——`>/dev/null` 一族不再死于内核 EPERM（L1/L2 规则 2
+//! 豁免、L3 却整树拒的两层粒度差消除）；`/dev` 目录树本身仍无规则——块
+//! 设备/危险节点写、节点删除、`mknod` 仍内核拒；
+//! ③ **根段**（0ch 子项②）：`/` 本体 [`ROOT_MAKE_GRANT`]（make 族子集恰
+//! 5 位，**不含** `WRITE_FILE`/`REMOVE_*`/`MAKE_CHAR`/`MAKE_BLOCK`/`REFER`/
+//! `TRUNCATE`）——顶层新建目录/文件/socket/fifo/sym 放行；Landlock union
+//! 语义下该授权全树生效（已接受后果与 `WRITE_FILE` 绝不上 `/` 的否决论证
+//! 见设计档 §7.2）。
 //!
 //! **deny 表不进本模块**——单一源在 orz-tools `write_control`
 //! （`LINUX_DISASTER_KERNEL_FACES`，0cc v3 收窄＝灾难防护最小核 /boot /dev
-//! /proc /sys；载体面系统树已放行）；本模块只承载机制，由调用方
-//! （orz-tools `terminal.rs` spawn 点）枚举 `/` 顶层并排除 deny 表后传入。
+//! /proc /sys；`DEVICE_SAFE_NODES`，0ch v4＝设备面安全节点恰 7 项）；本模块
+//! 只承载机制，由调用方（orz-tools `terminal.rs` spawn 点）传两表进
+//! [`prepare_allow_set`]。
 //!
 //! 失败姿态（0bw §1「高阻力＋强审计、非绝对保证」；2026-09-27 复审三分支
 //! 收敛，全部 fail-open）：① 内核不支持 Landlock ⇒ 不装 pre_exec；② `/`
@@ -16,16 +27,26 @@
 //! 锁死面），不因内核能力缺失瘫痪命令执行；③ 子进程内装挂失败 ⇒
 //! [`install_best_effort`] 以 write(2) 直写 stderr 一行提示（async-signal-
 //! safe，pre_exec 窗口内唯一可行可见面）后照常 exec——**装挂永不 fail
-//! spawn**。
+//! spawn**。表内节点缺席/symlink ⇒ 该项跳过不加规则＝默认拒（fail-closed）。
 //!
 //! 直写 syscall（不经 nono：nono 的 `Sandbox` 是整进程启动期形态，
 //! pre_exec 场景不适用）。syscall 号 x86_64／aarch64 统一（444–446）；
 //! 其余架构（arm／s390x／ppc64le／mips…）编号不同，**不启用**（
-//! `prepare_allow_dirs` 恒 `None`＝fail-open 方向——错号探测可能打到别的
+//! `prepare_allow_set` 恒 `None`＝fail-open 方向——错号探测可能打到别的
 //! syscall，不得尝试）。
 
+/// 装配产物：目录段＋文件段两表（C 形态全路径，pre_exec 无分配消费）；
+/// 根段为恒定规则、不随装配变化。
+pub struct ChildWriteAllowSet {
+    /// `/` 顶层目录 allowlist（deny 排除集已剔除；全写族 baseline）。
+    pub dirs: Vec<std::ffi::CString>,
+    /// 设备面安全节点（0ch 子项①；文件级 `WRITE_FILE`(＋TRUNCATE) 授权）。
+    pub files: Vec<std::ffi::CString>,
+}
+
 /// 调用方在 spawn 前的装配面：枚举 `/` 顶层目录、排除 `deny` 表项与非目录
-/// 项，返回可直接传入 [`install_child_write_guard`] 的 allowlist。
+/// 项；`safe_nodes` 逐项 CString 化进文件段（存在性/symlink 检查在装挂时）。
+/// 返回可直接传入 [`install_child_write_guard`] 的授权集。
 ///
 /// `None` ＝ Landlock 不可用或枚举失败（调用方按 best-effort 跳过装挂）。
 ///
@@ -36,11 +57,16 @@
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-pub fn prepare_allow_dirs(deny: &[&str]) -> Option<Vec<std::ffi::CString>> {
+pub fn prepare_allow_set(deny: &[&str], safe_nodes: &[&str]) -> Option<ChildWriteAllowSet> {
     if kernel_abi_version().is_none() {
         return None;
     }
-    enumerate_writable_top_dirs(deny).ok()
+    let dirs = enumerate_writable_top_dirs(deny).ok()?;
+    let files = safe_nodes
+        .iter()
+        .filter_map(|n| std::ffi::CString::new(*n).ok())
+        .collect();
+    Some(ChildWriteAllowSet { dirs, files })
 }
 
 /// 非（Linux ∧ x86_64/aarch64）无装配面（恒 `None`；调用方按 `#[cfg]` 排除，
@@ -49,7 +75,7 @@ pub fn prepare_allow_dirs(deny: &[&str]) -> Option<Vec<std::ffi::CString>> {
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 )))]
-pub fn prepare_allow_dirs(_deny: &[&str]) -> Option<Vec<std::ffi::CString>> {
+pub fn prepare_allow_set(_deny: &[&str], _safe_nodes: &[&str]) -> Option<ChildWriteAllowSet> {
     None
 }
 
@@ -143,7 +169,6 @@ mod sys {
         | FS_MAKE_FIFO
         | FS_MAKE_BLOCK
         | FS_MAKE_SYM;
-
     #[repr(C)]
     pub struct LandlockRulesetAttr {
         pub handled_access_fs: u64,
@@ -184,13 +209,41 @@ pub fn kernel_abi_version() -> Option<u32> {
     None
 }
 
+/// `/` 本体授权集（**0ch 子项②**；make 族子集恰 5 位）。设计档 §7.2 定档：
+/// **不含** `WRITE_FILE`/`TRUNCATE`（写/截断全树维持默认拒——union 语义下
+/// 授予即放行宿主既有块设备 open-write，扬盘保底失守）、**不含**
+/// `REMOVE_DIR`/`REMOVE_FILE`（删除口径=防删除破坏的本体）、**不含**
+/// `MAKE_CHAR`/`MAKE_BLOCK`（mknod 设备节点制造＝绕道 raw 设备访问）、
+/// **不含** `REFER`（跨目录 link/rename 搬移维持默认拒）。
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+pub const ROOT_MAKE_GRANT: u64 =
+    sys::FS_MAKE_DIR | sys::FS_MAKE_REG | sys::FS_MAKE_SOCK | sys::FS_MAKE_FIFO | sys::FS_MAKE_SYM;
+
+/// 文件段（设备面安全节点）授权集：`WRITE_FILE`＋`TRUNCATE`（仅 ABI≥v3——
+/// `allowed_access` 必须是 `handled_access_fs` 的子集，v1/v2 的 handled 不含
+/// TRUNCATE，带上即 EINVAL）。Landlock 对非目录 fd 仅接受文件族权利。
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn file_node_grant(version: u32) -> u64 {
+    let mut g = sys::FS_WRITE_FILE;
+    if version >= 3 {
+        g |= sys::FS_TRUNCATE;
+    }
+    g
+}
+
 /// 在当前（fork 后、exec 前）进程装挂子进程写面 Landlock ruleset。
 ///
-/// `allow_dirs` ＝ [`prepare_allow_dirs`]／[`enumerate_writable_top_dirs`]
-/// 产出的 allowlist（deny 表已在枚举时排除——Landlock 无 deny 规则，
-/// 「不授权」即拒）。错误上抛由调用方决定姿态（本项目 spawn 点为
-/// best-effort：见模块注释；`prepare_allow_dirs` 返回 `None` 时本函数
-/// 不会被装挂）。
+/// `allow` ＝ [`prepare_allow_set`] 产出的授权集（deny 表已在枚举时排除——
+/// Landlock 无 deny 规则，「不授权」即拒）。规则三段：目录（全写族
+/// baseline）＋文件（[`file_node_grant`]）＋`/` 根（[`ROOT_MAKE_GRANT`]）。
+/// 错误上抛由调用方决定姿态（本项目 spawn 点为 best-effort：见模块注释；
+/// `prepare_allow_set` 返回 `None` 时本函数不会被装挂）。
 ///
 /// # Safety
 /// After fork / before exec. 装挂后本进程（及其 exec 后映像）写族访问
@@ -199,7 +252,7 @@ pub fn kernel_abi_version() -> Option<u32> {
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-pub unsafe fn install_child_write_guard(allow_dirs: &[std::ffi::CString]) -> std::io::Result<()> {
+pub unsafe fn install_child_write_guard(allow: &ChildWriteAllowSet) -> std::io::Result<()> {
     use sys::{
         FS_REFER, FS_TRUNCATE, LANDLOCK_RULE_PATH_BENEATH, LandlockPathBeneathAttr,
         LandlockRulesetAttr, SYS_LANDLOCK_ADD_RULE, SYS_LANDLOCK_CREATE_RULESET,
@@ -240,48 +293,89 @@ pub unsafe fn install_child_write_guard(allow_dirs: &[std::ffi::CString]) -> std
     }
     let ruleset_fd = ruleset_fd as libc::c_int;
 
-    for dir in allow_dirs {
-        // SAFETY: dir 为合法 NUL 结尾路径；O_PATH＝仅持引用不读内容，
-        // O_CLOEXEC 防 exec 泄漏；O_NOFOLLOW＝枚举后被换成 symlink 的路径
-        // 打不开（跳过＝默认拒，fail-closed——复审 P1 纵深）。
-        let fd = unsafe {
-            libc::open(
-                dir.as_ptr(),
-                libc::O_PATH | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-            )
-        };
-        if fd < 0 {
-            // 枚举后消失的目录：不加规则＝该目录写面被默认拒（更严方向）。
-            continue;
-        }
-        let rule = LandlockPathBeneathAttr {
-            allowed_access: handled,
-            parent_fd: fd,
-        };
-        // SAFETY: rule 与 ruleset_fd 均为刚取得的合法句柄/结构。
-        let rc = unsafe {
-            libc::syscall(
-                SYS_LANDLOCK_ADD_RULE,
-                ruleset_fd,
-                LANDLOCK_RULE_PATH_BENEATH,
-                &rule as *const LandlockPathBeneathAttr,
-                0,
-            )
-        };
-        // SAFETY: fd 不再需要（规则已拷入内核）。
-        unsafe { libc::close(fd) };
-        if rc != 0 {
-            let err = std::io::Error::last_os_error();
+    // 目录段：顶层目录逐项全写族 baseline（既有语义不变）。
+    for dir in &allow.dirs {
+        if let Err(e) = unsafe { add_path_beneath_rule(ruleset_fd, dir, handled) } {
             // SAFETY: ruleset_fd 收尾。
             unsafe { libc::close(ruleset_fd) };
-            return Err(err);
+            return Err(e);
         }
+    }
+
+    // 文件段（0ch 子项①）：设备面安全节点逐个文件级授权；`allowed_access`
+    // 必须落在文件族权利内（目录族位会 EINVAL）。
+    let file_grant = file_node_grant(version);
+    for file in &allow.files {
+        if let Err(e) = unsafe { add_path_beneath_rule(ruleset_fd, file, file_grant) } {
+            // SAFETY: ruleset_fd 收尾。
+            unsafe { libc::close(ruleset_fd) };
+            return Err(e);
+        }
+    }
+
+    // 根段（0ch 子项②）：`/` 本体 make 族子集（常量集，见 ROOT_MAKE_GRANT）。
+    let root = std::ffi::CString::new("/").expect("static path");
+    if let Err(e) = unsafe { add_path_beneath_rule(ruleset_fd, &root, ROOT_MAKE_GRANT) } {
+        // SAFETY: ruleset_fd 收尾。
+        unsafe { libc::close(ruleset_fd) };
+        return Err(e);
     }
 
     // SAFETY: ruleset_fd 合法；NO_NEW_PRIVS 已置位。
     let rc = unsafe { libc::syscall(SYS_LANDLOCK_RESTRICT_SELF, ruleset_fd, 0) };
     // SAFETY: ruleset_fd 收尾（restrict 成败均已不再需要）。
     unsafe { libc::close(ruleset_fd) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// 加一条 PATH_BENEATH 规则（目录段/文件段/根段共用；打开失败＝枚举后
+/// 消失或 symlink 交换 ⇒ 跳过不加规则＝该路径写面被默认拒，fail-closed）。
+///
+/// # Safety
+/// `ruleset_fd` 须为合法 ruleset；`path` 须为合法 NUL 结尾路径。
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+unsafe fn add_path_beneath_rule(
+    ruleset_fd: libc::c_int,
+    path: &std::ffi::CString,
+    allowed_access: u64,
+) -> std::io::Result<()> {
+    use sys::{LANDLOCK_RULE_PATH_BENEATH, LandlockPathBeneathAttr, SYS_LANDLOCK_ADD_RULE};
+
+    // SAFETY: path 为合法 NUL 结尾路径；O_PATH＝仅持引用不读内容，
+    // O_CLOEXEC 防 exec 泄漏；O_NOFOLLOW＝枚举后被换成 symlink 的路径
+    // 打不开（跳过＝默认拒，fail-closed——复审 P1 纵深）。
+    let fd = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_PATH | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        // 路径缺席/已换 symlink：不加规则（更严方向），不算装挂失败。
+        return Ok(());
+    }
+    let rule = LandlockPathBeneathAttr {
+        allowed_access,
+        parent_fd: fd,
+    };
+    // SAFETY: rule 与 ruleset_fd 均为刚取得的合法句柄/结构。
+    let rc = unsafe {
+        libc::syscall(
+            SYS_LANDLOCK_ADD_RULE,
+            ruleset_fd,
+            LANDLOCK_RULE_PATH_BENEATH,
+            &rule as *const LandlockPathBeneathAttr,
+            0,
+        )
+    };
+    // SAFETY: fd 不再需要（规则已拷入内核）。
+    unsafe { libc::close(fd) };
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -296,7 +390,7 @@ pub unsafe fn install_child_write_guard(allow_dirs: &[std::ffi::CString]) -> std
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 )))]
-pub unsafe fn install_child_write_guard(_allow_dirs: &[std::ffi::CString]) -> std::io::Result<()> {
+pub unsafe fn install_child_write_guard(_allow: &ChildWriteAllowSet) -> std::io::Result<()> {
     Ok(())
 }
 
@@ -319,9 +413,9 @@ const INSTALL_FAILURE_NOTE: &[u8] =
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-pub unsafe fn install_best_effort(allow_dirs: &[std::ffi::CString]) {
+pub unsafe fn install_best_effort(allow: &ChildWriteAllowSet) {
     // SAFETY: 见 install_child_write_guard；失败路径仅 write(2)（信号安全）。
-    if unsafe { install_child_write_guard(allow_dirs) }.is_err() {
+    if unsafe { install_child_write_guard(allow) }.is_err() {
         // SAFETY: 常量切片指针/长度；fd 2 恒有效。
         unsafe {
             libc::write(
@@ -341,7 +435,7 @@ pub unsafe fn install_best_effort(allow_dirs: &[std::ffi::CString]) {
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 )))]
-pub unsafe fn install_best_effort(_allow_dirs: &[std::ffi::CString]) {}
+pub unsafe fn install_best_effort(_allow: &ChildWriteAllowSet) {}
 
 #[cfg(all(
     test,
@@ -440,13 +534,105 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    /// 0ch 子项② 权限集钉：`ROOT_MAKE_GRANT` 恰 5 位（make 族子集）——
+    /// 写/截断/删除/设备节点制造/跨目录搬移位一律不得混入（设计档 §7.2；
+    /// union 语义下 `WRITE_FILE` 上 `/` 即放行宿主块设备写＝扬盘保底失守）。
+    #[test]
+    fn root_make_grant_is_precise_five_bit_subset() {
+        use sys::{
+            FS_MAKE_BLOCK, FS_MAKE_CHAR, FS_MAKE_DIR, FS_MAKE_FIFO, FS_MAKE_REG, FS_MAKE_SOCK,
+            FS_MAKE_SYM, FS_REFER, FS_REMOVE_DIR, FS_REMOVE_FILE, FS_TRUNCATE, FS_WRITE_FILE,
+        };
+        assert_eq!(
+            ROOT_MAKE_GRANT,
+            FS_MAKE_DIR | FS_MAKE_REG | FS_MAKE_SOCK | FS_MAKE_FIFO | FS_MAKE_SYM
+        );
+        for banned in [
+            FS_WRITE_FILE,
+            FS_TRUNCATE,
+            FS_REMOVE_DIR,
+            FS_REMOVE_FILE,
+            FS_MAKE_CHAR,
+            FS_MAKE_BLOCK,
+            FS_REFER,
+        ] {
+            assert_eq!(
+                ROOT_MAKE_GRANT & banned,
+                0,
+                "banned bit {banned:#b} must not appear in ROOT_MAKE_GRANT"
+            );
+        }
+    }
+
+    /// 0ch 子项① 权限集钉：文件段授权只含文件族权利（WRITE_FILE＋ABI≥3 的
+    /// TRUNCATE），目录族位（MAKE_\*/REMOVE_\*）一律不出现——Landlock 对非
+    /// 目录 fd 接受目录族位即 EINVAL。
+    #[test]
+    fn file_node_grant_is_file_family_only() {
+        use sys::{
+            FS_MAKE_BLOCK, FS_MAKE_CHAR, FS_MAKE_DIR, FS_MAKE_FIFO, FS_MAKE_REG, FS_MAKE_SOCK,
+            FS_MAKE_SYM, FS_REFER, FS_REMOVE_DIR, FS_REMOVE_FILE, FS_TRUNCATE, FS_WRITE_FILE,
+        };
+        let dir_family = FS_MAKE_DIR
+            | FS_MAKE_REG
+            | FS_MAKE_SOCK
+            | FS_MAKE_FIFO
+            | FS_MAKE_SYM
+            | FS_MAKE_CHAR
+            | FS_MAKE_BLOCK
+            | FS_REMOVE_DIR
+            | FS_REMOVE_FILE
+            | FS_REFER;
+        for version in [1u32, 2, 3, 4, 5] {
+            let g = file_node_grant(version);
+            assert!(g & FS_WRITE_FILE != 0, "v{version}: WRITE_FILE required");
+            assert_eq!(
+                g & dir_family,
+                0,
+                "v{version}: directory-family bits must not appear in file grant"
+            );
+            if version >= 3 {
+                assert_eq!(g, FS_WRITE_FILE | FS_TRUNCATE, "v{version}");
+            } else {
+                assert_eq!(g, FS_WRITE_FILE, "v{version}: TRUNCATE not in handled");
+            }
+        }
+    }
+
+    /// 0ch 装配钉：`prepare_allow_set` 文件段与传入表逐项对应；ABI 探测
+    /// 失败 ⇒ `None`（门在枚举前）。
+    #[test]
+    fn prepare_allow_set_carries_files_and_gates_on_abi() {
+        let nodes = ["/dev/null", "/dev/zero", "/dev/ptmx"];
+        match prepare_allow_set(&CORE, &nodes) {
+            Some(set) => {
+                let file_names: Vec<String> = set
+                    .files
+                    .iter()
+                    .filter_map(|c| c.to_str().ok().map(|s| s.to_string()))
+                    .collect();
+                assert_eq!(
+                    file_names,
+                    nodes.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+                );
+                assert!(
+                    set.dirs.iter().any(|d| d.to_str().ok() == Some("/tmp")),
+                    "dirs 段应含 /tmp（枚举语义不变）"
+                );
+            }
+            None => {
+                assert!(kernel_abi_version().is_none(), "Some 门＝ABI 探测");
+            }
+        }
+    }
 }
 
 #[cfg(all(test, not(target_os = "linux")))]
 mod tests {
     #[test]
     fn non_linux_prepare_is_none() {
-        assert!(super::prepare_allow_dirs(&[]).is_none());
+        assert!(super::prepare_allow_set(&[], &[]).is_none());
         assert!(super::kernel_abi_version().is_none());
     }
 }

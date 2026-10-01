@@ -1235,6 +1235,22 @@ mod tests {
         }
     }
 
+    /// 0ch v4 L3/L1-L2 粒度一致性钉：设备安全节点表每一项都不得落进规则 2
+    /// 块设备目标形态（`is_block_device_target`）——L3 内核授权面不得比
+    /// L1/L2 block 面更宽；`/dev/null` 豁免锚两层面同在（设计档 §7.1）。
+    #[test]
+    fn device_safe_nodes_never_overlap_block_device_faces() {
+        assert_eq!(write_control::DEVICE_SAFE_NODES.len(), 7);
+        for node in write_control::DEVICE_SAFE_NODES {
+            assert!(
+                !is_block_device_target(node),
+                "L3 safe node {node} must not be an L1/L2 block-device face"
+            );
+        }
+        // 豁免锚：/dev/null 双面同族（L1/L2 NULL_DEVICE 豁免 ↔ L3 文件级授权）。
+        assert!(write_control::DEVICE_SAFE_NODES.contains(&NULL_DEVICE));
+    }
+
     /// 0cb③：`CommandReview::report()` 形状——allow 恒 null 臂、warn/block
     /// 恒 rule+detail 臂（schema XOR 语义的生产侧镜像）。
     #[test]
