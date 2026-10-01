@@ -79,46 +79,35 @@ pub fn proc_region_bounds(stat: &str) -> Option<(usize, usize, usize, usize)> {
 }
 
 /// Linux 启动期一次调用：零化 argv 区的 `flag`(+value) token 与 environ 区
-/// 的 `KEY=` 条目。best-effort——读不到 /proc/self/{stat,mem} 或写不回时
+/// 的 `KEY=` 条目。**直接裸指针写自身进程内存**（setproctitle 标准形态——
+/// argv/environ 字符串区在初始栈上映射为 RW，进程存活期归本进程所有；
+/// 不走 `/proc/self/mem`：该通道在本环境实测自进程读写不可靠）。地址取自
+/// `/proc/self/stat`（字段 48–51）；best-effort——stat 不可达/解析失败即
 /// 静默返回（调用方已先 `remove_var`，继承面已收口；本层只影响
 /// `/proc/*/cmdline`、`/proc/<orz-pid>/environ` 的外部读数）。
+///
+/// SAFETY：arg/env 区由内核在 exec 时映射为本进程 RW 栈内存，启动期仍有效；
+/// `u8` 无对齐要求；只写不读越界（区间端点即边界）。
 #[cfg(target_os = "linux")]
 pub fn scrub_linux(flag: &str, env_key: &str) {
-    use std::io::{Read, Seek, SeekFrom, Write};
-
     let Ok(stat) = std::fs::read_to_string("/proc/self/stat") else {
         return;
     };
     let Some((arg_start, arg_end, env_start, env_end)) = proc_region_bounds(&stat) else {
         return;
     };
-    let Ok(mut mem) = std::fs::File::open("/proc/self/mem") else {
-        return;
-    };
-    let mut scrub_region = |start: usize, end: usize, pick: fn(&[u8], &str) -> Vec<(usize, usize)>,
-                            needle: &str| {
-        if end <= start {
-            return;
-        }
-        let mut buf = vec![0u8; end - start];
-        if mem.seek(SeekFrom::Start(start as u64)).is_err() {
-            return;
-        }
-        if mem.read_exact(&mut buf).is_err() {
-            return;
-        }
-        let ranges = pick(&buf, needle);
-        if ranges.is_empty() {
-            return;
-        }
-        zero_ranges(&mut buf, &ranges);
-        if mem.seek(SeekFrom::Start(start as u64)).is_err() {
-            return;
-        }
-        let _ = mem.write_all(&buf);
-    };
-    scrub_region(arg_start, arg_end, zero_target_ranges, flag);
-    scrub_region(env_start, env_end, zero_env_entry_ranges, env_key);
+    if arg_end > arg_start {
+        let region =
+            unsafe { std::slice::from_raw_parts_mut(arg_start as *mut u8, arg_end - arg_start) };
+        let ranges = zero_target_ranges(region, flag);
+        zero_ranges(region, &ranges);
+    }
+    if env_end > env_start {
+        let region =
+            unsafe { std::slice::from_raw_parts_mut(env_start as *mut u8, env_end - env_start) };
+        let ranges = zero_env_entry_ranges(region, env_key);
+        zero_ranges(region, &ranges);
+    }
 }
 
 #[cfg(test)]
@@ -178,12 +167,7 @@ mod tests {
         let (a, b, c, d) = proc_region_bounds(&stat).expect("parses");
         assert_eq!(
             (a, b, c, d),
-            (
-                1_400_000_000,
-                1_400_000_100,
-                1_400_000_200,
-                1_400_000_300
-            )
+            (1_400_000_000, 1_400_000_100, 1_400_000_200, 1_400_000_300)
         );
     }
 }
