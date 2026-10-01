@@ -1183,7 +1183,7 @@ pub struct GoalRoleModel {
     /// spawn time; unknown/unauthorized ⇒ fail-open to current model.
     pub model: String,
     /// Harness `agent_type` (e.g. "cursor", "grok-build-plan") whose
-    /// `AgentDefinition` decides the role subagent's harness flavor (system
+    /// agent-type definition decides the role subagent's harness flavor (system
     /// prompt + cursor-vs-grok-build toolset), applied REGARDLESS of the
     /// session/parent agent. Resolved by NAME (project/plugin/builtin lookup,
     /// then re-flavored by the subagent toolset resolver) — NOT via the main

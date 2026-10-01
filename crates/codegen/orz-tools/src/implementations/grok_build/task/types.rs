@@ -160,8 +160,8 @@ pub struct SubagentRuntimeOverrides {
     /// `None` means "use role/persona default" (which itself defaults to `None`/shared workspace).
     pub isolation: Option<SubagentIsolationMode>,
     /// `/goal`-only harness override: the `agent_type` (e.g. `"cursor"`,
-    /// `"grok-build-plan"`) whose `AgentDefinition` decides the child's harness
-    /// flavor — system prompt + toolset — applied
+    /// `"grok-build-plan"`) whose agent-type definition decides the child's
+    /// harness flavor — system prompt + toolset — applied
     /// REGARDLESS of the parent agent (so a session can pin a
     /// compat-harness verifier and vice versa).
     /// Orthogonal to `subagent_type`, which still selects the toolset-role
@@ -800,7 +800,7 @@ pub enum SubagentDescribeOutcome {
 
 /// Resolved toolset summary for a subagent type.
 ///
-/// Built by the coordinator from the type's `AgentDefinition` AFTER the
+/// Built by the coordinator from the type's agent-type definition AFTER the
 /// same parent-dependent toolset re-selection a real spawn applies, so a
 /// parent's described tool names match what the child would
 /// actually get. The capability booleans key on the exact `ToolKind`

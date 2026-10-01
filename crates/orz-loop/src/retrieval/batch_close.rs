@@ -26,38 +26,14 @@ pub(crate) const MERGE_MAX_QUERIES: usize = 3;
 /// 模板同族 `refuse_inject_budget`／`plan_round_denied`。
 pub(crate) const DEFERRED_CAUSE: &str = "retrieval_dispatch_deferred_one_per_round";
 
-/// 0au（2026-09-20 立项，S3 摩擦 N2）：派发前 run 余量判定——批墙钟之外
-/// 还须容纳**一次收尾回合**的余量（秒）。remaining < batch_wallclock ＋
-/// 本余量 ⇒ 本批保留不派发（`WALLCLOCK_RESERVED_CAUSE`）。
-pub(crate) const CLOSE_ROUND_MARGIN_SECS: u64 = 60;
-
-/// 0au 尾部保留（秒）：距 run 墙钟不足此数**一律**不派发新批，尾部留给
-/// 落盘（方案建议 90–120 s，取上沿 120）。与档位表 180／300／450 绑定
-/// 判定（`wallclock_reserved`），不另立第二把尺。
-pub(crate) const RUN_TAIL_RESERVE_SECS: u64 = 120;
-
-/// 0au 保留拒绝的稳定 cause：无 `ToolStarted` 的预派发拒绝（模板同 D3）；
-/// 语义是「保留」不是「失败」——run 余量不足以容纳完整检索批＋收尾。
-pub(crate) const WALLCLOCK_RESERVED_CAUSE: &str = "retrieval_dispatch_wallclock_reserved";
-
-/// 0au 纯函数：本批应否因 run 墙钟余量不足而保留（不派发）。
-///
-/// `remaining = None`（无已知 run 上限——`ORZ_MAX_WALLCLOCK` 未设/为 0）
-/// ⇒ 永不保留（自然收工的 run 无预算可判，与 S3 取证口径一致：摩擦例全
-/// 部产生于墙钟到点的 run）。判据两支任一即保留：
-/// ① `remaining < batch_wallclock + CLOSE_ROUND_MARGIN_SECS`（批跑不满＋
-///   无收尾回合——S3 五次 trailing 的直接成因）；
-/// ② `remaining < RUN_TAIL_RESERVE_SECS`（尾部保留，落盘窗口）。
-pub(crate) fn wallclock_reserved(
-    remaining: Option<std::time::Duration>,
-    batch_wallclock: std::time::Duration,
-) -> bool {
-    let Some(remaining) = remaining else {
-        return false;
-    };
-    let need = batch_wallclock + std::time::Duration::from_secs(CLOSE_ROUND_MARGIN_SECS);
-    remaining < need || remaining < std::time::Duration::from_secs(RUN_TAIL_RESERVE_SECS)
-}
+// 148 批（2026-10-02，审查处置）退役面：原 0au 派发前 run 墙钟余量保留族
+// （`CLOSE_ROUND_MARGIN_SECS`／`RUN_TAIL_RESERVE_SECS`／
+// `WALLCLOCK_RESERVED_CAUSE`／`wallclock_reserved`，2026-09-20 S1 落码）
+// 随墙钟可见性一并退役——上限读源（env `ORZ_MAX_WALLCLOCK`）已随 0cg
+// argv/env 收口成不可达死配置（用户裁决：F6/保留量不涉他面，记录并同
+// 退役）；agent_loop 侧接线（预扫描＋保留臂＋post-batch 重述）同批清退。
+// `BatchCloseKind::WallclockBound`（0ar D2 单批墙钟）与子代理档位墙钟
+// （180/300/450）不属本族，保持不动。
 
 /// 提前交付（§3.7）显式标记：子代理不满 5 条可主动提交，标记行其余部分
 /// 即证据指针（缺指针按普通收尾处理＋anomaly，fail-open）。
@@ -693,76 +669,5 @@ mod tests {
             BatchCloseKind::WallclockBound.terminal_reason(),
             "dispatch_wallclock_bound"
         );
-    }
-
-    // ── 0au：派发前 run 墙钟余量判定（S1 落码钉子） ─────────────────────
-
-    use std::time::Duration as StdDuration;
-
-    /// 无已知 run 上限（ORZ_MAX_WALLCLOCK 缺席/为 0）⇒ 永不保留——自然
-    /// 收工的 run 无预算可判（判据 ③：不误伤剩余充足/无上限路径）。
-    #[test]
-    fn wallclock_reserve_never_fires_without_a_known_limit() {
-        assert_eq!(wallclock_reserved(None, StdDuration::from_secs(300)), false);
-    }
-
-    /// 判据 ①：余量 < 批墙钟＋收尾回合 ⇒ 保留——S3 四轮 trailing 实录
-    /// 逐例回放（extract 26s、torch 117s、r1 torch 183s、r2 gpt2 123s 全被
-    /// 拦；r3 的 462s 正常批不受扰）。
-    #[test]
-    fn wallclock_reserve_replays_the_s3_trailing_corpus() {
-        let extended = StdDuration::from_secs(300);
-        let standard = StdDuration::from_secs(180);
-        // S3 extract 26s / torch 117s（近失）：< 300+60 ⇒ 保留。
-        assert!(wallclock_reserved(
-            Some(StdDuration::from_secs(26)),
-            extended
-        ));
-        assert!(wallclock_reserved(
-            Some(StdDuration::from_secs(117)),
-            extended
-        ));
-        // r1 torch 183s、r2 gpt2 123s、r2 extract 191s：extended 下全保留。
-        assert!(wallclock_reserved(
-            Some(StdDuration::from_secs(183)),
-            extended
-        ));
-        assert!(wallclock_reserved(
-            Some(StdDuration::from_secs(123)),
-            extended
-        ));
-        assert!(wallclock_reserved(
-            Some(StdDuration::from_secs(191)),
-            extended
-        ));
-        // r3 462s extended：360 需求 ⇒ 不保留（该批正常收口）。
-        assert!(!wallclock_reserved(
-            Some(StdDuration::from_secs(462)),
-            extended
-        ));
-        // standard 180+60=240：300s 余量不保留（边界外）；239s 保留（边界内）。
-        assert!(!wallclock_reserved(
-            Some(StdDuration::from_secs(240)),
-            standard
-        ));
-        assert!(wallclock_reserved(
-            Some(StdDuration::from_secs(239)),
-            standard
-        ));
-    }
-
-    /// 尾部保留支：即便批墙钟极短（standard），距 run 终点不足 120s 一律
-    /// 保留（S3 extract 26s 即使 standard 也必须拦住）。
-    #[test]
-    fn tail_reserve_holds_even_for_the_shortest_tier() {
-        assert!(wallclock_reserved(
-            Some(StdDuration::from_secs(119)),
-            StdDuration::from_secs(180)
-        ));
-        // 恰好 120s：不小于保留额；但 < 180+60 ⇒ 仍由判据 ① 保留。
-        assert!(wallclock_reserved(
-            Some(StdDuration::from_secs(120)),
-            StdDuration::from_secs(180)
-        ));
     }
 }

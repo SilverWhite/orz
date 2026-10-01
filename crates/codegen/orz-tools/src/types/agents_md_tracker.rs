@@ -88,7 +88,9 @@ pub struct AgentsMdTracker {
     checked_dirs: HashSet<PathBuf>,
 
     /// AGENTS.md file paths that were part of the initial system prompt injection
-    /// (seeded by AgentBuilder at session start from agents_md.rs discovery).
+    /// (seeded by the tool bridge at session start from agents_md.rs discovery;
+    /// the former `AgentBuilder` attribution retired with orz-agent, 0ce
+    /// 2026-10-01).
     /// We never remind about these — the agent already has them.
     /// All entries are canonicalized via `normalize()`.
     initial_discovery: HashSet<PathBuf>,
@@ -127,7 +129,8 @@ impl AgentsMdTracker {
     }
 
     /// Seed the tracker with paths from the initial AGENTS.md discovery.
-    /// Called once at session start by AgentBuilder/ToolBridge.
+    /// Called once at session start by the tool bridge (the former
+    /// `AgentBuilder` attribution retired with orz-agent, 0ce 2026-10-01).
     ///
     /// `initial_paths` are the full paths to AGENTS.md files already injected
     /// into the system prompt. Their parent directories are marked as checked.

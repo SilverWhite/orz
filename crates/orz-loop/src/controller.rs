@@ -79,7 +79,7 @@ pub fn max_tool_rounds_override() -> Option<u32> {
 /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, BACKLOG 0k / TODO
 /// P0-0k 第一批第 2 项)：检索子代理 run 级预算——墙钟默认 600s（10 分钟），
 /// `ORZ_RETRIEVAL_SUBAGENT_TIMEOUT_SECS` 覆盖，0 禁用（unbounded）。
-/// 主车道 wallclock（ORZ_MAX_WALLCLOCK）仍由 orz-bin 层整体兜底；本预算
+/// 主车道 wallclock（ORZ_MAX_WALLCLOCK）由 orz-bin 层整体兜底；本预算
 /// 只约束单次检索派发，防止一个检索会话烧掉主 run 的墙钟。
 pub const RETRIEVAL_SUBAGENT_WALLCLOCK_DEFAULT_SECS: u64 = 600;
 
@@ -107,43 +107,13 @@ pub fn retrieval_subagent_wallclock_override() -> Option<Option<std::time::Durat
         .and_then(|s| parse_retrieval_subagent_wallclock(&s))
 }
 
-/// TER T1.8 (2026-09-04)：主车道评测墙钟上限来源——env
-/// `ORZ_MAX_WALLCLOCK`（秒，orz-bin `--max-wallclock` 施加；>0 生效）。
-/// `0` / 缺失 / 非法 = 无上限（unlimited）。M2 T2.1 墙钟单一化后，评测
-/// 侧以 runner/sandbox 施加值为准，本 env 仍作为本地显式上限逃生阀。
-pub(crate) fn parse_main_wallclock_limit_secs(s: &str) -> Option<Option<u64>> {
-    match s.trim().parse::<u64>() {
-        Ok(0) => Some(None),
-        Ok(secs) => Some(Some(secs)),
-        Err(_) => {
-            // TER 全面审查 F4 (2026-09-04)：非法值在此回落 unlimited（与
-            // 0/缺失同语义），但必须留可见告警——TUI/嵌入路径不经 orz-bin
-            // 的 exit-2 校验，静默拼错会悄悄关掉 F6 push/预算读源。
-            tracing::warn!(
-                raw = %s,
-                "ORZ_MAX_WALLCLOCK parse failed — treating as unlimited (typo would \
-                 otherwise silently disable the wallclock read source)"
-            );
-            None
-        }
-    }
-}
-
-pub(crate) fn main_wallclock_limit_secs_override() -> Option<u64> {
-    std::env::var("ORZ_MAX_WALLCLOCK")
-        .ok()
-        .and_then(|s| parse_main_wallclock_limit_secs(&s))
-        .flatten()
-}
-
-/// TER T1.9 (2026-09-04)：F6 push 档开关——env `ORZ_F6_PUSH`（1/on/true/
-/// yes）；缺失/其它值 = off（PUSH→PULL 纪律默认）。
-pub fn f6_push_enabled_override() -> bool {
-    matches!(
-        std::env::var("ORZ_F6_PUSH").ok().as_deref(),
-        Some("1" | "on" | "true" | "yes")
-    )
-}
+// 148 批（2026-10-02，审查处置）退役面：原 TER T1.8/T1.9 的
+// `parse_main_wallclock_limit_secs`／`main_wallclock_limit_secs_override`
+// （env `ORZ_MAX_WALLCLOCK` 读源）与 `f6_push_enabled_override`
+// （env `ORZ_F6_PUSH`）——0cg 已把该 env 收口为 orz-bin 进程内静态
+// （argv→env 桥退役＋启动期 `remove_var`），两读源恒 None/off 成不可达
+// 死配置；F6 push 档与 0au 尾部派发保留量随墙钟可见性一并退役
+// （用户裁决 2026-10-02），读源函数随批清退。
 
 /// 0bf ①（2026-09-22，用户令「RLI 常开进生产面、默认启用、影子退役」）：
 /// RLI 通道族总开关——**默认启用**；env `ORZ_LIF_RLI_SHADOW` 语义反转成
@@ -481,14 +451,6 @@ pub struct AgentLoopController {
     pub(crate) main_agent: MainAgent,
     pub(crate) blackboard: Arc<SharedBlackboard>,
     pub(crate) max_tool_rounds: u32,
-    /// TER T1.9 (2026-09-04)：F6 push 档开关（默认 off；显式
-    /// `ORZ_F6_PUSH` 开启）。
-    pub(crate) f6_push_enabled: bool,
-    /// F6 push 档读取的评测墙钟上限（`ORZ_MAX_WALLCLOCK`；None = 未施加
-    /// → 不注入）。
-    pub(crate) f6_push_limit_secs: Option<u64>,
-    /// 每 run 已跨阈值记账（600/300/120；run 起始复位）。
-    f6_push_crossed: Mutex<[bool; 3]>,
     /// TER 全面审查 P1-1 (2026-09-04)：本会话已记过 mid-run `tool_running`
     /// 的 auto-bg 调用（task_id → run_id）。loop 侧 idle-kill 事件生产者
     /// 据此只对“同 run 内先有 mid-run + running:true 完成”的任务补记
@@ -497,12 +459,6 @@ pub struct AgentLoopController {
     /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：检索子代理单次
     /// 派发墙钟预算。`None` = 禁用（unbounded）。
     pub(crate) retrieval_subagent_wallclock: Option<std::time::Duration>,
-    /// 0au（2026-09-20，S3 摩擦 N2）：run 级墙钟上限的**测试 seam**——
-    /// 派发前余量判定（`run_agent_loop` 预扫描）的解析序为
-    /// 「env（`ORZ_MAX_WALLCLOCK`）> 本字段 > None（不判定）」。生产路径
-    /// 只吃 env（orz-bin `--max-wallclock` 的读源）；本字段仅供测试注入，
-    /// 避免 env 全局态污染并行测试。
-    pub(crate) run_wallclock_limit_secs: Option<u64>,
     /// 检索子代理工具轮上限（与 `max_tool_rounds` 取 min 生效）。
     /// `None` = 禁用（unbounded，仅用主车道上限；0k 审查处理 P3-5）。
     pub(crate) retrieval_max_tool_rounds: Option<u32>,
@@ -899,15 +855,11 @@ impl AgentLoopController {
             main_agent: MainAgent::new(gateway.clone()),
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: max_tool_rounds_override().unwrap_or(MAX_TOOL_ROUNDS),
-            f6_push_enabled: f6_push_enabled_override(),
-            f6_push_limit_secs: main_wallclock_limit_secs_override(),
-            f6_push_crossed: Mutex::new([false; 3]),
             mid_run_call_ids: Mutex::new(std::collections::HashMap::new()),
             // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
             // 委托契约复杂度分档——构造时不再固化默认预算；dispatch 按
             // 「显式 env > controller 字段（seam） > 档位默认」解析。
             retrieval_subagent_wallclock: retrieval_subagent_wallclock_override().flatten(),
-            run_wallclock_limit_secs: None,
             retrieval_max_tool_rounds: retrieval_subagent_max_tool_rounds_override().flatten(),
             candidate_cap: web_fetch_candidate_cap_override()
                 .unwrap_or(DEFAULT_WEB_FETCH_CANDIDATE_CAP),
@@ -1147,13 +1099,6 @@ impl AgentLoopController {
     /// 与外部 lane 双族恒在；未启用会话无检索工具且派发拒绝。
     pub fn with_retrieval_enabled(mut self, enabled: bool) -> Self {
         self.retrieval_enabled = enabled;
-        self
-    }
-
-    /// 0au（2026-09-20）测试 seam：注入 run 级墙钟上限（秒），供派发前
-    /// 余量判定的确定性单测（生产读源仍是 env，见字段文档）。
-    pub fn with_run_wallclock_limit_secs(mut self, secs: u64) -> Self {
-        self.run_wallclock_limit_secs = Some(secs);
         self
     }
 
@@ -1570,14 +1515,10 @@ impl AgentLoopController {
             main_agent,
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: MAX_TOOL_ROUNDS,
-            f6_push_enabled: f6_push_enabled_override(),
-            f6_push_limit_secs: main_wallclock_limit_secs_override(),
-            f6_push_crossed: Mutex::new([false; 3]),
             mid_run_call_ids: Mutex::new(std::collections::HashMap::new()),
             // 第二批分档：测试组件构造不固化预算默认，档位默认在 dispatch
             // 生效；需要显式预算的测试直接写 controller 字段。
             retrieval_subagent_wallclock: None,
-            run_wallclock_limit_secs: None,
             retrieval_max_tool_rounds: None,
             candidate_cap: DEFAULT_WEB_FETCH_CANDIDATE_CAP,
             max_inject_tokens_per_round: DEFAULT_MAX_INJECT_TOKENS_PER_ROUND,
@@ -2244,70 +2185,16 @@ impl AgentLoopController {
         ))
     }
 
-    /// TER T1.8: run 相对墙钟 elapsed——读 LIF 时间轴原点（只读、无
-    /// side-effect 锚定）；未锚定按 0 呈现。
-    fn run_elapsed_wallclock_secs(&self) -> u64 {
-        let lif = self.lif.lock().unwrap_or_else(|e| e.into_inner());
-        match lif.run_origin_secs() {
-            Some(t0) => (Self::now_epoch_secs() - t0).max(0.0) as u64,
-            None => 0,
-        }
-    }
-
     // 0cg（2026-10-01）墙钟可见性拆除：原 `wallclock_rounds_line`（0am S1
     // Part A 的 T̂→轮次换算投影行，SESSION PULL 面与 resident 状态行共用）
-    // 随渲染面同拆退役；`run_elapsed_wallclock_secs` 保留——仍服务 F6 push
-    // 档与 retrieval 派发保留量（机械面，模型不可见）。
-
-    /// TER T1.9 (2026-09-04)：F6 push 档——每轮模型请求前调用；仅当
-    /// 显式开启（`f6_push_enabled`）且配置了评测墙钟上限时，剩余跨
-    /// <600/300/120s 阈值才机械注入一次中性事实（只报剩余/上限/已用轮，
-    /// 不附建议），并记 `budget_cue_injected` 事件；每 run 每档至多一次
-    /// （≤3 次/run；T0.2 verifier 上限 4 兼容）。默认 off = 零注入。
-    pub(crate) async fn maybe_push_f6_budget_cue(
-        &self,
-        writer: &mut EventWriter<'_>,
-        messages: &mut Vec<crate::gateway::model::Message>,
-        tool_rounds: u32,
-        main_lane: bool,
-    ) -> Result<(), AgentLoopError> {
-        if !main_lane || !self.f6_push_enabled {
-            return Ok(());
-        }
-        let Some(limit_secs) = self.f6_push_limit_secs else {
-            return Ok(());
-        };
-        let remaining_secs = limit_secs.saturating_sub(self.run_elapsed_wallclock_secs());
-        let threshold_secs = {
-            let mut crossed = self
-                .f6_push_crossed
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            crate::prompt::f6_push_cue_for_remaining(remaining_secs, &mut crossed)
-        };
-        let Some(threshold_secs) = threshold_secs else {
-            return Ok(());
-        };
-        writer
-            .record(
-                orz_assurance::EventType::BudgetCueInjected,
-                serde_json::json!({
-                    "remaining_seconds": remaining_secs,
-                    "rounds_used": tool_rounds,
-                    "threshold_seconds": threshold_secs,
-                }),
-            )
-            .await?;
-        messages.push(crate::gateway::model::Message {
-            role: crate::gateway::model::Role::User,
-            content: crate::prompt::f6_budget_cue_block(remaining_secs, limit_secs, tool_rounds),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-            reasoning_content: None,
-            round: None,
-        });
-        Ok(())
-    }
+    // 随渲染面同拆退役。148 批（2026-10-02，审查处置）：原 `TER T1.8
+    // run_elapsed_wallclock_secs` 与 `TER T1.9 maybe_push_f6_budget_cue`
+    // （F6 push 档）随墙钟可见性一并退役——前者唯一消费者是后者，后者
+    // 的上限读源（env `ORZ_MAX_WALLCLOCK`）已随 0cg 收口成不可达死配置
+    // （用户裁决：F6/保留量不涉他面，随墙钟记录并同退役）；F6 的唯一
+    // 生产者移除后 `budget_cue_injected` 零新增，事件契约面（枚举/schema/
+    // 校验族）保留服务历史 journal。0au 尾部派发保留量同批退役（其
+    // agent_loop 侧接线与 batch_close 判定函数一并清退）。
 
     /// TER T1.6 (2026-09-04): 黑板 `section=processes` live 分区——读取时
     /// 从 host 终端现算快照（≤1s 新鲜度），行含 task_id / 命令摘要 /
@@ -3733,11 +3620,6 @@ impl AgentLoopController {
             .blackboard_read_cursors
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = std::collections::HashMap::new();
-        // TER T1.9：F6 push 跨阈值记账随 run 复位（每 run ≤3 档注入）。
-        *self
-            .f6_push_crossed
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = [false; 3];
         // ACAF Slice 1 (ADR-0011 §4.2): the run's task goal is the ticket
         // goal binding (check 4) — pinned before any control event can fire.
         self.set_goal_digest(prompt);

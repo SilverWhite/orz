@@ -411,7 +411,9 @@ impl ToolBridge {
     ///
     /// Returns the combined (startup + discovered) list with canonical-path
     /// and name dedup applied. This is the authoritative source for slash
-    /// command advertisement — PromptContext is NOT used.
+    /// command advertisement — no prompt-layer context is consulted (the
+    /// former `PromptContext` attribution retired with orz-agent, 0ce
+    /// 2026-10-01).
     pub async fn slash_skills(&self) -> Vec<crate::implementations::skills::types::SkillInfo> {
         let registry = &*self.registry;
         let res = registry.resources.lock().await;
