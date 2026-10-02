@@ -2025,13 +2025,17 @@ def _verify_v02_mechanical_audit(events: list[dict[str, Any]]) -> list[str]:
       retrieval_batch}；
       （`attention_ladder` 为 **已退役** 的 0ae D2 阶梯 kind——动态上下文
       滑块 S1 起生产零写入，保留枚举值只为历史 journal 仍可校验；
+      `budget` 为 **已退役** 的 0cn S2（2026-10-02，ADR-0010 §14.82）
+      轮数记次 kind——「已用 N/999 轮」逐批注入整体撤除（999 为占位值
+      不真值化、不设替代物），保留枚举值只为历史 journal 仍可校验；
       `context_scale` = 实际上下文刻度提醒与压缩开窗，键形
       `context_scale:<500k|900k|first_fold>`。）
     - 其余 kind 的 payload 必须携带 key（对象键，非空）/ round（非负整数）/
       summary（非空机械事实摘要）/ anomaly（字符串或 null）；
-    - 键形为 file:<path> / cmd:<call_id> / plan / budget / retrieval:<n> /
-      attention_ladder:<K>k（历史）/ context_scale:<500k|900k|first_fold> /
-      model_compression / plan_write_guidance / plan_write_reminder。
+    - 键形为 file:<path> / cmd:<call_id> / plan / budget（已退役，仅历史）/
+      retrieval:<n> / attention_ladder:<K>k（历史）/
+      context_scale:<500k|900k|first_fold> / model_compression /
+      plan_write_guidance / plan_write_reminder。
     - `retrieval_batch`（0av S1，2026-09-20，S3 摩擦 N3）payload 形状独立：
       {activation_id, usable, cap, retrieval_calls, terminal_reason} 五键
       （与 Rust `batch_close` 单源 helper 同值；模型面零改动、不进审查表/

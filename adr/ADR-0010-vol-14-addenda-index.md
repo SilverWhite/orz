@@ -4872,3 +4872,25 @@ RLI 影子默认关、生产 1D 不动）。选型出处按用户裁决**脱敏�
 
    边界：四者互不注入对方面、不锁工具面；模型面只有 RLI 两触发与 PULL 读数；用户面只有
    疲劳／繁杂度；`GAP-RUN-SESSION-BOUNDARY`（`candidate`）触发时本表作用域表述随批修订。
+
+#### §14.82 budget 轮数记次注入撤除（0cn）（2026-10-02，v1.83）
+
+> 出处：0CJ 报告 §3.1 判读（`mechanical_audit_update kind=budget`「已用 N/999 轮」
+> 每工具批一刷新＝当前模型轮次感的事实主来源，而 999 仅为占位值）＋用户 S1 裁决
+> 「0cn的话，就是单纯不传这个轮数记次了，这个注入撤销」（161 批补记 §7.3）；
+> S2 落码批转录（164 批）。
+
+1. **撤除裁决**：机械审查层 §14.39 的 `budget` 对象键（轮末轮数记次覆盖写）生产
+   撤除——逐批 `mechanical_audit_update kind=budget` 事件零写入、终审
+   `[MECHANICAL_AUDIT v0.1]` 报告块不再渲染轮数记次行。三选一定为**撤除**：
+   不真值化（999 占位值不接真实预算语义）、不并入 temporal 面重构；**不设替代物、
+   接受时间感回归**——轮次感由 temporal／域迁移行族（`lif_domain` 连带记录）承载，
+   粗粒度已足。
+2. **契约面保留（历史回放纪律，同 `attention_ladder` 先例）**：runtime schema
+   `mechanical-audit-update-event-payload-v0.2` 的 kind 枚举与 Python 冻结镜像的
+   kind 集合**保留 `budget` 值不删**——删值＝历史 journal 判 invalid；生产零写入由
+   单测钉子钉住（新 run 不得出现 `kind=budget`）。`blackboard_read section=session`
+   的轮预算 PULL 面（真值语义）不受本条影响。
+3. **报告块形状（撤除后）**：执行事实／墙钟／异常事实三类；预算行与「预算：暂无」
+   兜底文案随撤除一并退役，墙钟行保留（`墙钟约 Ns`，run 已用墙钟，0cg 拆除范围
+   之外的既有机械面）。
