@@ -989,3 +989,14 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - 批档：[`170 批档`](audits/170_CARRIER_REBUILD_V0811_0CP_S3_0CN_S3_2026-10-03.md)。
 - 关键词：170 批、0.8.11 重建、源冻结 6493fdae、0cp S3 达成、0cn S3 达成、c6a0812c 身份门、ACAF 重 provision 9f1e2889、static-pie×3、alpine/bookworm 双冒烟、imm64 内联字节面注记、打包顺延、未发行、计数 59。
 - **补记（2026-10-03）：本批已提交推送**——orz `6493fdae` → `cli/feat/fusion-architecture`（`7daf76c0..6493fdae`，三笔＝168／169／bump）；父仓 `69990840` → `origin/main`（`96e2e1f9..69990840`，三笔＝168／169／170 落账）；两仓工作树净、本地无未推送提交与未推标签；**仍未发行**（无 Release、无 rel-stage 打包，发布面仍停 v0.8.7）。
+
+### 1.124 2026-10-03 171 批 recli 二跑真机核证——0cp S4 达成＋0cn S4 达成（用户令「我考虑再次跑一遍slopcode bench的recli作为验收测试，你觉得怎么样？」→ 评估对话〔判据 2 看门狗定测试钉口径——181s 真卡死面被 TER 180s 后台化精确避让、正常任务不可达，设计原注「真机可选」；不换题维持 recli 已知收益面〕→「那请启动recli吧」；计数不变 59、闭合待用户裁决 59 → 57）
+
+- **发射前置全绿**：载体 manifest 0.8.11（`orz` `c6a0812c…` 与身份门一致）；Docker 29.6.2；C: 12G／D: 38G 空闲（159 批满盘教训检查项）；基镜像两件在位；`ORZ_DEEPSEEK_API_KEY` 显式注入；ACP 冒烟 10.4s 全绿（provision rc=0、signer `7fee74b1…` 与 manifest 逐位一致、`smoke.txt` 实写）。发射＝`uv run slop-code run --agent orz --model deepseek/deepseek-v4-flash --problem recli`（rig 目录内、seed 42）；全程零重试零停摆。
+- **跑批形态**：8/8 checkpoint 单会话全程（8 run 共享前缀 `72764d4e`＋ARC 归档）；总墙钟 ≈53min（均值 399.2±162.7s/chkpt，首跑 580.7s）；185 模型轮／172 工具调用／172 权限请求（全 yolo）；压缩 4 次；exit 0。**同题同源**＝与首跑 ckpt 1/4/8 prompt 逐字节 diff 相等。core 轨迹 11/11→9/9→5/7→4/5→1/5→0/6→2/5→6/7（与首跑同构、唯 ckpt3 差一档）；官方 strict 2/8；k=1 不外推。
+- **0cp S4 七判据**：①动作样累计 ✓（侧车 `sample_points=320` 全动作源、grid 引用 9 卷＝0、唯一 >60s 命令〔61s `run_terminal_cmd`〕段内零采样、128 条 trace 抽检「窗内」9 样深度全 0.0s＝并行批完成边界）②看门狗＝真机未触发（无卡死、0 时间样＝预期；测试钉覆盖）③k=3 ✓（2 次 fire：`err×3（u=0.75≥θ=0.74）`、`slow×3（u=1.01≥θ=0.59）`）④直投 ✓（37 fire＝37 journal `mechanical_audit_update kind=rli_notice` 行、同刻装配实证 seq 466→467→468/469〔+5/+14ms〕、`notice_delivered_total=37` 恰等、fire 全集 journal 可复算＝0co 盲区闭环）⑤回归 ✓（零动作周期零注入、五通道 320 样连续在算、注入面族完整〔tool_result 150/lif_domain 98/context_scale 8/model_compression 5/plan_write_guidance 1〕）⑥D6 ✓（37 行 186/213/228B 全 ≤240、参数含义＋趋势＋`〔仅读数非阻断〕`尾注）⑦D7 ✓（`spike_entries=13`→`domain_spike_entry` 13/13 全提醒、回归端 14 回零专用提醒；对照首跑「稳定确认 0、spike 全被滤＝提醒面事实死亡」——**提醒面复活**）。
+- **0cn S4**：`kind=budget`＝0＋`预算`＝0（首跑 136→0）；轮次感由 lif_domain 98＋rli_notice 37＋context_scale 8 承载；`墙钟约`＝报告块 face（bench 形态两轮均不渲染，170 批字节判据覆盖保留性，非回归）。
+- **观察项（不占判据）**：spike 13 次/≈3,200s ≈ 1/4.1min（首跑 1/6.6min）仍稀疏且驻留极短（1–3 轮即回）、无突发聚集——无阻尼定稿维持、「以数据议最小间隔」条款不触发；streak fire 与 spike 进入同刻成对首见（r91 seq 468/469）；`section=rli` 消费＝0（与 0cj S4「可见但不用」连续，非 0cp 判据）；checkpoint_3 分差 5/7 vs 7/7 如实记不追因。
+- **台账**：TODO 头部计数行＋P1 行＋`P1-0cp`/`P1-0cn` S4 勾选；BACKLOG 本批指针＋计数行＋P1 行＋`0cn`/`0cp` 节 S3/S4 达成行＋开放项清单注记；索引头行 v4.141 → **v4.142**＋`AUTH-RLI-ACTION-SAMPLING-NOTICE-PUSH` 条目。
+- 批档：[`171 批档`](audits/171_0CP_S4_0CN_S4_RECLI_SECOND_RUN_2026-10-03.md)。
+- 关键词：171 批、recli 二跑、0cp S4 达成、0cn S4 达成、七判据核收、看门狗测试钉口径、k=3、直投 37/37、delivered 恰等、0co 盲区闭环、D6 行宽、D7 提醒面复活、预算注入归零、同题同源、侵蚀曲线复现、闭合待裁决、计数 59。
