@@ -104,6 +104,7 @@ orz 为**本地优先**、**保障优先**、**直接进入真机而非沙箱环
 ### 真机安全设计
 
 orz 直接运行在真机上是设计选择。
+
 （注：狗粮轮中存在大量未补全写入面时的长且杂的任务轮作为风险测试，详情请查看仓库中狗粮轮相关内容。如无法接受，也可直接将整个 orz 放置进沙箱环境中）
 
 模型与宿主之间默认没有沙箱，也**刻意不做可写根 allowlist**：可写面就是整个真实环境。因此安全不来自隔离，而来自**分层机械门禁＋全程审计**，措辞按「保证／阻力／审计」三档使用，绝非绝对安全。四层叠加：
@@ -124,6 +125,12 @@ orz 直接运行在真机上是设计选择。
 - 实施审计：[`docs/audits/`](docs/audits/)
 - Python reference/conformance：[`assurance/README.md`](assurance/README.md)
 - 历史 README 快照：[`存档/readme/README.md`](存档/readme/README.md)
+
+> [!IMPORTANT]
+> 构建前置：`orz-tools-api` 的 build script 需要 `protoc`。仓库自带的 `orz/bin/protoc.exe`
+> 是**未入库**的本地依赖（被 `.gitignore` 排除，干净克隆中不存在）——先设
+> `PROTOC=<路径>/orz/bin/protoc.exe`（或安装 `protobuf-compiler`），否则依赖编译约 20 分钟后
+> 才在 build script 处失败。
 
 ### 当前状态
 
