@@ -5226,20 +5226,13 @@ pub(crate) async fn run_agent_loop(
         if !plan_round_active {
             tool_rounds += 1;
         }
-        // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39)：预算键
-        // 每轮末覆盖写（轮数；墙钟在报告时取 elapsed）。
+        // 0cn S2（2026-10-02，ADR-0010 §14.82 用户裁决）：budget 轮数记次
+        // 注入撤除——原「MECHANICAL-AUDIT-LAYER 预算键每轮末覆盖写（
+        // `kind=budget`「已用 N/999 轮」）」生产零写入；999 为占位值不接
+        // 真实预算语义、不设替代物（接受时间感回归，轮次感由 temporal／
+        // 域迁移行族承载）。kind 枚举保留仅供历史 journal 回放校验（零写入
+        // 钉子见 mechanical_audit 测试）。
         if profile.role == AgentRole::Main {
-            let budget_payload =
-                mechanical_audit.record_budget(tool_rounds, tool_rounds, profile.max_tool_rounds);
-            writer
-                .record(
-                    EventType::MechanicalAuditUpdate,
-                    serde_json::json!({
-                        "kind": crate::mechanical_audit::KIND_BUDGET,
-                        "payload": budget_payload
-                    }),
-                )
-                .await?;
             // 0bg S2（2026-09-22，双迁移定案「连带记录」）：LIF 域迁移事实
             // ——模型面「域迁移+n」徽章撤除后，机械层连带留痕（只记不发
             // 模型；每键一条覆盖写，逐次历史由 journal 事件流可离线复算）。

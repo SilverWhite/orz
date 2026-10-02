@@ -3,14 +3,17 @@
 //! 事实；每对象键仅保留最后一轮结果（覆盖写）；不给建议、不注入运行中
 //! 反馈；最终答案前中立问询轮随 [COUNTEREXAMPLE_GATE] 同轮以独立块
 //! `[MECHANICAL_AUDIT v0.1]` 注入报告。报告收敛为执行事实摘要（仅三类：
-//! 执行事实 / 预算 / 异常事实）；step/契约类只事件留痕、不上报告。
+//! 执行事实 / 墙钟 / 异常事实；0cn S2 起预算行退役）；step/契约类只事件
+//! 留痕、不上报告。
 //!
 //! 对象键（设计 §2.4）：
 //! - `file:<path>`：search_replace 结果（matched/created、diff 规模）；
 //! - `cmd:<call_id>`：run_terminal_cmd 结果（exit code、timeout、stdout
 //!   截断）；
 //! - `plan`：首轮计划门结果（accepted/degraded、步骤数、最近修订）；
-//! - `budget`：轮数 / 墙钟用量；
+//! - `budget`：**已退役**（0cn S2，2026-10-02，ADR-0010 §14.82）——轮数
+//!   记次注入（「已用 N/999 轮」）生产零写入，枚举/键保留仅供历史
+//!   journal 回放校验；
 //! - `retrieval:<n>`：检索派发（候选 / 上限）。
 
 use orz_assurance::EventType;
@@ -34,6 +37,13 @@ pub(crate) const MECHANICAL_AUDIT_CAPACITY: usize = 128;
 /// 首次阶梯触发即产生 schema-invalid journal）。
 pub(crate) const KIND_TOOL_RESULT: &str = "tool_result";
 pub(crate) const KIND_PLAN_GATE: &str = "plan_gate";
+/// **已退役（历史回放保留）**：0cn S2（2026-10-02，ADR-0010 §14.82 用户
+/// 裁决）——budget 轮数记次注入（「已用 N/999 轮」逐批覆盖写）整体撤除；
+/// 999 为占位值不接真实预算语义、不设替代物（接受时间感回归，轮次感由
+/// temporal／域迁移行族承载）。枚举值保留只为**历史 journal 仍可校验**
+/// （删值＝让旧刊判 invalid）；生产零写入由单测钉子钉住（本模块
+/// `mechanical_audit_report_injected_with_final_answer_gate`）。
+#[allow(dead_code)] // 保留供历史 journal 校验与 schema 枚举钉子（生产零写入）
 pub(crate) const KIND_BUDGET: &str = "budget";
 /// **已退役（历史回放保留）**：0ae D2 注意力阶梯的触发 kind。动态上下文
 /// 滑块 S1（2026-09-15，设计 §3.4 用户裁定 R3）把 D2 整体下线，生产侧
@@ -145,23 +155,9 @@ impl MechanicalAuditState {
         )
     }
 
-    /// 记录/覆盖预算键（每轮末调用；覆盖写）。
-    pub(crate) fn record_budget(
-        &mut self,
-        round: u32,
-        rounds_used: u32,
-        max_rounds: u32,
-    ) -> serde_json::Value {
-        self.record(
-            "budget",
-            round,
-            format!("已用 {rounds_used}/{max_rounds} 轮"),
-            None,
-        )
-    }
-
     /// 报告块（设计 §2.4：收敛为执行事实摘要——仅三类；每键至多一条；
-    /// 无建议、无引导）。`wallclock` 为 run 已用墙钟。
+    /// 无建议、无引导）。`wallclock` 为 run 已用墙钟。0cn S2 起预算行
+    /// 退役（ADR-0010 §14.82）：不再渲染轮数记次，墙钟行保留。
     pub(crate) fn report(&self, wallclock: Option<std::time::Duration>) -> String {
         let mut lines = vec![format!("{MECHANICAL_AUDIT_PREFIX} v0.1]")];
         let exec: Vec<&AuditEntry> = self
@@ -177,16 +173,9 @@ impl MechanicalAuditState {
                 lines.push(format!("- {} → {}", e.key, e.summary));
             }
         }
-        let budget_line = self
-            .entries
-            .iter()
-            .find(|e| e.key == "budget")
-            .map(|e| e.summary.clone())
-            .unwrap_or_else(|| "预算：暂无".to_string());
-        lines.push(match wallclock {
-            Some(d) => format!("预算：{}，墙钟约 {}s", budget_line, d.as_secs()),
-            None => format!("预算：{}", budget_line),
-        });
+        if let Some(d) = wallclock {
+            lines.push(format!("墙钟约 {}s", d.as_secs()));
+        }
         let anomalies: Vec<&AuditEntry> = self
             .entries
             .iter()
@@ -467,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn report_contains_only_exec_budget_and_anomalies() {
+    fn report_contains_only_exec_wallclock_and_anomalies() {
         let mut audit = MechanicalAuditState::new();
         audit.record("file:a.py", 1, "search_replace 成功（+1 文件）", None);
         audit.record(
@@ -476,18 +465,23 @@ mod tests {
             "exit 1，超时",
             Some("exit 1（120s 超时）".to_string()),
         );
-        audit.record("budget", 2, "已用 5/999 轮", None);
         // step/契约类只事件留痕、不上报告：记录到表中但报告不含。
         audit.record("step:order", 2, "step 顺序事件", None);
         let report = audit.report(Some(std::time::Duration::from_secs(90)));
         assert!(report.contains("[MECHANICAL_AUDIT v0.1]"));
         assert!(report.contains("file:a.py → search_replace 成功（+1 文件）"));
         assert!(report.contains("cmd:call-2 → exit 1，超时"));
-        assert!(report.contains("已用 5/999 轮"));
         assert!(report.contains("墙钟约 90s"));
         assert!(report.contains("cmd:call-2 → exit 1（120s 超时）"));
+        // 0cn S2（ADR-0010 §14.82）：预算行（轮数记次）退役——报告不得再
+        // 渲染「预算：」行与「已用 N/M 轮」记次。
+        assert!(!report.contains("预算"), "预算行已退役: {report}");
+        assert!(!report.contains("已用"), "轮数记次已退役: {report}");
         assert!(!report.contains("step:order"), "step/契约类不得进报告");
         assert!(!report.contains("建议"), "报告不得含建议");
+        // 无墙钟（None）时不渲染墙钟行。
+        let report_no_wallclock = audit.report(None);
+        assert!(!report_no_wallclock.contains("墙钟约"));
     }
 
     #[test]
@@ -634,9 +628,11 @@ mod tests {
     // ── MECHANICAL-AUDIT-LAYER S2 (2026-08-24, ADR-0010 §14.39 / 设计 §5) ──
 
     /// 设计 §2.4/§5 验收 4：终答前反例自查轮同轮注入 [MECHANICAL_AUDIT
-    /// v0.1] 独立块——报告收敛为执行事实摘要（动作/文件 delta/预算/异常
-    /// 事实），无建议；journal 以 `mechanical_audit_update` 轻量事件留痕
-    /// （plan_gate + budget + tool_result）。
+    /// v0.1] 独立块——报告收敛为执行事实摘要（动作/文件 delta/墙钟/异常
+    /// 事实；0cn S2 起预算行退役），无建议；journal 以
+    /// `mechanical_audit_update` 轻量事件留痕（plan_gate + tool_result）。
+    /// **0cn S2 零写入钉子（ADR-0010 §14.82）**：budget 轮数记次注入撤除
+    /// ⇒ 本 run 不得出现 `kind=budget` 事件（枚举值仅供历史 journal 校验）。
     #[tokio::test]
     async fn mechanical_audit_report_injected_with_final_answer_gate() {
         let dir = test_dir();
@@ -695,8 +691,13 @@ mod tests {
             .find(|m| m.content.contains("[MECHANICAL_AUDIT v0.1]"))
             .expect("audit report injected in the same round");
         assert!(audit_msg.content.contains("执行事实"), "{audit_msg:?}");
-        assert!(audit_msg.content.contains("预算"), "{audit_msg:?}");
+        assert!(audit_msg.content.contains("墙钟约"), "{audit_msg:?}");
         assert!(audit_msg.content.contains("异常事实"), "{audit_msg:?}");
+        // 0cn S2：预算行（轮数记次）退役——报告块不得再出现。
+        assert!(
+            !audit_msg.content.contains("预算") && !audit_msg.content.contains("已用"),
+            "budget line retired (0cn S2): {audit_msg:?}"
+        );
         assert!(
             audit_msg.content.contains("cmd:call-term-1"),
             "the cmd object key carries the latest result: {audit_msg:?}"
@@ -706,7 +707,8 @@ mod tests {
             "audit report must never carry advice: {audit_msg:?}"
         );
 
-        // journal 留痕：plan_gate / budget / tool_result 三类机械审查事件。
+        // journal 留痕：plan_gate / tool_result 两类机械审查事件；
+        // budget 退役 ⇒ 零写入钉子（历史 journal 回放仍合法）。
         let events = events(&dir);
         let audit_events: Vec<&RunEvent> = events
             .iter()
@@ -719,10 +721,10 @@ mod tests {
             "plan gate entry journaled: {audit_events:?}"
         );
         assert!(
-            audit_events
+            !audit_events
                 .iter()
                 .any(|e| e.payload["kind"] == KIND_BUDGET),
-            "budget entry journaled: {audit_events:?}"
+            "budget 轮数记次已撤除（0cn S2），本 run 不得出现: {audit_events:?}"
         );
         assert!(
             audit_events.iter().any(|e| {

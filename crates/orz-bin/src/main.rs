@@ -2574,8 +2574,8 @@ mod conformance_capture {
                         "snapshot_created",
                         "tool_started",
                         "tool_completed",
-                        // 工具轮后的机械审计更新（2026-09-09 起双条）。
-                        "mechanical_audit_update",
+                        // 工具轮后的机械审计更新（2026-09-09 起双条；0cn S2
+                        // 2026-10-02 起 budget 轮数记次撤除 ⇒ 单条）。
                         "mechanical_audit_update",
                         "model_output",
                         "counterexample_gate",
@@ -2915,8 +2915,9 @@ mod conformance_capture {
                 // round, no probe flips). The orientation crosses the
                 // 7-round threshold on the 7th retrieve's post-tool-batch
                 // gap (the 7th completed main round). 2026-09-09：工具轮后
-                // 双 mechanical_audit_update；第 7 轮 checkpoint 夹在两条
-                // 审计更新之间（post_tool_batch_gap 语义不变）。
+                // 双 mechanical_audit_update；0cn S2（2026-10-02）budget
+                // 轮数记次撤除 ⇒ 单条，第 7 轮 checkpoint 随后
+                // （post_tool_batch_gap 语义不变）。
                 for i in 0..7 {
                     expected.extend([
                         "model_output",
@@ -2941,7 +2942,6 @@ mod conformance_capture {
                     if i == 6 {
                         expected.push("orientation_checkpoint");
                     }
-                    expected.push("mechanical_audit_update");
                 }
                 expected.extend([
                     "model_output",
@@ -3079,7 +3079,9 @@ mod conformance_capture {
                         "request_header_change",
                         "model_output",
                         "tool_completed",
-                        "mechanical_audit_update",
+                        // 0cn S2（2026-10-02）budget 轮数记次撤除 ⇒ 每工具轮
+                        // 单条 mechanical_audit_update（原双条＝tool_result＋
+                        // budget 覆盖写）。
                         "mechanical_audit_update",
                         "model_output",
                         "counterexample_gate",
