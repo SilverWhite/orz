@@ -182,8 +182,8 @@
 
 **处置**：
 
-1. **中英双向语言入口**：`README.md` 与 `docs/en/README.en.md` 首行各加一行 `**[中文](README.md) ｜ [English](docs/en/README.en.md)**`（英文侧反向指回中文）——落地页一眼可点进英文版；两版仍互为镜像，仅该行方向相反。
+1. **中英双向语言入口**：`README.md` 与 `docs/en/README.en.md` 首行各加一行语言切换（中文侧为「中文 ｜ English」、英文侧为「English ｜ 中文」，两端分别指向中文版与英文版；本档只用文字描述该行、不写 Markdown 链接语法，以免被当本档相对链接）——落地页一眼可点进英文版；两版仍互为镜像，仅该行方向相反。
 2. **对外链接统一新地址**：`README.md`／`docs/en/README.en.md` 的 GitHub Releases 链接（4 处）＋`.gitmodules` 子模块 URL（`SilverWhite/CLI.git` → `SilverWhite/orz.git`，本地 `submodule.orz.url` 已随 `git submodule sync orz` 同步）统一改指新仓名 `SilverWhite/orz`。
 3. **留档不改（登记）**：历史审计档（17 篇）、ADR-0010 §14 沿革记录、台账流水与发行包内快照中的旧名引用**按原样留档**（旧名 301 重定向可用、不构成断链）；如需全库统一可另批扫改。
 
-**线上复核**：落地页 `github.com/SilverWhite/orz` 渲染 HTML 含英文入口链接；`releases/tag/v0.8.10`／`releases`／`blob/main/docs/en/README.en.md` 均 200。门禁 `valid: true`、error_count 0。
+**线上复核**：落地页 `github.com/SilverWhite/orz` 渲染 HTML 含英文入口链接；`releases/tag/v0.8.10`／`releases`／`blob/main/docs/en/README.en.md` 均 200。**门禁如实记**：本节首次入档（提交 `c0a3dc12`）时首跑红——门禁把本档内的语言入口示例当成本档相对链接，报 1 错误（`docs/en/README.en.md` 相对 `docs/audits/` 解析）；改为代码体写出同批复绿，`valid: true`、error_count 0。
