@@ -171,3 +171,5 @@
 5. **不入仓项**：Reddit 帖子正文、发帖动作与发帖后纠错回灌（charter §1/§3）——如需回灌按新项立项。
 
 **门禁**：闭合改动后复跑 `check_repository.py` ⇒ `valid: true`、error_count 0（台账一致性对拍覆盖 BACKLOG/TODO 计数、优先级总览表、开放项清单、TODO 勾选态、索引 §8 桶）。
+
+**上传回执（同日补记）**：父仓 `main` 提交 **`c5f7a0fe`**（`a8360ace..c5f7a0fe`）已推送至远端仓库（GitHub 侧仓库已由 `SilverWhite/CLI` 改名 `SilverWhite/orz`，旧名 301 重定向；`docs/en/README.en.md` 线上可访问，raw／blob 均 200）；本地 `origin` 已改指新地址。
