@@ -1,3 +1,5 @@
+**[中文](README.md) ｜ [English](docs/en/README.en.md)**
+
 ## 快速开始
 
 ### 前提
@@ -21,7 +23,7 @@
 | 4. 设置启动环境 | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
 | 5. 运行 | `.\orz.exe`（交互 TUI）<br>`.\orz.exe -p "你的任务" --real`（无头模式）<br>`.\orz.exe web`（Web 工作台，打印本地带令牌地址） | `./orz`（交互 TUI）<br>`./orz -p "你的任务" --real`（无头模式）<br>`./orz web`（Web 工作台，打印本地带令牌地址） |
 
-发布包说明与完整性校验见 GitHub Release（最新 [v0.8.10](https://github.com/SilverWhite/CLI/releases/tag/v0.8.10)，双平台包＋`SHA256SUMS`）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
+发布包说明与完整性校验见 GitHub Release（最新 [v0.8.10](https://github.com/SilverWhite/orz/releases/tag/v0.8.10)，双平台包＋`SHA256SUMS`）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
 
 ### 从源码运行
 
@@ -132,7 +134,7 @@ orz 直接运行在真机上——这是设计选择，不是疏漏。模型与�
 
 - **设计**：ADR-0010 是唯一自然语言设计权威，`accepted / evolving`（2026-09-27 起取消冻结、改版本化现行法——设计层演进自由，契约层变更须走修订件＋下游同步；见 ADR-0010 §14.79）。
 - **实现**：Rust production workspace 可运行，当前整体 `partial`；未闭合差距集中登记在 [`CLI_PROJECT_INDEX.md` §3.1](CLI_PROJECT_INDEX.md#31-已登记实现差距)，不在本 README 展开。
-- **发布**：0.1.0–0.5.1 试用发布包入口在 [`releases/`](releases/)；0.5.4 起双平台安装包发布于 [GitHub Releases](https://github.com/SilverWhite/CLI/releases)（当前最新 v0.8.10，Windows zip／Linux tar.gz＋`SHA256SUMS`；0.6.13 起载体内嵌 Web 工作台，`orz web` 即起本地回环界面；0.7.0 起检索线与真机浏览器车道随载体发布；0.8.0 起写入管控线〔Linux Landlock／载体完整性自检／命令审查留痕／回退窗口 undo〕随载体发布；0.8.2 起 ACAF 签发装配点落点错配修复与签名器启动失败旁路随载体发布；0.8.7 起写入管控收窄为宿主机灾难保底〔保护面＝`.gsa` 会话卷＋ACAF 密钥库根／签名器清单，含宿主态祖先链臂〕与模型面前缀渲染稳定化随载体发布；0.8.8 起写入管控 L3 内核粒度精准化〔设备面安全节点文件级放行＋根级新建放行〕随载体发布；0.8.9 起死代码清退与墙钟可见性拆除随载体发布；0.8.10 起黑板模型面瘦身〔描述 5,593→2,492 字符＋guide 说明书重写〕与 RLI 参考面注解随载体发布）；当前未提供 macOS 原生包。
+- **发布**：0.1.0–0.5.1 试用发布包入口在 [`releases/`](releases/)；0.5.4 起双平台安装包发布于 [GitHub Releases](https://github.com/SilverWhite/orz/releases)（当前最新 v0.8.10，Windows zip／Linux tar.gz＋`SHA256SUMS`；0.6.13 起载体内嵌 Web 工作台，`orz web` 即起本地回环界面；0.7.0 起检索线与真机浏览器车道随载体发布；0.8.0 起写入管控线〔Linux Landlock／载体完整性自检／命令审查留痕／回退窗口 undo〕随载体发布；0.8.2 起 ACAF 签发装配点落点错配修复与签名器启动失败旁路随载体发布；0.8.7 起写入管控收窄为宿主机灾难保底〔保护面＝`.gsa` 会话卷＋ACAF 密钥库根／签名器清单，含宿主态祖先链臂〕与模型面前缀渲染稳定化随载体发布；0.8.8 起写入管控 L3 内核粒度精准化〔设备面安全节点文件级放行＋根级新建放行〕随载体发布；0.8.9 起死代码清退与墙钟可见性拆除随载体发布；0.8.10 起黑板模型面瘦身〔描述 5,593→2,492 字符＋guide 说明书重写〕与 RLI 参考面注解随载体发布）；当前未提供 macOS 原生包。
 - 测试全绿或单次跑分不构成架构符合性结论；符合性状态以索引与审计为准。
 
 ## License
