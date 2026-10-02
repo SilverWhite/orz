@@ -67,7 +67,7 @@ cargo run -p orz-bin -- --fake-provider               # TUI
 
 orz 为**本地优先**、**保障优先**、**直接进入真机而非沙箱环境**的终端 AI 编程 Agent/harness，制作全程使用 AI coding。
 
-其中，控制面、Agent loop 与保障体系为自研内容，除此之外，框架内直接复用了部分 [`grok-build`](https://github.com/xai-org/grok-build) 中已成熟的工具与工作区组件，参考了 [`codex`](https://github.com/openai/codex) 的代码设计语言。执行侧服务调用形态大量借鉴了 [`Home Assistant`](https://github.com/home-assistant)（`domain.service + target + data`），并少量参考了 [`deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness) 与其他成熟产品。Web 工作台的 UI 风格与形态取自本仓三份 UI 设计稿，外观实现直接照搬旧时代桌面主题 [`98.css`](https://github.com/jdan/98.css) 与 [`XP.css`](https://github.com/botoxparty/XP.css)；Markdown 渲染实现照搬 [`marked`](https://github.com/markedjs/marked)。
+其中，控制面、Agent loop 与保障体系为自研内容，除此之外，框架内直接复用了部分 [`grok-build`](https://github.com/xai-org/grok-build) 中已成熟的工具与工作区组件，参考了 [`codex`](https://github.com/openai/codex) 的代码设计语言，同时使用并借鉴了其命令审查部分。执行侧服务调用形态大量借鉴了 [`Home Assistant`](https://github.com/home-assistant)（`domain.service + target + data`），并少量参考了 [`deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness) 与其他成熟产品。Web 工作台的 UI 风格与形态取自本仓三份 UI 设计稿，外观实现直接照搬旧时代桌面主题 [`98.css`](https://github.com/jdan/98.css) 与 [`XP.css`](https://github.com/botoxparty/XP.css)；Markdown 渲染实现照搬 [`marked`](https://github.com/markedjs/marked)。
 
 整体架构可主要分为两大块两小块。
 两大块为**Agent 层**与**机械层**，两小块为作为核心面板的**黑板**和外挂的**时间与动作域判断组件**。
@@ -75,7 +75,7 @@ orz 为**本地优先**、**保障优先**、**直接进入真机而非沙箱环
 ### Agent 层
 
 - **主 Agent**：唯一任务推进者。系统提示近零，面对冻结的固定 10 工具面：`read_file`/`grep`/`search_replace`/`run_terminal_cmd`/`web_search`/`web_fetch`，加 `blackboard_read`、`submit`、`blackboard_write`（向黑板计划/笔记区写入，单条 ≤8K）与 `context_compress`（知情发起模型参与压缩）；默认模型注册为 DeepSeek v4 flash（thinking 默认 max）。任务最终经 submit 两阶段（请求 → 确认）交付，终答前有一轮机械审计与反例自查。
-- **外部检索子代理**：联网检索经外部检索子代理执行；检索启用门 fail-closed——未启用即整族关闭（`--retrieval-enabled`），主面 `web_search` 保持单一派发入口、执行体在子代理（全局并发 1）。启用后子代理工具面恒注册本地浏览器与原生 web 双族检索工具（带车道名与推荐序的静态标注，本地浏览器优先），换道由模型自主选择：本地浏览器通道走引擎 SERP（Google 主序、Bing 回退、DDG 兜底；人化输入延迟＝逐字符键入 + 提交前停顿 + Enter，对模型不可见），HTTP 分段道为自建引擎链（缺省直连 `360search,baidu`，代理链加 `duckduckgo`；Bing 家族已出集；TLS/HTTP2 指纹伪装，结果质量判断交检索子代理）；浏览器启动可用性以事实事件（`browser_launch_result`）在事件链留痕。内部检索 lane 保留设计，触发工具当前封存。
+- **外部检索子代理**：联网检索经外部检索子代理执行；检索启用门 fail-closed——未启用即整族关闭（`--retrieval-enabled`），主面 `web_search` 保持单一派发入口、执行体在子代理（全局并发 1）。启用后子代理工具面恒注册本地浏览器与原生 web 双族检索工具（带车道名与推荐序的静态标注，本地浏览器优先），换道由模型自主选择：本地浏览器通道走引擎 SERP（Google 主序、Bing 回退、DDG 兜底；人化输入延迟＝逐字符键入 + 提交前停顿 + Enter，对模型不可见），HTTP 分段道为自建引擎链（缺省直连 `360search,baidu`，代理链加 `duckduckgo`；TLS/HTTP2 指纹伪装，结果质量判断交检索子代理）；浏览器启动可用性以事实事件（`browser_launch_result`）在事件链留痕。内部检索 lane 保留设计，触发工具当前封存。
 - **会话与计划**：交互会话（TUI/ACP）可跨进程恢复；一次性 `-p` 不开启跨调用恢复，但同样落会话持久化，并按里程碑增量归档到 `.gsa/archives/`。`--plan` 提供机械计划状态机工作流，生产路径中 plan_first 休眠。
 
 ### 机械层
@@ -105,11 +105,16 @@ orz 为**本地优先**、**保障优先**、**直接进入真机而非沙箱环
 
 机制的完整状态、稳定 ID 与深入入口见下方「开发者入口」；设计权威为 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)，当前投影在 [`architecture/current/README.md`](architecture/current/README.md)。
 
-## 评测
+### 真机安全设计
 
-Terminal-Bench 2.1（V4.1 题集全 89 题）整轮实测：**任务级 73/89＝82.0%**（试次级 85/110＝77.3%；k=1、每题一作业、串行、官方每题时限，逐题读数由各作业的 `result.json` 机械提取，不引二手账面）。该轮跨两代发布包（0.8.4／0.8.7）混装，含两轮**替换原试次**的重跑；其中 18 题做过「无可见墙钟」对照重跑，进出的净效应恰为零。逐题读数、失败解剖与披露边界见 [`报告`](docs/TB21_V41_89_FULL_ROUND_REPORT_2026-10-01.md)。
+orz 直接运行在真机上——这是设计选择，不是疏漏。模型与宿主之间默认没有沙箱，也**刻意不做可写根 allowlist**：可写面就是整个真实环境。因此安全不来自隔离，而来自**分层机械门禁＋全程审计**，措辞按「保证／阻力／审计」三档使用，绝不宣称绝对安全。四层叠加：
 
-k=1 筛查轮不含方差统计、不作为榜单成绩，以上数字不外推。
+1. **来源可信——ACAF**：每个跨越信任边界的动作都携带一枚由独立签发进程出具的一次性 HMAC 票据，密钥不进 Agent 进程；票据对模型不可见、绑定解析后的真实目标（TOCTOU 核证）、原子消费并全程留痕。在役载体默认 fail-closed：未配置即拒绝启动 run。→ 中文权威见 [`ACAF 设计档`](docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md)。
+2. **策略——权限桥与审批组件**：无头与批量场景按轴开关（`--allow-write`、`--allow-shell`／`--allow-network`）；当前默认是 yolo 自动放行，人工审批面（Codex 血统审批组件）是**已登记的未来可选扩展、尚未实现**——如实说明，不作掩饰。
+3. **灾难写保底——写入管控**：封闭枚举恰好五条拦截规则，只接住不可逆的毁灭形态——根级递归删除、裸设备／卷毁写、引导固件与安全机制翻转、注册表蜂巢删除、宿主状态写（`.gsa` 会话卷与 ACAF 密钥库根／签名器清单，含宿主态祖先链臂）；一般写动作照常放行、归审批组件。三道实施面＝工具面、命令词法审查、Linux Landlock 内核守卫。→ 中文权威见 [`写控设计档`](docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md)，对外口径见 [`orz/SECURITY.md`](orz/SECURITY.md)。
+4. **审计与恢复**：hash-chained journal（事件 schema v0.2）加 verifier 交叉校验、只读 `--replay`、编辑面回退窗口（`orz rollback list`／`orz rollback restore` 撤销 CLI）、载体完整性自检。
+
+已知边界一并登记、不做隐藏：不防已失陷的签发器、同用户恶意进程、内核级失陷与恶意模型服务；票据证明来源与授权，不证明命令明智；命令审查是尽力而为的词法匹配。
 
 ## 开发者入口
 

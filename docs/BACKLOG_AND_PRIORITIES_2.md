@@ -830,3 +830,49 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **0cm 立项登记**：charter [`EN_TRANSLATION_PROJECT_CHARTER_2026-10-02.md`](../docs/EN_TRANSLATION_PROJECT_CHARTER_2026-10-02.md)；BACKLOG P1 名册＋计数行 **59 → 60**＋开放项行＋新增 `0cm` 节；TODO 计数行＋P1 路由行＋新增 `P1-0cm` 节；索引 v4.124 → **v4.125**＋`AUTH-EN-TRANSLATION-LINE` 条目＋§8 pending 桶。
 - **边界与后续**：0ck／0cl 维持开放（S4 真机核证＝消费率随 `0cj` S3/S4 收取）；0.8.8／0.8.9 中间载体未单独发行；下一步＝`0ci` S0（钉数据集仓库/版本 pin，顺位第一）／`0cj` 挑题／`0cm` S1。
 - 关键词：156 批、提交推送、`d282046b`、`55d61c47`、GitHub Release v0.8.10、rel-156-stage、回下载逐位一致、0cm 对外英文翻译线、计数 59 → 60。
+
+### 1.109 2026-10-02 157 批 0cm S1–S4 第一轮翻译出稿（用户令「翻译对应稿就先这些，请开始第一轮翻译吧」；计数不变 60）
+
+- **交付物五件落 `docs/en/`**（charter §1 D1–D5 一次性出稿；**同日用户裁决增补 D6 后为六件口径**，见本节尾）：D1 `TRANSLATION_GLOSSARY.md`（`v0.1`＝charter 附录 A 种子 30 条扩充至 52 行 63 词条＋EN↔CN 文档映射表；**用户增删定稿待续**）；D2 `README.en.md`（主仓 README 全译，v0.8.10 发布面钉版；相对链接改指 `../../`；指向中文内部档处标注 Chinese）；D3 `TB21_V41_89_FULL_ROUND_REPORT_EN.md`（跑分报告全译；**89 行成绩表逐格照抄**，仅翻表头与「形态／备注」两列——擦墙通过=at-the-wall pass、撞时限=timeout kill、自完判负=self-completed judged fail）；D4 `WRITE_CONTROL_CURRENT_EN.md`（写控 v4 规则面＋v1 存续架构蒸馏；五条 block 规则命令逐字保留；沿革 5 版各一行；§7.6 否决备选留名）；D5 `ACAF_CURRENT_EN.md`（ACAF 蒸馏＋在役实况：仅 Normal 在役、无人审腿、Slices 3–4 设计未实现；0.8.2/0.8.7 变更并入；D-1…D-16 压缩一段）。
+- **质量口径落实**（charter §2 逐条）：对照表先行落盘再译；表格数字程序化照抄；五件档头统一声明 `LLM-assisted translation; the Chinese originals are authoritative. Corrections welcome.`；沿革压缩绕开速记体；用户读数面＝D2＋D1（charter §2.4）。
+- **待续（不闭合 0cm）**：D2 用户过目；D1 定稿 v0.1→v1.0；可选发帖英文草稿未产出（发帖动作与最终措辞留用户）。
+- **台账**：TODO `P1-0cm` S1–S4 勾选＋计数行指针；BACKLOG 计数行指针＋`0cm` 节进展行；索引 v4.125 → **v4.126**＋条目进展（`pending` 维持）。**未提交未推送未发行**。
+- 批档：[`157 批档`](audits/157_0CM_S1_S4_FIRST_TRANSLATION_ROUND_2026-10-02.md)。
+- **同日再裁决（真机安全章＋Bing 句同步）**：用户令「中文版 readme 里面也单独加上真机安全设计这一节吧，加在开发者节前面」＋「中文那边，bing那一句也进行同步吧，两边的唯一差别就是总纲就好了」→ `README.md` 增补 `### 真机安全设计`（置于开发者入口前；四层＋已知边界，链接指中文权威档）并删「Bing 家族已出集」句；中英两版内容互为镜像、**唯一差别＝英文版总纲**。见 157 档 §12/§13。
+- **同日独立复审与勘正**（用户令「审计一下 157 批的内容…」；计数不变 60）：复核通过 D3 表 89 行六列零差异、声明句五件逐字合规、D1 基数 30→52、320K/500K 阈值与 10 工具面均与现行源一致；勘正七项＝D5 平台事实（DPAPI 系 Windows 专有；Linux 为 `file-0600-installation`）／D5 IPC 与清单校验（实际 stdin/stdout JSON-lines；清单签名校验未实现、源码标 v2 边界——对外文档原高估在役信任链，已按实现事实改写）／中英第二处有意分叉补声明（Bing 句，尊重用户原删改）／`untouched release face` 措辞失实改 release-shaped／D5 D-12「provider-side search」加沿革括注／D1 词条 62→63 与 D3「其余 10 张表」→8 勘正／D2 四处措辞（含 `but not in a sandbox`→`with no sandbox`）。明细见 157 档 §11。
+- **同日增补 D6 总纲整合件**：用户令「加一份总纲吧，D4/D5 两部分作为真机环境下的安全保障，额外详细介绍也可以」→ charter §1 增补 D6＝`CURRENT_DESIGN_EN.md` 现行设计总纲（定位／架构／Agent 层／机械层／黑板／LIF／载体与组件＋§7「真机环境下的安全保障」整合章＝ACAF／权限桥与审批组件／写控／审计与恢复四层合成·正常篇幅（**用户冗余裁决：详细度留 D4/D5 本体**；**D4/D5 保持独立深入件**，EN↔CN 一对一维护映射不破）；词典 §3 增 D6 映射行。
+- **同日 README 精简轮**：用户令「readme 中的篇幅和总纲是不是有大量重合啊，readme 要不要精简一下」→ 裁决精简、中英两版同步＝README 定位**功能门面**（快速开始／配置／入口＋框架速览），设计叙事移交 D6；CN `README.md` 删「Agent 层」～「载体与组件」五小节＋运行路径段（框架介绍收敛两段），EN 同构收敛；保留写控权威档与 `orz/SECURITY.md` 链接；charter D2 行＋词典 §3 D2 pin 更新。
+- **同日再裁决（精简反转＋D6 并入）**：用户令「中文版别同步啊，母语者又用不到总纲，中文版恢复原样；要不然就把英文版总纲和英文版readme合起来，英文版readme细致些」→ ① CN `README.md` 恢复原框架介绍五小节＋运行路径段（去总纲链接，重回 0.8.10 发布面原样）；② 英文 README 改**扩展版**＝恢复五节＋新「Safety on the real machine」章（总纲 §7 吸收），`CURRENT_DESIGN_EN.md` 删除退役、**D6 编号保留记并入 D2，五件口径恢复**；③ 中英两版形态自此有意分叉（EN 独有安全章；CN＝发布面原样）**（→ 同日 §12/§13 更新：CN 亦增补真机安全设计章、并同步删除「Bing 家族已出集」句 ⇒ 两版内容互为镜像、唯一差别＝英文版总纲）**；charter D2/D6 行＋词典 §3 D2/D6 行同步。
+- 关键词：157 批、0cm S1–S4、第一轮翻译、docs/en/、TRANSLATION_GLOSSARY v0.1、README.en、TB21 英译、写控蒸馏、ACAF 蒸馏、计数 60 不变。
+
+### 1.110 2026-10-02 158 批 0cj S0 勘定——SlopCodeBench 上游核证与挑题准则（用户令「请开始进行0cj吧，先勘定，我考虑挑难度高的或者综合性强的一道题，先看看orz的具体表现以及RLI的情况」；计数不变 60）
+
+- **①仓库/DOI/判分器核证**：harness=`SprocketLab/slop-code-bench`（MIT，pin `31ceea3a`）＋题目=`gabeorlanski/scb-problems`（Apache-2.0，pin `38d627ec`，均 2026-09-22 活跃）；Zenodo DOI 10.5281/zenodo.19257129＋arXiv 2603.24755；**36 题/196 检查点实测吻合**（config.yaml 声明合计恰 196＝论文口径；树中遗留 md 非权威；152 批「39 检查点/题」勘误＝单题实为 3–8 个，每 checkpoint 测试命令 10–300s 超时非 agent 墙钟）；难度分布 Easy 12/Medium 12/Hard 12；**判分器＝pytest 确定性**（CORE/FUNCTIONALITY/ERROR/REGRESSION 四分类＋PassPolicy，uvx 隔离执行），LLM judge 仅代码质量参考不进 oracle——零二手账面纪律相容；基准不饱和外部锚＝论文最强 Opus 4.6 17% strict pass／GPT-5.4 11%／HumanLayer Opus 5 24%（4/17 全在早期 checkpoint）；KNOWN_ISSUES 参考解缺陷 5 题（测试仍权威）。
+- **②agent 接入契约核证**：SCBench 侧＝Agent ABC 六方法（`_from_config/setup/run/reset/save_artifacts/cleanup`）＋`register_agent`＋YAML 配置（cost_limits.step_limit），**per-checkpoint `run(task)` 默认不重置状态**、claude_code 以 `--continue` 维持单连续会话跨全部 checkpoint（长程退化语义的载体）；orz 侧＝`-p` 每次新会话不适用，**定形＝容器内常驻 `orz --stdio` ACP 多轮**（`session/new`＋逐 checkpoint `session/prompt`，同会话＝同黑板＝同上下文）；**RLI（0bf 起常开生产化，「影子」仅存 kill-switch env 命名）会话级跨 run 累积**（`render_rli_section`「会话相对；全 run 无窗口」）＝全题长程观测面成立；读数收取＝journal 解析（`.gsa/runs/RUN-*/events.jsonl`，0bf S3 先例）；0.8.10 载体已含 0ck 注解＋0bd ⑦ 阈值推面＝「注解单臂」实验处理就位；Harbor dataset 仅分发形态、迭代精化循环无 Harbor 原生映射，「非 Harbor 系须新写适配器」维持（S2＝新写 orz agent 包＋docker.j2，零 orz 源码改动）。
+- **③挑题准则定稿（C1–C5）**：C1 难度＝`difficulty: Hard` 12 题池／C2 综合性＝子系统数与域广度／C3 RLI 跑道＝checkpoint 数／C4 自足性＝test_dependencies 轻量／C5 缺陷排除（KNOWN_ISSUES 重灾不入）；Hard 池排序：**recli**（8 ckpt，CLI 框架全家桶 sqlite+缓存+docker 编排+版本升级，仅 pyyaml）＞**sith**（6 ckpt，Python 代码智能 CLI 面最广，零依赖）＞test_translator（8 ckpt 多语言测试翻译）＞meshctl（8 ckpt）＞sheeteval（7 ckpt）＞metric_transform_lang（5 ckpt DSL）＞mocked_http（8 ckpt 依赖重）＞rejector／eve_industry（ck5 缺陷）／dag_execution（3 ckpt）／dynamic_buffer（ck4 缺陷）／eve_market_tools（缺陷重灾排除）；**首推 recli、备选 sith，首题圈定随 S1 冻结留用户裁决**。
+- **台账**：TODO `P1-0cj` S0 行进展注记＋计数行指针；BACKLOG 本批指针＋计数行＋`0cj` 节 S0 状态行；索引 v4.126 → **v4.127**。**未提交未推送**（与 157 批同在工作树累积）。
+- 批档：[`158 批档`](audits/158_0CJ_S0_SURVEY_2026-10-02.md)。
+- 关键词：158 批、0cj S0、SlopCodeBench 勘定、36 题 196 检查点、pytest 确定性判分、orz --stdio ACP、RLI 会话级、挑题准则、recli、sith、39 检查点勘误。
+
+### 1.111 2026-10-02 159 批 0cj S1 冻结（recli）＋S2 orz 适配器落地＋recli 首跑发射（用户令「目前RLI已经不是影子了」「就按照你的判定，跑recli吧」；计数不变 60）
+
+- **RLI 口径勘误（用户令，同批修正四处）**：RLI 已非影子——0bf（2026-09-22）语义反转缺省常开，「影子」仅存 kill-switch env 名与内部结构名；158 批档 §2.2＋BACKLOG 主卷两处＋本卷 §1.110 措辞改「0bf 起常开生产化」。
+- **S1 首题冻结＝recli**（用户令按主代理判定＝Hard 池最长跑道〔8 checkpoint＝8 连续 run〕×综合面×仅 pyyaml；**冻结口径＝1 题先行**，3–5 题全 manifest 留首跑读数后一并冻结，P2-15 偏差如实登记）。
+- **S2 适配器（rig clone，非本仓）**：`D:/tb-eval/scbench/`（harness pin `31ceea3a`／题目 pin `38d627ec`；`SCBENCH_PROBLEMS_PATH` 直指题目 clone）；新增 `src/slop_code/agent_runner/agents/orz/`（agent.py＝`OrzAgentConfig`＋`OrzAgent`＋`_AcpProcess` 驱动；__init__.py 注册）＋四配置件（agents/orz.yaml／models/deepseek-v4-flash.yaml〔pricing 全 0〕／providers.yaml +deepseek）；**形态＝容器内常驻 `orz --stdio --real` ACP 新行分隔 JSON-RPC**（`-p` 每 run 新会话不可续；`--real` 全局 argv 扫描、缺省 fake——冒烟 `(fake) 已收到请求` 实锤后修正）；`initialize→session/new→逐 checkpoint session/prompt`，同会话＝同黑板＝RLI 会话级跨 run 累积（全题长程观测面）；权限请求自动应答（allow 项优先，bypassPermissions 同姿势）＋未知 client 请求 method-not-found；**watchdog 3600s→session/cancel→180s grace→杀管道**（0.8.10 无 ORZ_MAX_WALLCLOCK，客户端兜底即唯一墙钟）；usage＝journal `model_output` 计数；产物＝acp_transcript＋acp-wire.log（双向实时）＋stderr（RUST_LOG=debug）＋journal tar；容器供应链 TB 同形（三件套 docker cp＋chmod＋ACAF 容器内 provision fail-closed＋`orz trust` 兜底）。
+- **harness Windows 缺陷修正四处**（rig clone 内）：①`resolve_host_user` `os.getuid()` 非 posix→None；②streaming `_container_workdir` `as_posix()`（`"\workspace"` 被 daemon 400）；③exec `_container_workdir` 同款第二处（**评测路径踩中**＝checkpoint_1 首评 125 秒败 `infrastructure_failure`，修后 ckpt 2+ 恢复、ckpt_1 候跑毕独立复评）；④`placeholders.py` 静态资产容器路径（recli 无资产未踩、多资产题必踩）；另无模板 agent 需先 `slop-code docker build-base`（首次 apt 网络抖动，重试成功 1.18GB）。
+- **ACP 冒烟全绿**（`smoke_orz_acp.py` 裸容器）：10.4s、182 update、文件实际写入、4 模型轮、ACAF 票据/权限/orientation 事件全在。
+- **Docker 满盘事故（环境事故登记）**：recli run1–run4 连环失败与 run4 checkpoint_1 停摆 45 min（journal 止于 round-2 face_fingerprint；线程全 futex、无 TCP、无传输错误）深挖出**根因＝C:/D: 双盘 100% 满**（`wsl --update` 报 0x80070070 实锤→动态 vhdx 无法增长→bootstrap mkfs `No such device`→引擎挂死）；处置＝用户清盘（C: 18G/D: 99G 空闲）＋重启；18GB 旧数据盘改名留档 `docker_data.vhdx.corrupt-bak-20261002`（**未删除**）；引擎恢复 29.6.2；教训＝跑批前先核盘（拟入检查清单）。
+- **recli 首跑 run5 发射（19:07）进行中**——debug 追踪重跑同停摆点顺利越过（round 11+、LIF 域迁移在册）；**checkpoint_1 完成＝16 模型轮/22 工具调用并已转 checkpoint_2（RUN id 共享会话前缀 `65f2858a`＝同会话跨 checkpoint 设计实证）**；读数与 S3 正式摩擦台账随首跑完成后落档。
+- **台账**：TODO `P1-0cj` S1/S2 勾选＋S3 首跑注记＋计数行指针；BACKLOG 本批指针＋计数行＋`0cj` 节 S1/S2 状态行；索引 v4.127 → **v4.128**。**未提交未推送**。
+- 批档：[`159 批档`](audits/159_0CJ_S1_S2_ORZ_ADAPTER_AND_RECLI_FIRST_RUN_2026-10-02.md)。
+- 关键词：159 批、recli 冻结、S2 适配器、orz --stdio --real、ACP 多轮、同会话跨 checkpoint、RLI 会话级、watchdog cancel、ACAF provision、Windows 三缺陷、Docker 满盘、vhdx 留档、首跑发射。
+
+### 1.112 2026-10-02 160 批 0cm 定案上传（用户令「英文readme我第一轮时已经审过，目前没什么新发现，可进行定案并同步上传至github页」；60 → 59＝0cm 闭合）
+
+- **用户裁决**：D2 英文 README 第一轮过目即定案、无新发现 ⇒ 冻结为对外英文门面（本轮零正文改动；§14 五处措辞勘正先于定案入档）。
+- **D1 定稿**：`docs/en/TRANSLATION_GLOSSARY.md` `v0.1 → v1.0`——用户未提词条增删，按 52 行 63 词条现表冻结；档头「用户增删待续」移除，§4 维护触发（先改表、再重出受影响英文档）保留。
+- **上传**：`docs/en/README.en.md`、`TB21_V41_89_FULL_ROUND_REPORT_EN.md`、`WRITE_CONTROL_CURRENT_EN.md`、`ACAF_CURRENT_EN.md`、`TRANSLATION_GLOSSARY.md` 五件随 157/158/159 三批累积件与台账改动一并入仓，推送 `origin/main`（GitHub `SilverWhite/CLI`）。
+- **台账**：索引头行 v4.128 → **v4.129**＋`AUTH-EN-TRANSLATION-LINE` `pending` → `implemented`＋§8 桶换位；BACKLOG 计数行 60 → 59＋P1 开放项清单与优先级总览表移出 `0cm`＋`0cm` 节补闭合行；TODO 计数行 60 → 59＋P1 路由行与 `P1-0cm` 收尾批勾选同步。
+- **不入仓**：Reddit 帖子正文、发帖动作、发帖后纠错回灌（charter §1/§3）——如需回灌按新项立项。
+- 批档：[`157 批档 §14/§15`](audits/157_0CM_S1_S4_FIRST_TRANSLATION_ROUND_2026-10-02.md)。
+- 关键词：160 批、0cm 闭合、英文门面定案、D1 v1.0、D2 用户签核、docs/en 五件、origin/main 上传、Reddit 发帖留用户。
