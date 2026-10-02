@@ -862,7 +862,7 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **harness Windows 缺陷修正四处**（rig clone 内）：①`resolve_host_user` `os.getuid()` 非 posix→None；②streaming `_container_workdir` `as_posix()`（`"\workspace"` 被 daemon 400）；③exec `_container_workdir` 同款第二处（**评测路径踩中**＝checkpoint_1 首评 125 秒败 `infrastructure_failure`，修后 ckpt 2+ 恢复、ckpt_1 候跑毕独立复评）；④`placeholders.py` 静态资产容器路径（recli 无资产未踩、多资产题必踩）；另无模板 agent 需先 `slop-code docker build-base`（首次 apt 网络抖动，重试成功 1.18GB）。
 - **ACP 冒烟全绿**（`smoke_orz_acp.py` 裸容器）：10.4s、182 update、文件实际写入、4 模型轮、ACAF 票据/权限/orientation 事件全在。
 - **Docker 满盘事故（环境事故登记）**：recli run1–run4 连环失败与 run4 checkpoint_1 停摆 45 min（journal 止于 round-2 face_fingerprint；线程全 futex、无 TCP、无传输错误）深挖出**根因＝C:/D: 双盘 100% 满**（`wsl --update` 报 0x80070070 实锤→动态 vhdx 无法增长→bootstrap mkfs `No such device`→引擎挂死）；处置＝用户清盘（C: 18G/D: 99G 空闲）＋重启；18GB 旧数据盘改名留档 `docker_data.vhdx.corrupt-bak-20261002`（**未删除**）；引擎恢复 29.6.2；教训＝跑批前先核盘（拟入检查清单）。
-- **recli 首跑 run5 发射（19:07）进行中**——debug 追踪重跑同停摆点顺利越过（round 11+、LIF 域迁移在册）；**checkpoint_1 完成＝16 模型轮/22 工具调用并已转 checkpoint_2（RUN id 共享会话前缀 `65f2858a`＝同会话跨 checkpoint 设计实证）**；读数与 S3 正式摩擦台账随首跑完成后落档。
+- **recli 首跑跑毕＋终局读数（S3 首题探针轮达成）**：8/8 checkpoint 单会话跑完（10 run 共享会话前缀 `65f2858a`；总墙钟 ≈86 min；**155 模型轮／230 工具调用／230 权限请求全 yolo 自动应答／上下文压缩 10 次／LIF 域迁移累计 109 次**）。**CRLF 第 5 修复（`shared.py write_text` newline）后 `slop-code eval` 快照复评 infra 失败全清零**：strict pass（CORE 全过）＝**4/8（ckpt1 11/11、ckpt2 9/9、ckpt3 7/7、ckpt8 6/7）**，core 率轨迹 100→100→100→80→20→0→40→86%＝一题全录「扩展→侵蚀→回归反弹」；lint 错误 135→1,992 单调膨胀（LOC 944→9,246、函数 30→329）。**RLI 读数＝rli 面消费率 0**（全轮无 `section=rli` 调用，与 0bf S3 基线同值＝0ck 注解单臂未抬升，判据①首笔真机数据；0ck S4 注解可见性核证仍待做）；阈值推面按本次检测式未检出待复核。外部锚对照（单题 k=1 不外推）：HumanLayer Opus 5 全 17 题 4 strict 且全在早期 ckpt。**时间元认知判读＝budget/temporal resident 行族维持（budget「已用 N/999 轮」×136 每批刷新），RLI 通道活（域迁移 109）但无人体问津＝结构性零消费；阈值推面真阴性**。**模型身份勘误＝名义 v4-flash 后端自动路由 v4.1（用户澄清，全部读数属 v4.1）**；报告档＝[`0CJ 首题探针轮报告`](audits/0CJ_RECLI_FIRST_PROBE_REPORT_2026-10-02.md)。
 - **台账**：TODO `P1-0cj` S1/S2 勾选＋S3 首跑注记＋计数行指针；BACKLOG 本批指针＋计数行＋`0cj` 节 S1/S2 状态行；索引 v4.127 → **v4.128**。**未提交未推送**。
 - 批档：[`159 批档`](audits/159_0CJ_S1_S2_ORZ_ADAPTER_AND_RECLI_FIRST_RUN_2026-10-02.md)。
 - 关键词：159 批、recli 冻结、S2 适配器、orz --stdio --real、ACP 多轮、同会话跨 checkpoint、RLI 会话级、watchdog cancel、ACAF provision、Windows 三缺陷、Docker 满盘、vhdx 留档、首跑发射。
@@ -878,3 +878,42 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **审批口径更正＋英文 README 再对齐（同日用户令）**：中文版按实现实况更正「审批面未实现」旧口径（交互审批面已实现并接线；yolo 默认不逐次弹窗）＋删「从源码运行」节并挪构建前置；英文版按远端中文版逐节对齐（删源码运行节、审批新口径、精简项与 important 位置同步）。中英标题树 1:1、链接 0 断、门禁绿（[`157 批档 §17`](audits/157_0CM_S1_S4_FIRST_TRANSLATION_ROUND_2026-10-02.md)）。
 - 批档：[`157 批档 §14/§15`](audits/157_0CM_S1_S4_FIRST_TRANSLATION_ROUND_2026-10-02.md)。
 - 关键词：160 批、0cm 闭合、英文门面定案、D1 v1.0、D2 用户签核、docs/en 五件、origin/main 上传、Reddit 发帖留用户。
+
+### 1.113 2026-10-02 161 批 0CJ 报告落档＋0ck S4 可见性核证达成＋0cn/0co 立项（用户令「这个预算注入不应该留啊，999也只是一个占位值而已……请立项吧」「先用本轮数据算算RLI组件的预测情况再说，或许应该调整触发阈值……请额外立项」「现在请先做一下0ck S4吧」；计数 59 → 61）
+
+- **0CJ 报告档落档**＝[`0CJ_RECLI_FIRST_PROBE_REPORT_2026-10-02.md`](audits/0CJ_RECLI_FIRST_PROBE_REPORT_2026-10-02.md)（终局读数＋机制判读正式报告；159 档 §3.3 为台账摘要）；**模型身份勘误入档＝名义 v4-flash 后端自动路由 v4.1（用户澄清），全部读数属 v4.1**。
+- **0ck S4 真机核证达成（活体探针 `probe_0ck_s4.py`）**：要求模型逐字引用工具描述中 RLI 注解（控制句防编造）→ 模型逐字引出注解原句＋section 枚举 rli 条目＋selector 注记（与 controller.rs 源串一致，精确子串命中）＝**注解在模型面可见**；与 recli 消费 0 合并＝两层判定闭合＝**可见但不用（无体感需求，非注解丢失）**；**0ck S1–S4 全达成、闭合待用户裁决**（本批不动计数）。
+- **0cn 立项＝budget 注入处置（59 → 60）**：用户令「预算注入不应该留；999 也只是占位值；要处理掉」——处置对象＝`mechanical_audit_update kind=budget`「已用 N/999 轮」注入行（recli 实测 136 条＝模型轮次感事实主来源）；张力＝撤除前须定替代物或接受时间感回归；批序 S1 设计定稿（撤除／真值化／并入 temporal 面，三选一）→ S2 落码 → S3 进体 → S4 真机核证。
+- **0co 立项＝RLI 触发阈值数据评估（60 → 61）**：用户令「先用本轮数据算算 RLI 组件的预测情况再说，或许应该调整触发阈值，一切看具体数据」——数据源已确认在案＝checkpoint 快照 `.gsa/archives/65f2858a.json.gz`（rli ×87／u_err ×20／domain ×385／spike ×4）＋10 run journal（域迁移 109 次）；批序 S0 复算管线 → S1 预测表现报告 → S2 阈值调整建议稿（θ／k=5／四通道）→ S3 用户裁决；只评估不动在役面，RLI 数学归 0am。
+- **台账**：TODO 计数行（59 → 61）＋P1 路由行（＋0cn/0co；0ck 改 S1–S4 达成）＋`P1-0ck` S4 勾选＋新增 `P1-0cn`／`P1-0co` 节；BACKLOG 本批指针＋计数行＋P1 总览行＋锚点行＋`0ck` 节 S4 达成＋新增 `0cn`／`0co` 节；索引 v4.129 → **v4.130**＋§8（＋BUDGET-INJECTION-DISPOSAL／RLI-TRIGGER-THRESHOLD-EVAL；0ck 条目更新）。**未提交未推送**。
+- 批档：[`161 批档`](audits/161_0CK_S4_VISIBILITY_AND_0CN_0CO_ADJUDICATION_2026-10-02.md)。
+- 关键词：161 批、0CJ 报告、0ck S4 活体探针、可见但不用、0cn budget 处置、999 占位值、0co 阈值评估、archives 数据源、计数 61。
+
+### 1.114 2026-10-02 161 批补记（同日用户三裁决：0ck 闭合＋0cn S1 定稿＝撤除＋0cj S4 收口；用户令「请为161批进行补记」「0ck可闭合」「0cn的话，就是单纯不传这个轮数记次了，这个注入撤销」「0cj可收口」；61 → 59）
+
+- **0ck 闭合（61 → 60，`pending` → `implemented`）**：S1–S4 全达成后用户裁决闭合——注解在模型面可见（S4 活体探针）＋消费读数 0（随 0cj 收取）＝两层判定「**可见但不用**」存档；S2 既存 flaky 观察归测试面另案，不随 0ck。
+- **0cn S1 设计定稿＝撤除（不设替代物；计数不变）**：用户令「单纯不传这个轮数记次了，这个注入撤销」——三选一定为**撤除**：不真值化（999 占位值不接真实预算语义）、不并入 temporal 面重构；**不设替代物、接受时间感回归**（模型轮次感改由 temporal／域迁移行族承载）；S2 落码 → S3 进体 → S4 真机核证待续（另批）。
+- **0cj S4 收口＝负结果如实闭合（60 → 59）**：判据①「消费率 >0」未达成（rli 面消费率 0，与 0bf S3 基线 0/3 同值；0ck S4 补齐后两层判定闭合＝可见但不用——失败模式＝无体感需求，非注解丢失）；判据②「读数在场轮转向变化复算」自然空转（消费 0 ⇒ 无样本，如实登记不补做）；**线定位（RLI 观测场）达成**＝单会话跨 8 checkpoint 长程观测成立＋观测基底移交 0co/0am（快照 rli×87／u_err×20／domain×385／spike×4＋10 run journal 域迁移 109）；全 manifest 3–5 题扩展不执行（如需另立）；第三层注入式维持出局；0bd ⑦ 在役面不动。
+- **门禁补记**：`check_repository.py` 复跑 error_count 0、`valid: true`（161 批档 §5 承诺兑现）。
+- **台账**：TODO 计数行（61 → 59）＋P1 路由行（0ck/0cj 移出、0cn 注记）＋`P1-0ck` 闭合勾选＋`P1-0cj` S3/S4 勾选＋`P1-0cn` S1 勾选；BACKLOG 本批指针＋计数行＋P1 总览行＋锚点行＋`0ck`／`0cj` 节闭合行＋`0cn` 节 S1 行；索引 v4.130 → **v4.131**＋§8（RLI-TOOL-ANNOTATION／EVAL-SLOPCODE-BENCH-FRICTION 移入 `implemented` 桶；BUDGET-INJECTION-DISPOSAL 注记更新）。**未提交未推送**。
+- 批档：[`161 批档 §7`](audits/161_0CK_S4_VISIBILITY_AND_0CN_0CO_ADJUDICATION_2026-10-02.md)。
+- 关键词：161 批补记、0ck 闭合、0cn 撤除、注入撤销、不设替代物、时间感回归、0cj 收口、负结果闭合、观测基底移交、计数 59。
+
+### 1.115 2026-10-02 162 批 0co S0–S2——RLI 触发阈值数据评估（用户令「请进行0co吧」；计数不变 59）
+
+- **S0 数据提取与复算管线达成**：终态权威＝checkpoint_8 活体会话档 `lif.rli_shadow`（rli-shadow-v1）；归档单包副本内容冻结于 ckpt6→7 边界（t≈2697s，恰为侵蚀期末）＝中期独立快照；checkpoint_1–8 各快照构成 8 时点演化序列（免重放）；8 个 run journal（RUN-0…7 与 checkpoint 一一对应，2,381 事件）＋2 个 ARC 桩；刺激语义＝slow＞60s／stall＞90s／deny＝权限拒（本会话 yolo 全程零刺激）／k=5／10s 网格补点（占 670 采样点的 49.6%）。复算脚本仓外 `D:/tb-eval/0co/`（只读）。
+- **S1 预测表现达成（含对 0CJ 报告 §3.2 的更正）**：① **阈值推面并非零触发**——终态提醒队列 StreakCrossed×3（t=3825/4285/4379，全 slow 通道，u=1.54/1.52/1.85 越 θ），全部 `delivered=false`（模型零拉取 ⇒ 推面开火也无人知晓）；② 0CJ §3.2「0 触发」的检测方法（journal audit 扫描）系**结构性盲区**——提醒走黑板 pull-delta 投递、不落 journal；③ **侵蚀窗（ckpt 4–6，round 59–90）四压力通道全静默＝真阴性成立**（err 冻结 3 hits〔ckpt2 单一错误事件〕／stall 1／slow・deny 0；u_prog 反而 0.62–0.97）——「成功但无效」的语义侵蚀在刺激面上不可见，缺口不在 θ/k 可调范围；④ 3 连发全部为单工具段内网格补点累计（对质量无判别力，幸零投递）；⑤ 繁杂度 c 峰值 1.000 恰在侵蚀起点但语义＝「与基线持平」，零锁存。
+- **S2 阈值调整建议稿达成（全部提案、不动在役面）**：A＝streak 单工具段免疫（网格补点不重复累计；实证 3/3）；B＝k→8（次选）；C＝θ 衰减地板（err θ 已衰 1.0→0.481，无实证样本、低优先）；deny 评测口径豁免（yolo 死通道）；**不建议**动 θ 初值/η/q/周期（无归因样本）；「侵蚀不可见」＝刺激面语义缺口，移交 0am 转正裁决（0CJ §6 的「越阈主动显著」路线即便落地也抓不到侵蚀）。
+- **台账**：TODO 计数行本批指针（计数不变 59）＋P1 路由行 0co 注记＋`P1-0co` S0/S1/S2 勾选＋`P1-0cj` S3 行更正注；BACKLOG 本批指针＋计数行＋P1 总览行＋锚点行＋`0co` 节 S0–S2 达成行＋`0cj` 节更正行；索引 v4.131 → **v4.132**＋§8 0co 条目注记。**未提交未推送**。
+- 批档：[`162 批档`](audits/162_0CO_S0_S2_RLI_THRESHOLD_DATA_EVAL_2026-10-02.md)。
+- 关键词：162 批、0co S0–S2、StreakCrossed×3、慢通道连发、单工具段网格补点、投递 16/16 未达、侵蚀窗真阴性、0CJ §3.2 检测盲区更正、θ 地板、deny 死通道、计数 59。
+
+### 1.116 2026-10-02 163 批 0co S3 用户裁决闭合＋0cp 立项＋设计稿 v1.0（用户令「干脆根本性调整，变成动作触发式采样呢？每个动作是一个采样，而每个动作天然携带不同特征」「k……下调至3，并且改为附注直投」「无动作样且模型流式传输停滞后3分01秒后触发一个时间采样」「请新立项并立新的设计文档吧」；59 → 58 → 59 对冲）
+
+- **0co S3 裁决闭合（59 → 58，`pending` → `implemented`）**：提案 A 升格根本化（采样层整体动作触发式，非补丁式免疫）／B 不采纳（反向 k 5→3）／新增卡死看门狗时间样 181s（网格「卡死期可预测」历史职责的降格承接）／附注式直投采纳；残差观察两项（θ 地板／deny 口径豁免）未裁决留档不占计数。
+- **0cp 立项（58 → 59）＝RLI 动作触发式采样与提醒附注式直投**，设计权威 [`RLI_ACTION_SAMPLING_NOTICE_PUSH_DESIGN`](../docs/RLI_ACTION_SAMPLING_NOTICE_PUSH_DESIGN.md) **v1.0**：**D1** 采样层动作化（streak/锚点采样只绑决策轮＋工具完成事件；`fill_grid_gaps`／`RLI_GRID_SECS`／`RLI_GRID_FILL_MAX` 退役——动力学闭式解无需补点）；**D2** 卡死看门狗（`RLI_WATCHDOG_SAMPLE_SECS=181.0`＝TER 首报后台化 180s＋1s 避让〔ADR-0010 §14.55〕；无动作样∧流式停滞→恰一个时间采样，动作样重武装）；**D3** `RLI_STREAK_K` 5→3；**D4** fire 当刻附注式直投（mechanical_audit 注入行附于工具批回传〔范式同 budget/lif_domain 0bf ②〕、journal 自动留痕＝0co §3.1 盲区闭环、队列转事件历史）；**D5** 152 批 §5.2 局部取代声明（fire 附注放行、周期性读数注入维持出局；ADR 转录随 S2）。
+- **边界**：五通道数学/θ 自校准/繁杂度/λ̂/域机器/T̂ 全不动（0am 线）；`section=rli` 查询面与 0ck 注解句不动；无新工具；与 0cn S2（budget 注入撤除）同族不同批。
+- **批序**：S1 设计定稿（达成）→ S2 落码（待放行）→ S3 进体 → S4 真机核证（判据五条见设计稿 §5）。
+- **台账**：TODO 计数行本批指针＋P1 路由行（0co 移出、＋0cp）＋`P1-0co` S3 勾选闭合＋新增 `P1-0cp` 节；BACKLOG 本批指针＋计数行＋P1 总览行＋锚点行＋`0co` 节闭合行＋新增 `0cp` 节；索引 v4.132 → **v4.133**＋§1 新增 AUTH-RLI-ACTION-SAMPLING-NOTICE-PUSH＋§8 两桶换位。**未提交未推送**。
+- 批档：[`163 批档`](audits/163_0CO_S3_CLOSURE_AND_0CP_PROJECT_2026-10-02.md)。
+- 关键词：163 批、0co S3 闭合、0cp 立项、动作触发式采样、网格退役、卡死看门狗 181s、k=5→3、附注式直投、152 §5.2 局部取代、设计稿 v1.0、计数对冲 59。

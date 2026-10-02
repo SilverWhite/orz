@@ -17,9 +17,9 @@
 
 > **分卷口径（2026-09-25 用户令）**：逐批流水与记录文档自**下一批**起**直接**记入 [BACKLOG 第二卷](docs/BACKLOG_AND_PRIORITIES_2.md)（取代先前「先落治理行、沉淀后再移入第二卷」）；本文件与主 BACKLOG 只留「当前计数＋本批一句要点＋指针链接」。
 
-- 未闭合总数：**59 项**（BACKLOG 计数口径；**本批＝160 批 0cm 定案上传（60 → 59）**——用户裁决「可进行定案并同步上传至github页」＝D2 英文 README 过目定案（第一轮审阅无新发现）＋D1 术语对照表冻结 v1.0＋`docs/en/` 五件随 157–159 累积件入仓推送 `origin/main`；[`157 批档 §15`](docs/audits/157_0CM_S1_S4_FIRST_TRANSLATION_ROUND_2026-10-02.md)。前批＝159 批 0cj S1/S2（计数不变 60）；158 批 0cj S0 勘定。官方轮读数以 142 批报告口径为准（任务级 **73/89＝82.0%**）；TB 2.1 成绩线随 152 批裁决收官＝不再刷分〔同批 0b 已全项退役〕。）TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
+- 未闭合总数：**59 项**（BACKLOG 计数口径；**本批＝163 批 0co S3 用户裁决闭合＋0cp 立项＋设计稿 v1.0（计数不变 59：0co −1／0cp ＋1 对冲）**——裁决＝采样层根本性动作触发式（每动作一个采样、网格补点退役）＋卡死看门狗时间样 181s（TER 180s＋1s）＋k 5→3（异常累积值语义不变）＋提醒附注式直投（fire 当刻注入行、journal 自动留痕）；0co 残差观察两项未裁决留档不占计数；设计权威＝[`RLI_ACTION_SAMPLING_NOTICE_PUSH_DESIGN`](docs/RLI_ACTION_SAMPLING_NOTICE_PUSH_DESIGN.md) v1.0（D1–D5、含 152 批 §5.2 局部取代声明）；0cp S2 落码待放行；[`163 批档`](docs/audits/163_0CO_S3_CLOSURE_AND_0CP_PROJECT_2026-10-02.md)。前批＝162 批 0co S0–S2（计数不变 59）／161 批补记（61 → 59）。）TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 - P0：0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项，实施未开始；§14.2 验证载体已裁决引入模拟器（2026-09-12），S1 载体搭建待放行，M0 定版为首个无依赖里程碑）；0z 真机资源安全边界与崩溃收尾（2026-09-12 用户裁决立项，设计完成待放行实施；S1–S4，**不与 0v-C 搭车**）。`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` 已随 0.5.1 载体重建闭合（2026-09-14）。**即时结果回报与流式检索线（GAP-MECH-IMMEDIATE-FEEDBACK）已于 2026-09-27 S4 三题实机复验通过后闭合**（55 → 54；判据①②③全过＋FR-D02 达成；整轮 89 题重跑按用户修正令不发起；原验证⑤登记已随 152 批退役废止）：[`098 S4 收口档`](docs/audits/098_0AC_S4_CLOSURE_2026-09-27.md)。**2026-09-20 闭合**：检索批次回送与轮级单席位线（S1 契约面／S2 实施／S3 同三题真机复验全部完成，ADR-0010 §14.73/v1.75 转录随 S2；未闭合 36 → 35）＋同日 N1–N6 摩擦深挖登记观察不立项。
-- P1：0bz 上下文脸面瞬态分叉（S1 已落码；S2–S4 待续）；0by ACAF 签名器不可达（S1＋S2 已修，S3/S4 待续）；0cb 写控保底化（S1–S3；S4 读数已随 123 批达成，闭合待裁决）；组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项；0aa 历史卷 journal 全量 verifier 复扫；0aj 黑板写权限层放行（`blackboard_write` ReadOnly deny，旧摩擦残余）；0al 门禁冻结克隆树漂移；0ae 上下文软门与模型参与压缩；0ah 滑块上下文（v8；实现更正批＋只读审查处置＋收口清理批已落码，五项真机读数待实测，登记待放行）；0am LIF 动力学升级线（挂起，O2 为前置门）；0aq 严格审查处置线（RS-01…RS-19 待修；明细第二卷 §2.2）；0ba 运行身份唯一性（run id 秒级撞名）；0bc 资源层收口与可失败分配（随轮观测 RLI）；0bd／0bg／0bh／0bi／0bj／0bk 摩擦大杂项轮（明细第二卷）；**0bm 狗粮长轮**（首次真机轮达成 09-25：编辑面簇四件＋0bj②⑤⑥ 落码 `b7dd241e`；同轮并入 0bj／0bp）；**0bn 必定压缩复审补口**（单独进行、不进轮；S2 已随 0.6.12 进载体）；**0bp 检索形态改指浏览器车道**（B 路径；执行面自 09-25 起随 0bs 同载）；**0br Web 形态 UI**（Web 先行、TUI 形式后补；ADR §14.78）；**0bs／0bt 大狗粮轮**（0bt 全轮并件入 0bs；七件＋0bt 四件＋⑧-⑯ 已随 **0.7.0** 提交推送与发行；S3 载体达成、S4 真机待跑）；S3 摩擦处置 0aw／0ax；**0ci Frontier-Bench 试点线**（2026-10-02 立项）；**0cj SlopCodeBench 挑题摩擦探针线**（2026-10-02 立项＝RLI 观测场）；**0ck RLI 模型面注解**（2026-10-02 单独立项，S1/S2 达成）；**0cl 黑板模型面瘦身**（2026-10-02 单独立项，S1/S2 达成）。已闭合流水（沉淀第二卷）＝102 批就绪判定修复（55 → 54）／097 批闭合三项（58 → 55）／检索合成判定面（2026-09-20 闭合）／灾难兜底精准化（2026-10-02 闭合 57 → 56：[`151 批档`](docs/audits/151_0CH_CLOSURE_2026-10-02.md)）／英文翻译线定案上传（60 → 59）。
+- P1：0bz 上下文脸面瞬态分叉（S1 已落码；S2–S4 待续）；0by ACAF 签名器不可达（S1＋S2 已修，S3/S4 待续）；0cb 写控保底化（S1–S3；S4 读数已随 123 批达成，闭合待裁决）；组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项；0aa 历史卷 journal 全量 verifier 复扫；0aj 黑板写权限层放行（`blackboard_write` ReadOnly deny，旧摩擦残余）；0al 门禁冻结克隆树漂移；0ae 上下文软门与模型参与压缩；0ah 滑块上下文（v8；实现更正批＋只读审查处置＋收口清理批已落码，五项真机读数待实测，登记待放行）；0am LIF 动力学升级线（挂起，O2 为前置门）；0aq 严格审查处置线（RS-01…RS-19 待修；明细第二卷 §2.2）；0ba 运行身份唯一性（run id 秒级撞名）；0bc 资源层收口与可失败分配（随轮观测 RLI）；0bd／0bg／0bh／0bi／0bj／0bk 摩擦大杂项轮（明细第二卷）；**0bm 狗粮长轮**（首次真机轮达成 09-25：编辑面簇四件＋0bj②⑤⑥ 落码 `b7dd241e`；同轮并入 0bj／0bp）；**0bn 必定压缩复审补口**（单独进行、不进轮；S2 已随 0.6.12 进载体）；**0bp 检索形态改指浏览器车道**（B 路径；执行面自 09-25 起随 0bs 同载）；**0br Web 形态 UI**（Web 先行、TUI 形式后补；ADR §14.78）；**0bs／0bt 大狗粮轮**（0bt 全轮并件入 0bs；七件＋0bt 四件＋⑧-⑯ 已随 **0.7.0** 提交推送与发行；S3 载体达成、S4 真机待跑）；S3 摩擦处置 0aw／0ax；**0ci Frontier-Bench 试点线**（2026-10-02 立项）；**0cl** 黑板瘦身；**0cn** budget 处置（**S1 定稿＝撤除**〔161 批补记用户裁决——不设替代物接受时间感回归〕；S2–S4 待续）；**0cp** RLI 动作采样与附注直投（163 批立项；S2 落码待放行）。已闭合流水（沉淀第二卷）＝**RLI 阈值评估线收口（163 批，59 → 58）**／RLI 注解闭合（61 → 60）／SlopCodeBench 探针线收口（60 → 59）〔161 批〕／102 批就绪判定修复（55 → 54）／097 批闭合三项（58 → 55）／检索合成判定面（2026-09-20 闭合）／灾难兜底精准化（57 → 56，151 批）／英文翻译线定案上传（60 → 59）。
 - P2：IMPL-CONTROL-FABRIC Slice 3/4（P2-7）；OPS-PROTOCOL 裁剪与接线裁决（P2-8）；P2-11 余项（PULL 自描述 S3/S4、retryable 分类位、依赖图 S3/S4）；P2-12 S4 复验；P2-13 B4；P2-14 S3/S4；P2-15 EVALUATION-CORPUS-FREEZE（S1/S2 完成；附属 `GAP-EVAL-RESULT-SCHEMA-DRIFT` 已修复）；0ap FR-A06 压缩交互设计批（首步设计评估稿，取舍随稿裁决）；0bb 命令行引号与长行取用摩擦（入口见 BACKLOG）；S3 摩擦处置 0at（逐 query 归因）／0av（批次数读数落盘面）；
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky。
 - 审计登记边界（条件触发，不占当前优先级）：orz-host 可选后端、headless 计划信号、23 工具分区 journals、B-1 后续、ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL。
@@ -808,26 +808,27 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 追加裁决（152 批第二轮）：读数解读以错题解剖与缺陷提取为主、分数仅作评判参考（「用题目找bug和不足才重要」）。
 - 入口：BACKLOG `0ci` / [`152 批档`](docs/audits/152_FRONTIER_BENCH_SLOPCODEBENCH_ADJUDICATION_2026-10-02.md)。
 
-### P1-0cj SlopCodeBench 挑题摩擦探针线（RLI 观测场）（P1；2026-10-02 用户裁决立项，BACKLOG 0cj；57 → 58；来源＝[`152 批档`](docs/audits/152_FRONTIER_BENCH_SLOPCODEBENCH_ADJUDICATION_2026-10-02.md)＋用户裁决「先挑题并且作为摩擦任务来跑」「可以用来观察 RLI」）
+### P1-0cj SlopCodeBench 挑题摩擦探针线（RLI 观测场）（P1；2026-10-02 用户裁决立项，BACKLOG 0cj；57 → 58；**2026-10-02 用户裁决收口闭合（60 → 59，161 批补记）＝负结果如实闭合**；来源＝[`152 批档`](docs/audits/152_FRONTIER_BENCH_SLOPCODEBENCH_ADJUDICATION_2026-10-02.md)＋用户裁决「先挑题并且作为摩擦任务来跑」「可以用来观察 RLI」）
 
 > 定位＝摩擦任务线（`0w` 同形：挑题、非整轮、不追分）；长程迭代任务＝RLI 观测场；兼作 RLI 模型可见性验证场。只观测不改造（RLI 数学归 `0am`，挂起）。
 
-- [ ] **S0 勘定**：仓库/DOI/判分器核证＋agent 接入契约核证＋挑题准则定稿。**进展（158 批）＝三件全核证**：①双仓 pin（harness `31ceea3a`／题目 `38d627ec`）＋DOI＋36 题/196 检查点吻合＋pytest 确定性判分（LLM judge 仅质量参考）；②接入契约定形＝容器内常驻 `orz --stdio` ACP 多轮（`-p` 新会话不适用），RLI 会话级跨 run 累积＝观测面成立；③准则 C1–C5＋Hard 池 12 题排序（首推 recli 备选 sith）——**首题圈定随 S1 冻结留用户裁决**（[`158 批档`](docs/audits/158_0CJ_S0_SURVEY_2026-10-02.md)）。
+- [x] **S0 勘定**（158 批达成）：仓库/DOI/判分器核证＋agent 接入契约核证＋挑题准则定稿。**三件全核证**：①双仓 pin（harness `31ceea3a`／题目 `38d627ec`）＋DOI＋36 题/196 检查点吻合＋pytest 确定性判分（LLM judge 仅质量参考）；②接入契约定形＝容器内常驻 `orz --stdio` ACP 多轮（`-p` 新会话不适用），RLI 会话级跨 run 累积＝观测面成立；③准则 C1–C5＋Hard 池 12 题排序（首推 recli 备选 sith）——首题圈定随 S1 冻结留用户裁决（[`158 批档`](docs/audits/158_0CJ_S0_SURVEY_2026-10-02.md)）。
 - [x] **S1 挑题冻结（首题先行）**：**recli**（用户令「就按照你的判定，跑recli吧」＝Hard 池最长跑道×综合面×仅 pyyaml）；**冻结口径＝1 题**，3–5 题全 manifest 留首跑读数后一并冻结（偏差如实登记，159 批）。
 - [x] **S2 适配器**：orz 无头模式包装 SCBench agent 契约（新写，非 Harbor 系）——**达成（159 批）**：rig clone 落 `agents/orz/`（Agent ABC 六方法＋ACP 驱动）＋四配置件；形态＝容器内常驻 `orz --stdio --real` 多轮（同会话跨 checkpoint＝RLI 全题长程观测面）；watchdog cancel 兜底（0.8.10 无 ORZ_MAX_WALLCLOCK）；ACAF 容器内 provision；harness Windows 缺陷修正四处（run id 共享会话前缀 `65f2858a`＝同会话实证）；ACP 冒烟全绿。
-- [ ] **S3 摩擦探针轮**：逐题真机＋RLI 读数随轮收取（消费率／阈值触发／读数-转向相关）＋摩擦台账。**首题探针轮达成（159 批终局读数）＝recli 8/8 checkpoint 单会话跑完**（86 min、155 轮模型、LIF 域迁移累计 109 次、上下文压缩 10 次）；**strict pass 4/8**（ckpt1/2/3/8 CORE 全过），轨迹完整呈现扩展→侵蚀（80%→20%→0%）→反弹（40%→86%）；lint 错误 135→1992 单调膨胀；**RLI 消费率＝0**（注解单臂未抬升＝判据①首笔真机数据；0ck S4 注解可见性核证仍待做）；阈值推面按检测式未检出待复核。**全 manifest（3–5 题）留用户裁决**。
-- [ ] **S4 报告＋RLI 可见性判据**：对照基线＝0bf S3 消费率 0/3；判据＝消费率 >0 且读数在场轮转向变化可由 journal 复算；可见性三层组合裁决见 152 批档 §5。
+- [x] **S3 摩擦探针轮**：逐题真机＋RLI 读数随轮收取（消费率／阈值触发／读数-转向相关）＋摩擦台账。**首题探针轮达成（159 批终局读数）＝recli 8/8 checkpoint 单会话跑完**（86 min、155 轮模型、LIF 域迁移累计 109 次、上下文压缩 10 次）；**strict pass 4/8**（ckpt1/2/3/8 CORE 全过），轨迹完整呈现扩展→侵蚀（80%→20%→0%）→反弹（40%→86%）；lint 错误 135→1992 单调膨胀；**RLI 消费率＝0**（注解单臂未抬升＝判据①首笔真机数据；0ck S4 注解可见性核证仍待做）；阈值推面真阴性（全 audit 流扫描无 rli 痕迹，对照 0bf S3 两触发＝本轮未越阈；**0co 更正 162 批：全程并非零触发——ckpt_8 slow StreakCrossed×3〔未投递〕，侵蚀窗内零触发成立**）；**时间元认知维持者判读＝budget/temporal resident 行族而非 RLI**（budget「已用 N/999 轮」×136 每批刷新）。**模型身份勘误＝名义 v4-flash 后端自动路由 v4.1（用户澄清），全部读数属 v4.1**；报告档＝[`0CJ_RECLI_FIRST_PROBE_REPORT_2026-10-02.md`](docs/audits/0CJ_RECLI_FIRST_PROBE_REPORT_2026-10-02.md)。**全 manifest（3–5 题）扩展随收口不执行**（161 批补记；如需另立）。
+- [x] **S4 报告＋RLI 可见性判据**（2026-10-02 收口闭合，用户令「0cj可收口」，161 批补记 §7.4，60 → 59）：判据①「消费率 >0」未达成（消费率 0；0ck S4 可见性核证补齐后两层判定闭合＝**可见但不用**——失败模式＝无体感需求，非注解丢失）；判据②「读数在场轮转向变化复算」自然空转（消费 0 ⇒ 无样本，如实登记不补做）；**线定位（RLI 观测场）达成**＝观测基底移交 0co/0am（快照 rli×87／u_err×20／domain×385／spike×4＋10 run journal 域迁移 109）；第三层注入式维持出局（152 批档 §5）。
 - 追加裁决（152 批第二轮，定案）：注解先行（已单独立项 0ck，措辞定稿并落码〔153 批〕）；注入式不再增加（第三层出局——注入必牵引模型对整体时间与进程的注意力；0bd ⑦ 在役面维持不扩展）。
 - 入口：BACKLOG `0cj` / [`152 批档`](docs/audits/152_FRONTIER_BENCH_SLOPCODEBENCH_ADJUDICATION_2026-10-02.md) §5。
 
-### P1-0ck RLI 模型面注解（`blackboard_read` rli 域一句使用指引）（P1；2026-10-02 用户令单独立项＋落码，BACKLOG 0ck；57 → 58；来源＝[`153 批档`](docs/audits/153_RLI_TOOL_ANNOTATION_2026-10-02.md)＋152 批 §9.2＋用户令「先把RLI注解做了，然后再进入新一轮验证，请进行单独立项」；**执行形态＝单独立项单独批〔0bn 同形〕，不并线 0cj**）
+### P1-0ck RLI 模型面注解（`blackboard_read` rli 域一句使用指引）（P1；2026-10-02 用户令单独立项＋落码，BACKLOG 0ck；57 → 58；**2026-10-02 用户裁决闭合（61 → 60，161 批补记）＝`pending` → `implemented`**；来源＝[`153 批档`](docs/audits/153_RLI_TOOL_ANNOTATION_2026-10-02.md)＋152 批 §9.2＋用户令「先把RLI注解做了，然后再进入新一轮验证，请进行单独立项」；**执行形态＝单独立项单独批〔0bn 同形〕，不并线 0cj**）
 
 > 定位＝0cf 同构（面在役、模型不知晓 ⇒ 0bf S3 消费率 0/3）；措辞约束＝一句、精简、简单明了（152 批 §9.2）；注入式不加（第三层出局）。
 
 - [x] **S1 落码**（2026-10-02，153 批）：定案措辞（用户令修订后定稿，无批次号考古）＝`如需时间/动作连续性与节奏压力走向等信息，请查看 RLI 参考面（section=rli）。`——插于 rli 分区机制括注之后、0cf guide 句之前；单来源＝`orz-loop` controller.rs `blackboard_read` description（全仓唯一、无测试钉原文）。
 - [x] **S2 测试面**（2026-10-02，153 批）：触碰面 fmt 零 diff（controller.rs rustfmt --check 干净；全仓 fmt 漂移在案不拒批）＋ `cargo test -p orz-loop --lib` 终态 847 过／0 挂全绿（首跑 1 挂＝`user_cancel_closes_pending_activations_before_run_cancelled` 既存 **flaky**〔连挂 3 次后整套复跑自愈〕，stash 差分定因干净 HEAD 同挂＝与 0ck 无因果，登记留裁决不扩批）；clippy stash 前后 73/73 行＝新增 0。
 - [x] **S3 重建进体**（2026-10-02，155 批）：0.8.10 双平台重建换装（源冻结 orz `55d61c47`）；字节判据＝RLI_ANNO 0→5 两平台（**初建件判据拦截 0cl 瘦身丢 0ck 注解句＝`55d61c47` 修复重build**）＋Linux MATCH 3/3＋static-pie×3＋alpine/bookworm 双冒烟 0.8.10＋ACAF 重 provision `b4b5d87b…`＋身份门 `4e35f410…`→`4ed531e8…`；Windows fake-provider 整轮冒烟 rc=0。明细 [`155 批档`](docs/audits/155_CARRIER_REBUILD_V0810_0CK_0CL_S3_2026-10-02.md)。
-- [ ] **S4 真机核证**：注解在模型面可见（journal/回放核证）；消费率读数随 0cj S3/S4 收取（对照基线 0/3）。
+- [x] **S4 真机核证**（2026-10-02，161 批）：注解在模型面可见＝活体探针逐字引出通过（注解原句＋section 枚举 rli 条目＋selector 注记与源码一致）；消费率读数随 0cj 收取＝0（对照基线 0/3 同值）。**两层判定闭合＝可见但不用（无体感需求，非注解丢失）**。**0ck S1–S4 全达成、闭合待用户裁决**（[`161 批档`](docs/audits/161_0CK_S4_VISIBILITY_AND_0CN_0CO_ADJUDICATION_2026-10-02.md) §2）。
+- [x] **闭合**（2026-10-02 用户裁决「0ck可闭合」，161 批补记 §7.2，61 → 60）：`pending` → `implemented`；「可见但不用」两层判定存档；S2 既存 flaky 观察归测试面另案不随 0ck。
 - 入口：BACKLOG `0ck` / [`153 批档`](docs/audits/153_RLI_TOOL_ANNOTATION_2026-10-02.md) / [`152 批档`](docs/audits/152_FRONTIER_BENCH_SLOPCODEBENCH_ADJUDICATION_2026-10-02.md) §5/§9。
 
 ### P1-0cl 黑板模型面瘦身（`blackboard_read` 描述＋guide 说明书简明化）（P1；2026-10-02 用户令立项＋落码，BACKLOG 0cl；58 → 59；来源＝[`154 批档`](docs/audits/154_BLACKBOARD_FACE_SLIMMING_2026-10-02.md)＋153 批 §4＋用户令「请先进行黑板瘦身吧，说明书也要简明扼要，可以做成框架内部名词解释和组件关系交代」；与 0ck 同族、单独立项单独批）
@@ -839,6 +840,33 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **S3 重建进体**（2026-10-02，155 批）：0.8.10 双平台重建换装（与 0ck 同窗）；字节判据＝GUIDE_NOUNS/ANCHOR_PARAM 0→5＋OCF_OLD_GONE（0cf 英文旧句）5→0＋enum（journal/notes）/anchor 进体＋保留面零回归（`/dev/null` WIN 3→3・LIN 46→46）；Linux MATCH 3/3＋static-pie×3＋双容器冒烟 0.8.10。明细 [`155 批档`](docs/audits/155_CARRIER_REBUILD_V0810_0CK_0CL_S3_2026-10-02.md)。
 - [ ] **S4 真机核证**：guide 可读、journal/notes/anchor 可用。
 - 入口：BACKLOG `0cl` / [`154 批档`](docs/audits/154_BLACKBOARD_FACE_SLIMMING_2026-10-02.md)。
+
+### P1-0cn budget 注入处置（BUDGET-INJECTION-DISPOSAL）（P1；2026-10-02 用户裁决立项，BACKLOG 0cn；59 → 60；来源＝0CJ 报告 §3.1 判读＋用户令「预算注入不应该留啊，999也只是一个占位值而已，这个要处理掉，请立项吧」）
+
+> 定位＝`mechanical_audit_update kind=budget`「已用 N/999 轮」注入行处置——recli 轮实测 136 条（每工具批一刷新）＝当前模型轮次感的**事实主来源**（0CJ 报告 §3.1）。
+
+- [x] **S1 设计定稿**（2026-10-02 用户裁决「0cn的话，就是单纯不传这个轮数记次了，这个注入撤销」，161 批补记 §7.3）：三选一定为**撤除**——不真值化（999 占位值不接真实预算语义）、不并入 temporal 面重构；**不设替代物、接受时间感回归**（张力解除——轮次感改由 temporal／域迁移行族承载）。
+- [ ] **S2 落码**＋S3 进体＋S4 真机核证（待续，另批执行）。
+- 入口：BACKLOG `0cn` / [`0CJ 报告`](docs/audits/0CJ_RECLI_FIRST_PROBE_REPORT_2026-10-02.md) §3.1 / [`161 批档`](docs/audits/161_0CK_S4_VISIBILITY_AND_0CN_0CO_ADJUDICATION_2026-10-02.md) §3。
+
+### P1-0co RLI 触发阈值数据评估（RLI-TRIGGER-THRESHOLD-EVAL）（P1；2026-10-02 用户裁决立项，BACKLOG 0co；60 → 61；**2026-10-02 用户裁决 S3 闭合（59 → 58，163 批）＝`pending` → `implemented`**；来源＝用户令「没越界就不推是设计明确的……先用本轮数据算算RLI组件的预测情况再说，或许应该调整触发阈值，一切看具体数据，这一部分也请额外立项」）
+
+> 定位＝用 recli 首跑数据离线复算 RLI 组件预测表现，据数据评估 0bd ⑦ 触发阈值；只评估与建议，不动在役面（改动随裁决另行立项）；RLI 数学归 0am（挂起）。
+
+- [x] **S0 数据提取与复算管线**（2026-10-02，162 批）：数据源在案并全部解析＝checkpoint_8 活体会话档 `conversations/65f2858a.json` 的 `lif.rli_shadow`（终态权威）＋归档冻结副本（ckpt6→7 边界）＋逐 checkpoint 8 时点演化序列＋8 run journal（2,381 事件）；刺激语义提取（slow＞60s／stall＞90s／k=5／10s 网格补点占采样 49.6%）。逐 checkpoint 演化表见 [`162 批档 §2`](docs/audits/162_0CO_S0_S2_RLI_THRESHOLD_DATA_EVAL_2026-10-02.md)。
+- [x] **S1 预测表现报告**（2026-10-02，162 批）：**阈值推面并非零触发**——侧车队列 StreakCrossed×3（全 slow 通道、ckpt_8 恢复期、全部 delivered=false）；**侵蚀窗（ckpt 4–6）四压力通道全静默＝真阴性成立**（归档副本独立证实）；3 连发全部为单工具段内网格补点累计（73–99s 成功 build/test）＝对质量无判别力；更正 0CJ 报告 §3.2「0 触发」判读（journal 扫描对提醒面结构性盲区）。明细 [`162 批档 §3`](docs/audits/162_0CO_S0_S2_RLI_THRESHOLD_DATA_EVAL_2026-10-02.md)。
+- [x] **S2 阈值调整建议稿**（2026-10-02，162 批）：提案 A＝streak 单工具段免疫（网格补点不重复累计）／B＝k→8（次选）／C＝θ 衰减地板（无实证样本、低优先）／deny 评测口径豁免；不建议调整 θ 初值/η/q/周期（无归因样本）；「侵蚀不可见」属刺激面语义缺口移交 0am 转正裁决。明细 [`162 批档 §4`](docs/audits/162_0CO_S0_S2_RLI_THRESHOLD_DATA_EVAL_2026-10-02.md)。
+- [x] **S3 用户裁决**（2026-10-02，163 批，59 → 58）：提案 A 升格根本化（采样层整体动作触发式、网格退役）／新增卡死看门狗时间样 181s（TER 180s＋1s）／**k 5→3**（异常累积值语义不变；上轮调研明确 5 过高）／**附注式直投采纳**（fire 当刻注入行）——整体落地为 **0cp**（设计稿 v1.0）；残差观察两项（θ 地板／deny 口径豁免）未裁决留档不占计数。[`163 批档 §1`](docs/audits/163_0CO_S3_CLOSURE_AND_0CP_PROJECT_2026-10-02.md)。
+- 入口：BACKLOG `0co` / [`0CJ 报告`](docs/audits/0CJ_RECLI_FIRST_PROBE_REPORT_2026-10-02.md) §3.2 / [`161 批档`](docs/audits/161_0CK_S4_VISIBILITY_AND_0CN_0CO_ADJUDICATION_2026-10-02.md) §4。
+
+### P1-0cp RLI 动作触发式采样与提醒附注式直投（RLI-ACTION-SAMPLING-NOTICE-PUSH）（P1；2026-10-02 用户三裁决立项，BACKLOG 0cp；58 → 59；来源＝162 批 0co 数据＋用户令「干脆根本性调整，变成动作触发式采样呢？每个动作是一个采样，而每个动作天然携带不同特征」「k……下调至3，并且改为附注直投」「无动作样且模型流式传输停滞后3分01秒后触发一个时间采样」；单独立项单独批，与 0cn S2 相邻但独立不并批）
+
+> 设计权威＝[`RLI_ACTION_SAMPLING_NOTICE_PUSH_DESIGN`](docs/RLI_ACTION_SAMPLING_NOTICE_PUSH_DESIGN.md) v1.0（163 批落盘）；五通道数学/θ 自校准/繁杂度/λ̂/域机器/T̂ 全不动（0am 线）。
+
+- [x] **S1 设计定稿**（2026-10-02，163 批）：**D1** 采样层动作化（streak/锚点采样只绑决策轮＋工具完成事件；`fill_grid_gaps`／`RLI_GRID_SECS`／`RLI_GRID_FILL_MAX` 退役）；**D2** 卡死看门狗（`RLI_WATCHDOG_SAMPLE_SECS=181.0`＝TER 首报后台化 180s＋1s 避让；无动作样∧流式停滞→恰一个时间采样，动作样重武装）；**D3** `RLI_STREAK_K` 5→3；**D4** fire 当刻附注式直投（mechanical_audit 注入行、journal 自动留痕＝0co 盲区闭环；队列转事件历史）；**D5** 152 批 §5.2 局部取代声明（fire 附注放行、周期读数注入维持出局；ADR 转录随 S2）。
+- [ ] **S2 落码**（待放行）：rli.rs＋controller 装配/渲染面＋测试钉＋ADR 转录。
+- [ ] **S3 进体**＋**S4 真机核证**（判据五条见设计稿 §5：长命令段内零中间采样／看门狗 181s 恰一样后休眠／k=3 字节判据＋触发沿用例／fire→模型面附注行＋同刻 journal 行／五通道终态逐位对拍钉）。
+- 入口：BACKLOG `0cp` / [`163 批档`](docs/audits/163_0CO_S3_CLOSURE_AND_0CP_PROJECT_2026-10-02.md) / [`162 批档`](docs/audits/162_0CO_S0_S2_RLI_THRESHOLD_DATA_EVAL_2026-10-02.md)。
 
 ### P1-0cm 对外英文翻译线（Reddit 征求建议用英文门面件）（P1；2026-10-02 用户裁决立项，BACKLOG 0cm；59 → 60；来源＝2026-10-02 会话三步收敛＋用户令「当前新增0cm」；charter＝[`EN_TRANSLATION_PROJECT_CHARTER_2026-10-02.md`](docs/EN_TRANSLATION_PROJECT_CHARTER_2026-10-02.md)）
 
