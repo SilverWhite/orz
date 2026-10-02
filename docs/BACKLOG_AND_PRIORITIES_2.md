@@ -976,3 +976,15 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **台账**：TODO `P1-0cp` 补审查处置修正行＋头部指针行；BACKLOG 本批指针＋前批指针（168）＋计数行＋P1 总览行；索引头行 v4.138 → **v4.139**＋AUTH-RLI 条目补注；设计稿 v1.2 勘误（版本行＋D7 裁决句）＋§6 批序行（§14.55→§14.83 括注勘误＋本批指针）。子仓随批提交（orz `e36dcacb`）。
 - 批档：[`169 批档`](audits/169_0CP_S2_REVIEW_FIXES_2026-10-03.md)。
 - 关键词：169 批、0cp S2 审查处置、看门狗时间基、epoch→run 相对轴、on_rli_watchdog_tick、接缝轴判别钉、Pressure→Normal 回归、D7 勘误、凡异常域→Normal、take 谓词直取、冻结面注记、影子冻结缺陷、ADR v1.85、计数 59。
+
+### 1.123 2026-10-03 170 批 0.8.11 双平台载体重建进体——0cp S3／0cn S3 达成（用户令「请进行重建吧」；计数不变 59）
+
+- **源冻结**：orz `6493fdae`（`7daf76c0` 164 批 0cn S2＋`99124f42` 168 批 0cp S2＋`e36dcacb` 169 修正批＋`6493fdae` bump 0.8.10→0.8.11；`cargo metadata --locked` exit 0、Cargo.toml＋Cargo.lock 恰两行）。**打包顺延**（0cp/0cn S4 真机未完、无发行压力；沿 155 口径）、未推送未发行。
+- **Windows**：`build_orz.ps1 -Release -Jobs 2` exit 0（cargo 25m07s；退出码独立取＝155 §2-A 方学注记落实；零 warning 零 rustc 闪退）；换装 `D:\tb-eval\orz-windows\` MATCH 3/3＋`.0.8.10-bak` 链；`--build-info`＝`0.8.11 os=windows`；载体清单刷新 3 entries。三件终态＝`orz.exe` 57,067,008（+13,312）`ff22cbc1…`／`orz-signer.exe` Δ0 `9f1e2889…`／`orz-acaf-provision.exe` Δ0 `32d494a5…`。
+- **ACAF 重 provision**：旧 manifest 留 `signer-manifest.json.bak-20261003-170`；provision exit 0；`binary_sha256=9f1e2889…` ↔ 换装位逐位一致；keystore 两件（`f37556ab…`/`2aa80cb8…`）与 155 批账面同＝未动。
+- **Linux musl**：docker `rust:1.97-slim`（镜像重拉——前批清理）apt 预检 APT_OK＋`build_orz_aliyun_trixie.sh` cargo 42m08s rc=0（-j 1）；`/out` 直写换装位 MATCH 3/3；Python ELF 解析三件 **ET_DYN＋PT_INTERP=0（static-pie）**；alpine 3.20/bookworm 双冒烟 `0.8.11 os=linux` exit 0。三件终态＝`orz` 115,516,016（+36,784）`c6a0812c…`（身份门新值）／`orz-signer` 1,397,512（+304）`7fee74b1…`／`orz-acaf-provision` 1,215,944（+16）`6957066f…`。
+- **进体字节判据**：0cp 新面＝`域事件: 稳定确认`/`spike进入`/T̂ 注解 0→1、`rli.notice.` 0→7（WIN）/0→1（LIN）、key 串 streak_crossed/domain_spike_entry/migration_confirmed/coverage_gap 在件内；退役面＝`域迁移确认` 1→0、`RLI提醒` 2→0；0cn 面＝`预算：` 2→0、`墙钟约` 1→1；回归面＝`/dev/null` 3/46 不变、`carrier-write` 1→1；版本串 0.8.11=15/10、残留 0.8.10=0。**§2-A 判读注记**：短字面量（`\nRLI提醒: `/`rli_notice`/`lif_domain`）WIN 侧被 LLVM 以 `movabs imm64` 内联进多调用点（实据 `49 BF 0A 52 4C 49 E6 8F 90 E9`＝"\nRLI提" 指令流），连续字节面不可见、LIN 侧 .rdata 连续（如实记）；后续判据以 key 串＋键形＋长文案为面。
+- **身份门换装**：`run_r0_heavy_official.py` `EXPECTED_CARRIER_SHA256` `4ed531e8…` → **`c6a0812c…`**（注释同步源冻结 `6493fdae`；适配器 `6d55c26e…` 未动）；语法＋`--help` 加载 rc 0。**冒烟**：WIN `--fake-provider -p hello` 整轮 rc=0（run `RUN-CLI-6ac00bd6`）。
+- **台账**：TODO `P1-0cp`/`P1-0cn` S3 勾选＋头部指针行；BACKLOG 本批指针＋前批指针（169）＋计数行＋P1 行；索引头行 v4.139 → **v4.140**。orz 源清单随批再生。
+- 批档：[`170 批档`](audits/170_CARRIER_REBUILD_V0811_0CP_S3_0CN_S3_2026-10-03.md)。
+- 关键词：170 批、0.8.11 重建、源冻结 6493fdae、0cp S3 达成、0cn S3 达成、c6a0812c 身份门、ACAF 重 provision 9f1e2889、static-pie×3、alpine/bookworm 双冒烟、imm64 内联字节面注记、打包顺延、未推送未发行、计数 59。
