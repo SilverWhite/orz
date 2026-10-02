@@ -173,3 +173,17 @@
 **门禁**：闭合改动后复跑 `check_repository.py` ⇒ `valid: true`、error_count 0（台账一致性对拍覆盖 BACKLOG/TODO 计数、优先级总览表、开放项清单、TODO 勾选态、索引 §8 桶）。
 
 **上传回执（同日补记）**：父仓 `main` 提交 **`c5f7a0fe`**（`a8360ace..c5f7a0fe`）已推送至远端仓库（GitHub 侧仓库已由 `SilverWhite/CLI` 改名 `SilverWhite/orz`，旧名 301 重定向；`docs/en/README.en.md` 线上可访问，raw／blob 均 200）；本地 `origin` 已改指新地址。
+
+## §16 上传后收尾（同日，用户反馈「GitHub页里我没看到英文版readme啊？main链里发布的还是中文readme」「对外链接统一成新地址吧」，2026-10-02）
+
+> 计数不变 59；提交 **`b916b966`**，推送 `origin/main`。
+
+**成因**：GitHub 仓库落地页只渲染**仓根 README**（本仓为中文版）——英文门面在 `docs/en/README.en.md`，属既有布局但首页无入口，用户因而找不到。
+
+**处置**：
+
+1. **中英双向语言入口**：`README.md` 与 `docs/en/README.en.md` 首行各加一行 `**[中文](README.md) ｜ [English](docs/en/README.en.md)**`（英文侧反向指回中文）——落地页一眼可点进英文版；两版仍互为镜像，仅该行方向相反。
+2. **对外链接统一新地址**：`README.md`／`docs/en/README.en.md` 的 GitHub Releases 链接（4 处）＋`.gitmodules` 子模块 URL（`SilverWhite/CLI.git` → `SilverWhite/orz.git`，本地 `submodule.orz.url` 已随 `git submodule sync orz` 同步）统一改指新仓名 `SilverWhite/orz`。
+3. **留档不改（登记）**：历史审计档（17 篇）、ADR-0010 §14 沿革记录、台账流水与发行包内快照中的旧名引用**按原样留档**（旧名 301 重定向可用、不构成断链）；如需全库统一可另批扫改。
+
+**线上复核**：落地页 `github.com/SilverWhite/orz` 渲染 HTML 含英文入口链接；`releases/tag/v0.8.10`／`releases`／`blob/main/docs/en/README.en.md` 均 200。门禁 `valid: true`、error_count 0。

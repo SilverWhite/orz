@@ -874,5 +874,6 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **上传**：`docs/en/README.en.md`、`TB21_V41_89_FULL_ROUND_REPORT_EN.md`、`WRITE_CONTROL_CURRENT_EN.md`、`ACAF_CURRENT_EN.md`、`TRANSLATION_GLOSSARY.md` 五件随 157/158/159 三批累积件与台账改动一并入仓，推送 `origin/main`（GitHub `SilverWhite/CLI`）。
 - **台账**：索引头行 v4.128 → **v4.129**＋`AUTH-EN-TRANSLATION-LINE` `pending` → `implemented`＋§8 桶换位；BACKLOG 计数行 60 → 59＋P1 开放项清单与优先级总览表移出 `0cm`＋`0cm` 节补闭合行；TODO 计数行 60 → 59＋P1 路由行与 `P1-0cm` 收尾批勾选同步。
 - **不入仓**：Reddit 帖子正文、发帖动作、发帖后纠错回灌（charter §1/§3）——如需回灌按新项立项。
+- **上传后收尾（同日用户反馈）**：GitHub 落地页只渲染仓根中文 README ⇒ 两版 README 首行加中英双向语言入口；对外链接统一改指新仓名（README 两版 Releases 链接 4 处＋`.gitmodules` 子模块 URL，本地 submodule 配置同步）；历史审计档／沿革记录／发行包快照按留档不改（旧名 301 可用）。提交 `b916b966`（收尾记录见 [`157 批档 §16`](audits/157_0CM_S1_S4_FIRST_TRANSLATION_ROUND_2026-10-02.md)）。
 - 批档：[`157 批档 §14/§15`](audits/157_0CM_S1_S4_FIRST_TRANSLATION_ROUND_2026-10-02.md)。
 - 关键词：160 批、0cm 闭合、英文门面定案、D1 v1.0、D2 用户签核、docs/en 五件、origin/main 上传、Reddit 发帖留用户。
