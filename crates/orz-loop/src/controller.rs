@@ -699,7 +699,10 @@ pub struct AgentLoopController {
     /// state). Feeds on decision rounds (model_output with tool_calls) and
     /// tool events; read-only surface via `blackboard_read
     /// section=temporal` (PULL, zero injection — §3/§6.1).
-    pub(crate) lif: Mutex<orz_assurance::lif::LifEngine>,
+    /// **0cp S2**：`Arc` 共享——RLI 卡死看门狗（D2）的运行时定时检查任务
+    /// （agent_loop 每 run spawn）经 [`Self::lif_shared`] 持有同一引擎；
+    /// 既有 `self.lif.lock()` 读法经 Deref 不变。
+    pub(crate) lif: std::sync::Arc<Mutex<orz_assurance::lif::LifEngine>>,
     /// P2-14 S1（2026-09-04，ADR-0010 §14.54 / 压缩 marker 折叠视图快照
     /// 设计 §3.1 R1 不一致分支）：共享折叠分区（exec / edits /
     /// tool_actions）行章的「执行窗主决策轮」pin——主车道某轮模型输出带
@@ -929,7 +932,7 @@ impl AgentLoopController {
             status_line_appended: Mutex::new(None),
             delivery_baseline: Mutex::new(None),
             delivery_pending: Mutex::new((0, false)),
-            lif: Mutex::new(new_lif_engine()),
+            lif: std::sync::Arc::new(Mutex::new(new_lif_engine())),
             board_stamp_pin: Mutex::new(None),
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             // 0bg S2：LIF 域迁移连带记录游标（只记不发模型）。
@@ -1566,7 +1569,7 @@ impl AgentLoopController {
             status_line_appended: Mutex::new(None),
             delivery_baseline: Mutex::new(None),
             delivery_pending: Mutex::new((0, false)),
-            lif: Mutex::new(new_lif_engine()),
+            lif: std::sync::Arc::new(Mutex::new(new_lif_engine())),
             board_stamp_pin: Mutex::new(None),
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             // 0bg S2：LIF 域迁移连带记录游标（只记不发模型）。
@@ -2509,11 +2512,10 @@ impl AgentLoopController {
         let body = match selector.unwrap_or("now") {
             "now" => {
                 let mut lines = vec![format!(
-                    "rli.now → [RLI on | 步数 {} | 采样 {}（网格补点 {}）| T̂={:.1}s \
+                    "rli.now → [RLI on | 步数 {} | 采样 {} | T̂={:.1}s \
                      | 自判域 {}]",
                     shadow.steps(),
                     shadow.sample_points(),
-                    shadow.grid_samples(),
                     t_hat,
                     domain.current_domain().as_str(),
                 )];
@@ -2905,11 +2907,6 @@ impl AgentLoopController {
         slider_readout: Option<&str>,
     ) -> String {
         const HEADER_CAP: usize = 256;
-        // 0bh ①（2026-09-22）：RLI 提醒段的**独立预算**——提醒不再与徽章挤
-        // 同一 256 B 头段（真机实锤 17 条仅 4 次到达：头段余量 40–42 B <
-        // 单条 60–91 B ⇒ 静默让位）。核算单位＝提醒本体＋注解 ≤240 B/条
-        // （0bg 定稿）；有提醒时头段上限＝ HEADER_CAP ＋ NOTICE_BUDGET。
-        const NOTICE_BUDGET: usize = 240;
         // 0ae D0（2026-09-15，设计 §3，用户定案）：水位状态标——黑板 live
         // 字节水位明示为【x.xM/10M】式读数，随每个 live 读取响应头携带
         // （既有 10MiB 疲劳提醒机制不变；固化写入为 KB 量级，水位无虞）。
@@ -2918,28 +2915,23 @@ impl AgentLoopController {
         // 0bg S2：`migration_count`/`last_migration` 原为「域迁移+n」徽章输入；
         // 双迁移定案后模型面不再渲染该徽章（迁移事实改走机械记录，见
         // `take_new_lif_migrations`），此处只取 round 与 RLI 面读数。
-        let (temporal_round, rli_steps, rli_pending_notices) = {
+        // **0cp D4（2026-10-03）**：原「未投递 RLI 提醒挂 pull-delta 头」
+        // 投递面整体退役——162 批实锤 16/16 `delivered=false`（模型零拉取
+        // 使推面事实死亡），投递改为**触发当刻附注式直投**（agent_loop 工具
+        // 批回传装配点 `take_pending_rli_notices` ＋ `mechanical_audit_update`
+        // journal 行）；头段只留水位标＋分区增量徽章（256 B 帽不变）。
+        let temporal_round = {
             let lif = self.lif.lock().unwrap_or_else(|e| e.into_inner());
-            let t = lif.temporal();
-            (
-                t.round(),
-                lif.rli_shadow().map(|s| s.steps()),
-                // 0bf ③（2026-09-22）：未投递 RLI 提醒（两触发；文案触发时
-                // 定格，含失配概率）——一次性投递候选，见下方头段。
-                lif.rli_shadow()
-                    .map(|s| {
-                        s.pending_notices()
-                            .iter()
-                            .map(|n| n.text.clone())
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default(),
-            )
+            lif.temporal().round()
         };
         items.push(("session", tool_rounds as u64));
         items.push(("temporal", temporal_round));
         // 0am 改造四项③（2026-09-20）：rli 参考面增量徽章——影子未启用时
         // 无游标语义（不挂徽章，保持零成本）。
+        let rli_steps = {
+            let lif = self.lif.lock().unwrap_or_else(|e| e.into_inner());
+            lif.rli_shadow().map(orz_assurance::lif::RliShadow::steps)
+        };
         if let Some(steps) = rli_steps {
             items.push(("rli", steps));
         }
@@ -2953,13 +2945,6 @@ impl AgentLoopController {
         // 读时现算：分段文本由调用方在工具执行点现算传入（messages 在握、
         // 纯函数、零新增记账），本方法不做任何新锁获取、不倒锁序（既有
         // blackboard → lif → cursors 顺序不变）。None ＝不渲染（测试面）。
-        // ── 0bh ①（2026-09-22）：提醒投递预算独立化 ─────────────────────
-        // 真机实锤（0bg 轮主会话回查：`RUN-CLI-6ab274e2` 消息面 17 条提醒仅
-        // 4 次到达模型）——头段被水位标＋徽章占去 189–216 B，留给提醒只剩
-        // 40–42 B（单条本体 60–91 B、含注解最坏 ≤240 B）且超预算 `break`
-        // **静默**。装配顺序据此反转：**先提醒（独立预算段）、徽章让位/折叠**
-        // ——提醒不再与徽章挤同一 256 B；无提醒时头段预算维持 256 B 不变，
-        // 有提醒时上限＝ HEADER_CAP ＋ NOTICE_BUDGET（提醒段独立于 256）。
         let core = match slider_readout {
             Some(segment) => format!("[黑板 增量 水位{watermark} {segment}]"),
             None => format!("[黑板 增量 水位{watermark}]"),
@@ -2972,51 +2957,11 @@ impl AgentLoopController {
                 badges.push(format!("{name}+{delta}"));
             }
         }
-        // 0bf ③（2026-09-22，用户令「模型面提醒只留两触发…一次性投递」）：
-        // RLI 提醒段——pull-delta 头一次性携带。预算内最多 2 条、逐条先量后
-        // 挂（不截断半条）；**0bg S2：域类提醒（迁移确认／掩盖缺口）每次
-        // 投递至多 1 条**（用户定案「每轮最多一条域类提醒」——第二条留待
-        // 下次读取，不重不漏）。文案在触发时定格（含注解）。
-        // 0bh ①：装配改「提醒优先、徽章让位」——未挂的提醒给短告知（不静默）。
-        let mut notice_segment = String::new();
-        let mut attached_notices = 0usize;
-        let mut attached_indices: Vec<usize> = Vec::new();
-        let mut deferred_notices = 0usize;
-        let mut attached_domain_notice = false;
-        for (pending_pos, text) in rli_pending_notices.iter().enumerate() {
-            if attached_notices >= 2 {
-                deferred_notices += 1;
-                continue;
-            }
-            let domain_class = text.starts_with("域迁移确认") || text.starts_with("掩盖缺口");
-            if domain_class && attached_domain_notice {
-                // 域类让位：留待下次读取（不重不漏），不计入预算受阻。
-                continue;
-            }
-            let piece = if attached_notices == 0 {
-                format!(" RLI提醒: {text}")
-            } else {
-                format!(" | {text}")
-            };
-            if notice_segment.len() + piece.len() > NOTICE_BUDGET {
-                deferred_notices += 1;
-                continue;
-            }
-            notice_segment.push_str(&piece);
-            attached_notices += 1;
-            attached_indices.push(pending_pos);
-            attached_domain_notice |= domain_class;
-        }
-        // 徽章让位/折叠：徽章只在「头段预算 − 核心 − 提醒段」的余量内渲染
-        // ——**有提醒时徽章让位，而不是让提醒让位**；余量不足则折叠为
-        // 「前缀徽章 ＋ …(+k)」（不截断半条、不静默丢）。独立提醒预算段
-        // （HEADER_CAP＋NOTICE_BUDGET）只在「核心＋提醒段」本身就超 256 的
-        // 退化情形兜底（单条最坏 240 B 时仍可投递）。
+        // 徽章折叠：徽章只在头段预算余量内渲染，超限折叠为「前缀徽章 ＋
+        // …(+k)」（不截断半条、不静默丢）。
         let mut badges_part = String::new();
         if !badges.is_empty() {
-            let budget = HEADER_CAP
-                .saturating_sub(core.len())
-                .saturating_sub(notice_segment.len());
+            let budget = HEADER_CAP.saturating_sub(core.len());
             let joined = badges.join(" ");
             if joined.len() <= budget {
                 badges_part = joined;
@@ -3051,48 +2996,16 @@ impl AgentLoopController {
             header.push(' ');
             header.push_str(&badges_part);
         }
-        header.push_str(&notice_segment);
-        // 未挂的提醒不静默（0bh ① 的另一半）：给短告知，提醒本体仍留在
-        // 队列、下次读取重试（不重不漏）；计数照常入影子（见下）。
-        if deferred_notices > 0 {
-            header.push_str(&format!(" | RLI提醒+{deferred_notices}条暂存"));
-        }
         // 0ae D0：水位状态标恒挂（用户定案「各分区响应头带读数」）；
-        // 增量徽章与提醒段只在有变化时追加（原「零噪音」纪律对徽章
-        // 部分继续成立）。
-        // 0bh ①：总帽——常态 256 B；「核心＋提醒段」本身超 256 时放到
-        // 256＋240（独立提醒预算段的退化兜底）。
-        let total_cap = if header.len() <= HEADER_CAP {
-            HEADER_CAP
-        } else {
-            HEADER_CAP + NOTICE_BUDGET
-        };
-        let header = orz_assurance::tool_envelope::enforce_bound(header, total_cap);
+        // 增量徽章只在有变化时追加（原「零噪音」纪律对徽章部分继续成立）。
+        let header = orz_assurance::tool_envelope::enforce_bound(header, HEADER_CAP);
         // 推进本次读取分区的游标（成功 live 读语义）。0bg S2：迁移计数基线
         // 随「域迁移+n」徽章一并退役（迁移事实改走机械记录，模型面只留 RLI
-        // 「域迁移确认」——双迁移通知定案）。
+        // 域事件提醒——0cp D4 起由附注直投承载）。
         if let Some((_, revision)) = items.iter().find(|(n, _)| *n == section) {
             cursors.insert(section.to_string(), *revision);
         }
         drop(cursors);
-        // 0bf ③：携带即投递（在游标锁释放后单独取 lif 锁——不倒锁序）。
-        // 0bh ①：投递按**索引**标记（域类让位会让「前 n 条」口径错位——
-        // 索引口径与装配循环严格一致）；投递/暂存计数与头段余量入影子
-        // （「delivered 计数化」＋余量可核；随侧车持久）。
-        if attached_notices > 0 || deferred_notices > 0 {
-            if let Some(shadow) = self
-                .lif
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .rli_shadow_mut()
-            {
-                shadow.mark_notices_delivered_at(&attached_indices);
-                shadow.record_notice_delivery_accounting(
-                    deferred_notices,
-                    total_cap.saturating_sub(header.len()),
-                );
-            }
-        }
         format!("{header}\n{body}")
     }
 
@@ -3186,6 +3099,25 @@ impl AgentLoopController {
             .unwrap()
             .rli_shadow()
             .map(orz_assurance::lif::RliShadow::complexity_reading)
+    }
+
+    /// **0cp S2（D2/D4，2026-10-03）**：RLI 提醒附注式直投——取走全部未
+    /// 投递提醒（触发时定格文案；取走即置位 `delivered`＝附注行已装配）。
+    /// 消费方（agent_loop 工具批回传装配点）据此把行文附于回传内容后并写
+    /// `mechanical_audit_update{kind:"rli_notice"}` journal 行（盲区闭环）。
+    /// 影子未启用 / 无未投递提醒 = 空表。
+    pub(crate) fn take_pending_rli_notices(&self) -> Vec<orz_assurance::lif::RliNotice> {
+        let mut lif = self.lif.lock().unwrap_or_else(|e| e.into_inner());
+        lif.rli_shadow_mut()
+            .map(orz_assurance::lif::RliShadow::take_pending_for_push)
+            .unwrap_or_default()
+    }
+
+    /// **0cp S2（D2）**：RLI 卡死看门狗运行时任务与 agent loop 共享同一
+    /// LIF 引擎（`Arc` 克隆；判定与采样在锁内短临界区完成，不跨 await 持
+    /// 锁——与既有 `self.lif.lock()` 读法同一把锁）。
+    pub(crate) fn lif_shared(&self) -> std::sync::Arc<Mutex<orz_assurance::lif::LifEngine>> {
+        std::sync::Arc::clone(&self.lif)
     }
 
     /// B1 会话化基础（2026-09-03，R5 conversation-relative 轴）：run 结束
@@ -7136,14 +7068,14 @@ body"
             "rli.now",
             "自判域",
             "v_err=",
-            "pred(10T̂)",
-            "err:",
             // 0bg S2：`prog:` 等尾段明细在超预算时让位到 `selector=channels`
             // 折叠面（下方单独断言）——now 面只保证核心行 + 让位标。
             // 0be 四项②④（2026-09-21）：分通道 horizon＋短视锚点＋λ̂＋繁杂度
             // 读数（未就绪时机械如实）。
-            "p1(1T̂)",
-            "λ̂=",
+            // 0cp D6/D7：近提醒行自带 T̂ 注解＋趋势后整体变长，通道明细行
+            // 让位折断为「…已省 N 行」（同上方超预算让位纪律；明细仍可经
+            // channels 面折叠读取——下方断言）。
+            "已省",
             "繁杂度:",
             // 0bg S2（2026-09-22）：面头固定符号表一行（用户裁决 (c)）。
             "符号:",
@@ -7487,17 +7419,19 @@ body"
         );
     }
 
-    /// 0bf ③（2026-09-22）：RLI 提醒随 pull-delta 头**一次性投递**——触发后
-    /// 首次读取挂头（≤2 条、预算内）；携带即投递，再读不重发（`rli.now`
-    /// 面仍可回看）；影子被 kill switch 关闭时零投递。
+    /// **0cp D4（2026-10-03）**：RLI 提醒投递改**附注式直投**——不再随
+    /// pull-delta 头携带（162 批实锤 16/16 未投递＝推面事实死亡）；宿主在
+    /// 下一工具批回传装配点 `take_pending_rli_notices` 取走（取走即置位
+    /// `delivered`＝附注已装配，二次取走为空＝不重发）；影子被 kill switch
+    /// 关闭时零取走；`rli.now` 面仍可回看事件历史。
     #[test]
-    fn rli_notices_ride_pull_delta_header_once() {
+    fn rli_notices_deliver_via_direct_push_take_once() {
         let controller =
             AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
         {
             let mut guard = controller.lif.lock().unwrap_or_else(|e| e.into_inner());
             // 缺省常开（0bf ①）：连续错误工具事件 → err 通道持续越线，
-            // 连续 5 个采样点触发（θ 自适应上抬，给 7 个事件余量）。
+            // 连续 3 个动作采样点触发（0cp D3 k=3；θ 自适应上抬，给余量）。
             let mut t = 0.0f64;
             for _ in 0..7u32 {
                 t += 1.0;
@@ -7508,26 +7442,45 @@ body"
         let body = controller
             .render_rli_section(Some("now"), None, None)
             .unwrap();
-        let with_delta = controller.attach_pull_delta("rli", body.clone(), 0, None);
-        assert!(with_delta.contains("RLI提醒:"), "{with_delta}");
-        assert!(with_delta.contains("持续越线"), "{with_delta}");
-        // 已投递：再读不重复（提醒仍可在 `rli.now` 面回看）。
-        let again = controller.attach_pull_delta("rli", body, 0, None);
-        assert!(!again.contains("RLI提醒:"), "{again}");
-        // kill switch：无影子 = 零投递。
+        // 头段不再携带提醒（直投改造；头段＝水位标＋徽章）。
+        let with_delta = controller.attach_pull_delta("rli", body, 0, None);
+        let header_line = with_delta.lines().next().unwrap();
+        assert!(!header_line.contains("RLI提醒:"), "{header_line}");
+        assert!(!header_line.contains("持续越线"), "{header_line}");
+        // 直投取走：一次性（取走即置位 delivered＝附注已装配）。
+        let taken = controller.take_pending_rli_notices();
+        assert_eq!(taken.len(), 1);
+        assert!(taken[0].text.contains("持续越线"), "{}", taken[0].text);
+        assert!(taken[0].delivered, "取走即置位");
+        assert!(controller.take_pending_rli_notices().is_empty(), "不重发");
+        // 投递会计：delivered＝附注装配数（D4 语义）；受阻/余量面冻结。
+        let (delivered, deferred, _headroom) = controller
+            .lif
+            .lock()
+            .unwrap()
+            .rli_shadow()
+            .expect("shadow present")
+            .notice_delivery_stats();
+        assert_eq!(delivered, 1);
+        assert_eq!(deferred, 0);
+        // 事件历史可回看（`rli.now` 面「近提醒」行）。
+        let again_face = controller
+            .render_rli_section(Some("now"), None, None)
+            .unwrap();
+        assert!(again_face.contains("持续越线"), "{again_face}");
+        // kill switch：无影子 = 零取走。
         controller
             .lif
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .disable_rli_shadow();
-        let off = controller.attach_pull_delta("rli", "rli: x".to_string(), 0, None);
-        assert!(!off.contains("RLI提醒:"), "{off}");
+        assert!(controller.take_pending_rli_notices().is_empty());
     }
 
-    /// 0bh ①（2026-09-22）**任务面钉子**：徽章让位后提醒仍可投递——构造长
-    /// 头段（全分区大徽章）＋ 一条待投递提醒，断言：提醒本体在头段内（不被
-    /// 静默吞掉）、徽章出现折叠标记、头段总长 ≤256 B；**投递面钉子**：头段
-    /// 余量与 delivered/暂存计数可核（`rli_shadow` 读数）。
+    /// 0bh ①（2026-09-22）**任务面钉子（0cp D4 改版）**：徽章折叠纪律保持
+    /// ——构造长头段（全分区大徽章），断言：徽章出现折叠标记（不被静默
+    /// 吞掉）、头段总长 ≤256 B、**头段不再携带 RLI 提醒**（直投改造；
+    /// 提醒经 `take_pending_rli_notices` 交付）。
     #[test]
     fn pull_delta_long_header_folds_badges_instead_of_swallowing_notices() {
         let controller =
@@ -7563,8 +7516,10 @@ body"
         }
         let out = controller.attach_pull_delta("plan", "body".to_string(), 0, None);
         let first_line = out.lines().next().expect("header line");
-        assert!(first_line.contains("RLI提醒:"), "提醒被吞：{first_line}");
-        assert!(first_line.contains("持续越线"), "{first_line}");
+        assert!(
+            !first_line.contains("RLI提醒:"),
+            "0cp D4：头段不再携带提醒：{first_line}"
+        );
         assert!(
             first_line.contains("…(+"),
             "长头段应折叠徽章而非静默：{first_line}"
@@ -7576,19 +7531,9 @@ body"
         );
         assert!(first_line.is_char_boundary(first_line.len()));
         assert!(out.contains("\nbody"), "body lost: {out}");
-        // 投递面钉子：delivered 计数化 + 头段余量可核。
-        let (delivered, deferred, headroom) = controller
-            .lif
-            .lock()
-            .unwrap()
-            .rli_shadow()
-            .expect("shadow present")
-            .notice_delivery_stats();
-        assert_eq!(delivered, 1, "投递计数");
-        assert_eq!(deferred, 0, "无受阻暂存");
-        assert!(headroom <= 240, "头段余量应在提醒预算内：{headroom}");
-        // 一次性投递语义保持：再读不重发。
-        let again = controller.attach_pull_delta("plan", "body".to_string(), 0, None);
-        assert!(!again.contains("RLI提醒:"), "{again}");
+        // 直投交付面（D4）：提醒在本批回传装配点由宿主取走。
+        let taken = controller.take_pending_rli_notices();
+        assert_eq!(taken.len(), 1, "直投取走");
+        assert!(taken[0].text.contains("持续越线"), "{}", taken[0].text);
     }
 }

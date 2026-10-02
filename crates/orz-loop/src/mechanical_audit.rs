@@ -14,13 +14,28 @@
 //! - `budget`：**已退役**（0cn S2，2026-10-02，ADR-0010 §14.82）——轮数
 //!   记次注入（「已用 N/999 轮」）生产零写入，枚举/键保留仅供历史
 //!   journal 回放校验；
-//! - `retrieval:<n>`：检索派发（候选 / 上限）。
+//! - `retrieval:<n>`：检索派发（候选 / 上限）；
+//! - `rli.notice.<kind>`：**0cp D4**（2026-10-03，ADR-0010 §14.83）RLI
+//!   提醒附注式直投留痕——fire 当刻行文附于回传内容后＋journal 一条
+//!   （不进报告块；盲区闭环）。
 
 use orz_assurance::EventType;
+use orz_assurance::lif::RliNoticeKind;
 
 use crate::controller::EventWriter;
 use crate::gateway::model::ToolCall;
 use crate::host::ToolResult;
+
+/// **0cp D4**：`rli.notice.<kind>` 对象键的 kind 段（snake_case；单一源，
+/// 写入点与 schema 描述同引）。四种触发源＝四类 [`RliNoticeKind`]。
+pub(crate) fn rli_notice_key(kind: RliNoticeKind) -> &'static str {
+    match kind {
+        RliNoticeKind::StreakCrossed => "streak_crossed",
+        RliNoticeKind::MigrationConfirmed => "migration_confirmed",
+        RliNoticeKind::CoverageGap => "coverage_gap",
+        RliNoticeKind::DomainSpikeEntry => "domain_spike_entry",
+    }
+}
 
 /// 报告块前缀——注册进 `prompt::is_injected_block_text`（机械注入文本，
 /// 绝不持久化回会话）。
@@ -73,6 +88,17 @@ pub(crate) const KIND_RETRIEVAL_BATCH: &str = "retrieval_batch";
 /// **只记不发模型**、逐次历史由 journal 事件流（本 kind 的覆盖写＋LIF
 /// 事件面）可离线复算。payload 形状＝均一四键（同 tool_result 族）。
 pub(crate) const KIND_LIF_DOMAIN: &str = "lif_domain";
+/// **0cp S2（D4，2026-10-03，163 批立项）**：RLI 提醒**附注式直投**留痕
+/// ——三类 RliNotice（StreakCrossed／MigrationConfirmed／CoverageGap）与
+/// 0cp D7 新增 DomainSpikeEntry 在**触发当刻**转附注式直投：agent_loop 于
+/// 下一工具批回传装配点取走（`take_pending_rli_notices`，取走即置位
+/// `delivered`），把行文附于回传内容后（行 ≤240B、只读数无建议）并落本
+/// kind 一条 journal 行——162 批 §3.1「提醒面 journal 盲区」闭环（fire
+/// 全集可由 journal 独立复算）。key＝`rli.notice.<kind>`（每键覆盖写，逐
+/// 次历史由 journal 事件流可复算）、anomaly＝null（不进报告块）。取代
+/// 152 批 §5.2「注入不再增加」的**局部**取代声明见 ADR-0010 §14.83：fire
+/// 当刻事件附注放行、周期性读数注入维持出局。
+pub(crate) const KIND_RLI_NOTICE: &str = "rli_notice";
 
 /// 一条对象键的审查结果（每键至多一条，新结果覆盖旧结果）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -737,6 +763,117 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ── 0cp S2（D4，2026-10-03，ADR-0010 §14.83）──────────────────────
+
+    /// **0cp D4 判据 4 钉**（设计 §5）：RLI fire → 模型面出现附注行＋**同刻
+    /// journal `mechanical_audit_update{kind:rli_notice}` 行**（盲区闭环：
+    /// fire 全集可由 journal 复算）；`delivered` 与附注装配数一致。连续 3
+    /// 轮失败命令推 err 通道凑满 k=3（0cp D3；决策轮＋工具事件各为一动作
+    /// 样），第 3 轮工具批回传附「RLI提醒: 持续越线…」行。
+    #[tokio::test]
+    async fn rli_notice_direct_push_attaches_line_and_journals() {
+        use crate::gateway::model::Role;
+        use orz_assurance::lif::{RLI_NOTICE_TEXT_BUDGET, RLI_T_HAT_ANNOTATION};
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            // timed_out ⇒ ToolOutcome::Error（err 通道 +1；exit 1 是 D2 值
+            // 语义＝Other 不注 err——tool_run 分类口径）。
+            tool_result: Some(ToolResult {
+                output: "timeout".to_string(),
+                exit_code: None,
+                timed_out: true,
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        // plan 轮（首轮计划门）→ 三轮失败命令（streak 第 3 个动作样凑满）
+        // → 终答。
+        let mut scripts = vec![ScriptedResponse::tool_calls(vec![plan_write_call(
+            "call-plan-1",
+            valid_plan_json(),
+        )])];
+        for i in 0..3u32 {
+            scripts.push(ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "run_terminal_cmd".to_string(),
+                arguments: serde_json::json!({ "command": format!("fail-{i}") }),
+                call_id: format!("call-term-{i}"),
+            }]));
+        }
+        scripts.push(ScriptedResponse::text("草稿"));
+        scripts.push(ScriptedResponse::text("终答"));
+        let fake = Arc::new(FakeProvider::new(scripts));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = stage_c_controller(gateway);
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "运行命令",
+                "RUN-RLI-PUSH",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, "终答");
+
+        // 模型面：第 3 轮失败命令的回传附注行（含 D6 T̂ 注解；无周期注入）
+        // ——历史重放同一份内容，末请求内恰一次出现（不重复注入）。
+        let requests = fake.received_requests();
+        let last = requests.last().expect("requests captured");
+        let pushed: Vec<&crate::gateway::model::Message> = last
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Tool && m.content.contains("RLI提醒: 持续越线"))
+            .collect();
+        assert_eq!(pushed.len(), 1, "恰一轮回传携带附注行");
+        let line_start = pushed[0].content.find("RLI提醒:").unwrap();
+        let line = &pushed[0].content[line_start..];
+        assert!(line.contains(RLI_T_HAT_ANNOTATION), "D6 注解在行内: {line}");
+        assert!(
+            line.len() <= RLI_NOTICE_TEXT_BUDGET + "\n".len(),
+            "行宽 ≤240B 纪律: {line}"
+        );
+
+        // journal：kind=rli_notice、key=rli.notice.streak_crossed、盲区闭环。
+        let events = events(&dir);
+        let rli_events: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::MechanicalAuditUpdate)
+            .filter(|e| e.payload["kind"] == KIND_RLI_NOTICE)
+            .collect();
+        assert_eq!(rli_events.len(), 1, "恰一条 rli_notice journal 行");
+        assert_eq!(
+            rli_events[0].payload["payload"]["key"],
+            "rli.notice.streak_crossed"
+        );
+        assert!(
+            rli_events[0].payload["payload"]["summary"]
+                .as_str()
+                .unwrap()
+                .contains("持续越线"),
+            "{:?}",
+            rli_events[0].payload
+        );
+        // delivered 与附注装配数一致（D4 投递语义）。
+        let (delivered, _deferred, _headroom) = controller
+            .lif
+            .lock()
+            .unwrap()
+            .rli_shadow()
+            .expect("shadow present")
+            .notice_delivery_stats();
+        assert_eq!(delivered, 1, "投递率分子＝附注装配数");
+        assert!(controller.take_pending_rli_notices().is_empty(), "不重发");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ── 0ag 同型契约钉子（2026-09-15，0AE-C2 修复）─────────────────────
     //
     // runtime schema `mechanical-audit-update-event-payload-v0.2` 的 kind
@@ -773,6 +910,7 @@ mod tests {
                 KIND_PLAN_WRITE_GUIDANCE.to_string(),
                 KIND_RETRIEVAL_BATCH.to_string(),
                 KIND_LIF_DOMAIN.to_string(),
+                KIND_RLI_NOTICE.to_string(),
             ]
         );
         // 0av S1：schema 按 kind 条件分支校验 payload——retrieval_batch 走
@@ -840,6 +978,7 @@ mod tests {
                 KIND_MODEL_COMPRESSION.to_string(),
                 KIND_PLAN_WRITE_GUIDANCE.to_string(),
                 KIND_LIF_DOMAIN.to_string(),
+                KIND_RLI_NOTICE.to_string(),
             ]
         );
         // 分支触发面与 kind 枚举互补且不交——两分支并集恰为全枚举。

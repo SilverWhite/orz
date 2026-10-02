@@ -468,17 +468,32 @@ mod serp_budget_tests {
         let main_budget = main.serp_budget.clone().expect("main carries a budget");
         let grill_budget = grill.serp_budget.clone().expect("grill carries a budget");
         assert_eq!(
-            main_budget.lock().unwrap_or_else(|e| e.into_inner()).usage(),
+            main_budget
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .usage(),
             (0, MAIN_SERP_NAVIGATION_BUDGET)
         );
-        assert!(main_budget.lock().unwrap_or_else(|e| e.into_inner()).reserve().is_ok());
+        assert!(
+            main_budget
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .reserve()
+                .is_ok()
+        );
         assert_eq!(
-            grill_budget.lock().unwrap_or_else(|e| e.into_inner()).usage(),
+            grill_budget
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .usage(),
             (0, MAIN_SERP_NAVIGATION_BUDGET),
             "grill budget must not observe the main lane's usage"
         );
         assert_eq!(
-            main_budget.lock().unwrap_or_else(|e| e.into_inner()).usage(),
+            main_budget
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .usage(),
             (1, MAIN_SERP_NAVIGATION_BUDGET)
         );
     }
@@ -2064,6 +2079,64 @@ fn answer_gate_has_substance(svc: &SharedLoopServices<'_>, tool_rounds: u32) -> 
             .any(|step| !matches!(step.status, StepStatus::Done(_) | StepStatus::Failed(_)))
 }
 
+/// 0cp S2（D2，2026-10-03）：RLI 卡死看门狗的轮询间隔（秒）——设计口径
+/// 「复用既有 tick 或 1–10s 级 interval 任务；仅判定，不产生周期采样」；
+/// 5s 与既有 500ms 进程级 stall 看门狗（orz-bin）量级解耦（181s 阈的
+/// 1–3% 粒度）。
+const RLI_WATCHDOG_POLL_SECS: u64 = 5;
+
+/// 0cp S2（D2）：看门狗任务守卫——随 run_agent_loop 返回（含 `?` 早退）
+/// Drop 取消任务；`run 仍活跃`（触发条件③）由任务生命周期保证。
+struct RliWatchdogGuard(tokio_util::sync::CancellationToken);
+
+impl Drop for RliWatchdogGuard {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+/// 0cp S2（D2）：spawn RLI 卡死看门狗任务——主车道且回调方提供心跳钟
+/// （ActivityClock：SSE 帧／流式 chunk／journal 记录皆盖章，`idle()` 即
+/// 「无模型流式输出活动」的进程级量尺）才挂。判定与采样在 lif 锁内短临界
+/// 区完成（不跨 await 持锁，与既有 `self.lif.lock()` 同一把锁）；触发恰产
+/// 一个时间采样后由影子内部休眠（`watchdog_armed`），任务本身持续轮询至
+/// run 结束。
+fn spawn_rli_watchdog(
+    controller: &AgentLoopController,
+    heartbeat: Option<&ActivityClock>,
+    role: AgentRole,
+) -> Option<RliWatchdogGuard> {
+    if role != AgentRole::Main {
+        return None;
+    }
+    let heartbeat = heartbeat.cloned()?;
+    let lif = controller.lif_shared();
+    let token = tokio_util::sync::CancellationToken::new();
+    let cancelled = token.clone();
+    tokio::spawn(async move {
+        let mut tick =
+            tokio::time::interval(std::time::Duration::from_secs(RLI_WATCHDOG_POLL_SECS));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = cancelled.cancelled() => break,
+                _ = tick.tick() => {
+                    let idle_secs = heartbeat.idle().as_secs_f64();
+                    let now = AgentLoopController::now_epoch_secs();
+                    if let Some(shadow) = lif
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .rli_shadow_mut()
+                    {
+                        let _fired = shadow.on_watchdog_tick(now, idle_secs);
+                    }
+                }
+            }
+        }
+    });
+    Some(RliWatchdogGuard(token))
+}
+
 /// The shared model↔tool loop (M1 extraction, 2026-08-10).
 ///
 /// Semantics preserved verbatim from `run_turn_inner`'s loop body:
@@ -2105,6 +2178,13 @@ pub(crate) async fn run_agent_loop(
     // `run_retrieval_subagent`。
     run_gateway: &Arc<dyn ModelGateway>,
 ) -> Result<LoopOutcome, AgentLoopError> {
+    // 0cp S2（D2，2026-10-03，ADR-0010 §14.83）：RLI 卡死看门狗——主车道
+    // 每 run 一个 5s 级轻量定时检查任务（仅判定，不产生周期采样）：无动作
+    // 样且心跳静默 ≥181s（TER 首报后台化 180s＋1s 避让）⇒ 恰一个时间采样
+    // 留证后休眠；触发沿若有提醒随 D4 在下一工具批直投。守卫随 run 终止
+    // Drop 取消任务（run 仍活跃＝触发条件③由任务生命周期保证）。None
+    // 心跳（无静默量尺）与非主车道不挂。
+    let _rli_watchdog_guard = spawn_rli_watchdog(controller, heartbeat, profile.role);
     let workspace_trust = host.workspace_trust();
     // The session's budget counter (user adjudication 2026-08-10, review
     // F5): a `continue` re-entry is the same retrieval session — the
@@ -4116,7 +4196,10 @@ pub(crate) async fn run_agent_loop(
                             &tc.name, &tc, &result,
                         )
                     {
-                        evidence.lock().unwrap_or_else(|e| e.into_inner()).push(record);
+                        evidence
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .push(record);
                     }
                     // 0ar S2：可见倒数行（设计 §3.6）——检索族结果尾部机械
                     // 追加（本批证据快照＋已发起调用数，条目/调用分开报）。
@@ -4713,7 +4796,10 @@ pub(crate) async fn run_agent_loop(
                                 &tc.name, tc, &result,
                             )
                         {
-                            evidence.lock().unwrap_or_else(|e| e.into_inner()).push(record);
+                            evidence
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .push(record);
                         }
                         // 0ar S2：可见倒数行（设计 §3.6）——检索族结果尾部
                         // 机械追加（本批证据快照＋已发起调用数）。
@@ -5256,6 +5342,50 @@ pub(crate) async fn run_agent_loop(
                         }),
                     )
                     .await?;
+            }
+            // 0cp S2（D4，2026-10-03，ADR-0010 §14.83）：RLI 提醒**附注式
+            // 直投**——触发当刻的未投递 RliNotice 在本工具批回传装配点取走
+            // （取走即置位 `delivered`），行文以「RLI提醒: …」行附于回传内容
+            // 后（模型面），并逐条落 `mechanical_audit_update{kind:
+            // rli_notice}` journal 行（盲区闭环：fire 全集可由 journal 复算；
+            // 本批无 blackboard_read 时行文是唯一模型面，有读取时直投与其
+            // 头段互斥——`delivered` 先到先置位）。触发为稀有事件（recli
+            // 实测 3 fire／5,166s），零周期注入（152 批 §5.2 出局面不动）。
+            // 若触发后无后续工具批（会话即终止）＝不跨会话补投（队列留痕）。
+            if messages.iter().rev().any(|m| m.role == Role::Tool) {
+                let notices = controller.take_pending_rli_notices();
+                if !notices.is_empty() {
+                    let mut block = String::new();
+                    for notice in &notices {
+                        block.push_str("\nRLI提醒: ");
+                        block.push_str(&notice.text);
+                    }
+                    if let Some(last_tool) =
+                        messages.iter_mut().rev().find(|m| m.role == Role::Tool)
+                    {
+                        last_tool.content.push_str(&block);
+                    }
+                    for notice in &notices {
+                        let payload = mechanical_audit.record(
+                            format!(
+                                "rli.notice.{}",
+                                crate::mechanical_audit::rli_notice_key(notice.kind)
+                            ),
+                            tool_rounds,
+                            notice.text.clone(),
+                            None,
+                        );
+                        writer
+                            .record(
+                                EventType::MechanicalAuditUpdate,
+                                serde_json::json!({
+                                    "kind": crate::mechanical_audit::KIND_RLI_NOTICE,
+                                    "payload": payload
+                                }),
+                            )
+                            .await?;
+                    }
+                }
             }
         }
         // TER T1.7 (2026-09-04)：`max_tool_rounds == 0` = 默认无硬限——
