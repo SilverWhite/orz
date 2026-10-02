@@ -955,3 +955,13 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **台账**：BACKLOG/TODO `0cp` 条目（v1.2、七决策、S1 注）＋头部指针与计数行；索引 `AUTH-RLI-ACTION-SAMPLING-NOTICE-PUSH` v1.2/D7＋头行 v4.136 → **v4.137**。**未提交未推送**。
 - 批档：[`167 批档`](audits/167_0CP_D7_SPIKE_DOMAIN_EVENT_MERGED_2026-10-03.md)。
 - 关键词：167 批、0cp v1.2、D7、spike 即提醒、域事件提醒二合一、稳定门否证、不能假设域特征可分、提醒面事实死亡、进入端触发、无阻尼常数、§14.81 提醒面修订、计数 59。
+
+### 1.121 2026-10-03 168 批 0cp S2 落码——RLI 动作触发式采样与提醒附注式直投（本会话用户令「请进行0cp S2吧」放行；计数不变 59）
+
+- **落码范围（设计稿 §6 S2 全兑现）**：rli.rs＝D1 `fill_grid_gaps`/`RLI_GRID_SECS`/`RLI_GRID_FILL_MAX`/`grid_samples` 退役＋动作样两源（决策轮＋工具完成事件）＋`last_sample_t` 转动作采样锚／D2 `RLI_WATCHDOG_SAMPLE_SECS=181.0` 三同时（武装∧Δt≥181∧心跳 idle≥181；窗锚缺失保守不触发）恰一样后休眠、`watchdog_armed` 随快照、样不计 steps／D3 k 5→3／D4 `take_pending_for_push`（取走即置位 delivered、返回已装配态；队列转事件历史；受阻/余量计数面冻结）／D6 `RLI_T_HAT_ANNOTATION` 单一源＋`t_hat_trend_text`（前值→现值↑↓无成因；`t_hat_prev` 随快照）＋四类行 ≤240B／D7 `DomainSpikeEntry`（切换当刻提醒；回归与 bootstrap 不提醒只计数；`spike_entries`/`spike_returns` 随快照；`recent_outcomes` 近 5 动作窗 live-only；域机器零改动）。controller＝lif `Mutex`→`Arc<Mutex>`＋`lif_shared`/`take_pending_rli_notices`＋**pull-delta 头 RLI 提醒段整体退役**（162 批 16/16 未投递面关闭）＋rli.now 面头同步。agent_loop＝D4 主车道轮末附注直投（「\nRLI提醒: …」附回传后＋逐条 `mechanical_audit_update{kind:"rli_notice", key:"rli.notice.<kind>"}` journal 行；无后续工具批不跨会话补投）＋D2 `spawn_rli_watchdog`（5s 级 interval、`RliWatchdogGuard` Drop 取消、lif 锁内短临界区、心跳 idle 为无流量量尺）。契约面＝schema kind 枚举/分支/描述＋Python 冻结镜像同步＋`KIND_RLI_NOTICE`/`rli_notice_key`＋互证钉两数组。
+- **ADR-0010 转录**：§14.83（v1.84）七项落卷（含 D5＝对 152 批 §5.2「注入不再增加」的局部取代声明：fire 当刻放行、周期注入维持出局；§14.81 关系＝LIF 提醒面行为修订、非新增 PULL 面）＋主文件冻结版本补记。
+- **测试钉（§5 判据映射）**：判据 1/2＝`action_samples_only_and_watchdog_single_shot`（100s 空档零补点＋看门狗六断言）；3＝streak 钉 k=3；4＝`rli_notice_direct_push_attaches_line_and_journals`（agent_loop 级：3 轮超时命令→回传附注行〔末请求恰一份〕＋journal 恰一条＋delivered=1）；5＝既有 bit-exact 对拍钉全绿；6＝预算钉四类＋T̂ 存在性；7＝`domain_spike_entry_notifies_immediately_return_is_silent`。
+- **验证读数**：orz-assurance **279/0**、orz-loop **847/0**（3ig）、orz-bin **60/0**、orz-tools 2990/0、Python MechanicalAudit 3/0；clippy 差分 **107 → 106（净 −1）**；fmt 触碰五文件零新增。环境预存两件（非本批）：`user_cancel_…` 竞态用例 stash 差分干净树同败〔148 批已登记〕、orz-host 超时/截断类环境敏感失败（干净树 6 败、本批树 5 败＝未触碰 crate）；D 盘页面文件不足（os error 1455）一次＝清 incremental＋损坏 rlib 恢复〔148 批先例〕。S3 进体（双平台载体重建）未跑——沿「暂时不重建」口径随 S3 窗口。
+- **台账**：TODO `P1-0cp` S2 勾选＋头部指针/计数行；BACKLOG 本批指针＋`0cp` 批序行＋P1 总览行；索引 `AUTH-RLI-ACTION-SAMPLING-NOTICE-PUSH` S2 达成＋头行 v4.137 → **v4.138**。子仓随批提交。
+- 批档：[`168 批档`](audits/168_0CP_S2_ACTION_SAMPLING_DIRECT_PUSH_IMPL_2026-10-03.md)。
+- 关键词：168 批、0cp S2、动作触发式采样、网格退役、看门狗 181s、k=3、附注式直投、rli_notice kind、盲区闭环、pull-delta 头投递退役、spike 即提醒、域事件提醒二合一、T̂ 注解、ADR §14.83、计数 59。

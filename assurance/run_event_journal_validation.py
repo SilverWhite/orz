@@ -2035,7 +2035,8 @@ def _verify_v02_mechanical_audit(events: list[dict[str, Any]]) -> list[str]:
     - 键形为 file:<path> / cmd:<call_id> / plan / budget（已退役，仅历史）/
       retrieval:<n> / attention_ladder:<K>k（历史）/
       context_scale:<500k|900k|first_fold> / model_compression /
-      plan_write_guidance / plan_write_reminder。
+      plan_write_guidance / plan_write_reminder / rli.notice.<kind>（0cp D4
+      RLI 提醒直投留痕，2026-10-03）。
     - `retrieval_batch`（0av S1，2026-09-20，S3 摩擦 N3）payload 形状独立：
       {activation_id, usable, cap, retrieval_calls, terminal_reason} 五键
       （与 Rust `batch_close` 单源 helper 同值；模型面零改动、不进审查表/
@@ -2061,12 +2062,16 @@ def _verify_v02_mechanical_audit(events: list[dict[str, Any]]) -> list[str]:
             # 0bg S2（2026-09-22）：LIF 域迁移连带记录（key=lif.domain_migration；
             # 均一四键形状）——LIF `域迁移+n` 徽章撤出模型面后的机械层留痕。
             "lif_domain",
+            # 0cp S2（D4，2026-10-03，ADR-0010 §14.83）：RLI 提醒附注式直投
+            # 留痕（key=rli.notice.<kind>；均一四键形状）——四类 RliNotice
+            # 触发当刻行文附于工具批回传后＋同刻 journal 行（盲区闭环）。
+            "rli_notice",
         ):
             errors.append(
                 f"event {index}: mechanical_audit_update kind {kind!r} must be "
                 "tool_result / plan_gate / budget / attention_ladder / "
                 "context_scale / model_compression / plan_write_guidance / "
-                "retrieval_batch / lif_domain"
+                "retrieval_batch / lif_domain / rli_notice"
             )
         if not isinstance(entry, dict):
             errors.append(
