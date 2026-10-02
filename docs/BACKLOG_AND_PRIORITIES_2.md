@@ -965,3 +965,14 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **台账**：TODO `P1-0cp` S2 勾选＋头部指针/计数行；BACKLOG 本批指针＋`0cp` 批序行＋P1 总览行；索引 `AUTH-RLI-ACTION-SAMPLING-NOTICE-PUSH` S2 达成＋头行 v4.137 → **v4.138**。子仓随批提交。
 - 批档：[`168 批档`](audits/168_0CP_S2_ACTION_SAMPLING_DIRECT_PUSH_IMPL_2026-10-03.md)。
 - 关键词：168 批、0cp S2、动作触发式采样、网格退役、看门狗 181s、k=3、附注式直投、rli_notice kind、盲区闭环、pull-delta 头投递退役、spike 即提醒、域事件提醒二合一、T̂ 注解、ADR §14.83、计数 59。
+
+### 1.122 2026-10-03 169 批 0cp S2 审查处置——看门狗时间基转轴（P1）＋D7 回归分类勘误（P2）＋take 谓词直取（P3）（用户令「请对审查出的全部问题进行处理」，对象＝168 批三维度全面检查；计数不变 59）
+
+- **P1 看门狗时间基错位（实现缺陷修正）**：`spawn_rli_watchdog` 直传 `now_epoch_secs()`（UNIX epoch ≈1.76e9）进 `RliShadow::on_watchdog_tick`，而影子内部轴＝run 相对秒（动作样经 `LifEngine::rel()` 转换后喂入、轴原点 0）——窗口①（`now−t0≥181`）对 epoch 恒真；触发时以 epoch 量级 Δt 推进闭式解＝全通道湮灭＋锚点序列记入 ~1.7e9 垃圾点＋后续动作样 `dt=0` ⇒ 影子永久冻结（冻结态 u_prog≈0 持续 LowProgress 标签反噬误导性域提醒；D2「看门狗样成触发沿→D4 直投」生产不可达）。修正＝`LifEngine` 新增 `on_rli_watchdog_tick(t_wall, idle)` 唯一宿主入口（`rel()` 转轴后喂影子；kill switch 恒 false），agent_loop 看门狗任务改走包装；接缝轴判别钉 `rli_watchdog_tick_converts_wall_epoch_to_run_relative_axis`（epoch 时间基下窗未满不触发〔旧实现此处恒真必误触发〕／窗满恰产一样／动作锚不被盖保持相对轴值／后续动作样照常结算）。单测未拦原因＝宿主接缝零覆盖（单测自洽小轴直调 shadow、集成测试不等 181s）。
+- **P2 D7 回归分类勘误**：`recovery` 原只枚举 Stuck/LowProgress→Normal，Pressure→Normal（`label()` 四值两两可达——错误压力直接衰减回正常、无需途经 LowProgress）落入进入分支＝`spike_entries` 多计＋模型面发「spike进入 pressure→normal」（恢复被说成进入）。修正＝回归端改**「凡异常域→Normal」**（bootstrap Start→首域仍不计数不提醒）；`DomainSpikeEntry` 文档与注释块同步勘误；新钉 `domain_pressure_to_normal_counts_return_not_entry`（进入当刻提醒→回归静默仅计数→全集无「pressure→normal」进入文本→稳定确认照常一次且行内「进1回1」）。
+- **P3 两件**：`take_pending_for_push` 由「全量置位后取队列末尾 N 条」改**按未投递谓词直取**（克隆先于置位、返回态随置位改写保持「与队列一致＝已装配」、`notice_delivered_total` 同步累计）——消除「已投递前缀／未投递后缀」非局部序不变量依赖；`mark_notices_delivered_at`／`record_notice_delivery_accounting` 唯一调用方（pull-delta 头装配循环）已随 D4 直投退役，补「冻结面」文档注记（保留 pub 库面，不删除不扩张）。
+- **ADR-0010 勘误**：vol-14 §14.83 第 7 项 D7 回归端就地勘误（回归端＝凡异常域→Normal，附 168 批误计经过）；主文件冻结版本补记 **v1.85**。均为实现缺陷修正，无语义新增、无新裁决。
+- **验证读数**：orz-assurance **281/0**（279＋新钉 2）、orz-loop **848/0**（3ig；首跑 1 败重跑自愈＝148 批登记预存 flaky 先例形态；848＋3ig 与静态测试属性 851 严丝合缝——168 批档所记 847 与本批 ±1 差异＝flaky 件计入口径，非本批引入）；clippy 106 持平 168 批账面；fmt 触碰三文件零新增（预存漂移面重排已全部回滚）。
+- **台账**：TODO `P1-0cp` 补审查处置修正行＋头部指针行；BACKLOG 本批指针＋前批指针（168）＋计数行＋P1 总览行；索引头行 v4.138 → **v4.139**＋AUTH-RLI 条目补注；设计稿 v1.2 勘误（版本行＋D7 裁决句）＋§6 批序行（§14.55→§14.83 括注勘误＋本批指针）。子仓随批提交（orz `e36dcacb`）。
+- 批档：[`169 批档`](audits/169_0CP_S2_REVIEW_FIXES_2026-10-03.md)。
+- 关键词：169 批、0cp S2 审查处置、看门狗时间基、epoch→run 相对轴、on_rli_watchdog_tick、接缝轴判别钉、Pressure→Normal 回归、D7 勘误、凡异常域→Normal、take 谓词直取、冻结面注记、影子冻结缺陷、ADR v1.85、计数 59。
