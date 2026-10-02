@@ -1271,9 +1271,11 @@ pub enum RliNoticeKind {
     /// 条件持续成立即下一轮报）。
     CoverageGap,
     /// **0cp D7**（2026-10-03 用户裁定）：域 spike 进入端即时提醒——自判域
-    /// 切换当刻报一次（无需等待稳定）；回归端（Stuck/LowProgress→Normal）
-    /// 与 bootstrap（Start→首域）不提醒。域机器本身不动（spike 判定、域
-    /// 状态机归 0am）——改的只是「哪些 LIF 事件产生模型面提醒」。
+    /// 切换当刻报一次（无需等待稳定）；回归端（**凡异常域→Normal**；169 批
+    /// 勘误：原枚举 Stuck/LowProgress→Normal 不完备，Pressure→Normal 同属
+    /// 恢复）与 bootstrap（Start→首域）不提醒（回归只计数）。域机器本身
+    /// 不动（spike 判定、域状态机归 0am）——改的只是「哪些 LIF 事件产生
+    /// 模型面提醒」。
     DomainSpikeEntry,
 }
 
@@ -1515,21 +1517,34 @@ impl RliShadow {
 
     /// **0cp D4（2026-10-03）**：取走全部未投递提醒并即刻置位 `delivered`
     /// （附注行已装配——投递语义，同刻 journal 留痕由宿主装配点写入）；
-    /// 返回克隆（触发时定格文案；置位后取——返回态与队列一致＝已装配）。
+    /// 返回克隆（触发时定格文案；返回态与队列一致＝已装配）。
     /// 无后续工具批（会话即终止）＝不跨会话补投（如实弃置于队列历史）。
+    ///
+    /// 169 批审查修正：取走与置位改为**按未投递谓词直取**（克隆先于置位、
+    /// 返回态随置位改写）——不再依赖「已投递前缀／未投递后缀」队列序不变
+    /// 量去反推「末尾 N 条」，消除未来任何部分置位调用形态下的取错集风险。
     pub fn take_pending_for_push(&mut self) -> Vec<RliNotice> {
-        let pending_count = self.notices.iter().filter(|n| !n.delivered).count();
-        if pending_count == 0 {
-            return Vec::new();
-        }
-        self.mark_notices_delivered(pending_count);
-        self.notices
+        let mut taken: Vec<RliNotice> = self
+            .notices
             .iter()
-            .rev()
-            .take(pending_count)
-            .rev()
+            .filter(|n| !n.delivered)
             .cloned()
-            .collect()
+            .collect();
+        if taken.is_empty() {
+            return taken;
+        }
+        let mut marked = 0usize;
+        for notice in &mut self.notices {
+            if !notice.delivered {
+                notice.delivered = true;
+                marked += 1;
+            }
+        }
+        for notice in &mut taken {
+            notice.delivered = true;
+        }
+        self.notice_delivered_total += marked as u64;
+        taken
     }
 
     /// 标记前 `n` 条未投递提醒为已投递（头携带即投递；返回实际条数）。
@@ -1552,6 +1567,10 @@ impl RliShadow {
     /// （每次至多 1 条）会让「前 n 条」口径错位（被让位者从未到达却可能被
     /// 标成已投递）。装配循环持有索引，此接口与循环严格同口径。
     /// 返回实际标记条数，并累计 `notice_delivered_total`。
+    ///
+    /// **0cp D4 起＝冻结面**（169 批注记）：唯一调用方 pull-delta 头装配
+    /// 循环已随直投改造整体退役，生产零调用；保留为 pub 库面（历史侧车/
+    /// 复算工具可用），不删除、不扩张。
     pub fn mark_notices_delivered_at(&mut self, indices: &[usize]) -> usize {
         let pending: Vec<usize> = self
             .notices
@@ -1573,6 +1592,10 @@ impl RliShadow {
 
     /// 0bh ①（2026-09-22）：投递面会计——预算受阻的暂存条数与**头段余量**
     /// （字节）落影子（随侧车持久；「头段余量可核＋投递率计数」钉子）。
+    ///
+    /// **0cp D4 起＝冻结面**（169 批注记）：唯一调用方 pull-delta 头装配
+    /// 循环已随直投改造整体退役，生产零调用（两计数面生产不再写入）；保留
+    /// 为 pub 库面（快照兼容与历史侧车可读），不删除、不扩张。
     pub fn record_notice_delivery_accounting(&mut self, deferred: usize, headroom_bytes: usize) {
         self.notice_deferred_total += deferred as u64;
         self.notice_headroom_bytes = headroom_bytes as u64;
@@ -1933,17 +1956,20 @@ impl RliShadow {
         }
         // **0cp D7（167 批用户裁定）**：spike 进入端即提醒——域瞬态偏移发生
         // 当刻报一次（与稳定确认合并为统一「域事件提醒」族，同一行格式）；
-        // 回归端（Stuck/LowProgress→Normal）与 bootstrap（Start→首域）不
-        // 提醒（回归只计数）。域机器不动；recli 实测 spike 进入 13 次
-        // ／5,166s 已足稀疏，无阻尼常数（禁拟合）。切换轮与稳定确认轮互斥
-        // （确认要求连续 ≥3 轮无切换），此处顺序无冲突。
+        // 回归端与 bootstrap 不提醒（回归只计数）。域机器不动；recli 实测
+        // spike 进入 13 次／5,166s 已足稀疏，无阻尼常数（禁拟合）。切换轮与
+        // 稳定确认轮互斥（确认要求连续 ≥3 轮无切换），此处顺序无冲突。
+        // **169 批审查勘误**：回归端＝**凡异常域→Normal**——原枚举
+        // 「Stuck/LowProgress→Normal」不完备：`label()` 四值两两可达，
+        // Pressure→Normal（错误压力直接衰减回正常）属恢复而非进入，旧判定
+        // 会把它计成进入并向模型面发「spike进入 pressure→normal」。
         if switched {
             let to = self.domain.current_domain();
-            let recovery = matches!(domain_before, Domain::Stuck | Domain::LowProgress)
-                && to == Domain::Normal;
+            let bootstrap = domain_before == Domain::Start;
+            let recovery = !bootstrap && to == Domain::Normal;
             if recovery {
                 self.spike_returns = self.spike_returns.saturating_add(1);
-            } else if domain_before != Domain::Start {
+            } else if !bootstrap {
                 self.spike_entries = self.spike_entries.saturating_add(1);
                 domain_notice_pushed = true;
                 let round_now = self.domain.round();
@@ -4212,5 +4238,80 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 0cp D7 ＋ 169 批审查勘误：**Pressure→Normal 属回归端**——不提醒、
+    /// 只计回归（旧判定只枚举 Stuck/LowProgress→Normal，会把「错误压力直接
+    /// 衰减回正常」误计成进入并向模型面发「spike进入 pressure→normal」；
+    /// `label()` 四值两两可达，该迁移真实可达）。bootstrap（Start→Normal）
+    /// 仍不计数不提醒；稳定确认触发源与「进N回M」域趋势读数不变。
+    #[test]
+    fn domain_pressure_to_normal_counts_return_not_entry() {
+        let mut shadow = RliShadow::new();
+        // bootstrap：Start→Normal（u_prog 新鲜、u_err=0）——不计数不提醒。
+        shadow.on_tool_event(1.0, ToolEvent::success(Some(120)));
+        shadow.on_decision_round(2.0, 8.0);
+        assert_eq!(shadow.spike_counts(), (0, 0));
+        assert!(shadow.notices().is_empty(), "bootstrap 不提醒");
+        // 错误风暴 ×3 → u_err≥2 ∧ u_prog≥0.5 ⇒ normal→pressure（进入端，
+        // 当刻提醒）；确认门不受影响（切换轮重置稳定候选）。
+        for t in [3.0, 4.0, 5.0] {
+            shadow.on_tool_event(t, ToolEvent::error(Some(900)));
+        }
+        shadow.on_decision_round(6.0, 8.0);
+        let entries: Vec<&RliNotice> = shadow
+            .notices()
+            .into_iter()
+            .filter(|n| n.kind == RliNoticeKind::DomainSpikeEntry)
+            .collect();
+        assert_eq!(entries.len(), 1, "normal→pressure 进入端当刻提醒");
+        assert!(
+            entries[0].text.contains("spike进入 normal→pressure"),
+            "{text}",
+            text = entries[0].text
+        );
+        assert_eq!(shadow.spike_counts(), (1, 0));
+        // 压力衰减（err 慢模态 ~107s）＋成功保温（prog 慢模态 ~38s）：
+        // t=60 时 u_err<2 ∧ u_prog≥0.5 ⇒ pressure→normal——**回归端**：
+        // 不提醒、只计回归（169 批勘误断言核心）。
+        shadow.on_tool_event(40.0, ToolEvent::success(Some(120)));
+        shadow.on_decision_round(60.0, 8.0);
+        let entries_after: Vec<&RliNotice> = shadow
+            .notices()
+            .into_iter()
+            .filter(|n| n.kind == RliNoticeKind::DomainSpikeEntry)
+            .collect();
+        assert_eq!(entries_after.len(), 1, "回归端不提醒");
+        assert_eq!(shadow.spike_counts(), (1, 1), "进入/回归计数各 +1");
+        assert!(
+            shadow
+                .notices()
+                .iter()
+                .all(|n| !n.text.contains("pressure→normal")),
+            "恢复不得以 spike进入 面目出现: {all:?}",
+            all = shadow.notices().iter().map(|n| &n.text).collect::<Vec<_>>()
+        );
+        // 稳定确认触发源不动：连续驻留 ≥3 轮后确认一次，行内域趋势
+        // 「进1回1」与计数面同源。（机器轮：t=2→r1、t=6→r2 切换、
+        // t=60→r3 回归切换、t=70/78→r4/r5 驻留——r5 达 settle=3 门。）
+        shadow.on_tool_event(65.0, ToolEvent::success(Some(120)));
+        shadow.on_decision_round(70.0, 8.0);
+        shadow.on_decision_round(78.0, 8.0);
+        let confirmed: Vec<&RliNotice> = shadow
+            .notices()
+            .into_iter()
+            .filter(|n| n.kind == RliNoticeKind::MigrationConfirmed)
+            .collect();
+        assert_eq!(confirmed.len(), 1, "稳定确认恰一次");
+        assert!(
+            confirmed[0].text.contains("稳定确认 pressure→normal"),
+            "{text}",
+            text = confirmed[0].text
+        );
+        assert!(
+            confirmed[0].text.contains("进1回1"),
+            "{text}",
+            text = confirmed[0].text
+        );
     }
 }

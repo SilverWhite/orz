@@ -305,6 +305,23 @@ impl LifEngine {
         }
     }
 
+    /// 0cp S2 修正批（169 批，2026-10-03）：RLI 卡死看门狗的宿主 tick 唯一
+    /// 入口——与两动作源（[`Self::on_decision_round`]／[`Self::on_tool_event`]
+    /// ）同轴纪律：`t` 为墙钟 epoch 秒，经 [`Self::rel`] 转 **run 相对轴**后
+    /// 才喂影子（影子内部轴＝run 相对秒；直传 epoch 会令看门狗窗口①恒真、
+    /// 并以 epoch 量级 Δt 推进通道动力学＝状态湮灭＋影子冻结——168 批审查
+    /// P1 实锤，轴转换收敛于本包装，宿主不得再绕行）。
+    ///
+    /// 影子未启用（kill switch）＝恒 `false` 零采样。判定与采样在调用方持有
+    /// 引擎锁的临界区内完成（同步方法、不跨 await）。
+    pub fn on_rli_watchdog_tick(&mut self, t: f64, activity_idle_secs: f64) -> bool {
+        let t = self.rel(t);
+        match &mut self.rli_shadow {
+            Some(shadow) => shadow.on_watchdog_tick(t, activity_idle_secs),
+            None => false,
+        }
+    }
+
     /// Decay every channel over the interval since the last step, with the
     /// second-order closed form applied first (using pre-decay u_err / u_prog,
     /// design §4.4).
@@ -588,6 +605,54 @@ mod tests {
         assert!(plain.temporal_session_snapshot().rli_shadow.is_none());
         plain.restore_temporal_session(&snapshot, None);
         assert!(!plain.rli_shadow_enabled());
+    }
+
+    /// 0cp S2 修正批（169 批，2026-10-03）：看门狗**宿主接缝的轴判别钉**——
+    /// `on_rli_watchdog_tick` 接收墙钟 epoch 秒，窗口①必须在 run 相对轴上
+    /// 判「自上一动作样 Δt ≥ 181s」。168 批实现曾把 epoch 直传影子：窗口①
+    /// 对 epoch 恒真（首个满 idle 的 tick 即误触发），并以 epoch 量级 Δt 推
+    /// 进通道动力学＝通道湮灭、锚点序列记入 ~1.7e9 垃圾点、后续动作样
+    /// dt=0 ⇒ 影子永久冻结。本钉在 epoch 时间基下判别：窗未满不触发、窗满
+    /// 恰产一样、动作锚不被看门狗盖（影子内 `last_sample_t` 保持相对轴值）。
+    #[test]
+    fn rli_watchdog_tick_converts_wall_epoch_to_run_relative_axis() {
+        let t0 = 1_759_000_000.0_f64;
+        let mut engine = LifEngine::new();
+        engine.enable_rli_shadow();
+        // 首个决策轮锚定轴原点（run_t0 = t0+100）并盖首个动作样锚（rel 0）。
+        engine.on_decision_round(t0 + 100.0);
+        let samples_before = engine.rli_shadow().unwrap().sample_points();
+        assert_eq!(samples_before, 1);
+        // 窗未满（rel 180.5 < 181）∧ idle 已满 181 ⇒ 不触发——旧实现
+        // （epoch 直传）此处恒真必误触发，本断言即轴判别。
+        assert!(
+            !engine.on_rli_watchdog_tick(t0 + 100.0 + 180.5, 181.0),
+            "window ① is judged on the run-relative axis, not wall epoch"
+        );
+        assert_eq!(
+            engine.rli_shadow().unwrap().sample_points(),
+            samples_before,
+            "no sample before the window is due"
+        );
+        // 窗满（rel 281.5 ≥ 181）∧ idle 满 ⇒ 恰产一个时间采样。
+        assert!(engine.on_rli_watchdog_tick(t0 + 100.0 + 181.5, 181.0));
+        assert_eq!(
+            engine.rli_shadow().unwrap().sample_points(),
+            samples_before + 1
+        );
+        // 动作锚不被看门狗盖（设计 D2：不盖锚）——影子内锚仍在相对轴原值
+        // 0.0（若被 epoch 污染将 ≈1.759e9）。
+        assert_eq!(
+            engine.rli_shadow().unwrap().snapshot().last_sample_t,
+            Some(0.0),
+            "anchor stays on the run-relative axis, untouched by the watchdog"
+        );
+        // 触发后动作样照常结算（影子未被冻结：采样数随动作样继续前进）。
+        engine.on_tool_event(t0 + 300.0, ToolEvent::success(Some(10)));
+        assert_eq!(
+            engine.rli_shadow().unwrap().sample_points(),
+            samples_before + 2
+        );
     }
 
     /// 0am 改造四项①（2026-09-20）＋补充项②④（2026-09-20）：引擎逐决策轮

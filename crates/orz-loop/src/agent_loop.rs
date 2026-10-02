@@ -2123,13 +2123,15 @@ fn spawn_rli_watchdog(
                 _ = tick.tick() => {
                     let idle_secs = heartbeat.idle().as_secs_f64();
                     let now = AgentLoopController::now_epoch_secs();
-                    if let Some(shadow) = lif
+                    // 169 批修正（168 批审查 P1）：经
+                    // `LifEngine::on_rli_watchdog_tick` 喂入——epoch 墙钟在
+                    // 包装内转 run 相对轴（影子内部轴＝run 相对秒；直传
+                    // epoch 令看门狗窗口①恒真、并以 epoch 量级 Δt 推进通道
+                    // 动力学＝状态湮灭＋影子冻结）。轴转换唯一点，宿主不绕行。
+                    let mut engine = lif
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .rli_shadow_mut()
-                    {
-                        let _fired = shadow.on_watchdog_tick(now, idle_secs);
-                    }
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let _fired = engine.on_rli_watchdog_tick(now, idle_secs);
                 }
             }
         }
