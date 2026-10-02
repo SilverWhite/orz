@@ -987,4 +987,5 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **身份门换装**：`run_r0_heavy_official.py` `EXPECTED_CARRIER_SHA256` `4ed531e8…` → **`c6a0812c…`**（注释同步源冻结 `6493fdae`；适配器 `6d55c26e…` 未动）；语法＋`--help` 加载 rc 0。**冒烟**：WIN `--fake-provider -p hello` 整轮 rc=0（run `RUN-CLI-6ac00bd6`）。
 - **台账**：TODO `P1-0cp`/`P1-0cn` S3 勾选＋头部指针行；BACKLOG 本批指针＋前批指针（169）＋计数行＋P1 行；索引头行 v4.139 → **v4.140**。orz 源清单随批再生。
 - 批档：[`170 批档`](audits/170_CARRIER_REBUILD_V0811_0CP_S3_0CN_S3_2026-10-03.md)。
-- 关键词：170 批、0.8.11 重建、源冻结 6493fdae、0cp S3 达成、0cn S3 达成、c6a0812c 身份门、ACAF 重 provision 9f1e2889、static-pie×3、alpine/bookworm 双冒烟、imm64 内联字节面注记、打包顺延、未推送未发行、计数 59。
+- 关键词：170 批、0.8.11 重建、源冻结 6493fdae、0cp S3 达成、0cn S3 达成、c6a0812c 身份门、ACAF 重 provision 9f1e2889、static-pie×3、alpine/bookworm 双冒烟、imm64 内联字节面注记、打包顺延、未发行、计数 59。
+- **补记（2026-10-03）：本批已提交推送**——orz `6493fdae` → `cli/feat/fusion-architecture`（`7daf76c0..6493fdae`，三笔＝168／169／bump）；父仓 `69990840` → `origin/main`（`96e2e1f9..69990840`，三笔＝168／169／170 落账）；两仓工作树净、本地无未推送提交与未推标签；**仍未发行**（无 Release、无 rel-stage 打包，发布面仍停 v0.8.7）。

@@ -71,3 +71,15 @@ imm64 内联字节面注记、打包顺延、未推送未发行、计数 59。
 
 - 机械门禁：落账后复跑 `check_repository.py`＝error_count **0**、`valid: true`（2026-10-03 实测）；父仓 orz 源清单随批再生（`generate_orz_source_manifest.py`，1,485 条）。
 - **门禁拦截事件（如实记）**：首跑 `check_repository.py` 报 `ledger consistency: TODO 全部勾选但 BACKLOG 仍记开放——token: 0cp`——根因＝TODO `P1-0cp` 节把 `[x] S3 进体` 与 `[ ] S4 真机核证` 写在同一列表行（行首 `[x]` 掩盖行中 `[ ]`，勾选解析按行首取态）；处置＝S3/S4 拆为两行后门禁回绿。**教训**：勾选清单一行一事，复合状态不得共用列表行（门禁再次在 RLI 线拦下真实漂移——155 批 `RLI_ANNO` 拦截同族价值实证）。
+
+## §9 补记：提交推送（2026-10-03）
+
+用户令「请先进行全面的提交与推送吧」（承接本批已落账的「未推送未发行」边界）。**本批三笔提交已推送**：
+
+- **orz**：`cli/feat/fusion-architecture` `7daf76c0..6493fdae`（三笔＝`99124f42` 168 批 0cp S2 落码／`e36dcacb` 169 批审查处置修正／`6493fdae` bump 0.8.10→0.8.11）。
+- **父仓**：`origin/main` `96e2e1f9..69990840`（三笔＝`f3e5d310` 168 批落账／`bdd9f4d1` 169 批落账／`69990840` 170 批落账）。
+- **核验**：两仓推送后 `git status` 均干净、与上游零差（parent `main...origin/main` 齐平；orz `feat/fusion-architecture...cli/feat/fusion-architecture` 齐平）；orz 本地 20 个标签全部已在远端，无未推标签。
+- **仍未发行**：无 Release、无 rel-stage 打包（沿本批「打包顺延」口径）；发布面仍停 v0.8.7。**0cp／0cn S4 真机核证仍未跑**（计数 59 不变）。
+- **记账**：BACKLOG 本批指针＋计数行、TODO 计数行追加补记；BACKLOG 第二卷 §1.123 追加补记；索引头行 v4.140 → **v4.141**（头行尾部「未推送」改为已推送）。
+
+关键词：170 批补记、提交推送、`6493fdae` → `cli/feat/fusion-architecture`、`69990840` → `origin/main`、未发行、发布面 v0.8.7、索引 v4.141。
