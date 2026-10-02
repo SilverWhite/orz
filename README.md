@@ -25,17 +25,6 @@
 
 发布包说明与完整性校验见 GitHub Release（最新 [v0.8.10](https://github.com/SilverWhite/orz/releases/tag/v0.8.10)，双平台包＋`SHA256SUMS`）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
 
-### 从源码运行
-
-Rust toolchain 由 [`orz/rust-toolchain.toml`](orz/rust-toolchain.toml) 固定；在 `orz/` 工作区内构建：
-
-```powershell
-cargo build -p orz-bin
-cargo run -p orz-bin -- --fake-provider -p "hello"   # 离线试跑，无需凭据
-cargo run -p orz-bin -- --real -p "你的任务"           # 真实 DeepSeek transport
-cargo run -p orz-bin -- --fake-provider               # TUI
-```
-
 ### 常用入口
 
 | 场景 | 命令 |
