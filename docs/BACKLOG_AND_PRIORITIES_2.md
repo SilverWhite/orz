@@ -1057,3 +1057,14 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - orz `663aad89`（7 文件 +944/−294）；父仓 pin＋manifest 1486 条随批。
 - 批档：[`176 批档`](audits/176_0AM_P8A_STIMULUS_ROUTING_CORE_2026-10-03.md)。
 - 关键词：176 批、0am P8-a、路由核心、router 模块、stimulus_targets、ToolEvent 扩展、ChannelKind 5→8、快照 schema v2、写控块判定、on_bus_event、跨档过滤、同源复用、重放回归微移、5→7 勘误、P8 尾批、计数 57。
+
+### 1.130 2026-10-03 177 批 0am P8-b——总线布线＋成因段＋行宽重订＋RS-06（用户令「请继续吧」；计数不变 57）
+
+- **总线布线**：`SharedLoopServices` 挂 `lif` 句柄（四构造点）；站点＝压缩×2→Ctx、传输重试×2→Infra（recovered/exhausted）、探针翻转→Infra（仅翻转门内）、宿主资源三族→Infra（`ResourceTier` 封闭枚举映射；跨档过滤引擎侧；未知档位不参与）。**布线勘误如实登记**＝第一版把 run-start 基线探针也喂入 Infra，`rli_notice_direct_push` 真机钉拦截（恰一轮回传变两）——依 S2 产出条件「翻转才落」撤除 controller 两处，复绿 848/0；教训＝**布线认产出条件，不认事件类型**。`LedgerFoldAdvance` 无 orz-loop 产出者（只剩 TUI 消费面）＝S2 §3.1 标签状态复查项登记。
+- **成因段**：`RliShadow` 通道标签环（cap 8、live-only、闭集 20 词）＋streak fire 单 fire 行「源：驱动标签×计数」（如「源：验证失败×3」；多 fire 行保持机制成因；P9 零触发——只述已发生注入）＋行宽 `RLI_NOTICE_TEXT_BUDGET` **240→320B**（S2 §4.3 预见越限的重订）。
+- **0cp D6 勘误**：设计稿 §D6 头＋§5 判据 6 双处——「无成因」子句由 S2 档 P8 正式取代；≤240B→≤320B；参数含义＋趋势注解维持。
+- **RS-06 四件**：libm `=0.2.15` 精确钉；T̂₀ 单源（estimator `T_HAT_INIT_SECS`）；example 默认路径去 `D:\tb-eval` 硬编码；prog-ω 热更新建模注记。**余两小件**（快照 zeta 序列化不还原／`ORZ_LIF_RLI_SHADOW` 与 ACAF env 解析口径）留后续小批。
+- **验证**：orz-assurance lib **288/0**（＋引擎 streak 成因段/宽度钉）＋orz-loop lib **848/0**（真机钉拦截→修正复绿；间歇失败＝既有负载敏感钉自愈）＋双自检绿＋clippy 触碰面零新增＋重放注入账目逐位不变（`s3_run2_p8b_regression.json`）。
+- orz `1793ef97`（9 文件 +276/−15）；父仓 pin＋manifest 1486 条随批。**余项＝载体重建＋字面量核证**（下一重建窗口；RLI 侧车 schema v2 字节判据随批）。
+- 批档：[`177 批档`](audits/177_0AM_P8B_BUS_CAUSE_RS06_2026-10-03.md)。
+- 关键词：177 批、0am P8-b、总线布线、ResourceTier、run-start 误喂拦截、标签环、成因段、源：验证失败×3、行宽 320B、0cp D6 勘误、RS-06、fold 无产出者复查、载体重建余项、计数 57。
