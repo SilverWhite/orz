@@ -4217,7 +4217,9 @@ pub(crate) async fn run_agent_loop(
                         )
                         .await?;
                         // P2-10 R2 (2026-08-31): inject-budget refusal = deny.
-                        controller.feed_lif_deny(None);
+                        // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 →
+                        // GateGuard（码与 `refuse_inject_budget` 内字面量同源）。
+                        controller.feed_lif_deny(None, "round_inject_budget_exceeded");
                         match f {
                             Some(PolicyFeedback::Denied(key)) => round_denials.push(key),
                             Some(PolicyFeedback::Succeeded) => round_had_success = true,
@@ -4407,7 +4409,9 @@ pub(crate) async fn run_agent_loop(
                 )
                 .await?;
                 // P2-10 R2 (2026-08-31): inject-budget refusal = deny.
-                controller.feed_lif_deny(None);
+                // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 →
+                // GateGuard（码与 `refuse_inject_budget` 内字面量同源）。
+                controller.feed_lif_deny(None, "round_inject_budget_exceeded");
                 match feedback {
                     Some(PolicyFeedback::Denied(key)) => round_denials.push(key),
                     Some(PolicyFeedback::Succeeded) => round_had_success = true,
@@ -4435,7 +4439,8 @@ pub(crate) async fn run_agent_loop(
                 )
                 .await?;
                 // P2-10 R2 (2026-08-31): plan-round refusal = deny.
-                controller.feed_lif_deny(None);
+                // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 → PlanLane。
+                controller.feed_lif_deny(None, "plan_write_already_submitted");
                 match f {
                     PolicyFeedback::Denied(key) => round_denials.push(key),
                     PolicyFeedback::Succeeded => round_had_success = true,
@@ -4458,7 +4463,8 @@ pub(crate) async fn run_agent_loop(
                 )
                 .await?;
                 // P2-10 R2 (2026-08-31): plan-round refusal = deny.
-                controller.feed_lif_deny(None);
+                // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 → PlanLane。
+                controller.feed_lif_deny(None, "plan_round_tool_denied");
                 match f {
                     PolicyFeedback::Denied(key) => round_denials.push(key),
                     PolicyFeedback::Succeeded => round_had_success = true,
@@ -4665,7 +4671,9 @@ pub(crate) async fn run_agent_loop(
                         )
                         .await?;
                         // P2-10 R2 (2026-08-31): role-gate refusal = deny.
-                        controller.feed_lif_deny(None);
+                        // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 →
+                        // RetrievalEnable。
+                        controller.feed_lif_deny(None, "nested_subagent_dispatch_refused");
                         round_feedback = Some(f);
                         r
                     } else {
@@ -4716,7 +4724,9 @@ pub(crate) async fn run_agent_loop(
                         )
                         .await?;
                         // P2-10 R2 (2026-08-31): role-gate refusal = deny.
-                        controller.feed_lif_deny(None);
+                        // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 →
+                        // PermissionTicket。
+                        controller.feed_lif_deny(None, "control_tool_lane_denied");
                         round_feedback = Some(f);
                         r
                     } else {
@@ -4743,7 +4753,11 @@ pub(crate) async fn run_agent_loop(
                         )
                         .await?;
                         // P2-10 R2 (2026-08-31): role-gate refusal = deny.
-                        controller.feed_lif_deny(None);
+                        // 0am 审查处置（2026-10-03）：拒绝码喂入点解析——
+                        // `write_gate` 的结构化拒绝码族（retrieval_role_*
+                        // → RetrievalEnable；console_*/plan_write_lane_denied
+                        // → PlanLane）由 `DenyClass::of_code` 逐码判定。
+                        controller.feed_lif_deny(None, reason);
                         round_feedback = Some(f);
                         r
                     } else {

@@ -37,11 +37,30 @@ impl AgentLoopController {
     /// its own outcome, not a host error (err) and not a D2 value exit
     /// (Other). `wall_ms` is None for no-ToolStarted refusals (no execution
     /// time was spent).
-    pub(crate) fn feed_lif_deny(&self, wall_ms: Option<u64>) {
-        self.lif.lock().unwrap_or_else(|e| e.into_inner()).on_tool_event(
-            AgentLoopController::now_epoch_secs(),
-            orz_assurance::lif::ToolEvent::deny(wall_ms),
-        );
+    ///
+    /// 0am 审查处置（2026-10-03）：`deny_code`（结构化拒绝码）在此单源解析
+    /// 为拒绝类标签维（S2 §4.2/§5 兑现——`DenyClass::of_code` 只在喂入点
+    /// 调用，标签随事件入引擎）；通道值语义不变（Deny 1.0 照旧，deny 优先
+    /// 分派）；未知码落 `Other`＝「其他拒绝」。
+    pub(crate) fn feed_lif_deny(&self, wall_ms: Option<u64>, deny_code: &str) {
+        let deny_class = orz_assurance::lif::DenyClass::of_code(deny_code);
+        self.lif
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .on_tool_event(
+                AgentLoopController::now_epoch_secs(),
+                orz_assurance::lif::ToolEvent {
+                    outcome: orz_assurance::lif::ToolOutcome::Deny,
+                    wall_ms,
+                    policy_denied: false,
+                    routing: Some(orz_assurance::lif::StimulusRouting {
+                        class: orz_assurance::lif::ActionClass::Neutral,
+                        deny_class: Some(deny_class),
+                        non_zero_exit: false,
+                        write_control_block: false,
+                    }),
+                },
+            );
     }
 
     /// P2-12 COMPRESSION-LINGUISTIC-FORMAL-LAYER 方案 A（2026-09-02）：

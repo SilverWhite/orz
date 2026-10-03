@@ -20,6 +20,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::lif::estimator::T_HAT_INIT_SECS;
+
 /// --- design constants (§4.3) ---
 pub const ERR_TAU_SECS: f64 = 180.0;
 pub const ERR_THETA: f64 = 4.0;
@@ -293,23 +295,46 @@ impl FirstOrderChannel {
     }
 
     /// prog is a non-firing freshness channel: success sets u = 1, τ = 8·T̂.
+    /// 0am 审查处置批（2026-10-03）：轮语义 τ 字面 `8.0` 改引
+    /// `T_HAT_INIT_SECS`（值不变；RS-06 T̂₀ 单源补齐 1D 半边）。
     pub fn prog() -> Self {
-        Self::new(ChannelKind::Prog, PROG_TAU_ROUNDS * 8.0, None, 0.0)
+        Self::new(
+            ChannelKind::Prog,
+            PROG_TAU_ROUNDS * T_HAT_INIT_SECS,
+            None,
+            0.0,
+        )
     }
 
     /// 0am P8：非 firing 水平通道族（τ 随决策轮按 k·T̂ 重导出；单位换算，
     /// 非逐轮拟合）。Verify＝验证失败累积（失败注入、通过零注入）；
-    /// Ctx/Infra＝总线事件 1.0 注入。
+    /// Ctx/Infra＝总线事件 1.0 注入。预启用 τ 的 `8.0` 秒字面同样引
+    /// `T_HAT_INIT_SECS`（0am 审查处置批，RS-06 单源）。
     pub fn verify() -> Self {
-        Self::new(ChannelKind::Verify, VERIFY_TAU_ROUNDS * 8.0, None, 0.0)
+        Self::new(
+            ChannelKind::Verify,
+            VERIFY_TAU_ROUNDS * T_HAT_INIT_SECS,
+            None,
+            0.0,
+        )
     }
 
     pub fn ctx() -> Self {
-        Self::new(ChannelKind::Ctx, CTX_TAU_ROUNDS * 8.0, None, 0.0)
+        Self::new(
+            ChannelKind::Ctx,
+            CTX_TAU_ROUNDS * T_HAT_INIT_SECS,
+            None,
+            0.0,
+        )
     }
 
     pub fn infra() -> Self {
-        Self::new(ChannelKind::Infra, INFRA_TAU_ROUNDS * 8.0, None, 0.0)
+        Self::new(
+            ChannelKind::Infra,
+            INFRA_TAU_ROUNDS * T_HAT_INIT_SECS,
+            None,
+            0.0,
+        )
     }
 
     pub fn kind(&self) -> ChannelKind {

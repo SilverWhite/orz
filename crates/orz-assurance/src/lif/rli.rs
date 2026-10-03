@@ -275,11 +275,12 @@ pub const RLI_SLOW_PERIOD_SECS: f64 = 600.0;
 pub const RLI_DENY_PERIOD_SECS: f64 = 120.0;
 /// 新鲜度型通道（轮语义）——`ω = 2π/(k·T̂)`。
 pub const RLI_PROG_PERIOD_ROUNDS: f64 = 8.0;
-/// 0am P8（2026-10-03，S2 §2 预注册初值；物理依据见
-/// `VERIFY_TAU_ROUNDS` 注）。
-pub const RLI_VERIFY_PERIOD_ROUNDS: f64 = 8.0;
-pub const RLI_CTX_PERIOD_ROUNDS: f64 = 32.0;
-pub const RLI_INFRA_PERIOD_ROUNDS: f64 = 64.0;
+/// 0am P8（2026-10-03，S2 §2 预注册初值）。**0am 审查处置批（2026-10-03）
+/// 改引 [`crate::lif::channels`] 轮语义 τ 常数**——值不变（8/32/64），消除
+/// 1D 与 RLI 两侧的双源（物理依据见 `VERIFY_TAU_ROUNDS` 注）。
+pub const RLI_VERIFY_PERIOD_ROUNDS: f64 = super::channels::VERIFY_TAU_ROUNDS;
+pub const RLI_CTX_PERIOD_ROUNDS: f64 = super::channels::CTX_TAU_ROUNDS;
+pub const RLI_INFRA_PERIOD_ROUNDS: f64 = super::channels::INFRA_TAU_ROUNDS;
 
 /// 影子通道族（v1 五条 ＋ **0am P8 三条**＝八通道；stuck 延后——见模块头）。
 /// 〔勘误：S2 档 §2 标题「5→7」系算术笔误，通道表实为 5+3=8；随 P8 批勘误。〕
@@ -1439,7 +1440,10 @@ pub struct RliShadow {
     /// **0am P8-b**（2026-10-03，S2 §4.3 标签成因）：各通道最近注入的机械
     /// 标签环（cap [`RLI_CHANNEL_LABEL_CAP`]；**live-only** 不随侧车持久；
     /// streak 成因段「驱动标签名＋计数」数据面——闭集词表见
-    /// [`RliShadow::stamp_label`] 调用点）。
+    /// [`RliShadow::stamp_label`] 调用点）。0am 审查处置批（2026-10-03）
+    /// 补注：live-only＝不随侧车持久、只按容量（cap 8）淘汰、不按时间/
+    /// 衰减过期；Ctx/Infra 照常记录（streak 观察域不含它们——数据面与
+    /// fire 渲染面分离）。
     channel_labels: [VecDeque<&'static str>; RLI_CHANNELS.len()],
 }
 
@@ -1519,7 +1523,14 @@ impl RliShadow {
     }
 
     /// 成因段标签维：环内按标签计数（旧在前），如「执行失败×3＋验证失败×1」；
-    /// 空环＝None（无注入史——不虚构成因）。
+    /// 空环＝None（无注入史——不虚构成因）。0am 审查处置批（2026-10-03）
+    /// 补注：「×N」＝**环内**（该通道最近 ≤8 次注入）该标签出现次数，
+    /// **非 streak k**——两数可分叉（环外更早驱动如实少报、不虚报）。
+    /// **截断规则（0am 审查处置批裁定，2026-10-03）**：按环内计数降序
+    /// （同数保持环内首次出现序——稳定排序）最多渲染前 4 个标签。实测：
+    /// Deny 环 7 标签全渲染的最坏 streak 行 **349B** > 预算 320B；截断后
+    /// 同形态 **284B**（钉子
+    /// `streak_line_width_worst_case_with_max_label_diversity` 双断言）。
     fn channel_label_cause(&self, kind: ChannelKind) -> Option<String> {
         let ring = &self.channel_labels[Self::index_of(kind)];
         if ring.is_empty() {
@@ -1532,6 +1543,9 @@ impl RliShadow {
                 None => counts.push((label, 1)),
             }
         }
+        // 0am 审查处置批：计数降序稳定排序＋前 4 截断（行宽预算；见方法注）。
+        counts.sort_by_key(|&(_, c)| std::cmp::Reverse(c));
+        counts.truncate(4);
         Some(
             counts
                 .iter()
@@ -1829,8 +1843,11 @@ impl RliShadow {
     /// **0cp D1（2026-10-03）动作采样点结算**（决策轮／工具事件两源共用）
     /// ——锚点序列采样 ＋ 持续越线观察 ＋ 采样计数 ＋ 看门狗重武装；末尾
     /// 盖**动作采样锚**（看门狗 ① 窗起点）。持续越线只观察四条压力通道
-    /// （err／stall／slow／deny；`prog` 不参与——新鲜度高不是异常）。观察
-    /// 为纯读数：不改 θ、不改 fires、不反馈。
+    /// （err／stall／slow／deny）＋ Verify（0am S2 验证摩擦——成因段
+    /// 「源：验证失败×k」依赖）；`prog` 不参与（新鲜度高不是异常）；
+    /// **Ctx/Infra 显式排除**（0am 审查处置批 2026-10-03 用户裁决：水平/
+    /// 新鲜度族单事件高台＋死窗 θ 收敛会成单事件回声，扩面无正向收益）。
+    /// 观察为纯读数：不改 θ、不改 fires、不反馈。
     fn note_sample_point(&mut self, t: f64) {
         self.sample_points = self.sample_points.saturating_add(1);
         self.sample_anchor_series();
@@ -1842,10 +1859,23 @@ impl RliShadow {
 
     /// **0cp D1**：持续越线观察＋触发沿成提醒（动作采样点与看门狗单点两
     /// 源共用）。0cp D6：行内自带 T̂ 参数含义注解＋趋势（无成因）。
+    /// **0am 审查处置批（2026-10-03，用户裁决）**：观察域收窄为显式白名单
+    /// ——Err/Stall/Slow/Deny 四条压力通道＋Verify（0am S2 验证摩擦——
+    /// 成因段「源：验证失败×k」依赖）；`prog` 不参与（新鲜度高不是异常）；
+    /// **Ctx/Infra 显式排除**——水平/新鲜度族单事件高台＋死窗 θ 收敛会成
+    /// 单事件回声，扩面无正向收益。标签环 [`Self::stamp_label`] 对 Ctx/
+    /// Infra 照常记录（数据面不变，只是无 fire 渲染路径）。
     fn observe_streaks_and_fire(&mut self, t: f64) {
         let mut fired: Vec<(ChannelKind, u64, f64, f64)> = Vec::new();
         for ch in &mut self.channels {
-            if ch.kind == ChannelKind::Prog {
+            if !matches!(
+                ch.kind,
+                ChannelKind::Err
+                    | ChannelKind::Stall
+                    | ChannelKind::Slow
+                    | ChannelKind::Deny
+                    | ChannelKind::Verify
+            ) {
                 continue;
             }
             if ch.observe_streak(t) {
@@ -4210,6 +4240,96 @@ mod tests {
         assert_eq!(shadow.take_pending_for_push(), Vec::<RliNotice>::new());
         let (delivered, _deferred, _headroom) = shadow.notice_delivery_stats();
         assert_eq!(delivered, 1, "投递率分子＝附注装配数");
+    }
+
+    /// 0am 审查处置批（2026-10-03）：streak 行宽**最坏形态**钉——单 fire ＋
+    /// Deny 环最大标签多样性（七变体各一入环后凑 streak）。实测：全渲染
+    /// 349B 越限 ⇒ `channel_label_cause` 机械截断（计数降序前 4）后
+    /// **284B** ≤ [`RLI_NOTICE_TEXT_BUDGET`] 320B（数字随文案模板冻结，
+    /// 改文案须重测本钉）。
+    #[test]
+    fn streak_line_width_worst_case_with_max_label_diversity() {
+        fn deny_routed(dc: crate::lif::router::DenyClass) -> ToolEvent {
+            ToolEvent {
+                outcome: ToolOutcome::Other,
+                wall_ms: None,
+                policy_denied: false,
+                routing: Some(crate::lif::router::StimulusRouting {
+                    deny_class: Some(dc),
+                    ..crate::lif::router::StimulusRouting::new(
+                        crate::lif::router::ActionClass::Neutral,
+                    )
+                }),
+            }
+        }
+        use crate::lif::router::DenyClass as DC;
+        // 七变体各注入一次（of_code 五类＋PolicyMarker 信封＋WriteControl
+        // 写控块）；60s 间隔＋中性样隔断（u 衰减 < θ ⇒ streak 归零——单
+        // fire 纪律；间隔 < 90s 不触发 stall）。
+        let diversity = [
+            deny_routed(DC::PermissionTicket),
+            deny_routed(DC::PlanLane),
+            deny_routed(DC::GateGuard),
+            deny_routed(DC::RetrievalEnable),
+            deny_routed(DC::Other),
+            ToolEvent {
+                outcome: ToolOutcome::Other,
+                wall_ms: None,
+                policy_denied: true,
+                routing: Some(crate::lif::router::StimulusRouting::new(
+                    crate::lif::router::ActionClass::Neutral,
+                )),
+            },
+            ToolEvent {
+                outcome: ToolOutcome::Other,
+                wall_ms: None,
+                policy_denied: false,
+                routing: Some(crate::lif::router::StimulusRouting {
+                    write_control_block: true,
+                    ..crate::lif::router::StimulusRouting::new(
+                        crate::lif::router::ActionClass::Neutral,
+                    )
+                }),
+            },
+        ];
+        let mut shadow = RliShadow::new();
+        let mut t = 10.0;
+        for ev in diversity {
+            shadow.on_tool_event(t, ev);
+            shadow.on_tool_event(t + 60.0, ToolEvent::other(None));
+            t += 61.0;
+        }
+        assert!(shadow.notices().is_empty(), "多样性段零 fire");
+        // 末段凑满 k → 恰一条 fire（首轮 u 高台已衰减，首个 deny 样 miss
+        // 后三连 hit；间隔 1s 内 u 累积过 θ）。
+        shadow.on_tool_event(t, deny_routed(DC::PermissionTicket));
+        shadow.on_tool_event(t + 1.0, deny_routed(DC::PlanLane));
+        shadow.on_tool_event(t + 2.0, deny_routed(DC::GateGuard));
+        shadow.on_tool_event(t + 3.0, deny_routed(DC::RetrievalEnable));
+        let notices = shadow.notices();
+        assert_eq!(notices.len(), 1, "恰一条 streak fire");
+        assert_eq!(notices[0].kind, RliNoticeKind::StreakCrossed);
+        assert!(notices[0].text.contains("deny×3"), "{}", notices[0].text);
+        assert!(
+            notices[0].text.contains("源："),
+            "成因段在列: {}",
+            notices[0].text
+        );
+        // 截断规则：成因段至多 4 对「标签×计数」（分隔符至多 3 个）。
+        let cause = notices[0]
+            .text
+            .split("源：")
+            .nth(1)
+            .and_then(|s| s.split("；").next())
+            .unwrap_or_default();
+        assert!(cause.matches('＋').count() <= 3, "成因段超 4 标签: {cause}");
+        // 最坏形态实测 284B ≤ 320B（截断后；全渲染 349B——见方法注）。
+        assert!(
+            notices[0].text.len() <= RLI_NOTICE_TEXT_BUDGET,
+            "{}B 超预算: {}",
+            notices[0].text.len(),
+            notices[0].text
+        );
     }
 
     /// 0bf ②③（2026-09-22）：域迁移**确认**（新域稳定 3 轮后一次）＋转移

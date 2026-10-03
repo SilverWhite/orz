@@ -205,7 +205,9 @@ impl AgentLoopController {
             &tc.arguments,
             ToolFailureOutcome::Refused(code),
         );
-        self.feed_lif_deny(None);
+        // 0am 审查处置（2026-10-03）：拒绝码喂入点解析（`browser_control_*`
+        // 不在既有前缀词表 → Other＝「其他拒绝」）。
+        self.feed_lif_deny(None, code);
         writer.record(EventType::ToolCompleted, payload).await?;
         messages.push(Message {
             role: Role::Tool,
@@ -264,7 +266,9 @@ impl AgentLoopController {
             &tc.arguments,
             ToolFailureOutcome::Refused(code),
         );
-        self.feed_lif_deny(None);
+        // 0am 审查处置（2026-10-03）：拒绝码喂入点解析（`browser_control_*`
+        // 不在既有前缀词表 → Other＝「其他拒绝」）。
+        self.feed_lif_deny(None, code);
         writer.record(EventType::ToolCompleted, payload).await?;
         messages.push(Message {
             role: Role::Tool,

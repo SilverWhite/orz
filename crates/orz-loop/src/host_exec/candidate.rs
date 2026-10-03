@@ -148,7 +148,9 @@ impl AgentLoopController {
             payload["candidate_cap"] = serde_json::json!(cap);
         }
         // P2-10 R2 (2026-08-31): candidate-gate refusal = deny event.
-        self.feed_lif_deny(None);
+        // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 → GateGuard
+        // （`*_candidate_*` 码族由 `DenyClass::of_code` 判定）。
+        self.feed_lif_deny(None, code);
         writer.record(EventType::ToolCompleted, payload).await?;
         messages.push(Message {
             role: Role::Tool,

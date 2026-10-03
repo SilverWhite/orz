@@ -239,7 +239,8 @@ impl AgentLoopController {
                 round: None,
             });
             // P2-10 R2 (2026-08-31): retired-tool refusal = deny event.
-            self.feed_lif_deny(None);
+            // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 → GateGuard。
+            self.feed_lif_deny(None, "retired_tool_denied");
             return Ok((
                 ToolResult {
                     output: msg,
@@ -299,7 +300,8 @@ impl AgentLoopController {
                 round: None,
             });
             // P2-10 R2 (2026-08-31): sealed-tool refusal = deny event.
-            self.feed_lif_deny(None);
+            // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 → GateGuard。
+            self.feed_lif_deny(None, "sealed_tool_denied");
             return Ok((
                 ToolResult {
                     output: msg,
@@ -369,7 +371,8 @@ impl AgentLoopController {
                 round: None,
             });
             // P2-10 R2 (2026-08-31): anchor mismatch refusal = deny event.
-            self.feed_lif_deny(None);
+            // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 → GateGuard。
+            self.feed_lif_deny(None, CODE_CONTENT_ANCHOR_MISMATCH);
             return Ok((
                 ToolResult {
                     output: msg,
@@ -444,7 +447,8 @@ impl AgentLoopController {
                 round: None,
             });
             // P2-10 R2 (2026-08-31): retrieval enable-gate refusal = deny.
-            self.feed_lif_deny(None);
+            // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 → RetrievalEnable。
+            self.feed_lif_deny(None, code);
             return Ok((
                 ToolResult {
                     output: msg,
@@ -690,7 +694,8 @@ impl AgentLoopController {
                     .rollback();
             }
             // P2-10 R2 (2026-08-31): permission deny/defer = deny event.
-            self.feed_lif_deny(None);
+            // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 → PermissionTicket。
+            self.feed_lif_deny(None, &reason_code);
             return Ok((
                 result,
                 Some(PolicyFeedback::Denied(DenialKey {
@@ -759,7 +764,8 @@ impl AgentLoopController {
                 // call writes back into the minimal previous-round map.
                 self.maybe_note_probe_call_failure(probe_writeback, &tc.name);
                 // P2-10 R2 (2026-08-31): missing test runner = deny event.
-                self.feed_lif_deny(None);
+                // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 → Other。
+                self.feed_lif_deny(None, "missing_test_runner");
                 return Ok((
                     ToolResult {
                         output: msg,
@@ -865,6 +871,28 @@ impl AgentLoopController {
                         // P0-A step 5 (design §5): 调用即探针 — the failed
                         // work-tool call writes back into the minimal map.
                         self.maybe_note_probe_call_failure(probe_writeback, &tc.name);
+                        // 0am 审查处置（2026-10-03）：休眠路径预接线——R1 封存
+                        // 下不可达，解封复活若不接臂则 Verify 对 run_tests 恒
+                        // 死窗（审查 P1-1）。形状镜像通用完成臂（host 错误 =
+                        // Error；本臂无信封/非零退出位）。本臂提前 return，
+                        // 不与通用完成臂双喂。
+                        self.lif
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .on_tool_event(
+                                AgentLoopController::now_epoch_secs(),
+                                orz_assurance::lif::ToolEvent {
+                                    outcome: orz_assurance::lif::ToolOutcome::Error,
+                                    wall_ms: Some(wall_started.elapsed().as_millis() as u64),
+                                    policy_denied: false,
+                                    routing: Some(orz_assurance::lif::StimulusRouting {
+                                        class: orz_assurance::lif::ActionClass::Verify,
+                                        deny_class: None,
+                                        non_zero_exit: false,
+                                        write_control_block: false,
+                                    }),
+                                },
+                            );
                         // None = neutral for the denial streak (only actual
                         // success resets — ADR-0010 §3.5.4).
                         return Ok((
@@ -920,6 +948,35 @@ impl AgentLoopController {
             writer
                 .record(EventType::ToolCompleted, completed_payload)
                 .await?;
+            // 0am 审查处置（2026-10-03）：休眠路径预接线——R1 封存下不可达，
+            // 解封复活若不接臂则 Verify 对 run_tests 恒死窗（审查 P1-1）。
+            // 形状镜像通用完成臂（timed_out=Error / exit 0=Success / 其余
+            // Other＋非零退出位 H2 填平；class=Verify）。本块整体提前
+            // return，不与通用完成臂双喂。
+            let outcome = if result.timed_out {
+                orz_assurance::lif::ToolOutcome::Error
+            } else if result.exit_code == Some(0) {
+                orz_assurance::lif::ToolOutcome::Success
+            } else {
+                orz_assurance::lif::ToolOutcome::Other
+            };
+            self.lif
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .on_tool_event(
+                    AgentLoopController::now_epoch_secs(),
+                    orz_assurance::lif::ToolEvent {
+                        outcome,
+                        wall_ms: Some(wall_started.elapsed().as_millis() as u64),
+                        policy_denied: false,
+                        routing: Some(orz_assurance::lif::StimulusRouting {
+                            class: orz_assurance::lif::ActionClass::Verify,
+                            deny_class: None,
+                            non_zero_exit: matches!(result.exit_code, Some(c) if c != 0),
+                            write_control_block: false,
+                        }),
+                    },
+                );
             // 2026-08-08 blackboard partition: fold the executed call into
             // the tool-action section (terminal — a fixed command run).
             // B1：写时盖 (round, domain) 章（统一入口）。
@@ -2786,7 +2843,8 @@ impl AgentLoopController {
                 });
                 // P2-10 R2 (2026-08-31): console action-write lane refusal =
                 // deny event.
-                self.feed_lif_deny(None);
+                // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 → PlanLane。
+                self.feed_lif_deny(None, "console_action_write_lane_denied");
                 return Ok((
                     ToolResult {
                         output: msg.to_string(),
@@ -2963,7 +3021,8 @@ impl AgentLoopController {
                         round: None,
                     });
                     // P2-10 R2 (2026-08-31): order-slot busy refusal = deny.
-                    self.feed_lif_deny(None);
+                    // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 → PlanLane。
+                    self.feed_lif_deny(None, "order_slot_busy");
                     return Ok((
                         ToolResult {
                             output: content,
@@ -3009,7 +3068,8 @@ impl AgentLoopController {
                     round: None,
                 });
                 // P2-10 R2 (2026-08-31): plan_write lane refusal = deny event.
-                self.feed_lif_deny(None);
+                // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 → PlanLane。
+                self.feed_lif_deny(None, "plan_write_disabled");
                 return Ok((
                     ToolResult {
                         output: msg.to_string(),
@@ -3043,6 +3103,12 @@ impl AgentLoopController {
                     reasoning_content: None,
                     round: None,
                 });
+                // 0am 审查处置（2026-10-03，施工中新发现补喂）：本臂写
+                // plan_write_lane_denied 拒绝完成事件但从未喂 LIF（兄弟臂
+                // plan_write_disabled 有喂）——拒绝面对刺激面不可见，且重放
+                // 侧 classify_event_outcome 按码判 Deny＝生产-重放分歧。
+                // 与 21 站点同形补喂（PlanLane）。
+                self.feed_lif_deny(None, "plan_write_lane_denied");
                 return Ok((
                     ToolResult {
                         output: msg.to_string(),
@@ -4074,7 +4140,13 @@ impl AgentLoopController {
                             .get("command")
                             .and_then(serde_json::Value::as_str),
                     ),
-                    deny_class: None,
+                    // 0am 审查处置（2026-10-03）：信封码喂入点解析（S2 §5）
+                    // ——空码→None→分派层 PolicyMarker 兜底；非 deny 事件
+                    // 该位无效果。
+                    deny_class: res.policy_denial.as_ref().and_then(|pd| {
+                        (!pd.code.is_empty())
+                            .then(|| orz_assurance::lif::DenyClass::of_code(&pd.code))
+                    }),
                     non_zero_exit: matches!(res.exit_code, Some(code) if code != 0),
                     write_control_block: false,
                 };

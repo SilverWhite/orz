@@ -37,7 +37,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use chrono::DateTime;
-use orz_assurance::lif::router::{ActionClass, DenyClass, StimulusRouting, stimulus_targets};
+use orz_assurance::lif::router::{
+    ActionClass, DenyClass, ResourceTier, StimulusRouting, slow_weight, stimulus_targets,
+};
 use orz_assurance::lif::{
     ChannelKind, Domain, LifEngine, RLI_CHANNELS, RLI_DOMAIN_PROG_LOW, RLI_PREDICTION_STEPS,
     RliAnchors, ToolEvent, ToolOutcome, classify_event_outcome, is_denial_code,
@@ -1088,10 +1090,6 @@ impl SideClaims {
     }
 }
 
-fn slow_weight(wall_ms: u64) -> f64 {
-    (wall_ms as f64 / 60_000.0).clamp(1.0, 5.0)
-}
-
 /// 单事件双分派核心（[`parse_routed`] 与 s3 自检共用，保证同构）。
 fn dispatch_event(
     payload: &Value,
@@ -1169,7 +1167,10 @@ fn parse_routed(path: &Path) -> (String, Vec<RoutedStep>, SideClaims) {
     let mut commands: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut wcr_block: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut side = SideClaims::default();
-    let mut last_tier: Option<String> = None;
+    // 0am 审查处置批（2026-10-03）：跨档对账改用 `ResourceTier::from_wire`
+    // ——未知档字符串不计 crossing、不进记忆（与引擎 `last_snapshot_tier`
+    // 口径一致：喂入点 from_wire= None 根本不构造刺激）。
+    let mut last_tier: Option<ResourceTier> = None;
     let mut run_id = String::new();
     for line in text.lines() {
         let Ok(event) = serde_json::from_str::<Value>(line) else {
@@ -1228,13 +1229,15 @@ fn parse_routed(path: &Path) -> (String, Vec<RoutedStep>, SideClaims) {
             "resource_limit_hit" => side.limit_hit += 1,
             "host_resource_snapshot" => {
                 side.snapshots_seen += 1;
-                if let Some(t) = payload.get("tier").and_then(Value::as_str) {
+                if let Some(t) = payload.get("tier").and_then(Value::as_str)
+                    && let Some(tier) = ResourceTier::from_wire(t)
+                {
                     if let Some(prev) = &last_tier
-                        && prev != t
+                        && prev != &tier
                     {
                         side.snapshot_crossing += 1;
                     }
-                    last_tier = Some(t.to_string());
+                    last_tier = Some(tier);
                 }
             }
             _ => {}
@@ -1698,6 +1701,33 @@ fn s3_selftest() {
     );
     assert_eq!(AC::of_tool("search_replace", None), AC::Mutate);
     assert_eq!(AC::of_tool("read_file", None), AC::Retrieve);
+    // 0am 审查处置批（2026-10-03）：适配器载体结构化变更工具 → Mutate。
+    assert_eq!(AC::of_tool("apply_patch", None), AC::Mutate);
+    assert_eq!(AC::of_tool("write", None), AC::Mutate);
+    assert_eq!(AC::of_tool("edit", None), AC::Mutate);
+    // 0am 审查处置批：`cargo fmt --check` 命中、变更性 `cargo fmt` 不命中；
+    // `.exe` 归一后命中；守卫表首词（grep/echo 假验证失败）剔除，复合命令
+    // 非守卫段照常命中。
+    assert_eq!(
+        AC::of_tool("run_terminal_cmd", Some("cargo fmt --check")),
+        AC::Verify
+    );
+    assert_eq!(
+        AC::of_tool("run_terminal_cmd", Some("cargo fmt src/lib.rs")),
+        AC::Neutral
+    );
+    assert_eq!(
+        AC::of_tool("run_terminal_cmd", Some("cargo.exe test --lib")),
+        AC::Verify
+    );
+    assert_eq!(
+        AC::of_tool("run_terminal_cmd", Some("grep -rn pytest .")),
+        AC::Neutral
+    );
+    assert_eq!(
+        AC::of_tool("run_terminal_cmd", Some("cd x && python -m unittest")),
+        AC::Verify
+    );
     // 验证通过（61s）：legacy prog+slow → S2 零注入（slow 豁免；lib 分派）。
     let p = serde_json::json!({ "tool": "run_terminal_cmd", "exit_code": 0, "wall_ms": 61_000 });
     let (legacy, d, _, _) = dispatch_event(&p, AC::Verify, false, None);

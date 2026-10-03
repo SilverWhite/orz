@@ -4548,7 +4548,9 @@ impl AgentLoopController {
         // 2026-08-13).
         self.maybe_note_probe_call_failure(probe_writeback, &tc.name);
         // P2-10 R2 (2026-08-31): ACAF ticket refusal = deny event.
-        self.feed_lif_deny(None);
+        // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 → PermissionTicket
+        // （码与上方完成事件/信封的 `control_ticket_rejected:{code}` 同源）。
+        self.feed_lif_deny(None, &format!("control_ticket_rejected:{}", code.as_str()));
         messages.push(Message {
             role: Role::Tool,
             content: msg.clone(),

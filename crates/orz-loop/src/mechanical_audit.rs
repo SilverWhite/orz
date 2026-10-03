@@ -92,7 +92,8 @@ pub(crate) const KIND_LIF_DOMAIN: &str = "lif_domain";
 /// ——三类 RliNotice（StreakCrossed／MigrationConfirmed／CoverageGap）与
 /// 0cp D7 新增 DomainSpikeEntry 在**触发当刻**转附注式直投：agent_loop 于
 /// 下一工具批回传装配点取走（`take_pending_rli_notices`，取走即置位
-/// `delivered`），把行文附于回传内容后（行 ≤240B、只读数无建议）并落本
+/// `delivered`），把行文附于回传内容后（行 ≤320B（0am P8-b 重订）、只读
+/// 数无建议）并落本
 /// kind 一条 journal 行——162 批 §3.1「提醒面 journal 盲区」闭环（fire
 /// 全集可由 journal 独立复算）。key＝`rli.notice.<kind>`（每键覆盖写，逐
 /// 次历史由 journal 事件流可复算）、anomaly＝null（不进报告块）。取代
@@ -837,7 +838,7 @@ mod tests {
         assert!(line.contains(RLI_T_HAT_ANNOTATION), "D6 注解在行内: {line}");
         assert!(
             line.len() <= RLI_NOTICE_TEXT_BUDGET + "\n".len(),
-            "行宽 ≤240B 纪律: {line}"
+            "行宽 ≤320B（0am P8-b 重订）纪律: {line}"
         );
 
         // journal：kind=rli_notice、key=rli.notice.streak_crossed、盲区闭环。

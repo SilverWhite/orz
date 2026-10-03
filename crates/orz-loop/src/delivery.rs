@@ -100,7 +100,9 @@ impl AgentLoopController {
         });
         // P2-10 R2 (2026-08-31): console-tool refusal (submit / step_done /
         // return) = deny event.
-        self.feed_lif_deny(None);
+        // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 → PlanLane
+        // （console_*/submit_* 码族由 `DenyClass::of_code` 判定）。
+        self.feed_lif_deny(None, code);
         Ok(ToolResult {
             output: msg.to_string(),
             exit_code: Some(1),
