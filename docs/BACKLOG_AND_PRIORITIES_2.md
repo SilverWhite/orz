@@ -1081,3 +1081,20 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - orz `181c9cc9`（14 文件 +723/−78）；父仓 pin＋manifest 随批。**余项不变＝载体重建＋字面量核证＋RS-06 两小件。**
 - 批档：[`178 批档`](audits/178_0AM_REVIEW_DISPOSAL_2026-10-03.md)。
 - 关键词：178 批、0am 审查处置、Ctx/Infra 显式排除、单事件回声封堵、deny_class 接线、22 站点、run_tests 预接臂、词表 v2、首词守卫、行宽截断 top-4、S3 修正重放 r178、heredoc 假命中、53.6% 勘误、S2 v1.2、S0 v1.3、B02 闭合、计数 57。
+
+### 1.132 2026-10-04 179 批 RS-06 收口小批——快照 zeta sanitize 契约对齐＋env 解析口径合一（用户令「请先处理RS-06的两小件吧」；计数不变 57）
+
+- **① 快照 zeta 契约对齐**（orz-assurance `rli.rs`）：`RliChannel::restore` 文档头段残留「ζ 不随侧车恢复」与 0bc FR-6 采纳段自相矛盾——头段改「ω/ζ 按快照恢复（ζ 走 sanitize 契约）；q/η/容差仍代码常数」；**非有限值（NaN/Inf）由隐式「保持现值」改显式落回 `rli_zeta_for(kind)`**（与文档「异常值落回代码默认常数」定语对齐＋重复 restore 幂等——原实现依赖调用方 fresh 前置态）；有限值钳制 `[0,4]` 同 `set_zeta` 口径不变。钉 `snapshot_zeta_roundtrip_adopts_and_sanitizes`＝采纳 0.75／越界钳制 9.9→4.0、−1.0→0.0／NaN 落回按通道默认（err=0.5／prog=2.0）／幂等。
+- **② env 解析口径合一**（orz-loop `controller.rs`）：`parse_rli_shadow_kill_switch` **单一解析源**（与 `parse_acaf_fail_closed_env` 同构：trim＋小写＋同闭集 `0/false/no/off` 与 `1/true/yes/on`＋非法 `Err(())` 交调用方）；`rli_shadow_enabled_override` 非法显式值 `tracing::warn`（列接受集）回退默认开——原静默吞；**kill 语义零翻转**（闭集外输入原恒 on 现仍 on；`1/true/yes/on` 显式确认开）；缺失 env 仍静默默认开。`result_unit_err` 双解析器同款 `#[allow]`＋互指注释（净 −2 存量、零新增）。
+- **缺陷定性（0aq RS-06 P3 原文对照）**：zeta 功能缺陷已由 0bc FR-6（2026-09-21）修复，残余＝文档矛盾＋NaN 行为与文档不符＋无钉；env 的 trim/大小写已由 0bf ①（2026-09-22）统一，残余＝无单一解析源（env 直读不可单测，0bd ⑨ 口径）＋非法值处置不一致。本批全收。
+- **边界**：侧车 schema（`rli-shadow-v2`）/序列化形态/重放注入账目零扰动（触碰面不在刺激喂入路径；NaN 分支真实数据不可达——生产写侧 zeta 恒有限）；仓内预存 fmt 漂移（30+ 处 rustfmt 分歧）不扩散修复（176 批先例），仅触碰双文件干净。
+- **验证**：orz-assurance lib **298/0**（+1；全 target 298+9+4+9 绿）＋orz-loop lib **850/0/3**（+2）＋触碰双文件 `rustfmt --check` 干净＋clippy 触碰面零新增。
+- orz `905bc3f5`（2 文件 +116/−17）；父仓 pin＋manifest 1486 条（差异恰 2 行）随批。**RS-06 P3 五件全闭合（T̂₀ 双源 177＋178 补 1D 半边／example 路径／prog-ω 注记／zeta／env 口径）；0am 余项收敛＝载体重建＋字面量核证（＋已登记的真机轮 Verify 读数预注册）。**
+- 批档：[`179 批档`](audits/179_RS06_CLOSURE_2026-10-04.md)。
+- 关键词：179 批、RS-06 收口、zeta 快照往返、restore sanitize、NaN 落回默认、幂等 restore、parse_rli_shadow_kill_switch、ACAF 同口径、单一解析源、非法值告警回退、kill switch、result_unit_err、计数 57。
+
+### 1.133 2026-09-12 批（0v 闭合 26 → 25 → 0z 立项 25 → 26 → 深审入档；2026-10-04 行龄滚出主卷）
+
+- **0v 闭合入账 26 → 25**（用户裁决「不强硬取证」——判据 9/10 与 CAPTCHA 样本不再追、命中率与 chrome-error 分类偏差观察归档，S1–S4 全部闭合转 `implemented`）。
+- **0z 真机资源安全边界立项登记 25 → 26**（P0，设计完成待放行实施——本轮真机自举两次满占用卡死处置：三个缺口＋一个摩擦项）。
+- **同日全项目只读深审入档**（[`FULL_PROJECT_DEEP_REVIEW`](audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md)，登记不动计数）——0v-C 两项 P0 被同日 orz `ba934af8` 修复闭合覆盖且触发源实锤与报告独立判断（URL 无痕改写）吻合、账本三处同步断裂（报告 P1-5）同日回补；其余 P1/P2 与体系面发现留用户裁决未立项，详见主卷治理注记。
