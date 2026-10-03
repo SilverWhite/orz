@@ -1027,7 +1027,7 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **批序**：S0 总清单（172 批）→ S2 路由表（本批）→ S3 离线重放（判据 J1–J5，两轮 recli journal 承载）→ P8 实现批（放行门＝S3 读数入档；含喂入扩展/ChannelKind 5→7/成因段渲染/行宽重订/0cp D6 勘误/RS-06）。
 - **台账**：TODO 头部计数行＋P1 行＋0am 节（S0 后新增 S2 勾选行＋挂起行转正批注）＋摩擦盘点节勾选；BACKLOG 本批指针＋计数行＋P1 总览行＋0am 节转正条目＋挂起行更新＋RS-06 改挂；盘点档边界注记＋§13；索引头行 v4.145 → **v4.146**＋`AUTH-RLI-BASE-SHADOW`/`AUTH-LIF-RLI-STIMULUS-TYPED-BUS` 条目更新。
 - 批档：[`174 批档`](audits/174_0AM_UNBLOCK_S2_STIMULUS_ROUTING_TABLE_2026-10-03.md)。
-- 关键词：174 批、0am 转正、S2 路由表、七通道、验证摩擦、认知负载、供给摩擦、Other 黑洞、认领矩阵、封闭性、死窗、动作类标签器、S3 判据 J1–J5、B04/B05 销项、RS-06 改挂 P8、计数不变 57、索引 v4.146。
+- 关键词：174 批、0am 转正、S2 路由表、八通道、验证摩擦、认知负载、供给摩擦、Other 黑洞、认领矩阵、封闭性、死窗、动作类标签器、S3 判据 J1–J5、B04/B05 销项、RS-06 改挂 P8、计数不变 57、索引 v4.146。
 
 ### 1.128 2026-10-03 175 批 0am S3——S2 刺激面路由表离线重放验证 J1–J5 全收（用户令「请进行S3吧」；含负结果如实；重放件 `--s3` example 级扩展零生产面改动；计数不变 57）
 
@@ -1043,3 +1043,17 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - 批档：[`175 批档`](audits/175_0AM_S3_STIMULUS_ROUTING_REPLAY_2026-10-03.md)；读数仓外 `D:/tb-eval/0am_s3/`。
 - **补记（2026-10-03 同日）**：①用户裁决「跑分没办法优化不算问题，我们只优化通用内容，刨除跑分考虑即可」＝侵蚀检出负结果定性**范围外边界、无动作**（不为跑分形态特化，与 172 批裁决同源）；②读数补笔（orz `a1871d27` lp 计数）＝低进度主张查准率：二跑 legacy 8/7（87.5%、覆盖 4.7%＝保守机器）、S2 馈 53/62（**85.5%**，基线 62.7%，lift +22.8pp）；首跑 legacy 4/17（**23.5%，低于基线 36.8%**）、S2 馈 18/38（47.4%，基线 41.9%）——S2 路由下主张有内容且方向正确，lift 不均匀、脱靶示谐振滞后，域机重校准留 P8。
 - 关键词：175 批、0am S3、离线重放、J1–J5 全收、三回声实锤、写控块 join、61s unittest 豁免、Slow 验证时长全切除、u_prog 重塑、165 悖论复现、S2 语义窗双升、侵蚀检出负结果、Verify 死窗边界、1D-RLI 分歧、标签器种子、S2 v1.1、P8 放行门、计数 57。
+
+### 1.129 2026-10-03 176 批 0am P8-a——刺激面路由核心进体（S2 路由表实现批第一节；用户令「请继续」；计数不变 57）
+
+- **router 模块**（`orz-assurance/src/lif/router.rs` 新 555 行）：`ActionClass`（闭集＋`of_tool`＋验证词表词边界）、`DenyClass`（六分组＋`of_code`）、`StimulusRouting`、`stimulus_targets` 纯分派（deny 优先／验证通过零注入＋Slow 豁免／H2 填平／Prog 收窄／**未路由 legacy 回退**）、`BusStimulus`；**P9 零触发**（不携阈值/规则）。
+- **ToolEvent 扩展**：＋`policy_denied`＋`routing`（Copy 保持；None＝legacy 回退）。
+- **ChannelKind 5→8 双 bank**：＋Verify/Ctx/Infra；RLI 周期 8/32/64·T̂ 预注册、实极点分支、horizon 默认档、index_of 追加不移；1D τ 重导出/advance 全接入；**快照 schema v1→v2**（旧 v1 侧车 fresh 重启＝文档化降级）；锚点 feature 面 13→19（u/v 最小集；PULL 门 `known_feature_names()` 自动扩展、零 schema 变更）。**S2 档「5→7」系算术笔误随批勘误为 5→8**。
+- **生产接线**：tool_run 完成臂（路由键＋policy_denied 信封位）＋ToolError 臂（写控块判定＝`exec_policy::BLOCK_MESSAGE_PREFIX` 冻结前缀单源→`DenyClass::WriteControl`——S3-J2(a) 源生产摘除）；21 处 `feed_lif_deny` 零触碰（Deny 值语义不变，标签维随 P8-b 成因段）。
+- **on_bus_event**：Ctx/Infra 注入＋snapshot 跨档过滤 v1.1（引擎记忆档位）；影子前转。**生产 bus 站点布线＝P8-b 首项**（普查：compressed ×2@agent_loop、retry ×2〔Drop 语境〕、availability ×4、fold/资源族待定位）。
+- **重放件同源化**：本地标签器/分派删除，切 lib router（S2 §5 兑现）。**回归读数微移**＝S3 重放近似（verify 通过事件改写 Other）被生产语义修正：二跑 S2 馈 lp 主张 62→81/命中 53→68（83.9%）/S2 语义窗一致 106→117/169；首跑 55 主张 29 中（53.6%，基线 41.9%）/窗一致 57→62/136；**注入账目逐位不变**（两轮 legacy/s2 tool totals 全等）——微移只在域机输入面（Start 门释放），不在刺激面。
+- **验证**：orz-assurance lib **287/0**（＋router 6 例＋引擎 bank/bus 钉＋锚点名集 19 钉）＋orz-loop lib **848/0**＋双自检绿＋clippy 触碰面零新增；crate 级 fmt 误改 12 漂移文件已还原重提（提交严格限 7 文件触碰面）。
+- **P8 尾批**＝bus 站点布线→成因段＋行宽重订＋0cp D6 勘误→RS-06→载体重建＋字面量核证。
+- orz `663aad89`（7 文件 +944/−294）；父仓 pin＋manifest 1486 条随批。
+- 批档：[`176 批档`](audits/176_0AM_P8A_STIMULUS_ROUTING_CORE_2026-10-03.md)。
+- 关键词：176 批、0am P8-a、路由核心、router 模块、stimulus_targets、ToolEvent 扩展、ChannelKind 5→8、快照 schema v2、写控块判定、on_bus_event、跨档过滤、同源复用、重放回归微移、5→7 勘误、P8 尾批、计数 57。
