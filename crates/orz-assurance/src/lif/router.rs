@@ -343,7 +343,31 @@ pub enum BusStimulus {
     ResourceLimitHit,
     /// Infra：`host_resource_snapshot` 档位值——**跨档才注入**（v1.1 过滤：
     /// run 首测＝基线不计；引擎记忆上一档位做 crossing 判定）。
-    HostResourceSnapshotTier(&'static str),
+    HostResourceSnapshotTier(ResourceTier),
+}
+
+/// 宿主资源档位（0z 分档封闭集；`host_resource_snapshot.tier` 的机械映射；
+/// 未知档位＝None 不参与跨档判定，journal 照记）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceTier {
+    Normal,
+    Watch,
+    Soft,
+    ReclaimDirect,
+    Hard,
+}
+
+impl ResourceTier {
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "normal" => Some(ResourceTier::Normal),
+            "watch" => Some(ResourceTier::Watch),
+            "soft" => Some(ResourceTier::Soft),
+            "reclaim_direct" => Some(ResourceTier::ReclaimDirect),
+            "hard" => Some(ResourceTier::Hard),
+            _ => None,
+        }
+    }
 }
 
 impl BusStimulus {
@@ -533,12 +557,61 @@ mod tests {
         assert!(engine.prog().u() > 0.0);
         // 总线：压缩入 Ctx；snapshot 首测不注入、跨档注入（v1.1 过滤）。
         engine.on_bus_event(20.0, BusStimulus::ContextCompressed);
-        engine.on_bus_event(21.0, BusStimulus::HostResourceSnapshotTier("watch"));
+        engine.on_bus_event(
+            21.0,
+            BusStimulus::HostResourceSnapshotTier(ResourceTier::Watch),
+        );
         assert_eq!(engine.infra().u(), 0.0);
-        engine.on_bus_event(22.0, BusStimulus::HostResourceSnapshotTier("soft"));
+        engine.on_bus_event(
+            22.0,
+            BusStimulus::HostResourceSnapshotTier(ResourceTier::Soft),
+        );
         assert!(engine.infra().u() > 0.0);
         assert!(engine.ctx().u() > 0.0);
         assert!(engine.rli_shadow().unwrap().channel(ChannelKind::Infra).u() > 0.0);
+    }
+
+    #[test]
+    fn engine_streak_cause_segment() {
+        use crate::lif::{LifEngine, RLI_STREAK_K};
+        let mut engine = LifEngine::new();
+        engine.enable_rli_shadow();
+        // k 个连续验证失败 → streak fire 带标签成因段（「源：验证失败×k」）。
+        for i in 0..RLI_STREAK_K + 2 {
+            engine.on_tool_event(
+                10.0 + i as f64,
+                ToolEvent {
+                    outcome: ToolOutcome::Other,
+                    wall_ms: None,
+                    policy_denied: false,
+                    routing: Some(StimulusRouting {
+                        non_zero_exit: true,
+                        ..StimulusRouting::new(ActionClass::Verify)
+                    }),
+                },
+            );
+        }
+        let shadow = engine.rli_shadow().unwrap();
+        let fired = shadow
+            .notices()
+            .iter()
+            .any(|n| n.text.contains("源：验证失败×"));
+        assert!(
+            fired,
+            "streak notice must carry the label cause: {:?}",
+            shadow
+                .notices()
+                .iter()
+                .map(|n| n.text.clone())
+                .collect::<Vec<_>>()
+        );
+        for n in shadow.notices() {
+            assert!(
+                n.text.len() <= crate::lif::RLI_NOTICE_TEXT_BUDGET,
+                "notice width budget: {}",
+                n.text.len()
+            );
+        }
     }
 
     #[test]

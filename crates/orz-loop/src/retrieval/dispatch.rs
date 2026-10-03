@@ -438,6 +438,7 @@ impl AgentLoopController {
         let retrieval_calls = std::sync::atomic::AtomicU64::new(0);
         let svc = SharedLoopServices {
             blackboard: &self.blackboard,
+            lif: &self.lif,
             denial_state: &self.denial_state,
             pacing_rounds: &self.pacing_rounds,
             context_compact: &self.context_compact,
@@ -560,6 +561,7 @@ impl AgentLoopController {
                 if estimate > self.context_compact.session_end_trigger_tokens {
                     let svc = SharedLoopServices {
                         blackboard: &self.blackboard,
+                        lif: &self.lif,
                         denial_state: &self.denial_state,
                         pacing_rounds: &self.pacing_rounds,
                         context_compact: &self.context_compact,

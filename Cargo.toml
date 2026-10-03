@@ -140,7 +140,7 @@ indicatif = "0.18"
 # 0am S2 (2026-09-17)：RLI 影子通道的确定性数学面——pinned pure-Rust libm
 # （RLI 设计 §8 选项 A「固定 libm 版本」：跨平台三角函数/指数同 crate 版本
 # ⇒ 同一浮点语义；lock 内已存在，经 core_maths 传递）。
-libm = "0.2.15"
+libm = "=0.2.15"
 infer = "0.19.0"
 insta = "1"
 itertools = "0.14"

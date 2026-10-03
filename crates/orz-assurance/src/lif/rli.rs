@@ -1342,7 +1342,10 @@ pub fn rli_notice_annotation(kind: RliNoticeKind) -> &'static str {
 
 /// 0bg S2：提醒**本体＋注解**的字节预算（B/条）——注解随报的成本上界
 /// （用户裁决「随报的成本不大…关键是要方便模型理解」的口径门）。
-pub const RLI_NOTICE_TEXT_BUDGET: usize = 240;
+/// **0am P8-b 重订（2026-10-03，S2 §4.3/§8）**：成因段（标签维「源：…」）
+/// 入行后 240B 必越限（S2 档 §4.4 预见）——新预算 **320B**（最坏 D6 形态
+/// ≈270B＋余量；0cp D6「无成因」子句由 S2 P8 取代，行宽子句随本批修订）。
+pub const RLI_NOTICE_TEXT_BUDGET: usize = 320;
 
 /// 0bg S2：覆盖缺口就绪门——已完成段数下限（用户令「冷启动久些不是坏事，
 /// 域建模与预测本就需要基础数据量」；域图需基础数据量）。
@@ -1433,7 +1436,15 @@ pub struct RliShadow {
     /// 0bh ①：最近一次装配后的**头段余量**（字节；独立提醒预算减已用——
     /// 「头段余量可核」钉子；随侧车持久）。
     notice_headroom_bytes: u64,
+    /// **0am P8-b**（2026-10-03，S2 §4.3 标签成因）：各通道最近注入的机械
+    /// 标签环（cap [`RLI_CHANNEL_LABEL_CAP`]；**live-only** 不随侧车持久；
+    /// streak 成因段「驱动标签名＋计数」数据面——闭集词表见
+    /// [`RliShadow::stamp_label`] 调用点）。
+    channel_labels: [VecDeque<&'static str>; RLI_CHANNELS.len()],
 }
+
+/// 标签环容量（P8 成因段读数窗；触发沿渲染按环内计数）。
+pub const RLI_CHANNEL_LABEL_CAP: usize = 8;
 
 impl Default for RliShadow {
     fn default() -> Self {
@@ -1442,9 +1453,10 @@ impl Default for RliShadow {
 }
 
 impl RliShadow {
-    /// 全新影子（T̂₀ = 8s 预启用节奏，同 1D 引擎口径）。
+    /// 全新影子（T̂₀ ＝ 估计器初值单源〔RS-06 双源消解，2026-10-03〕——
+    /// 预启用节奏与 1D 引擎同源）。
     pub fn new() -> Self {
-        let t_hat0 = 8.0;
+        let t_hat0 = crate::lif::estimator::T_HAT_INIT_SECS;
         Self {
             channels: [
                 RliChannel::new(ChannelKind::Err, TAU / RLI_ERR_PERIOD_SECS),
@@ -1487,6 +1499,59 @@ impl RliShadow {
             notice_delivered_total: 0,
             notice_deferred_total: 0,
             notice_headroom_bytes: 0,
+            // 0am P8-b：标签环从空起（live-only）。
+            channel_labels: (0..RLI_CHANNELS.len())
+                .map(|_| VecDeque::with_capacity(RLI_CHANNEL_LABEL_CAP))
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("label rings sized to channel bank"),
+        }
+    }
+
+    /// **0am P8-b**（S2 §4.3 标签成因）：注入时盖机械标签（闭集词表——
+    /// 调用点逐一具名；`&'static str` 直存，零格式化开销）。
+    fn stamp_label(&mut self, kind: ChannelKind, label: &'static str) {
+        let ring = &mut self.channel_labels[Self::index_of(kind)];
+        ring.push_back(label);
+        while ring.len() > RLI_CHANNEL_LABEL_CAP {
+            ring.pop_front();
+        }
+    }
+
+    /// 成因段标签维：环内按标签计数（旧在前），如「执行失败×3＋验证失败×1」；
+    /// 空环＝None（无注入史——不虚构成因）。
+    fn channel_label_cause(&self, kind: ChannelKind) -> Option<String> {
+        let ring = &self.channel_labels[Self::index_of(kind)];
+        if ring.is_empty() {
+            return None;
+        }
+        let mut counts: Vec<(&'static str, usize)> = Vec::new();
+        for label in ring {
+            match counts.iter_mut().find(|(l, _)| l == label) {
+                Some((_, c)) => *c += 1,
+                None => counts.push((label, 1)),
+            }
+        }
+        Some(
+            counts
+                .iter()
+                .map(|(l, c)| format!("{l}×{c}"))
+                .collect::<Vec<_>>()
+                .join("＋"),
+        )
+    }
+
+    /// 拒绝类 → 机械标签（闭集；Deny 通道成因段）。
+    fn deny_label(dc: crate::lif::router::DenyClass) -> &'static str {
+        use crate::lif::router::DenyClass as DC;
+        match dc {
+            DC::PermissionTicket => "权限拒绝",
+            DC::PlanLane => "计划/车道拒绝",
+            DC::GateGuard => "门/护栏拒绝",
+            DC::RetrievalEnable => "检索启用拒绝",
+            DC::WriteControl => "写控拦截",
+            DC::PolicyMarker => "策略拒绝",
+            DC::Other => "其他拒绝",
         }
     }
 
@@ -1803,12 +1868,23 @@ impl RliShadow {
             format!("（失配概率 {p}）")
         };
         let t_hat_segment = self.t_hat_trend_text();
+        // **0am P8-b**（S2 §4.3 成因段·标签维）：单 fire 时附「源：驱动标签
+        // ×环内计数」——机械标签仅述已发生注入，不构成触发条件（P9）；
+        // 多 fire 行保持机制成因（宽度纪律）。
+        let label_cause = if fired.len() == 1 {
+            let (kind, ..) = fired[0];
+            self.channel_label_cause(kind)
+                .map(|c| format!("；源：{c}"))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         let round = (self.domain.round() > 0).then(|| self.domain.round());
         self.push_notice(RliNotice {
             kind: RliNoticeKind::StreakCrossed,
             t,
             round,
-            text: format!("持续越线: {listed}{detail}；{t_hat_segment}"),
+            text: format!("持续越线: {listed}{detail}{label_cause}；{t_hat_segment}"),
             delivered: false,
         });
     }
@@ -1944,7 +2020,9 @@ impl RliShadow {
         self.t_hat = t_hat_new;
         self.steps = self.steps.saturating_add(1);
         // 轮语义通道族（prog＋0am P8 的 verify/ctx/infra）：周期 k·T̂ 随
-        // T̂ 重导出（单位换算，非逐轮拟合）。
+        // T̂ 每轮重导出（**prog-ω 热更新建模注记〔RS-06 P3，2026-10-03〕**：
+        // 热更新＝单位换算臂——周期物理定义 k·T̂ 的秒化，非参数拟合/热调参；
+        // P3 物理性三条件之「由构造设定」臂，永不对结局拟合）。
         let round_semantic_omega = |k: f64| TAU / (k * self.t_hat);
         for ch in &mut self.channels {
             ch.omega = match ch.kind {
@@ -2092,23 +2170,34 @@ impl RliShadow {
         // （`routing: None`＝旧四值语义，行为不变；生产喂入点恒带路由键）。
         // 零触发语义（P9）。
         let targets = crate::lif::router::stimulus_targets(&event);
+        // 0am P8-b：注入同刻盖机械标签（成因段数据面；闭集词表）。
         if targets.err {
             self.channel_mut(ChannelKind::Err).inject(t, 1.0);
+            self.stamp_label(ChannelKind::Err, "执行失败");
         }
         if targets.deny {
             self.channel_mut(ChannelKind::Deny).inject(t, 1.0);
+            let dc = targets
+                .deny_class
+                .map(Self::deny_label)
+                .unwrap_or("其他拒绝");
+            self.stamp_label(ChannelKind::Deny, dc);
         }
         if targets.prog_set {
             self.channel_mut(ChannelKind::Prog).inject_set(t, 1.0);
+            self.stamp_label(ChannelKind::Prog, "变更成功");
         }
         if targets.verify {
             self.channel_mut(ChannelKind::Verify).inject(t, 1.0);
+            self.stamp_label(ChannelKind::Verify, "验证失败");
         }
         if let Some(w) = targets.slow {
             self.channel_mut(ChannelKind::Slow).inject(t, w);
+            self.stamp_label(ChannelKind::Slow, "长时(非验证)");
         }
         if long_gap {
             self.channel_mut(ChannelKind::Stall).inject(t, 1.0);
+            self.stamp_label(ChannelKind::Stall, "间隔失节律");
         }
         // 0am 改造四项①：自判域的成功门（与 LIF temporal 的 has_success 同
         // 口径——Start 仅在首次成功前出现）。
@@ -2126,11 +2215,12 @@ impl RliShadow {
     /// 跨档过滤在 [`crate::lif::LifEngine::on_bus_event`] 已完成——本层
     /// 只注入）。总线事件**非动作采样点**（0cp D1 动作化口径：streak 窗
     /// 只认决策轮/工具事件/看门狗样），不调 [`Self::note_sample_point`]。
-    pub fn on_bus_event(&mut self, t: f64, kind: ChannelKind) {
+    pub fn on_bus_event(&mut self, t: f64, kind: ChannelKind, label: &'static str) {
         for ch in &mut self.channels {
             ch.advance(t);
         }
         self.channel_mut(kind).inject(t, 1.0);
+        self.stamp_label(kind, label);
         for ch in &mut self.channels {
             ch.check(t);
         }

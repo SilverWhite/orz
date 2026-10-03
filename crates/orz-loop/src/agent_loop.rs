@@ -689,6 +689,10 @@ impl LoopProfile {
 /// status line) stay on the type.
 pub(crate) struct SharedLoopServices<'a> {
     pub blackboard: &'a Arc<SharedBlackboard>,
+    /// 0am P8-b（2026-10-03，S2 §3）：LIF 引擎句柄——总线事件（Ctx/Infra
+    /// 认领）经 [`orz_assurance::lif::LifEngine::on_bus_event`] 入刺激面
+    /// （仅「通道看见什么」；零触发语义）。
+    pub lif: &'a std::sync::Arc<std::sync::Mutex<orz_assurance::lif::LifEngine>>,
     pub denial_state: &'a Mutex<DenialState>,
     pub pacing_rounds: &'a std::sync::atomic::AtomicU32,
     pub context_compact: &'a ContextCompactConfig,
@@ -1136,6 +1140,15 @@ pub(crate) async fn run_template_compact(
             }),
         )
         .await?;
+    // 0am P8-b（2026-10-03，S2 §3 Ctx 认领）：压缩 marker → Ctx 通道
+    // （总线注入；P9 零触发——不构成任何新触发条件）。
+    svc.lif
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .on_bus_event(
+            AgentLoopController::now_epoch_secs(),
+            orz_assurance::lif::BusStimulus::ContextCompressed,
+        );
     Ok(CompactDecision::Executed)
 }
 
@@ -1619,6 +1632,15 @@ async fn compress_blocks_now(
             }),
         )
         .await?;
+    // 0am P8-b（2026-10-03，S2 §3 Ctx 认领）：压缩 marker → Ctx 通道
+    // （总线注入；P9 零触发——不构成任何新触发条件）。
+    svc.lif
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .on_bus_event(
+            AgentLoopController::now_epoch_secs(),
+            orz_assurance::lif::BusStimulus::ContextCompressed,
+        );
     Ok(Some(BlockCompaction {
         blocks: selected.len(),
         rounds,
@@ -2922,6 +2944,15 @@ pub(crate) async fn run_agent_loop(
                             AgentLoopController::tool_availability_payload(&snapshot),
                         )
                         .await?;
+                    // 0am P8-b（S2 §3 Infra 认领）：探针翻转 → Infra 通道。
+                    controller
+                        .lif
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .on_bus_event(
+                            AgentLoopController::now_epoch_secs(),
+                            orz_assurance::lif::BusStimulus::AvailabilityFlip,
+                        );
                 }
                 // PLAN-FIRST 阶段 B (2026-08-16): 记录主车道本轮探针源——
                 // 工具栏投影与注册板块（黑板模型栏）共用的单一事实源；
@@ -3232,6 +3263,15 @@ pub(crate) async fn run_agent_loop(
                             }),
                         )
                         .await?;
+                    // 0am P8-b（S2 §3 Infra 认领）：传输重试 → Infra 通道。
+                    controller
+                        .lif
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .on_bus_event(
+                            AgentLoopController::now_epoch_secs(),
+                            orz_assurance::lif::BusStimulus::TransportRetry,
+                        );
                 }
                 r
             }
@@ -3273,6 +3313,15 @@ pub(crate) async fn run_agent_loop(
                             }),
                         )
                         .await?;
+                    // 0am P8-b（S2 §3 Infra 认领）：传输重试耗尽 → Infra。
+                    controller
+                        .lif
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .on_bus_event(
+                            AgentLoopController::now_epoch_secs(),
+                            orz_assurance::lif::BusStimulus::TransportRetry,
+                        );
                 }
                 // F-06 (D-7 "保留输出 + incomplete 标记 + 明确终止原因"): a
                 // stream that aborted after producing partial content
@@ -6027,6 +6076,15 @@ mod tests {
         }
     }
 
+    fn test_lif() -> &'static std::sync::Arc<std::sync::Mutex<orz_assurance::lif::LifEngine>> {
+        static E: std::sync::OnceLock<
+            std::sync::Arc<std::sync::Mutex<orz_assurance::lif::LifEngine>>,
+        > = std::sync::OnceLock::new();
+        E.get_or_init(|| {
+            std::sync::Arc::new(std::sync::Mutex::new(orz_assurance::lif::LifEngine::new()))
+        })
+    }
+
     fn compact_test_svc<'a>(
         cfg: &'a ContextCompactConfig,
         blackboard: &'a Arc<SharedBlackboard>,
@@ -6036,6 +6094,7 @@ mod tests {
     ) -> SharedLoopServices<'a> {
         SharedLoopServices {
             blackboard,
+            lif: test_lif(),
             denial_state,
             pacing_rounds: pacing,
             context_compact: cfg,

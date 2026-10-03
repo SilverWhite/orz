@@ -122,8 +122,29 @@ impl AgentLoopController {
                 continue;
             };
             let mut payload = fact.clone();
+            let tier = payload
+                .get("tier")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
             payload.as_object_mut().map(|o| o.remove("event"));
             writer.record(event_type.clone(), payload).await?;
+            // 0am P8-b（2026-10-03，S2 §3 Infra 认领）：宿主资源三族 →
+            // Infra 通道（snapshot 跨档过滤在引擎内；v1.1 首测基线不计）。
+            let stimulus = match kind {
+                "host_resource_denied" => Some(orz_assurance::lif::BusStimulus::HostResourceDenied),
+                "resource_limit_hit" => Some(orz_assurance::lif::BusStimulus::ResourceLimitHit),
+                "host_resource_snapshot" => tier
+                    .as_deref()
+                    .and_then(orz_assurance::lif::ResourceTier::from_wire)
+                    .map(orz_assurance::lif::BusStimulus::HostResourceSnapshotTier),
+                _ => None,
+            };
+            if let Some(stimulus) = stimulus {
+                self.lif
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .on_bus_event(crate::AgentLoopController::now_epoch_secs(), stimulus);
+            }
         }
         Ok(())
     }

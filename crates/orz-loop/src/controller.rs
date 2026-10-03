@@ -4080,6 +4080,8 @@ impl AgentLoopController {
                 Self::tool_availability_payload(&probe_snapshot),
             )
             .await?;
+        // 注：run-start 基线探针**不**入 Infra（S2 矩阵只认「翻转」；初次
+        // 建档非翻转——P8-b 第一版曾误喂，真机钉拦截后撤除）。
         self.probe_state_seed(&probe_snapshot);
 
         // 0ac S3①（2026-09-13，设计稿 §9 / §10.2）：检索族探针——与工作工具面
@@ -4192,6 +4194,7 @@ impl AgentLoopController {
         let outcome = run_agent_loop(
             &SharedLoopServices {
                 blackboard: &self.blackboard,
+                lif: &self.lif,
                 denial_state: &self.denial_state,
                 pacing_rounds: &self.pacing_rounds,
                 context_compact: &self.context_compact,

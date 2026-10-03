@@ -23,7 +23,9 @@ pub mod rli;
 pub mod router;
 pub mod temporal;
 
-pub use router::{ActionClass, BusStimulus, DenyClass, StimulusRouting, stimulus_targets};
+pub use router::{
+    ActionClass, BusStimulus, DenyClass, ResourceTier, StimulusRouting, stimulus_targets,
+};
 
 pub use channels::{
     CTX_TAU_ROUNDS, ChannelKind, DENY_REFRACTORY_SECS, DENY_TAU_SECS, DENY_THETA,
@@ -129,7 +131,7 @@ pub struct LifEngine {
     last_tool_t: Option<f64>,
     /// 0am P8：最近一次资源快照档位（跨档过滤记忆；live-only 不随任何
     /// 持久化面携带——run 级新鲜态）。
-    last_snapshot_tier: Option<&'static str>,
+    last_snapshot_tier: Option<ResourceTier>,
 }
 
 impl Default for LifEngine {
@@ -348,6 +350,17 @@ impl LifEngine {
         let Some(kind) = stimulus.channel() else {
             return;
         };
+        // 0am P8-b：总线标签（闭集；成因段数据面）。
+        let label = match stimulus {
+            BusStimulus::ContextCompressed => "压缩",
+            BusStimulus::LedgerFoldAdvance => "折叠推进",
+            BusStimulus::LedgerFoldWriteFailed => "折叠写失败",
+            BusStimulus::TransportRetry => "传输重试",
+            BusStimulus::AvailabilityFlip => "探针翻转",
+            BusStimulus::HostResourceDenied => "资源拒绝",
+            BusStimulus::ResourceLimitHit => "限额命中",
+            BusStimulus::HostResourceSnapshotTier(_) => "资源跨档",
+        };
         self.advance(t);
         match kind {
             ChannelKind::Ctx => self.ctx.spike(t, 1.0),
@@ -355,7 +368,7 @@ impl LifEngine {
             _ => return,
         }
         if let Some(shadow) = &mut self.rli_shadow {
-            shadow.on_bus_event(t, kind);
+            shadow.on_bus_event(t, kind, label);
         }
     }
 

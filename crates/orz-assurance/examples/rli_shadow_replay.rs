@@ -549,7 +549,7 @@ fn main() {
         let root = args
             .get(2)
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(r"D:\tb-eval\jobs-official"));
+            .unwrap_or_else(|| PathBuf::from("jobs-official"));
         let out = args
             .get(3)
             .map(PathBuf::from)
@@ -560,7 +560,7 @@ fn main() {
     let root = args
         .get(1)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"D:\tb-eval\jobs-official"));
+        .unwrap_or_else(|| PathBuf::from("jobs-official"));
     let out = args
         .get(2)
         .map(PathBuf::from)
