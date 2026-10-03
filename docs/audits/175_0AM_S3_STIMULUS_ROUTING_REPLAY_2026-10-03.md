@@ -1,0 +1,46 @@
+# 175 批：0am S3——S2 刺激面路由表离线重放验证（J1–J5 全收，含负结果）（2026-10-03）
+
+> **用户令**：「请进行S3吧」。
+> **本批**＝0am 批序 S3：S2 路由表以重放变换形式在两轮 recli journal（首跑 `RUN-65f2858a-0..7`／二跑 `RUN-72764d4e-0..7`，snapshot 快照 9＋10 卷）上离线对拍，判据 J1–J5 开跑前冻结（S2 档 §6 原文未动）、读数含负结果如实入档。**零生产面改动**——源码变更仅重放件 example 级扩展（`rli_shadow_replay --s3` 模式＋`--s3-selftest`，标签器即 P8 `orz-assurance` 路由模块的种子）。
+> **计数不变 57**（0am 线内批）。
+
+## §0 结论速览
+
+| 判据 | 结果 | 要点 |
+|---|---|---|
+| **J1 认领一致性** | **过** | closure 恰等：二跑 172 完成＝67 认领注入＋35 verify 零注入＋70 显式中性；首跑 230＝115 认领事件（118 注入，含 3 笔 prog+slow 双标签）＋46＋69；分派为 (事件,标签) 确定性函数 |
+| **J2 封闭对账＋三回声逐例** | **过（三例全实锤）** | (a) 写控 `format` 误报（二跑 `RUN-72764d4e-2` seq88；首跑 `RUN-65f2858a-1` seq22 同型）：legacy 落 Err（无码无 exit 的 status=error 完成事件）→S2 恰 Deny(写控类) 一次，err streak 驱动源摘除；(b) 61s `python -m unittest discover`（seq42 wall=60815ms，命令串经 `model_output.tool_calls` 按 call_id 结构化取回＝「零新增采集面」重放兑现）legacy [prog+slow]→S2 零注入；**首跑 Slow 通道 9 注入全部为验证类时长＝H4 实锤**（RUN-7 七连发 79–98s 测试命令全豁免）；(c) 二跑 legacy err 输入恰 1（即误报块）→去源后 streak 复现不可能；slow 驱动归零 |
+| **J3 死窗与基线** | **过** | 二跑 S2 slow 全程 u≡0；Ctx 输入 4/10（compressed；fold_advance 两轮 0）；Infra 17/18（availability 17＋retry 1；snapshot 跨档 0＝run_start 基线不计过滤生效） |
+| **J4 语义分离读数** | **过＋一项负结果** | u_prog 分布重塑：二跑 mean 0.769→0.461/median 0.848→0.439、首跑 0.730→0.507/0.843→0.578；165 悖论复现于重放（首跑 legacy max **0.9756**、≥0.975 两轮）且 S2 馈慢性饱和带收窄（ge975 2→1）、量程拉开（编辑簇真突发 0.99）；**窗一致性公平口径（S2 语义实际＝窗内变更类成功）双轮均升**：首跑 50→57/136、二跑 68→106/169（legacy 口径下降属定义翻转预期）。**负结果如实登记**：两轮验证类命令全部通过（零 verify 失败注入）——本 workload 侵蚀形态（基准评分面功能退化）不经动作面验证失败可见，Verify 通道两轮为死窗；Verify 语义（对真实「测试红」型侵蚀）不因此推翻，登记为已知边界 |
+| **J5 双引擎同馈** | **同源成立＋观察** | 两引擎消费同一变换流（构造保证）；1D-vs-RLI 域一致率 legacy 0.970/0.934→S2 0.899/0.853＝语义锐化后双域机分歧增大，属预期观察（域语义不必同格，2026-09-20 裁决）；域机阈值重校准属动力学面留 P8 按 P3 酌处 |
+
+**S2 档 v1.1 勘误随批**（[`S2 设计档`](../LIF_RLI_STIMULUS_ROUTING_TABLE_S2_DESIGN_2026-10-03.md)）：①写入管控细化＝block 经 call_id join `write_control_review(review=block)` 判 Deny(写控类)、warn 不入 Deny（防双计）；②验证词表匹配口径＝大小写不敏感子串＋词边界；③snapshot 跨档过滤（run 首测基线不计）；④S3/P8 边界注（Verify/Ctx/Infra 动力学不在 S3）；⑤J1–J5 读数入档。
+
+## §1 实现与验证
+
+- **重放件扩展**（orz `orz-assurance/examples/rli_shadow_replay.rs`，example 级零生产面）：`--s3` 模式＝S2 标签器（动作类闭集＋验证词表＋拒绝类分组；工具名字面经 `tool_names` 常量引用——0ao 扫描钉）＋双分派账目（legacy 生产镜像 vs S2 路由表）＋双馈真实引擎重放（RLI 谐振＋LIF 1D，窗口恒取 legacy 实际）＋S2 语义进度窗（窗内变更类成功）。`--s3-selftest`：词表边界（`Makefile` 不误命中）、验证豁免、H2 填平、写控 join 四钉。
+- **验证读数**：orz-assurance lib **281/0** 全绿（含 0ao 扫描钉——初版字面被钉拦截后常量化复绿）；`--selftest`／`--s3-selftest` 双绿；clippy 触碰文件零新增（crate 预存告警面未触碰；`credential/mod.rs` 等 5 处 fmt 漂移为 HEAD 预存、不在本批触碰面）。
+- **读数工件（仓外）**：`D:/tb-eval/0am_s3/s3_run1_20261002.json`／`s3_run2_20261003.json`。
+
+## §2 P8 放行门与批序
+
+- S2 档 §8：**P8 放行门＝S3 判据读数入档——本批达成**。P8 批序（喂入负载扩展→ChannelKind 5→7 双 bank→成因段渲染＋行宽重订＋0cp D6 勘误→RS-06 随批）待用户放行开工。
+- 已知边界移交 P8：①Verify 侵蚀死窗边界（本 workload 形态）；②1D-vs-RLI 域机分歧增大（重校准按 P3，非触发规则）；③标签器从 example 提升为 `orz-assurance` 库模块（同源复用）。
+
+## §3 台账
+
+- 本档：`docs/audits/175_0AM_S3_STIMULUS_ROUTING_REPLAY_2026-10-03.md`。
+- S2 设计档：v1.0 → **v1.1**（勘误五项＋J1–J5 读数入档）。
+- TODO：头部计数行指针、P1 行 0am 注记、`0am` 节 S3 勾选行。
+- BACKLOG：本批指针（174 转前批）、计数行、P1 总览行、`0am` 节 S3 条目。
+- BACKLOG 第二卷：§1.128。
+- 索引：头行 v4.146 → **v4.147**；`AUTH-LIF-RLI-STIMULUS-TYPED-BUS` 条目 S3 状态。
+- orz：example 批提交（`feat/fusion-architecture`）；父仓 pin＋`orz_source_manifest.sha256` 重算随批。
+- 机械门禁：落账后复跑 `check_repository.py`。
+
+## §4 关键词
+
+175 批、0am S3、离线重放、J1–J5 全收、三回声实锤、写控块 join、61s unittest 豁免、
+Slow 验证时长全切除、u_prog 分布重塑、165 悖论复现、S2 语义窗一致性双升、
+侵蚀检出负结果、Verify 死窗边界、1D-RLI 分歧观察、重放件 --s3、标签器种子、S2 v1.1、
+P8 放行门达成、计数不变 57、索引 v4.147。

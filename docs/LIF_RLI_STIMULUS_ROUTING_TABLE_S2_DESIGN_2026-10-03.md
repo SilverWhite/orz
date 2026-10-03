@@ -1,6 +1,6 @@
 # LIF/RLI 刺激面路由表设计（S2）——标签→通道认领矩阵
 
-> **版本**:v1.0;日期:2026-10-03。
+> **版本**:v1.1;日期:2026-10-03(v1.0 首版落卷〔174 批〕;v1.1 S3 重放批勘误〔175 批〕:写入管控 block 路由细化、验证词表匹配口径、snapshot 跨档过滤、S3/P8 边界注、侵蚀检出负结果登记)。
 > **定位**:0am 刺激面改革批序的 **S2 产物**（上游＝[`LIF_RLI_STIMULUS_TYPED_BUS_DESIGN_2026-10-03`](LIF_RLI_STIMULUS_TYPED_BUS_DESIGN_2026-10-03.md) v1.2 §4.1 授权:标签→通道的认领矩阵、封闭性原则、死窗规则、P8 标签成因段可用标签集）。本档只定义**通道看见什么**;通道如何判断(动力学/阈值/触发沿)与**何时叫**(触发条件)一概不在本档(P9)。
 > **转正裁决(2026-10-03 用户令)**:「请开始进行0am吧」——0am 线自 2026-09-17 的挂起态就此解挂,本档为解挂后首件。**边界**:O2 审计发现本身(idle-kill 对输出已重定向进程盲)仍独立缓议,不随本线开启而自动处置。
 > **硬约束**:上游 §2 十原则 P1–P9 全程适用;本档违反 P9 的表述一律无效。
@@ -52,7 +52,7 @@
 | 族(上游 §3) | 认领 | 备注 |
 |---|---|---|
 | 生命周期(7) | 不认领 | run 边界由引擎既有复位语义消费,非刺激 |
-| 宿主资源(6) | **认领→Infra**:`host_resource_snapshot`(跨档)/`host_resource_denied`/`resource_limit_hit`;不认领:`resource_exhausted`/`process_tree_reaped`/`reclaim_performed` | 后三者为终局/清扫语义,run 已临终局,刺激无消费者 |
+| 宿主资源(6) | **认领→Infra**:`host_resource_snapshot`(**跨档过滤,v1.1 细化**:run 首测＝基线不计,tier 变更才计〔S3 实证:二跑 8 见 0 跨、首跑 8 见 0 跨〕)/`host_resource_denied`/`resource_limit_hit`;不认领:`resource_exhausted`/`process_tree_reaped`/`reclaim_performed` | 后三者为终局/清扫语义,run 已临终局,刺激无消费者 |
 | 提示/模型(5) | 不认领 | 节律原语(T̂/轮间隔/工具间隔)由估计器内在消费;输出内容面 P7 禁入 |
 | ACP(2) | 不认领 | 载体事实 |
 | 工具(7) | **认领**:`tool_started`/`tool_completed`→动作类标签器路由(§5.1:Prog/Verify/Err/Slow/中性五路);不认领:`tool_proposal`/`permission_requested`/`permission_decision`(拒绝事实已经拒绝臂入 Deny,防双计)/`tool_running`(与完成事件双计)/`budget_cue_injected`(默认 off) | 喂入点已备工具名与命令串(H3 修正的落点,§6) |
@@ -64,7 +64,7 @@
 | 快照/工件(3) | 不认领 | |
 | 计划面(8) | 不认领(v1) | 工作形态面非摩擦/产出面;`console_order_written` 退役 |
 | 传输(1) | **认领→Infra**:`transport_retry` | |
-| 写入管控(1) | 不直接认领 | block/warn 事实经喂入臂入 Deny(171 批写控误报为 S3-J2 对拍案例);避免与拒绝臂双计 |
+| 写入管控(1) | 不直接认领 | **block 事实入 Deny（v1.1 细化）**:S3 实证两轮各有一例写控 block 完成事件**无 `policy_denial` 标记、无结构化拒绝码、无 exit_code**——legacy 落 Err（171 批 streak×3 回声源），S2 路由按 `call_id` join `write_control_review(review=block)` 判 Deny(写控类)；**warn 不入 Deny**（warn 后命令照常执行，完成事件按自身结果路由——防双计）|
 | face_fingerprint(1) | 不认领 | 缓存归因面 |
 | 遗留回放(4) | 不认领 | 产侧已退役,仅历史回放 |
 | 字段级:`dep_graph` | 不认领 | 依赖图事实 |
@@ -85,7 +85,7 @@
 | 类 | 机械判据(闭集初版) |
 |---|---|
 | 变更类 | `search_replace`(结构化编辑工具) |
-| 验证类 | `run_tests` 工具;终端验证词表(大小写不敏感、首词/子命令前缀):`cargo test/build/check/clippy/fmt --check`、`pytest`/`python -m pytest`/`python -m unittest`、`make`、`npm test`/`npm run build`/`npx tsc`、`go test/build/vet`、`gradle …test`/`mvn …test`、`dotnet test/build`、`cmake --build`、`rake`、`eslint`/`ruff`/`pylint`/`mypy` |
+| 验证类 | `run_tests` 工具;终端验证词表(大小写不敏感、首词/子命令前缀):`cargo test/build/check/clippy/fmt --check`、`pytest`/`python -m pytest`/`python -m unittest`、`make`、`npm test`/`npm run build`/`npx tsc`、`go test/build/vet`、`gradle …test`/`mvn …test`、`dotnet test/build`、`cmake --build`、`rake`、`eslint`/`ruff`/`pylint`/`mypy` **〔v1.1 匹配口径〕**:大小写不敏感子串＋两侧字母数字词边界(复合命令 `cd x && python -m unittest …` 的子命令可命中;`Makefile` 不误命中 `make`;S3 重放件实现同此) |
 | 阅读/检索类 | `read_file`/`list_dir`/`grep`/`search_tool`/`web_search`/`web_fetch`/`lsp` |
 | 黑板/会话类 | `blackboard_read`/`blackboard_write`/`context_compress`/`compaction_whitelist_add`/`todo_write`/`update_goal`/`ask_user_question` |
 | 提交类 | `submit` |
@@ -107,11 +107,13 @@
 
 ## §6 S3 离线重放预注册判据(框架内事实,P6;S3 开跑前可修订,开跑即冻结)
 
-- **J1 认领一致性**:每笔注入可归源到唯一通道(矩阵合规,机械断言——双计/漏计即红)。
-- **J2 封闭对账**:注入总数＝认领事件总数;并含 171 批三回声**逐例对拍**:(a) 写控 `format` 误报→恰落 Deny 类一次、无 Err 回声;(b) 61s 成功测试→Verify 零注入∧Slow 零注入;(c) 去源后 streak fire 不复现——若仍复现,登记为动力学面残留移交后续批(本档不扩参数, P2)。
-- **J3 死窗与基线**:零输入通道全程基线(无自激)。
-- **J4 语义分离读数**:u_prog 分布新路由 vs 旧路由对照(预期:纯探索/验证 run 的 u_prog 下移＝真实低进度显形;165 批悖论复验);侵蚀检出能力:历史含连续验证失败窗的 run(若两轮 journal 存在)Verify 通道抬升与否——**含负结果如实入档**。
-- **J5 双引擎同馈一致性**:LIF 1D 与 RLI 在同一路由流上锚点对拍(同源无分叉)。
+> **〔v1.1 S3 读数已入档〔175 批〕**;判据原文开跑前冻结未动;S3/P8 边界＝Verify/Ctx/Infra 三新通道的**动力学**不在 S3(S3 只产出其输入序列账目),既有五通道新旧馈对比走真实引擎。重放件:`rli_shadow_replay --s3`(example 级扩展,零生产面改动;标签器即 P8 orz-assurance 模块的种子,同源复用)。语料＝两轮 recli journal(首跑 RUN-65f2858a-0..7／二跑 RUN-72764d4e-0..7,snapshot 快照)。读数档:`D:/tb-eval/0am_s3/s3_run1_20261002.json`／`s3_run2_20261003.json`。〕
+
+- **J1 认领一致性**:每笔注入可归源到唯一通道(矩阵合规,机械断言——双计/漏计即红)。**读数＝过**:两轮 closure 恰等(二跑 172 完成＝67 认领注入＋35 verify 零注入＋70 显式中性;首跑 230＝115 认领事件〔118 注入,含 3 笔 prog+slow 双标签〕＋46 零注入＋69 中性);路由分派为 (事件,标签) 的确定性函数。
+- **J2 封闭对账**:注入总数＝认领事件总数;并含 171 批三回声**逐例对拍**:(a) 写控 `format` 误报→恰落 Deny 类一次、无 Err 回声;(b) 61s 成功测试→Verify 零注入∧Slow 零注入;(c) 去源后 streak fire 不复现——若仍复现,登记为动力学面残留移交后续批(本档不扩参数,P2)。**读数＝过,三例全实锤**:(a) 二跑 `RUN-72764d4e-2` seq88 写控块(format 误报)legacy 落 Err→S2 恰 Deny(写控类)一次;首跑同型一例(RUN-65f2858a-1 seq22);(b) 二跑 seq42 wall=60815ms(`python -m unittest discover`——命令串经 `model_output.tool_calls` 按 call_id 结构化取回)legacy [prog+slow]→S2 零注入;首跑 RUN-7 七连发 79–98s 测试命令全豁免(首跑 Slow 通道 9 注入全部为验证类时长＝H4 实锤);(c) 二跑 legacy err 输入恰 1(即误报块)——去源后 err streak 驱动消失;slow×3 驱动(61s unittest)归零,S2 slow 输入＝0。
+- **J3 死窗与基线**:零输入通道全程基线(无自激)。**读数＝过**:二跑 S2 slow 全程 u≡0(max 0.0);Ctx 输入二跑 4/首跑 10(compressed;fold_advance 两轮均 0)、Infra 17/18(availability 17＋retry 首跑 1;snapshot 跨档两轮均 0——run_start 基线不计,v1.1 过滤);Verify 输入两轮均 0(见 J4 负结果)。
+- **J4 语义分离读数**:u_prog 分布新路由 vs 旧路由对照(预期:纯探索/验证 run 的 u_prog 下移＝真实低进度显形;165 批悖论复验);侵蚀检出能力:历史含连续验证失败窗的 run(若两轮 journal 存在)Verify 通道抬升与否——**含负结果如实入档**。**读数**:=分布重塑＝**过**——二跑 u_prog mean 0.769→0.461/median 0.848→0.439,首跑 0.730→0.507/0.843→0.578;165 悖论复现于重放(首跑 legacy u_prog max **0.9756**、≥0.975 共 2 轮),S2 馈下慢性饱和带收窄(首跑 ge975 2→1)且量程拉开(编辑簇真突发可达 0.99);=**窗一致性(公平口径)**＝**过**——S2 语义进度实际(窗内变更类成功)下,S2 馈一致性**双轮均升**(首跑 50→57/136,二跑 68→106/169),legacy「一切成功＝进度」口径下降属定义翻转预期;=**侵蚀检出＝负结果如实登记**——两轮 journal 的验证类命令**全部通过**(零 verify 失败注入),本 workload 的侵蚀形态(基准评分面功能退化)不经动作面验证失败可见,Verify 通道在此两轮为死窗;这不推翻 Verify 语义(对真实「测试红」型侵蚀有效),登记为已知边界。
+- **J5 双引擎同馈一致性**:LIF 1D 与 RLI 在同一路由流上锚点对拍(同源无分叉)。**读数＝同源成立**(两引擎消费同一变换流,构造保证);1D-vs-RLI 域一致率 legacy 0.970/0.934→S2 0.899/0.853——语义锐化后双引擎域机分歧增大,属预期观察(RLI 与 LIF 域语义不必同格,2026-09-20 用户裁决);域机阈值重校准属动力学面(非触发规则),留 P8 按 P3 物理依据酌处。
 
 ## §7 不变面(P9 兑现清单)
 

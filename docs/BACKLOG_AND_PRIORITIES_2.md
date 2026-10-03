@@ -1028,3 +1028,17 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **台账**：TODO 头部计数行＋P1 行＋0am 节（S0 后新增 S2 勾选行＋挂起行转正批注）＋摩擦盘点节勾选；BACKLOG 本批指针＋计数行＋P1 总览行＋0am 节转正条目＋挂起行更新＋RS-06 改挂；盘点档边界注记＋§13；索引头行 v4.145 → **v4.146**＋`AUTH-RLI-BASE-SHADOW`/`AUTH-LIF-RLI-STIMULUS-TYPED-BUS` 条目更新。
 - 批档：[`174 批档`](audits/174_0AM_UNBLOCK_S2_STIMULUS_ROUTING_TABLE_2026-10-03.md)。
 - 关键词：174 批、0am 转正、S2 路由表、七通道、验证摩擦、认知负载、供给摩擦、Other 黑洞、认领矩阵、封闭性、死窗、动作类标签器、S3 判据 J1–J5、B04/B05 销项、RS-06 改挂 P8、计数不变 57、索引 v4.146。
+
+### 1.128 2026-10-03 175 批 0am S3——S2 刺激面路由表离线重放验证 J1–J5 全收（用户令「请进行S3吧」；含负结果如实；重放件 `--s3` example 级扩展零生产面改动；计数不变 57）
+
+- **重放件**：orz `dd784885`（`rli_shadow_replay --s3`＋`--s3-selftest`）——动作类标签器（闭集＋验证词表词边界匹配＋拒绝类分组；工具名字面经 `tool_names` 常量＝0ao 扫描钉）、legacy/S2 双分派账目、双馈真实引擎对比（RLI 谐振＋LIF 1D；窗口恒取 legacy 实际）＋S2 语义进度窗（窗内变更类成功）；标签器即 P8 `orz-assurance` 模块种子。
+- **J1 过**：closure 恰等——二跑 172 完成＝67 认领注入＋35 verify 零注入＋70 显式中性；首跑 230＝115 认领事件（118 注入含 3 笔 prog+slow 双标签）＋46＋69。
+- **J2 过（三回声全实锤）**：(a) 写控 `format` 误报（二跑 RUN-72764d4e-2 seq88；首跑 RUN-65f2858a-1 seq22 同型）＝无码无 exit 的 status=error 完成事件 legacy 落 Err→S2 恰 Deny(写控类) 一次；(b) 61s `python -m unittest discover`（seq42 wall=60815ms；命令串经 `model_output.tool_calls` 按 call_id 结构化取回）legacy [prog+slow]→S2 零注入；首跑 RUN-7 七连发 79–98s 测试命令全豁免＝**首跑 Slow 9 注入全部验证类时长（H4 实锤）**；(c) streak 驱动摘除（二跑 legacy err 输入恰 1 即误报块；S2 slow 输入＝0）。
+- **J3 过**：零输入通道基线休眠（二跑 S2 slow u≡0）；Ctx 4/10、Infra 17/18、snapshot 跨档 0（run_start 基线不计过滤生效）。
+- **J4 过＋负结果**：u_prog 分布重塑（二跑 mean 0.769→0.461/median 0.848→0.439；首跑 0.730→0.507/0.843→0.578）；165 悖论复现于重放（legacy max 0.9756、≥0.975 两轮）且 S2 慢性饱和带收窄（ge975 2→1）；S2 语义窗一致性双升（首跑 50→57/136、二跑 68→106/169；legacy 口径下降属定义翻转预期）；**侵蚀检出负结果＝两轮验证命令全部通过（零 verify 失败注入）、Verify 死窗边界**（本 workload 侵蚀不经动作面可见；Verify 语义不因此推翻）。
+- **J5 同源成立＋观察**：1D-vs-RLI 域一致率 legacy 0.970/0.934→S2 0.899/0.853＝语义锐化后分歧增大（域语义不必同格）；域机重校准留 P8 按 P3。
+- **S2 档 v1.1 勘误五项**：写控 block join 细化＋warn 不入、验证词表匹配口径、snapshot 跨档过滤、S3/P8 边界注（新三通道动力学不在 S3）、J1–J5 读数入档。
+- **验证**：orz-assurance lib **281/0**（0ao 钉初版拦截→常量化复绿）＋`--selftest`/`--s3-selftest` 双绿＋clippy 触碰面零新增（`credential/mod.rs` 等 5 处 fmt 漂移为 HEAD 预存、未触碰）；父仓 pin → `dd784885`＋manifest 重算（差异恰 1 文件）。
+- **P8 放行门达成**：P8 批序（喂入扩展→ChannelKind 5→7 双 bank→成因段＋行宽重订＋0cp D6 勘误→RS-06 随批）待用户放行。
+- 批档：[`175 批档`](audits/175_0AM_S3_STIMULUS_ROUTING_REPLAY_2026-10-03.md)；读数仓外 `D:/tb-eval/0am_s3/`。
+- 关键词：175 批、0am S3、离线重放、J1–J5 全收、三回声实锤、写控块 join、61s unittest 豁免、Slow 验证时长全切除、u_prog 重塑、165 悖论复现、S2 语义窗双升、侵蚀检出负结果、Verify 死窗边界、1D-RLI 分歧、标签器种子、S2 v1.1、P8 放行门、计数 57。
