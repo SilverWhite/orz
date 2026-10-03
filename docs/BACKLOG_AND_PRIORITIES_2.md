@@ -1110,3 +1110,16 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **边界**：打包顺延、未推送未发行（发布面停 v0.8.7）；Linux 未重 provision（沿同口径）。**0am 余项收敛＝真机轮 Verify streak 查准/转向相关预注册读数（随下一真机轮）；按 2026-09-20 顺序裁决载体重建后进 0bc。**
 - 批档：[`180 批档`](audits/180_CARRIER_REBUILD_V0812_0AM_P8_ENTRY_2026-10-04.md)。
 - 关键词：180 批、0.8.12 重建、源冻结 `54717d06`、0am P8 面首次进件、`b141c1ef` 身份门、ACAF 重 provision 860c9860、signer 哈希传播、static-pie×3、双冒烟 0.8.12、标签环在件、词表 v2 在件、rli-shadow-v2 拆分内联、regex-syntax 版本串判读、check_carrier_literals、计数 57。
+
+### 1.135 2026-10-04 181 批 recli 三跑真机轮（0am Verify 读数承载轮）＋S0 前推对拍（用户令「不走预注册了，直接开始吧……先做S0试试」；计数不变 57）
+
+- **发射与跑批**：0.8.12 载体在役（冒烟 rc 0、signer `a21e1dc5…` 与清单逐位一致）；RLI 影子缺省常开（unset=enable，rig 零 env 注入）＝P8 八通道路由真机首验；`uv run slop-code run --agent orz --model deepseek/deepseek-v4-flash --problem recli`（与 171 同形）；8/8 checkpoint 全程、harness exit 0、≈7,478s ≈2h05m（二跑 53 分钟）；268 模型轮/476 采样/压缩 11 次（二跑 185/320/4）；T̂ 8.00→75.34s。
+- **P8 面首次真机**：60 notice＝spike 19＋迁移 17＋缺口 17＋streak 7，三面恰等（fire＝journal＝`notice_delivered_total`）；成因段 7 条全带 `源：` 五驱动（长时(非验证)/间隔失节律×2/写控拦截/执行失败×2/验证失败）；行宽 235–241≤320B；`rli-shadow-v2` 首次真机；八通道首算（ctx u=0.940 临界未 fire＝178 排除面一致；infra 1 次 retry）。**Verify 首 fire**（run-7 `verify×3 u=0.82≥θ=0.34` 源：验证失败、同刻装配 +5ms）＝S3 判定死窗未复现（死窗按用户既定接受边界）。
+- **回归**：0cp 七判据全过（动作样 476/网格 0/看门狗 0 时间样/k=3×7/零周期/D6+成因段形制/spike 19/19）；0cn 零残留（budget/预算/墙钟约=0）。
+- **分数（参考面 k=1）**：官方 core solved **3/8**（ckpt1/2/3）；逐档 marker 口径 11/11→9/9→7/7→4/5→1/5→0/6→1/5→6/7（与二跑六档逐同、ckpt3 +1 档＝core_solved 多一档来源、ckpt7 −1 档）；erosion **0.3176 三轮最低**；全测试 143/255（二跑 156/255）；mean test pass 0.799。
+- **S0 前推对拍**（`rli_forecast_probe` 0be 收编件；语料＝本轮 10 卷冻结副本；router 同源 vs legacy 两喂入）：①在途演化预测 skill 全正——Err +0.25→+0.59@h30（随 horizon 单调变好）、Slow +0.09→+0.43（legacy −1.14＝喂入失真实证）、Verify +0.45~0.65、Stall +0.24~0.33、Ctx +0.14~0.29、Prog θ侧命中 1.000；②**到达预告结构性为零**（「u<θ 且 pred>θ」全程 0 命中；脉冲重置驱动＝形态问题非参数问题）；③决策轮粒度低通事件级峰值（1.31 vs 1.91）＝预测读数挂事件级采样点；④喂入同源敏感性实证（legacy H2 黑洞 err 全盲）。err 事件级越线领先塌陷评估 ≈5min/≈100s（侵蚀先兆可观测首个同轮样本；k=1 不作因果结论）。
+- **用户定性三条登记**：消费 0 可预见（注入式＋注解下拉取按需，不构成否证）；泛用性质疑待斟酌（RLI 预测不能限于 slopcode bench——该测试「衰减」针对代码结构质量；方向＝绝对中性表达的全局性提醒和方向提醒、做自己的指标；不立项不计数）；方法学注记（重要）＝预测材料必须与生产喂入同源事件。
+- **S0.5 登记（用户令）**：到达概率段离线校准（λ̂·horizon Poisson P(新脉冲) 分桶/Brier 对拍）；**校准不必等下一轮**（可离线因果复算；下一真机轮＝out-of-sample 确认；边界＝err 脉冲每 run 10–20 次分桶偏粗）；λ̂ 估计器在役但仅 Prog 间隔驱动，脉冲通道到达率估计为 S0.5 离线件；预测段设计落卷与否待 S0.5 读数＋用户斟酌；顺序位 S0.5 → 0bc〔09-20 顺序裁决不变〕。
+- **边界**：零源码（探针临时补丁跑完 `git checkout` 还原、副本仓外 `rli_forecast_probe_routed_variant.rs`）；工件全部仓外 `D:/tb-eval/0am_p8_run7/`＋跑批日志 `D:/tb-eval/scbench/recli_run7_0am_p8.log`；未提交未推送（随下一提交批入账）。
+- 批档：[`181 批档`](audits/181_RECLI_RUN3_0AM_VERIFY_S0_FORECAST_BACKTEST_2026-10-04.md)。
+- 关键词：181 批、recli 三跑、Verify 首 fire、死窗未复现、P8 面首次真机、成因段五驱动、rli-shadow-v2 首次真机、core solved 3/8、erosion 0.318、S0 前推对拍、router 同源、在途 skill 全正、到达预告结构性零、脉冲驱动、同源事件注记、S0.5 到达概率校准、计数 57。
