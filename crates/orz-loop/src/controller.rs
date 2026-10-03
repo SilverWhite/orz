@@ -2664,10 +2664,16 @@ impl AgentLoopController {
                 // 0be 四项②：分通道明细（尾段；超预算最先让位——明细面
                 // `selector=channels` 折叠可读）。渲染与折叠面单一来源。
                 lines.extend(Self::rli_channel_lines(shadow, t_hat));
-                // 0bg S2（摩擦 g：1 KiB 截断可见性）：**预算内装配＋显式省略
+                // 0bg S2（摩擦 g：截断可见性）：**预算内装配＋显式省略
                 // 行**——超预算从尾部让位（分通道 → 近提醒；核心行不剪），
                 // 不静默截断；被剪行以省略行点名可读去处。
-                const NOW_BUDGET: usize = 830;
+                // **0am 预测段批再订（2026-10-04）**：提醒行随 178 批成因段
+                // ＋本批预测段增宽（单条最坏 ≈390B）——830B 会把近提醒一并
+                // 让位（追溯面事实死亡）；新预算 **960B**＝保底一条最坏
+                // 提醒＋省略行 ≤ 下方 BOARD_CAP 1024B（core≈534＋notice
+                // ≈390＋省略行≈45＝969B；两条最坏提醒时按让位次序退至一
+                // 条，仍不触硬钳制）。
+                const NOW_BUDGET: usize = 960;
                 let mut omitted = 0usize;
                 while lines.len() > core_len
                     && lines.iter().map(|l| l.len() + 1).sum::<usize>() > NOW_BUDGET

@@ -136,6 +136,17 @@ pub fn rli_horizon_steps(kind: ChannelKind) -> f64 {
     }
 }
 
+/// 预测段趋势死区（0am 预测段批，2026-10-04，设计卷 §2.2）：`|u_h − u₀|`
+/// 低于此值记 `→`（无实质趋势）。与 T̂ 趋势段死区同值取自同一「实质变化」
+/// 口径；通道水平量纲 O(1)，死区占量程 5%。机械常数、非拟合。
+pub const RLI_FORECAST_TREND_DEADBAND: f64 = 0.05;
+
+/// 预测段段内越线扫描网格点数（设计卷 §2.3）：闭式曲线在
+/// `(0, h·T̂]` 均匀取样点数。对最短 horizon（Stall=2·T̂≈180s、ω≈0.07rad/s）
+/// 分辨率远细于半周期，精度充分；恒定开销 O(64)、无迭代收敛问题。
+/// 构造常数、非拟合。
+pub const RLI_FORECAST_GRID_POINTS: usize = 64;
+
 /// 会话内在线到达率估计 λ̂（0be 四项①，2026-09-21）：**成功事件到达间隔
 /// 的 EMA**（估计式——非损失下降；口径见 [`RLI_FORECAST_CONTRAST`] §6）。
 /// 间隔先钳制到 [`RLI_LAMBDA_GAP_MIN_SECS`, `RLI_LAMBDA_GAP_MAX_SECS`]；
@@ -427,6 +438,62 @@ pub struct RliAnchors {
     pub hits: u64,
 }
 
+/// 预测段趋势三态（0am 预测段批，2026-10-04，设计卷 §2.2；死区
+/// [`RLI_FORECAST_TREND_DEADBAND`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RliForecastTrend {
+    /// 前推高于当前（`Δu ≥ +死区`）。
+    Up,
+    /// 前推低于当前（`Δu ≤ −死区`）。
+    Down,
+    /// 死区内（无实质趋势）。
+    Flat,
+}
+
+/// 预测段段内越线形态（设计卷 §2.3 **五值闭集**）——前推视界窗
+/// （「段」）内闭式曲线 `u(τ)` 对 θ 的穿越形态；固定网格机械扫描。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RliSegmentCrossing {
+    /// 起于 θ 上：段内全程 `u ≥ θ`（压力持续形态）。
+    PersistsAbove,
+    /// 起于 θ 上：段内跌破 θ 且不再回 θ 上（回落形态——S0 skill 主证据形态）。
+    FallsBelow,
+    /// 起于 θ 上：跌破后段内再次 `≥ θ`（振荡持续形态＝「段内再越线」）。
+    Recross,
+    /// 起于 θ 下：段内全程 `u < θ`（S0 实证主态——到达预告结构性为零）。
+    StaysBelow,
+    /// 起于 θ 下：段内升越 θ（结构性近零；如出现即闭式解的机械事实，
+    /// 如实渲染——非到达概率）。
+    RisesAbove,
+}
+
+impl RliSegmentCrossing {
+    /// 模型面文案（自述机械事实、无行动建议——0bf ② 纪律；闭集单源）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PersistsAbove => "段内θ上持续",
+            Self::FallsBelow => "段内回落",
+            Self::Recross => "段内再越线",
+            Self::StaysBelow => "段内不越线",
+            Self::RisesAbove => "段内越线",
+        }
+    }
+}
+
+/// 预测段读数（渲染时纯函数产物，**不持久化**——live 状态随处可复算；
+/// 设计卷 §3 边界 1）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RliForecast {
+    /// 当前水平 `u₀`（触发当刻）。
+    pub u0: f64,
+    /// 闭式前推值 `u_h`（`Δt = h·T̂` 自由演化）。
+    pub u_h: f64,
+    /// 趋势三态。
+    pub trend: RliForecastTrend,
+    /// 段内越线形态。
+    pub crossing: RliSegmentCrossing,
+}
+
 /// 单通道 RLI 影子状态。
 #[derive(Debug, Clone)]
 pub struct RliChannel {
@@ -662,6 +729,67 @@ impl RliChannel {
             phi * ((wd * b - zeta_w * a) * c - (wd * a + zeta_w * b) * s),
             phi * libm::sqrt(a * a + b * b),
         )
+    }
+
+    /// **预测段读数**（0am 预测段批，2026-10-04，设计卷
+    /// [`LIF_RLI_FORECAST_SEGMENT_DESIGN`](../../../../../docs/LIF_RLI_FORECAST_SEGMENT_DESIGN_2026-10-04.md)
+    /// §2）：闭式自由演化前推 `Δt = steps·T̂` 的三要素——前推值 `u_h`、
+    /// 趋势（死区 [`RLI_FORECAST_TREND_DEADBAND`]）、段内越线形态（五值
+    /// 闭集，[`Self::scan_crossing`]）。**纯自由演化**——`prog` 的期望
+    /// 注入修正（λ̂·Poisson）不进预测段（S0.5 到达面双重复核否定的兑现：
+    /// 到达概率及其估计量不进模型面）。T̂/steps 非法＝`None`（不渲染、
+    /// 不虚构前推）。纯读函数：不改状态。
+    pub fn forecast(&self, steps: f64, t_hat_secs: f64) -> Option<RliForecast> {
+        if !t_hat_secs.is_finite() || t_hat_secs <= 0.0 || !steps.is_finite() || steps <= 0.0 {
+            return None;
+        }
+        let dt = steps * t_hat_secs;
+        let (u_h, _, _) = self.free_evolution_at(dt);
+        let delta = u_h - self.u;
+        let trend = if delta >= RLI_FORECAST_TREND_DEADBAND {
+            RliForecastTrend::Up
+        } else if -delta >= RLI_FORECAST_TREND_DEADBAND {
+            RliForecastTrend::Down
+        } else {
+            RliForecastTrend::Flat
+        };
+        let crossing = self.scan_crossing(dt);
+        Some(RliForecast {
+            u0: self.u,
+            u_h,
+            trend,
+            crossing,
+        })
+    }
+
+    /// 段内越线扫描（设计卷 §2.3 五值闭集）：闭式曲线 `u(τ)` 在
+    /// `(0, dt]` 按 [`RLI_FORECAST_GRID_POINTS`] 均匀网格取样（恒等样点
+    /// τ=0 不取——只看未来），逐点与 θ 比较（`≥θ` 计「θ 上」，与 streak
+    /// 判定同口径）。起始侧由 `u₀` 决定；固定网格为机械近似（样点间窄
+    /// 穿越可能漏检——如实登记于设计卷）。纯函数、恒定开销。
+    fn scan_crossing(&self, dt: f64) -> RliSegmentCrossing {
+        let started_above = self.u >= self.theta;
+        let mut fell_below = false;
+        let grid = RLI_FORECAST_GRID_POINTS as f64;
+        for i in 1..=RLI_FORECAST_GRID_POINTS {
+            let tau = dt * (i as f64) / grid;
+            let (u_tau, _, _) = self.free_evolution_at(tau);
+            let above = u_tau >= self.theta;
+            if started_above {
+                if !above {
+                    fell_below = true;
+                } else if fell_below {
+                    return RliSegmentCrossing::Recross;
+                }
+            } else if above {
+                return RliSegmentCrossing::RisesAbove;
+            }
+        }
+        match (started_above, fell_below) {
+            (true, false) => RliSegmentCrossing::PersistsAbove,
+            (true, true) => RliSegmentCrossing::FallsBelow,
+            (false, _) => RliSegmentCrossing::StaysBelow,
+        }
     }
 
     /// 四锚点 + θ/命中读数（S3 导出面）。
@@ -1342,16 +1470,26 @@ pub fn rli_notice_annotation(kind: RliNoticeKind) -> &'static str {
             // 承载，尾注解只保留非阻断声明以守住 240B 预算）。
             "〔仅读数非阻断〕"
         }
-        RliNoticeKind::StreakCrossed => "〔连续k个动作采样点u≥θ；失配=ρ>1占比；仅读数非阻断〕",
+        RliNoticeKind::StreakCrossed => {
+            // 0am 预测段批（2026-10-04，设计卷 §2.4）：注解扩展「前推=…」
+            // ——预测段词义随报自含，模型免回查（T̂ 含义由行内 T̂ 注解承载）。
+            "〔连续k个动作采样点u≥θ；失配=ρ>1占比；前推=闭式自由演化至h·T̂；仅读数非阻断〕"
+        }
     }
 }
 
 /// 0bg S2：提醒**本体＋注解**的字节预算（B/条）——注解随报的成本上界
 /// （用户裁决「随报的成本不大…关键是要方便模型理解」的口径门）。
 /// **0am P8-b 重订（2026-10-03，S2 §4.3/§8）**：成因段（标签维「源：…」）
-/// 入行后 240B 必越限（S2 档 §4.4 预见）——新预算 **320B**（最坏 D6 形态
-/// ≈270B＋余量；0cp D6「无成因」子句由 S2 P8 取代，行宽子句随本批修订）。
-pub const RLI_NOTICE_TEXT_BUDGET: usize = 320;
+/// 入行后 240B 必越限（S2 档 §4.4 预见）——预算 240 → **320B**（0cp D6
+/// 「无成因」子句由 S2 P8 取代，行宽子句随批修订）。
+/// **0am 预测段批再订（2026-10-04，设计卷 §3.3）**：单 fire 预测段
+/// （「前推(h·T̂): …」≈45B）＋注解扩展（「前推=闭式自由演化至h·T̂」≈33B）
+/// 入行后 320B 必越限——新预算 **400B**（合成最坏单 fire 形态实测
+/// **383B**／钉驱动 **372B**，余量 ≈5%——格式闭集：模板常数＋两位小数
+/// 量化读数＋标签环 cap 8×前 4 截断；钉子随批更新；S2 §4.3「行宽新值
+/// 随实现批裁决」第二次行使）。
+pub const RLI_NOTICE_TEXT_BUDGET: usize = 400;
 
 /// 0bg S2：覆盖缺口就绪门——已完成段数下限（用户令「冷启动久些不是坏事，
 /// 域建模与预测本就需要基础数据量」；域图需基础数据量）。
@@ -1536,6 +1674,8 @@ impl RliShadow {
     /// Deny 环 7 标签全渲染的最坏 streak 行 **349B** > 预算 320B；截断后
     /// 同形态 **284B**（钉子
     /// `streak_line_width_worst_case_with_max_label_diversity` 双断言）。
+    /// 预测段批（2026-10-04）截断规则沿用；行宽随预测段入行再实测——
+    /// 钉驱动 **372B**／合成最坏 **383B**／预算 400B（预算钉随批更新）。
     fn channel_label_cause(&self, kind: ChannelKind) -> Option<String> {
         let ring = &self.channel_labels[Self::index_of(kind)];
         if ring.is_empty() {
@@ -1558,6 +1698,27 @@ impl RliShadow {
                 .collect::<Vec<_>>()
                 .join("＋"),
         )
+    }
+
+    /// **预测段文案**（0am 预测段批，2026-10-04，设计卷 §2.4）——触发沿
+    /// 渲染时从 live 状态闭式计算：`前推(h·T̂): u₀→u_h ↑/↓/→，段内{五值}`。
+    /// 纯读函数：不改状态、不推进动力学、不反馈（P9——只在既有触发沿
+    /// 渲染，零新触发）。T̂/horizon 非法＝`None`（不渲染、不虚构前推）。
+    pub(crate) fn forecast_segment_text(&self, kind: ChannelKind) -> Option<String> {
+        let ch = self.channel(kind);
+        let steps = rli_horizon_steps(kind);
+        let f = ch.forecast(steps, self.t_hat)?;
+        let arrow = match f.trend {
+            RliForecastTrend::Up => "↑",
+            RliForecastTrend::Down => "↓",
+            RliForecastTrend::Flat => "→",
+        };
+        Some(format!(
+            "前推({steps:.0}·T̂): {:.2}→{:.2} {arrow}，{}",
+            f.u0,
+            f.u_h,
+            f.crossing.as_str(),
+        ))
     }
 
     /// 拒绝类 → 机械标签（闭集；Deny 通道成因段）。
@@ -1914,12 +2075,27 @@ impl RliShadow {
         } else {
             String::new()
         };
+        // **0am 预测段批**（2026-10-04，设计卷 §2.5；182 批形态定案「仅前推
+        // 预告段」）：单 fire 附前推预告段——闭式前推值＋趋势＋段内再越线
+        // （S0 在途演化 skill 全正为据）；**到达概率不进模型面**（S0 结构
+        // 否定＋S0.5 经验否定）。渲染时纯读计算、零新触发（P9）；多 fire
+        // 行不附（宽度纪律，沿成因段先例）。
+        let forecast_segment = if fired.len() == 1 {
+            let (kind, ..) = fired[0];
+            self.forecast_segment_text(kind)
+                .map(|s| format!("；{s}"))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         let round = (self.domain.round() > 0).then(|| self.domain.round());
         self.push_notice(RliNotice {
             kind: RliNoticeKind::StreakCrossed,
             t,
             round,
-            text: format!("持续越线: {listed}{detail}{label_cause}；{t_hat_segment}"),
+            text: format!(
+                "持续越线: {listed}{detail}{label_cause}{forecast_segment}；{t_hat_segment}"
+            ),
             delivered: false,
         });
     }
@@ -3515,13 +3691,19 @@ mod tests {
     /// 0bg S2：提醒**本体＋注解** ≤ [`RLI_NOTICE_TEXT_BUDGET`]（最坏形态；
     /// 注解为固定模板、单一源 [`rli_notice_annotation`]）。0cp D6/D7：
     /// 行内 T̂ 注解＋趋势／域事件统一行格式一并入钉（四类触发源全覆盖）。
+    /// 0am 预测段批（2026-10-04）：StreakCrossed 最坏形态更新为「成因段
+    /// 4 标签＋预测段」单 fire 形态（多 fire 无成因段/预测段，行更短）。
     #[test]
     fn notice_texts_stay_within_budget() {
         let t_hat = format!("{}：8.94→31.89 ↑", RLI_T_HAT_ANNOTATION);
         let worst = [
             (
                 RliNoticeKind::StreakCrossed,
-                format!("持续越线: err×3 stall×3 slow×3 deny×3（失配概率 0.12）；{t_hat}"),
+                format!(
+                    "持续越线: deny×3（u=9.99≥θ=9.99；失配概率 0.12）；\
+                     源：计划/车道拒绝×8＋门/护栏拒绝×8＋检索启用拒绝×8＋策略拒绝×8；\
+                     前推(10·T̂): 9.99→0.00 ↓，段内回落；{t_hat}"
+                ),
             ),
             (
                 RliNoticeKind::MigrationConfirmed,
@@ -4373,13 +4555,151 @@ mod tests {
             .and_then(|s| s.split("；").next())
             .unwrap_or_default();
         assert!(cause.matches('＋').count() <= 3, "成因段超 4 标签: {cause}");
-        // 最坏形态实测 284B ≤ 320B（截断后；全渲染 349B——见方法注）。
+        // 0am 预测段批（2026-10-04）：单 fire 行附前推预告段（宽度实测见
+        // 钉尾注）。
+        assert!(
+            notices[0].text.contains("前推(10·T̂): "),
+            "缺预测段: {}",
+            notices[0].text
+        );
+        assert!(
+            notices[0].text.contains("，段内"),
+            "缺段内越线判定: {}",
+            notices[0].text
+        );
+        // 最坏形态实测 **372B**（成因段截断前 4＋预测段＋注解）≤ 预算
+        // 400B（数字随文案模板冻结，改文案须重测本钉；合成最坏形态
+        // 383B 见 `notice_texts_stay_within_budget`）。
         assert!(
             notices[0].text.len() <= RLI_NOTICE_TEXT_BUDGET,
             "{}B 超预算: {}",
             notices[0].text.len(),
             notices[0].text
         );
+    }
+
+    // ===== 0am 预测段批（2026-10-04，设计卷 §4 验证面）=====
+
+    /// 五值越线闭集逐值确定性钉（数学面；设计卷 §2.3）——同一天顶距不同
+    /// θ 侧给出不同形态；「段内再越线」=低阻尼振荡回落后再越 θ。
+    #[test]
+    fn forecast_crossing_verdicts_five_value_closed_set() {
+        let t_hat = 30.0;
+        let steps = rli_horizon_steps(ChannelKind::Err);
+        // ① 过阻尼回落（FallsBelow）：u₀=1 ≥ θ₀=1，ζ=2 实极点单调衰减；
+        //    u_h ≈ 0.25 < θ → 跌破不再回（无振荡）。
+        let mut ch = RliChannel::new(ChannelKind::Err, err_omega());
+        ch.set_poles(err_omega(), 2.0);
+        ch.inject_set(0.0, 1.0);
+        let f = ch.forecast(steps, t_hat).expect("T̂ 合法");
+        assert_eq!(f.crossing, RliSegmentCrossing::FallsBelow, "u_h={}", f.u_h);
+        assert_eq!(f.trend, RliForecastTrend::Down);
+        assert!(f.u_h < f.u0 && f.u0 >= ch.theta);
+        // ② θ 上持续（PersistsAbove）：同状态、θ=0.05——u_h≈0.065 ≥ θ 且
+        //    过阻尼单调不回落 → 全程 θ 上。
+        let mut ch = RliChannel::new(ChannelKind::Err, err_omega());
+        ch.set_poles(err_omega(), 2.0);
+        ch.inject_set(0.0, 1.0);
+        ch.theta = 0.05;
+        let f = ch.forecast(steps, t_hat).expect("T̂ 合法");
+        assert_eq!(
+            f.crossing,
+            RliSegmentCrossing::PersistsAbove,
+            "u_h={}",
+            f.u_h
+        );
+        // ③ 段内再越线（Recross）：默认 ζ=0.5 复极点振荡（ω_d 周期 ≈208s，
+        //    段 300s 容一次回落＋回越）；θ 压至 0.01 使回越峰（≈0.03@208s）
+        //    计「θ 上」。
+        let mut ch = RliChannel::new(ChannelKind::Err, err_omega());
+        ch.inject_set(0.0, 1.0);
+        ch.theta = 0.01;
+        let f = ch.forecast(steps, t_hat).expect("T̂ 合法");
+        assert_eq!(f.crossing, RliSegmentCrossing::Recross, "u_h={}", f.u_h);
+        // ④ θ 下不越线（StaysBelow）：零状态自由衰减恒低于 θ。
+        let ch = RliChannel::new(ChannelKind::Err, err_omega());
+        let f = ch.forecast(steps, t_hat).expect("T̂ 合法");
+        assert_eq!(f.crossing, RliSegmentCrossing::StaysBelow);
+        assert_eq!(f.trend, RliForecastTrend::Flat, "零状态无实质趋势");
+        // ⑤ θ 下机械升越（RisesAbove）：u=0、大正速率——闭式解振荡上摆
+        //    越 θ（结构性近零的生产形态；出现即机械事实、如实渲染）。
+        let mut ch = RliChannel::new(ChannelKind::Err, err_omega());
+        ch.v = 5.0;
+        let f = ch.forecast(steps, t_hat).expect("T̂ 合法");
+        assert_eq!(f.crossing, RliSegmentCrossing::RisesAbove, "u_h={}", f.u_h);
+        // 五值文案闭集（单源 as_str）。
+        assert_eq!(RliSegmentCrossing::PersistsAbove.as_str(), "段内θ上持续");
+        assert_eq!(RliSegmentCrossing::FallsBelow.as_str(), "段内回落");
+        assert_eq!(RliSegmentCrossing::Recross.as_str(), "段内再越线");
+        assert_eq!(RliSegmentCrossing::StaysBelow.as_str(), "段内不越线");
+        assert_eq!(RliSegmentCrossing::RisesAbove.as_str(), "段内越线");
+    }
+
+    /// 趋势死区与非法入参（设计卷 §2.2/§2.1）——短视界 Δu 在死区内记
+    /// Flat；T̂/steps 非法＝`None`（不渲染、不虚构前推）。
+    #[test]
+    fn forecast_trend_deadband_and_invalid_inputs() {
+        // 短视界（0.5s×10=5s）过阻尼衰减 |Δu|≈0.006 < 0.05 → Flat。
+        let mut ch = RliChannel::new(ChannelKind::Err, err_omega());
+        ch.set_poles(err_omega(), 2.0);
+        ch.inject_set(0.0, 0.5);
+        ch.theta = 0.4;
+        let f = ch.forecast(10.0, 0.5).expect("T̂ 合法");
+        assert_eq!(
+            f.trend,
+            RliForecastTrend::Flat,
+            "u₀={:.3} u_h={:.3}",
+            f.u0,
+            f.u_h
+        );
+        // 非法 T̂（0 / 负 / NaN）与非法 steps → None。
+        let ch = RliChannel::new(ChannelKind::Err, err_omega());
+        assert!(ch.forecast(10.0, 0.0).is_none());
+        assert!(ch.forecast(10.0, -1.0).is_none());
+        assert!(ch.forecast(10.0, f64::NAN).is_none());
+        assert!(ch.forecast(0.0, 30.0).is_none());
+        assert!(ch.forecast(f64::NAN, 30.0).is_none());
+        // Shadow 渲染层：T̂ 合法时段格式自洽；非法 T̂ 不渲染。
+        let mut shadow = RliShadow::new();
+        shadow.t_hat = 30.0;
+        let seg = shadow
+            .forecast_segment_text(ChannelKind::Err)
+            .expect("T̂ 合法应渲染");
+        assert!(seg.starts_with("前推(10·T̂): "), "{seg}");
+        assert!(seg.contains("，段内"), "{seg}");
+        shadow.t_hat = 0.0;
+        assert!(shadow.forecast_segment_text(ChannelKind::Err).is_none());
+    }
+
+    /// 多 fire 行不附预测段（设计卷 §2.5 宽度纪律，沿成因段先例）——
+    /// error＋长时 legacy 双路由（Err＋Slow）同拍双双越 k → 单行双 fire。
+    /// wall 取 60_001ms（权重 ≈1.000017）：Slow 首样 1.000 < θ·e^η=1.051
+    /// miss、Err 首样同 miss——两通道 streak 同步自事件 2 起累计，事件 4
+    /// 同拍双双到 k=3（恰一条多 fire 行）。
+    #[test]
+    fn multi_fire_line_omits_forecast_segment() {
+        let mut shadow = RliShadow::new();
+        for i in 0..4u32 {
+            shadow.on_tool_event(10.0 + i as f64, ToolEvent::error(Some(60_001)));
+        }
+        let notices = shadow.notices();
+        assert_eq!(notices.len(), 1, "恰一条 streak fire");
+        assert!(
+            notices[0].text.contains("err×3") && notices[0].text.contains("slow×3"),
+            "双通道同拍: {}",
+            notices[0].text
+        );
+        assert!(
+            notices[0].text.contains("（失配概率"),
+            "多 fire 保持机制成因: {}",
+            notices[0].text
+        );
+        assert!(
+            !notices[0].text.contains("前推("),
+            "多 fire 不附预测段: {}",
+            notices[0].text
+        );
+        assert!(!notices[0].text.contains("源："), "多 fire 无成因段");
     }
 
     /// 0bf ②③（2026-09-22）：域迁移**确认**（新域稳定 3 轮后一次）＋转移
