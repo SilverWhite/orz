@@ -904,19 +904,24 @@ impl RliChannel {
         }
     }
 
-    /// 从快照续接。ζ/q/η/容差为代码拥有的常数（不随侧车恢复——契约随代码
-    /// 版本走）；ω 与全部动力学状态按快照恢复。
+    /// 从快照续接。ω/ζ 与全部动力学状态按快照恢复（ζ 走下方 FR-6 sanitize
+    /// 契约）；q/η/容差仍为代码拥有的常数（契约随代码版本走）。
     ///
     /// **0bc FR-6（2026-09-21）**：快照里已带 `zeta`（观测/回放面），续接时
     /// **采纳**它（sanitize 后）——离线回放与在线续接的极点必须一致，否则
-    /// 「侧车续接＝同一动力学」的读法在 ζ 改动后失真。钳制口径与
-    /// [`Self::set_zeta`] 同（`[0,4]`）；异常/legacy 值（NaN、越界）落回代码
-    /// 默认常数（宁缺勿假：不采信一个不可信极点到动力学里）。
+    /// 「侧车续接＝同一动力学」的读法在 ζ 改动后失真。有限值钳制口径与
+    /// [`Self::set_zeta`] 同（`[0,4]`）；非有限值（NaN/Inf）不采信，落回代码
+    /// 默认极点 [`rli_zeta_for`]（宁缺勿假：不采信一个不可信极点到动力学
+    /// 里）。〔RS-06 收口（2026-10-04）：NaN 分支由隐式「保持现值」改为显式
+    /// 落回默认——与头段「代码拥有常数」清单对齐，且对重复 restore 幂等；
+    /// 快照往返钉见 `snapshot_zeta_roundtrip_adopts_and_sanitizes`。〕
     pub fn restore(&mut self, snapshot: &RliChannelSnapshot) {
         self.omega = snapshot.omega.max(1e-9);
-        if snapshot.zeta.is_finite() {
-            self.zeta = snapshot.zeta.clamp(0.0, 4.0);
-        }
+        self.zeta = if snapshot.zeta.is_finite() {
+            snapshot.zeta.clamp(0.0, 4.0)
+        } else {
+            rli_zeta_for(self.kind)
+        };
         self.u = snapshot.u;
         self.v = snapshot.v;
         self.theta = snapshot.theta.max(1e-9);
@@ -3392,6 +3397,51 @@ mod tests {
                 cb.rhythm()
             );
         }
+    }
+
+    /// RS-06 收口钉（2026-10-04）：快照 `zeta` 序列化↔restore 契约——
+    /// 有限值采纳（钳制口径同 `set_zeta`）；非有限值不采信，落回代码默认
+    /// 极点（宁缺勿假），且对重复 restore 幂等。原始缺陷面＝「同结构体
+    /// 序列化 zeta 而 restore 不应用」（0aq RS-06 P3 登记，FR-6 补采纳后
+    /// 本钉防回退）。
+    #[test]
+    fn snapshot_zeta_roundtrip_adopts_and_sanitizes() {
+        let omega = err_omega();
+        let mut source = RliChannel::new(ChannelKind::Err, omega);
+        source.set_zeta(0.75);
+        let snap = source.snapshot();
+
+        let mut target = RliChannel::new(ChannelKind::Err, omega);
+        assert_eq!(target.zeta(), RLI_ZETA, "fresh channel at code default");
+        target.restore(&snap);
+        assert_eq!(target.zeta(), 0.75, "finite snapshot zeta adopted");
+        // 重复 restore 幂等（采纳值不被第二次恢复扰动）。
+        target.restore(&snap);
+        assert_eq!(target.zeta(), 0.75);
+
+        // 越界有限值：按 `set_zeta` 同款钳制采纳（[0,4]）。
+        let mut oob = snap.clone();
+        oob.zeta = 9.9;
+        target.restore(&oob);
+        assert_eq!(target.zeta(), 4.0);
+        let mut neg = snap.clone();
+        neg.zeta = -1.0;
+        target.restore(&neg);
+        assert_eq!(target.zeta(), 0.0);
+
+        // 非有限值：不采信，落回代码默认极点（与现值无关）。
+        let mut nan = snap.clone();
+        nan.zeta = f64::NAN;
+        target.set_zeta(2.0);
+        target.restore(&nan);
+        assert_eq!(target.zeta(), RLI_ZETA, "NaN falls back to code default");
+        // prog 通道默认极点不同（实极点族），落回按本通道配置。
+        let mut prog_nan = RliChannel::new(ChannelKind::Prog, omega).snapshot();
+        prog_nan.zeta = f64::NAN;
+        let mut prog = RliChannel::new(ChannelKind::Prog, omega);
+        prog.set_zeta(0.5);
+        prog.restore(&prog_nan);
+        assert_eq!(prog.zeta(), RLI_PROG_ZETA);
     }
 
     /// 0bg S2（2026-09-22，用户裁决「直接做掩盖缺口吧」）：掩盖缺口触发——

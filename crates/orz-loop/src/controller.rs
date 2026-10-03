@@ -117,16 +117,39 @@ pub fn retrieval_subagent_wallclock_override() -> Option<Option<std::time::Durat
 
 /// 0bf ①（2026-09-22，用户令「RLI 常开进生产面、默认启用、影子退役」）：
 /// RLI 通道族总开关——**默认启用**；env `ORZ_LIF_RLI_SHADOW` 语义反转成
-/// **关闭开关**（kill switch）：显式 `0/off/false/no`（大小写/空白不敏感）
-/// 才关；缺失与其它值 = on。关 = 影子不构造、不喂入、侧车无字段，LIF 面
-/// 照常（回退面——退役与否待转正后首轮读数）。门控放在 loop 层
-/// （`LifEngine` 保持纯确定性内核，不做 env 读取）。
+/// **关闭开关**（kill switch）：显式 `0/false/no/off` 才关、
+/// `1/true/yes/on` 确认开；其它显式值告警回退开；缺失 = 开。关 = 影子不
+/// 构造、不喂入、侧车无字段，LIF 面照常（回退面——退役与否待转正后首轮
+/// 读数）。门控放在 loop 层（`LifEngine` 保持纯确定性内核，不做 env 读取）。
+///
+/// 单一解析源（RS-06 收口，2026-10-04）：取值判定收敛到
+/// [`parse_rli_shadow_kill_switch`]，与 [`parse_acaf_fail_closed_env`] 同
+/// 口径（trim＋小写＋闭集＋非法值 Err 交调用方告警回退）——两套 env 解析
+/// 口径自此一致（0aq RS-06 P3 登记：原两处 trim/大小写/非法值处置各异）。
+#[allow(clippy::result_unit_err)] // Err(()) 与 ACAF 解析器刻意同构（闭集 env 解析不值得自定义 Error）
+pub fn parse_rli_shadow_kill_switch(value: &str) -> Result<bool, ()> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "0" | "false" | "no" | "off" => Ok(false),
+        "1" | "true" | "yes" | "on" => Ok(true),
+        _ => Err(()),
+    }
+}
+
 pub fn rli_shadow_enabled_override() -> bool {
-    let raw = std::env::var("ORZ_LIF_RLI_SHADOW").unwrap_or_default();
-    !matches!(
-        raw.trim().to_ascii_lowercase().as_str(),
-        "0" | "off" | "false" | "no"
-    )
+    match std::env::var("ORZ_LIF_RLI_SHADOW") {
+        Ok(v) => match parse_rli_shadow_kill_switch(&v) {
+            Ok(enabled) => enabled,
+            Err(()) => {
+                tracing::warn!(
+                    "ORZ_LIF_RLI_SHADOW={v:?} is not a valid value \
+                     (0/false/no/off disable, 1/true/yes/on enable; unset = enable); \
+                     keeping the RLI channel family enabled"
+                );
+                true
+            }
+        },
+        Err(_) => true,
+    }
 }
 
 /// 0am S2：构造 LIF 引擎（0bf ① 起：默认启用影子；kill switch 见
@@ -236,6 +259,7 @@ pub(crate) fn retrieval_result_channel_from_env() -> RetrievalResultChannel {
 /// `0|false|no|off` → shadow；`1|true|yes|on` → enforce；其它 → `Err(())`
 /// （调用方各自决定错误处置：CLI 退出码 2，库层告警并回退 enforce）。值先
 /// `trim` 再小写，消除两处解析器原先 trim/不 trim 的不一致。
+#[allow(clippy::result_unit_err)] // Err(()) 与 RLI kill-switch 解析器刻意同构（见 parse_rli_shadow_kill_switch）
 pub fn parse_acaf_fail_closed_env(value: &str) -> Result<bool, ()> {
     match value.trim().to_ascii_lowercase().as_str() {
         "0" | "false" | "no" | "off" => Ok(false),
@@ -5201,6 +5225,31 @@ mod tests {
     fn parse_acaf_fail_closed_env_rejects_malformed_values() {
         for bad in ["", "2", "maybe", "enforce", " enabled "] {
             assert_eq!(parse_acaf_fail_closed_env(bad), Err(()), "token {bad:?}");
+        }
+    }
+
+    /// RS-06 收口钉（2026-10-04）：RLI kill-switch 与 ACAF fail-closed 同
+    /// 口径单源——canonical 闭集接受（trim＋大小写不敏感），非法值 Err 交
+    /// 调用方告警回退默认开。原始缺陷面＝两套 env 解析口径不一致
+    /// （0aq RS-06 P3 登记）。
+    #[test]
+    fn parse_rli_shadow_kill_switch_accepts_canonical_tokens() {
+        for on in ["1", "true", "yes", "on", " TRUE ", " yes "] {
+            assert_eq!(parse_rli_shadow_kill_switch(on), Ok(true), "token {on:?}");
+        }
+        for off in ["0", "false", "no", "off", " OFF ", " false "] {
+            assert_eq!(
+                parse_rli_shadow_kill_switch(off),
+                Ok(false),
+                "token {off:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_rli_shadow_kill_switch_rejects_malformed_values() {
+        for bad in ["", "2", "maybe", " enabled ", "disabled"] {
+            assert_eq!(parse_rli_shadow_kill_switch(bad), Err(()), "token {bad:?}");
         }
     }
 
