@@ -1606,7 +1606,8 @@ fn run_s3(root: &Path, out: &Path) {
     let mut tool_completed_total = 0u64;
     let mut feeds: BTreeMap<String, BTreeMap<String, Vec<f64>>> = BTreeMap::new();
     let mut agree_totals: BTreeMap<&'static str, (u64, u64)> = BTreeMap::new();
-    let mut window_agree: BTreeMap<&'static str, (u64, u64, u64, u64, u64, u64)> = BTreeMap::new();
+    let mut window_agree: BTreeMap<&'static str, (u64, u64, u64, u64, u64, u64, u64, u64)> =
+        BTreeMap::new();
 
     for journal in &journals {
         let (run_id, steps, side) = parse_routed(journal);
@@ -1683,6 +1684,7 @@ fn run_s3(root: &Path, out: &Path) {
             let replay = replay_routed(&steps, feed);
             let (mut p_ok, mut g_ok, mut j_ok, mut wins) = (0u64, 0u64, 0u64, 0u64);
             let (mut g2_ok, mut j2_ok) = (0u64, 0u64);
+            let (mut lp_claims, mut lp_hits) = (0u64, 0u64);
             let (mut ag, mut win) = (0u64, 0u64);
             for row in &replay.rows {
                 let agree = row.rli_domain.as_str() == row.lif1d_domain.as_str();
@@ -1721,6 +1723,12 @@ fn run_s3(root: &Path, out: &Path) {
                 }
                 // S2 语义口径：进度实际＝窗内变更类成功（durable 工件变更）。
                 let la_s2 = row.window_mutate == 0;
+                if lc {
+                    lp_claims += 1;
+                    if la_s2 {
+                        lp_hits += 1;
+                    }
+                }
                 if lc == la_s2 {
                     g2_ok += 1;
                 }
@@ -1734,7 +1742,7 @@ fn run_s3(root: &Path, out: &Path) {
             let prev = window_agree
                 .get(fkey)
                 .copied()
-                .unwrap_or((0, 0, 0, 0, 0, 0));
+                .unwrap_or((0, 0, 0, 0, 0, 0, 0, 0));
             *window_agree.entry(fkey).or_default() = (
                 prev.0 + p_ok,
                 prev.1 + g_ok,
@@ -1742,6 +1750,8 @@ fn run_s3(root: &Path, out: &Path) {
                 prev.3 + wins,
                 prev.4 + g2_ok,
                 prev.5 + j2_ok,
+                prev.6 + lp_claims,
+                prev.7 + lp_hits,
             );
         }
         run_reports.push(json!({
@@ -1799,7 +1809,7 @@ fn run_s3(root: &Path, out: &Path) {
                 json!({ "feed": f, "channels": per })
             }).collect::<Vec<_>>(),
             "lif1d_rli_agreement": agree_totals.iter().map(|(k, (a, w))| json!({ "feed": k, "agree": a, "windows": w, "ratio": if *w > 0 { *a as f64 / *w as f64 } else { f64::NAN } })).collect::<Vec<_>>(),
-            "window_agreement_vs_legacy_actuals": window_agree.iter().map(|(k, (p, g, j, w, g2, j2))| json!({ "feed": k, "pressure_ok": p, "progress_ok_legacy_semantics": g, "joint_ok_legacy_semantics": j, "progress_ok_s2_semantics": g2, "joint_ok_s2_semantics": j2, "windows": w })).collect::<Vec<_>>(),
+            "window_agreement_vs_legacy_actuals": window_agree.iter().map(|(k, (p, g, j, w, g2, j2, lpc, lph))| json!({ "feed": k, "pressure_ok": p, "progress_ok_legacy_semantics": g, "joint_ok_legacy_semantics": j, "progress_ok_s2_semantics": g2, "joint_ok_s2_semantics": j2, "low_progress_claims": lpc, "low_progress_hits_s2_semantics": lph, "windows": w })).collect::<Vec<_>>(),
         },
         "runs": run_reports,
     });
