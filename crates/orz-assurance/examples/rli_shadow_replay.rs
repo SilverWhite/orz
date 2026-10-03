@@ -39,8 +39,9 @@ use std::path::{Path, PathBuf};
 use chrono::DateTime;
 use orz_assurance::lif::{
     ChannelKind, Domain, LifEngine, RLI_CHANNELS, RLI_DOMAIN_PROG_LOW, RLI_PREDICTION_STEPS,
-    RliAnchors, ToolEvent, classify_event_outcome,
+    RliAnchors, ToolEvent, ToolOutcome, classify_event_outcome, is_denial_code,
 };
+use orz_assurance::tool_names::{BLACKBOARD_WRITE_TOOL_NAME, CONTEXT_COMPRESS_TOOL_NAME};
 use serde_json::{Value, json};
 
 /// Tiny deterministic xorshift64 PRNG（C1 置换；无新依赖）。
@@ -532,6 +533,22 @@ fn main() {
         selftest();
         return;
     }
+    if args.get(1).map(|s| s == "--s3-selftest").unwrap_or(false) {
+        s3_selftest();
+        return;
+    }
+    if args.get(1).map(|s| s == "--s3").unwrap_or(false) {
+        let root = args
+            .get(2)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"D:\tb-eval\jobs-official"));
+        let out = args
+            .get(3)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("s3-routing-replay.json"));
+        run_s3(&root, &out);
+        return;
+    }
     let root = args
         .get(1)
         .map(PathBuf::from)
@@ -967,4 +984,868 @@ fn main() {
     std::fs::write(&out, serde_json::to_string_pretty(&report).unwrap()).expect("write report");
     println!("{}", serde_json::to_string(&report).unwrap());
     println!("report written to {}", out.display());
+}
+
+// ============================================================================
+// 0am S3（2026-10-03）：S2 刺激面路由表离线重放（S2 设计档 §6 判据 J1–J5）。
+// 只读重放件扩展——零生产面改动；S3/P8 边界＝Verify/Ctx/Infra 三新通道的
+// **动力学**不在 S3（P8 实现），S3 只产出其**输入序列账目**；既有五通道的
+// 新旧路由对比走真实引擎（[`replay_routed`]）。
+// ============================================================================
+
+/// S2 §4.1 动作类（闭集）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[allow(clippy::derivable_impls)]
+enum ActionClass {
+    #[default]
+    Neutral,
+    Mutate,
+    Verify,
+    Retrieve,
+    Session,
+    Submit,
+}
+
+impl ActionClass {
+    #[allow(dead_code)]
+    fn key(self) -> &'static str {
+        match self {
+            ActionClass::Mutate => "mutate",
+            ActionClass::Verify => "verify",
+            ActionClass::Retrieve => "retrieve",
+            ActionClass::Session => "session",
+            ActionClass::Submit => "submit",
+            ActionClass::Neutral => "neutral",
+        }
+    }
+}
+
+/// S2 §4.1 终端验证词表（闭集初版）。匹配口径（S3 重放实现，随批登记）：
+/// **大小写不敏感子串＋两侧字母数字词边界**（复合命令 `cd x && python -m
+/// unittest …` 的子命令可命中；`Makefile` 不误命中 `make`）。
+const VERIFY_LEXICON: [&str; 26] = [
+    "cargo test",
+    "cargo build",
+    "cargo check",
+    "cargo clippy",
+    "cargo fmt",
+    "pytest",
+    "python -m pytest",
+    "python -m unittest",
+    "unittest",
+    "make",
+    "npm test",
+    "npm run build",
+    "npx tsc",
+    "go test",
+    "go build",
+    "go vet",
+    "gradle",
+    "mvn",
+    "dotnet test",
+    "dotnet build",
+    "cmake --build",
+    "rake",
+    "eslint",
+    "ruff",
+    "pylint",
+    "mypy",
+];
+
+/// 词边界包含（大小写不敏感）：命中处前一字节与尾后一字节均非 ASCII 字母数字。
+fn word_boundary_contains(hay: &str, needle: &str) -> bool {
+    let h = hay.as_bytes();
+    let n = needle.as_bytes();
+    if n.is_empty() || h.len() < n.len() {
+        return false;
+    }
+    let eq = |a: u8, b: u8| a.eq_ignore_ascii_case(&b);
+    for i in 0..=(h.len() - n.len()) {
+        if !h[i..i + n.len()].iter().zip(n).all(|(&a, &b)| eq(a, b)) {
+            continue;
+        }
+        let before_ok = i == 0 || !h[i - 1].is_ascii_alphanumeric();
+        let after = i + n.len();
+        let after_ok = after >= h.len() || !h[after].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
+}
+
+/// 动作类标签器（S2 §4.1；工具名为主、终端命令按词表）。
+fn action_class(tool: &str, command: Option<&str>) -> ActionClass {
+    match tool {
+        "search_replace" => ActionClass::Mutate,
+        "run_tests" => ActionClass::Verify,
+        "read_file" | "list_dir" | "grep" | "search_tool" | "web_search" | "web_fetch" | "lsp" => {
+            ActionClass::Retrieve
+        }
+        // 工具名字面单一源（0ao 扫描钉）：在册常量经 tool_names 引用。
+        t if t == BLACKBOARD_WRITE_TOOL_NAME || t == CONTEXT_COMPRESS_TOOL_NAME => {
+            ActionClass::Session
+        }
+        "blackboard_read"
+        | "compaction_whitelist_add"
+        | "todo_write"
+        | "update_goal"
+        | "ask_user_question" => ActionClass::Session,
+        "submit" => ActionClass::Submit,
+        "run_terminal_cmd" => match command {
+            Some(cmd)
+                if VERIFY_LEXICON
+                    .iter()
+                    .any(|tok| word_boundary_contains(cmd, tok)) =>
+            {
+                ActionClass::Verify
+            }
+            _ => ActionClass::Neutral,
+        },
+        _ => ActionClass::Neutral,
+    }
+}
+
+/// S2 §4.2 拒绝类分组（Deny 标签维）。
+fn deny_class_of(code: &str) -> &'static str {
+    let permission = code.starts_with("permission_")
+        || code.starts_with("control_ticket_rejected")
+        || code.starts_with("control_tool_lane");
+    if permission {
+        return "permission_ticket";
+    }
+    let plan = code.starts_with("plan_")
+        || code.starts_with("submit_")
+        || code.starts_with("console_")
+        || code == "order_slot_busy";
+    if plan {
+        return "plan_lane";
+    }
+    let guard = code.starts_with("content_anchor")
+        || code.starts_with("sealed_tool")
+        || code.starts_with("retired_tool")
+        || code.ends_with("_candidate_count_unbound")
+        || code.ends_with("_candidate_url_missing")
+        || code.ends_with("_candidate_cap_exceeded")
+        || code.starts_with("round_inject_budget");
+    if guard {
+        return "gate_guard";
+    }
+    if code.starts_with("retrieval_") || code.starts_with("nested_subagent") {
+        return "retrieval_enable";
+    }
+    "other"
+}
+
+/// 单事件 S2 路由分派（router 级账目；通道名与注入值）。
+#[derive(Default, Clone)]
+struct S2Dispatch {
+    class: ActionClass,
+    /// 认领注入（通道名, 值）；prog 为 set 语义（值 1.0）。
+    claims: Vec<(&'static str, f64)>,
+    deny_class: Option<&'static str>,
+    /// verify 通过（零注入——基线参考语义）。
+    verify_pass: bool,
+    /// 显式中性（零认领；与 claims 空等价，字段为可读性冗余）。
+    neutral: bool,
+}
+
+impl S2Dispatch {
+    fn has(&self, ch: &str) -> bool {
+        self.claims.iter().any(|(c, _)| *c == ch)
+    }
+}
+
+/// 单事件旧路由分派（生产现状逐字镜像，供 J1/J2 对账）。
+#[derive(Default, Clone)]
+struct LegacyDispatch {
+    claims: Vec<(&'static str, f64)>,
+}
+
+impl LegacyDispatch {
+    fn has(&self, ch: &str) -> bool {
+        self.claims.iter().any(|(c, _)| *c == ch)
+    }
+}
+
+/// 路由化步骤：时间 ＋ legacy 馈（窗口 ground truth）＋ S2 馈 ＋ 双分派。
+/// 决策轮（model_output 带工具调用）以「无双分派且无完成负载」形态在册。
+struct RoutedStep {
+    t: f64,
+    legacy_feed: ToolEvent,
+    s2_feed: ToolEvent,
+    legacy: LegacyDispatch,
+    s2: S2Dispatch,
+    decision: bool,
+    seq: u64,
+}
+
+/// 会话级 Ctx/Infra 认领账目（非工具事件族；逐 run）。
+#[derive(Default)]
+struct SideClaims {
+    ctx_compressed: u64,
+    fold_advance: u64,
+    fold_write_failed: u64,
+    transport_retry: u64,
+    availability: u64,
+    host_denied: u64,
+    limit_hit: u64,
+    snapshot_crossing: u64,
+    snapshots_seen: u64,
+}
+
+impl SideClaims {
+    fn ctx(&self) -> u64 {
+        self.ctx_compressed + self.fold_advance
+    }
+    fn infra(&self) -> u64 {
+        self.fold_write_failed
+            + self.transport_retry
+            + self.availability
+            + self.host_denied
+            + self.limit_hit
+            + self.snapshot_crossing
+    }
+}
+
+fn slow_weight(wall_ms: u64) -> f64 {
+    (wall_ms as f64 / 60_000.0).clamp(1.0, 5.0)
+}
+
+/// 单事件双分派核心（[`parse_routed`] 与 s3 自检共用，保证同构）。
+fn dispatch_event(
+    payload: &Value,
+    class: ActionClass,
+    wcr_block: bool,
+) -> (LegacyDispatch, S2Dispatch, ToolEvent, ToolEvent) {
+    let legacy_outcome = classify_event_outcome(payload);
+    let wall_ms = wall_ms_of(payload);
+    let exit_code = payload.get("exit_code").and_then(Value::as_i64);
+    let deny_reason = if payload.get("policy_denial").is_some() {
+        Some("policy_marker")
+    } else if let Some(code) = payload.get("error").and_then(Value::as_str)
+        && is_denial_code(code)
+    {
+        Some(deny_class_of(code))
+    } else if wcr_block {
+        Some("write_control")
+    } else {
+        None
+    };
+    // —— legacy 分派（生产镜像：Error→err / Deny→deny / Success→prog set /
+    // Other→无；wall>60s→slow；间隔>90s→stall 由调用方补）。
+    let mut legacy = LegacyDispatch::default();
+    match legacy_outcome {
+        ToolOutcome::Error => legacy.claims.push(("err", 1.0)),
+        ToolOutcome::Deny => legacy.claims.push(("deny", 1.0)),
+        ToolOutcome::Success => legacy.claims.push(("prog", 1.0)),
+        ToolOutcome::Other => {}
+    }
+    if let Some(w) = wall_ms
+        && w > 60_000
+    {
+        legacy.claims.push(("slow", slow_weight(w)));
+    }
+    // —— S2 分派（路由表 §2/§3；deny 优先）。
+    let mut d = S2Dispatch {
+        class,
+        ..S2Dispatch::default()
+    };
+    let s2_outcome;
+    let mut s2_wall = wall_ms;
+    if let Some(dc) = deny_reason {
+        d.claims.push(("deny", 1.0));
+        d.deny_class = Some(dc);
+        s2_outcome = ToolOutcome::Deny;
+    } else if class == ActionClass::Verify {
+        let failed =
+            matches!(legacy_outcome, ToolOutcome::Error) || exit_code.is_some_and(|c| c != 0);
+        if failed {
+            d.claims.push(("verify", 1.0));
+        } else {
+            d.verify_pass = true;
+        }
+        // Verify 动力学不在 S3（P8）——既有词表无位 ⇒ Other；Slow 验证豁免
+        // ⇒ wall 撤（防既有引擎误注）。
+        s2_outcome = ToolOutcome::Other;
+        s2_wall = None;
+    } else {
+        match legacy_outcome {
+            ToolOutcome::Error => {
+                d.claims.push(("err", 1.0));
+                s2_outcome = ToolOutcome::Error;
+            }
+            ToolOutcome::Success => {
+                if class == ActionClass::Mutate {
+                    d.claims.push(("prog", 1.0));
+                    s2_outcome = ToolOutcome::Success;
+                } else {
+                    d.neutral = true;
+                    s2_outcome = ToolOutcome::Other;
+                }
+            }
+            ToolOutcome::Other => {
+                if exit_code.is_some_and(|c| c != 0) {
+                    // H2 填平：非验证类非零退出入 Err。
+                    d.claims.push(("err", 1.0));
+                    s2_outcome = ToolOutcome::Error;
+                } else {
+                    d.neutral = true;
+                    s2_outcome = ToolOutcome::Other;
+                }
+            }
+            ToolOutcome::Deny => unreachable!("deny handled above"),
+        }
+        if let Some(w) = wall_ms
+            && w > 60_000
+        {
+            d.claims.push(("slow", slow_weight(w)));
+        }
+    }
+    (
+        legacy,
+        d,
+        ToolEvent {
+            outcome: legacy_outcome,
+            wall_ms,
+        },
+        ToolEvent {
+            outcome: s2_outcome,
+            wall_ms: s2_wall,
+        },
+    )
+}
+
+/// 解析单卷 journal 为路由化步骤流（两遍：先取 call_id→命令/写控审查与
+/// Ctx/Infra 侧账，再产步骤）。命令串取自 `model_output.tool_calls`（journal
+/// 内结构化字段——S2 §5「零新增采集面」的重放兑现）。
+fn parse_routed(path: &Path) -> (String, Vec<RoutedStep>, SideClaims) {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let mut commands: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut wcr_block: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut side = SideClaims::default();
+    let mut last_tier: Option<String> = None;
+    let mut run_id = String::new();
+    for line in text.lines() {
+        let Ok(event) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if run_id.is_empty() {
+            run_id = event
+                .get("run_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+        }
+        let event_type = event
+            .get("event_type")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let payload = event.get("payload").cloned().unwrap_or(Value::Null);
+        match event_type {
+            "model_output" => {
+                if let Some(calls) = payload.get("tool_calls").and_then(Value::as_array) {
+                    for call in calls {
+                        let Some(id) = call.get("call_id").and_then(Value::as_str) else {
+                            continue;
+                        };
+                        let args = call.get("arguments");
+                        let cmd = match args {
+                            Some(Value::Object(o)) => {
+                                o.get("command").and_then(Value::as_str).map(String::from)
+                            }
+                            Some(Value::String(s)) => {
+                                serde_json::from_str::<Value>(s).ok().and_then(|v| {
+                                    v.get("command").and_then(Value::as_str).map(String::from)
+                                })
+                            }
+                            _ => None,
+                        };
+                        if let Some(c) = cmd {
+                            commands.insert(id.to_string(), c);
+                        }
+                    }
+                }
+            }
+            "write_control_review" => {
+                if let Some(id) = payload.get("call_id").and_then(Value::as_str)
+                    && payload.get("review").and_then(Value::as_str) == Some("block")
+                {
+                    wcr_block.insert(id.to_string());
+                }
+            }
+            "context_compressed" => side.ctx_compressed += 1,
+            "ledger_fold_advance" => side.fold_advance += 1,
+            "ledger_fold_write_failed" => side.fold_write_failed += 1,
+            "transport_retry" => side.transport_retry += 1,
+            "tool_availability_check" => side.availability += 1,
+            "host_resource_denied" => side.host_denied += 1,
+            "resource_limit_hit" => side.limit_hit += 1,
+            "host_resource_snapshot" => {
+                side.snapshots_seen += 1;
+                if let Some(t) = payload.get("tier").and_then(Value::as_str) {
+                    if let Some(prev) = &last_tier
+                        && prev != t
+                    {
+                        side.snapshot_crossing += 1;
+                    }
+                    last_tier = Some(t.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    if run_id.is_empty() {
+        run_id = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+    }
+    let mut steps: Vec<RoutedStep> = Vec::new();
+    let mut last_tool_t: Option<f64> = None;
+    let mut seq_next = 0u64;
+    for line in text.lines() {
+        let Ok(event) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(ts) = event
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(parse_time)
+        else {
+            continue;
+        };
+        let event_type = event
+            .get("event_type")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let payload = event.get("payload").cloned().unwrap_or(Value::Null);
+        match event_type {
+            "model_output" => {
+                let calls = payload.get("tool_calls").and_then(Value::as_array);
+                if calls.map(|c| !c.is_empty()).unwrap_or(false) {
+                    seq_next += 1;
+                    steps.push(RoutedStep {
+                        t: ts,
+                        legacy_feed: ToolEvent::other(None),
+                        s2_feed: ToolEvent::other(None),
+                        legacy: LegacyDispatch::default(),
+                        s2: S2Dispatch {
+                            neutral: true,
+                            ..S2Dispatch::default()
+                        },
+                        decision: true,
+                        seq: seq_next,
+                    });
+                }
+            }
+            "tool_completed" => {
+                let tool = payload.get("tool").and_then(Value::as_str).unwrap_or("");
+                let call_id = payload.get("call_id").and_then(Value::as_str);
+                let command = call_id.and_then(|id| commands.get(id)).map(|s| s.as_str());
+                let class = action_class(tool, command);
+                let blocked = call_id.map(|id| wcr_block.contains(id)).unwrap_or(false);
+                let (mut legacy, mut d, legacy_feed, mut s2_feed) =
+                    dispatch_event(&payload, class, blocked);
+                let stall = last_tool_t.map(|prev| ts - prev > 90.0).unwrap_or(false);
+                if stall {
+                    legacy.claims.push(("stall", 1.0));
+                    d.claims.push(("stall", 1.0));
+                }
+                if d.claims.is_empty() {
+                    d.neutral = true;
+                }
+                if s2_feed.wall_ms.is_none() {
+                    // Verify 馈 wall 撤后既不改写 legacy 分派——上一行已算。
+                }
+                let _ = &mut s2_feed;
+                last_tool_t = Some(ts);
+                seq_next += 1;
+                steps.push(RoutedStep {
+                    t: ts,
+                    legacy_feed,
+                    s2_feed,
+                    legacy,
+                    s2: d,
+                    decision: false,
+                    seq: seq_next,
+                });
+            }
+            _ => {}
+        }
+    }
+    (run_id, steps, side)
+}
+
+/// S3 每轮行：双引擎域＋RLI 锚点（窗口取 legacy 馈——两馈共用同一实际）。
+struct RoutedRow {
+    rli_domain: Domain,
+    lif1d_domain: Domain,
+    anchors: BTreeMap<ChannelKind, RliAnchors>,
+    window_negative: u64,
+    window_success: u64,
+    /// S2 语义进度窗：窗内「变更类成功」（durable 工件变更）计数。
+    window_mutate: u64,
+    window_outcomes: u64,
+}
+
+struct RoutedReplay {
+    rows: Vec<RoutedRow>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Feed {
+    Legacy,
+    S2,
+}
+
+fn replay_routed(steps: &[RoutedStep], feed: Feed) -> RoutedReplay {
+    let mut engine = LifEngine::new();
+    engine.enable_rli_shadow();
+    let mut rows: Vec<RoutedRow> = Vec::new();
+    let (mut w_neg, mut w_suc, mut w_out, mut w_mut) = (0u64, 0u64, 0u64, 0u64);
+    let mut window_open = false;
+    for step in steps {
+        if step.decision {
+            if window_open && let Some(row) = rows.last_mut() {
+                row.window_negative = w_neg;
+                row.window_success = w_suc;
+                row.window_mutate = w_mut;
+                row.window_outcomes = w_out;
+            }
+            w_neg = 0;
+            w_suc = 0;
+            w_out = 0;
+            w_mut = 0;
+            window_open = true;
+            engine.on_decision_round(step.t);
+            let t_hat = engine.rli_shadow().map(|s| s.t_hat()).unwrap_or(8.0);
+            let mut anchors = BTreeMap::new();
+            if let Some(shadow) = engine.rli_shadow() {
+                for &kind in &RLI_CHANNELS {
+                    anchors.insert(kind, shadow.channel(kind).anchors(t_hat));
+                }
+            }
+            let rli_domain = engine
+                .rli_shadow()
+                .and_then(|s| s.domain().now().copied())
+                .map(|r| r.domain)
+                .unwrap_or(Domain::Start);
+            let lif1d_domain = engine.temporal().current_domain();
+            rows.push(RoutedRow {
+                rli_domain,
+                lif1d_domain,
+                anchors,
+                window_negative: 0,
+                window_success: 0,
+                window_mutate: 0,
+                window_outcomes: 0,
+            });
+        } else {
+            // 窗口恒取 legacy 结果（实际动作结果 ground truth，两馈一致）。
+            match step.legacy_feed.outcome {
+                ToolOutcome::Error | ToolOutcome::Deny => w_neg += 1,
+                ToolOutcome::Success => w_suc += 1,
+                ToolOutcome::Other => {}
+            }
+            w_out += 1;
+            if step.legacy_feed.outcome == ToolOutcome::Success
+                && step.s2.class == ActionClass::Mutate
+            {
+                w_mut += 1;
+            }
+            let ev = match feed {
+                Feed::Legacy => step.legacy_feed,
+                Feed::S2 => step.s2_feed,
+            };
+            engine.on_tool_event(step.t, ev);
+        }
+    }
+    if window_open && let Some(row) = rows.last_mut() {
+        row.window_negative = w_neg;
+        row.window_success = w_suc;
+        row.window_mutate = w_mut;
+        row.window_outcomes = w_out;
+    }
+    RoutedReplay { rows }
+}
+
+fn series_stats(vals: &[f64]) -> Value {
+    if vals.is_empty() {
+        return json!({ "n": 0 });
+    }
+    let mut sorted = vals.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let pick = |q: f64| -> f64 {
+        let idx = ((sorted.len() as f64 - 1.0) * q).round() as usize;
+        sorted[idx.min(sorted.len() - 1)]
+    };
+    let n = sorted.len() as f64;
+    let ge = |t: f64| sorted.iter().filter(|v| **v >= t).count();
+    json!({
+        "n": sorted.len(),
+        "mean": mean(vals),
+        "median": pick(0.5),
+        "p90": pick(0.9),
+        "max": sorted[sorted.len() - 1],
+        "ge_0_9": ge(0.9),
+        "ge_0_975": ge(0.975),
+        "ratio_ge_0_975": ge(0.975) as f64 / n,
+    })
+}
+
+/// `--s3` 入口：J1/J2 路由账目 ＋ J3 死窗 ＋ J4 新旧馈对比 ＋ J5 双引擎同馈。
+fn run_s3(root: &Path, out: &Path) {
+    let journals = find_journals(root);
+    let mut run_reports: Vec<Value> = Vec::new();
+    let mut legacy_channel_totals: BTreeMap<String, u64> = BTreeMap::new();
+    let mut s2_channel_totals: BTreeMap<String, u64> = BTreeMap::new();
+    let mut side_totals = SideClaims::default();
+    let mut reclass_totals: BTreeMap<String, u64> = BTreeMap::new();
+    let mut tool_completed_total = 0u64;
+    let mut feeds: BTreeMap<String, BTreeMap<String, Vec<f64>>> = BTreeMap::new();
+    let mut agree_totals: BTreeMap<&'static str, (u64, u64)> = BTreeMap::new();
+    let mut window_agree: BTreeMap<&'static str, (u64, u64, u64, u64, u64, u64)> = BTreeMap::new();
+
+    for journal in &journals {
+        let (run_id, steps, side) = parse_routed(journal);
+        if steps.is_empty() {
+            continue;
+        }
+        side_totals.ctx_compressed += side.ctx_compressed;
+        side_totals.fold_advance += side.fold_advance;
+        side_totals.fold_write_failed += side.fold_write_failed;
+        side_totals.transport_retry += side.transport_retry;
+        side_totals.availability += side.availability;
+        side_totals.host_denied += side.host_denied;
+        side_totals.limit_hit += side.limit_hit;
+        side_totals.snapshot_crossing += side.snapshot_crossing;
+        side_totals.snapshots_seen += side.snapshots_seen;
+        let mut run_legacy: BTreeMap<String, u64> = BTreeMap::new();
+        let mut run_s2: BTreeMap<String, u64> = BTreeMap::new();
+        let mut verify_pass = 0u64;
+        let mut neutral = 0u64;
+        let mut reclass: BTreeMap<String, u64> = BTreeMap::new();
+        let mut wc_joins: Vec<Value> = Vec::new();
+        let mut verify_slow_cut: Vec<Value> = Vec::new();
+        for s in &steps {
+            if s.decision {
+                continue;
+            }
+            tool_completed_total += 1;
+            for (ch, _) in &s.legacy.claims {
+                *run_legacy.entry(ch.to_string()).or_default() += 1;
+            }
+            for (ch, _) in &s.s2.claims {
+                *run_s2.entry(ch.to_string()).or_default() += 1;
+            }
+            if s.s2.verify_pass {
+                verify_pass += 1;
+            }
+            if s.s2.claims.is_empty() && !s.s2.verify_pass {
+                neutral += 1;
+            }
+            let lchs: Vec<&str> = s.legacy.claims.iter().map(|(c, _)| *c).collect();
+            let schs: Vec<&str> = s.s2.claims.iter().map(|(c, _)| *c).collect();
+            for ch in &lchs {
+                if !schs.contains(ch) {
+                    *reclass.entry(format!("{ch}:removed")).or_default() += 1;
+                }
+            }
+            for ch in &schs {
+                if !lchs.contains(ch) {
+                    *reclass.entry(format!("{ch}:added")).or_default() += 1;
+                }
+            }
+            if s.s2.has("deny") && s.legacy.has("err") && s.s2.deny_class == Some("write_control") {
+                wc_joins.push(json!({ "run": run_id, "seq": s.seq, "t": s.t }));
+            }
+            if s.s2.class == ActionClass::Verify && s.legacy.has("slow") {
+                verify_slow_cut.push(json!({
+                    "run": run_id, "seq": s.seq, "t": s.t,
+                    "wall_ms": s.legacy_feed.wall_ms,
+                    "legacy_claims": lchs,
+                }));
+            }
+        }
+        for (k, v) in run_legacy.iter() {
+            *legacy_channel_totals.entry(k.clone()).or_default() += v;
+        }
+        for (k, v) in run_s2.iter() {
+            *s2_channel_totals.entry(k.clone()).or_default() += v;
+        }
+        for (k, v) in reclass.iter() {
+            *reclass_totals.entry(k.clone()).or_default() += v;
+        }
+        // J4/J5：双馈真实引擎重放（窗口恒 legacy 实际）。
+        for (fkey, feed) in [("legacy", Feed::Legacy), ("s2", Feed::S2)] {
+            let replay = replay_routed(&steps, feed);
+            let (mut p_ok, mut g_ok, mut j_ok, mut wins) = (0u64, 0u64, 0u64, 0u64);
+            let (mut g2_ok, mut j2_ok) = (0u64, 0u64);
+            let (mut ag, mut win) = (0u64, 0u64);
+            for row in &replay.rows {
+                let agree = row.rli_domain.as_str() == row.lif1d_domain.as_str();
+                win += 1;
+                if agree {
+                    ag += 1;
+                }
+                for &kind in &RLI_CHANNELS {
+                    if let Some(a) = row.anchors.get(&kind) {
+                        feeds
+                            .entry(fkey.to_string())
+                            .or_default()
+                            .entry(channel_key(kind))
+                            .or_default()
+                            .push(a.u);
+                    }
+                }
+                if row.window_outcomes == 0 {
+                    continue;
+                }
+                wins += 1;
+                let pc = matches!(row.rli_domain, Domain::Pressure | Domain::Stuck);
+                let lc = matches!(row.rli_domain, Domain::LowProgress | Domain::Stuck);
+                let pa = row.window_negative > 0;
+                let la = row.window_success == 0;
+                let pok = pc == pa;
+                let lok = lc == la;
+                if pok {
+                    p_ok += 1;
+                }
+                if lok {
+                    g_ok += 1;
+                }
+                if pok && lok {
+                    j_ok += 1;
+                }
+                // S2 语义口径：进度实际＝窗内变更类成功（durable 工件变更）。
+                let la_s2 = row.window_mutate == 0;
+                if lc == la_s2 {
+                    g2_ok += 1;
+                }
+                if pok && lc == la_s2 {
+                    j2_ok += 1;
+                }
+            }
+            let e = agree_totals.entry(fkey).or_default();
+            e.0 += ag;
+            e.1 += win;
+            let prev = window_agree
+                .get(fkey)
+                .copied()
+                .unwrap_or((0, 0, 0, 0, 0, 0));
+            *window_agree.entry(fkey).or_default() = (
+                prev.0 + p_ok,
+                prev.1 + g_ok,
+                prev.2 + j_ok,
+                prev.3 + wins,
+                prev.4 + g2_ok,
+                prev.5 + j2_ok,
+            );
+        }
+        run_reports.push(json!({
+            "run_id": run_id,
+            "tool_completed": steps.iter().filter(|s| !s.decision).count() as u64,
+            "legacy_channel_claims": run_legacy,
+            "s2_channel_claims": run_s2,
+            "verify_pass_zero": verify_pass,
+            "neutral_zero": neutral,
+            "side_claims": {
+                "ctx": side.ctx(),
+                "infra": side.infra(),
+                "detail": serde_json::json!({
+                    "compressed": side.ctx_compressed,
+                    "fold_advance": side.fold_advance,
+                    "fold_write_failed": side.fold_write_failed,
+                    "transport_retry": side.transport_retry,
+                    "availability": side.availability,
+                    "host_denied": side.host_denied,
+                    "limit_hit": side.limit_hit,
+                    "snapshot_crossing": side.snapshot_crossing,
+                    "snapshots_seen": side.snapshots_seen,
+                }),
+            },
+            "reclass": reclass,
+            "j2a_write_control_deny_joins": wc_joins,
+            "j2b_verify_slow_excluded": verify_slow_cut,
+        }));
+    }
+
+    let report = json!({
+        "generated_by": "rli_shadow_replay --s3 (0am S3, 2026-10-03; S2 routing table J1-J5 replay)",
+        "root": root.display().to_string(),
+        "journals": journals.len(),
+        "j1_j2_router_ledger": {
+            "tool_completed_total": tool_completed_total,
+            "legacy_channel_totals": legacy_channel_totals,
+            "s2_tool_channel_totals": s2_channel_totals,
+            "s2_ctx_totals": { "compressed": side_totals.ctx_compressed, "fold_advance": side_totals.fold_advance, "total": side_totals.ctx() },
+            "s2_infra_totals": { "transport_retry": side_totals.transport_retry, "availability": side_totals.availability, "host_denied": side_totals.host_denied, "limit_hit": side_totals.limit_hit, "snapshot_crossing": side_totals.snapshot_crossing, "snapshots_seen": side_totals.snapshots_seen, "fold_write_failed": side_totals.fold_write_failed, "total": side_totals.infra() },
+            "reclass_legacy_to_s2": reclass_totals,
+        },
+        "j3_dead_windows": {
+            "note": "零输入通道＝基线休眠（无自激由引擎构造保证）；此处登记 Ctx/Infra 输入计数备核对",
+            "ctx_inputs": side_totals.ctx(),
+            "infra_inputs": side_totals.infra(),
+        },
+        "j2_cases": {
+            "write_control_deny_joins": run_reports.iter().map(|r| r["j2a_write_control_deny_joins"].clone()).collect::<Vec<_>>(),
+            "verify_slow_excluded": run_reports.iter().map(|r| r["j2b_verify_slow_excluded"].clone()).collect::<Vec<_>>(),
+        },
+        "j4_j5_feed_contrast": {
+            "channel_u_series": feeds.iter().map(|(f, chs)| {
+                let per: BTreeMap<String, Value> = chs.iter().map(|(k, v)| (k.clone(), series_stats(v))).collect();
+                json!({ "feed": f, "channels": per })
+            }).collect::<Vec<_>>(),
+            "lif1d_rli_agreement": agree_totals.iter().map(|(k, (a, w))| json!({ "feed": k, "agree": a, "windows": w, "ratio": if *w > 0 { *a as f64 / *w as f64 } else { f64::NAN } })).collect::<Vec<_>>(),
+            "window_agreement_vs_legacy_actuals": window_agree.iter().map(|(k, (p, g, j, w, g2, j2))| json!({ "feed": k, "pressure_ok": p, "progress_ok_legacy_semantics": g, "joint_ok_legacy_semantics": j, "progress_ok_s2_semantics": g2, "joint_ok_s2_semantics": j2, "windows": w })).collect::<Vec<_>>(),
+        },
+        "runs": run_reports,
+    });
+    std::fs::write(out, serde_json::to_string_pretty(&report).unwrap()).expect("write s3 report");
+    println!("s3 routing replay written to {}", out.display());
+}
+
+/// `--s3-selftest`：标签器与分派的最小行为钉（合成事件，不跑语料）。
+fn s3_selftest() {
+    // 词表匹配：复合命令命中、词界防误命中。
+    assert_eq!(
+        action_class(
+            "run_terminal_cmd",
+            Some("cd /workspace && .venv/bin/python -m unittest discover -s tests")
+        ),
+        ActionClass::Verify
+    );
+    assert_eq!(
+        action_class("run_terminal_cmd", Some("cat Makefile")),
+        ActionClass::Neutral
+    );
+    assert_eq!(
+        action_class("run_terminal_cmd", Some("cargo test --lib")),
+        ActionClass::Verify
+    );
+    assert_eq!(action_class("search_replace", None), ActionClass::Mutate);
+    assert_eq!(action_class("read_file", None), ActionClass::Retrieve);
+    // 验证通过（61s）：legacy prog+slow → S2 零注入（slow 豁免）。
+    let p = json!({ "tool": "run_terminal_cmd", "exit_code": 0, "wall_ms": 61_000 });
+    let (legacy, d, _, _) = dispatch_event(&p, ActionClass::Verify, false);
+    assert!(legacy.has("prog") && legacy.has("slow"));
+    assert!(d.verify_pass && d.claims.is_empty());
+    // 验证失败：verify 注入，不串 err。
+    let p = json!({ "tool": "run_terminal_cmd", "exit_code": 2, "wall_ms": 100 });
+    let (_, d, _, _) = dispatch_event(&p, ActionClass::Verify, false);
+    assert!(d.has("verify") && !d.has("err"));
+    // H2 填平：非验证类非零退出（legacy 黑洞）→ err。
+    let p = json!({ "tool": "run_terminal_cmd", "exit_code": 1, "wall_ms": 10 });
+    let (legacy, d, _, _) = dispatch_event(&p, ActionClass::Neutral, false);
+    assert!(!legacy.has("err"));
+    assert!(d.has("err"));
+    // 写控块 join：legacy err（无码 status=error）→ S2 deny(write_control)。
+    let p = json!({ "tool": "run_terminal_cmd", "status": "error", "error": "command blocked by the mechanical write control backstop (rule: raw-device-write)" });
+    let (legacy, d, _, _) = dispatch_event(&p, ActionClass::Neutral, true);
+    assert!(legacy.has("err"));
+    assert!(d.has("deny") && d.deny_class == Some("write_control"));
+    assert!(!d.has("err"));
+    println!("s3 routing selftest ok (labeler + dispatch + J2 cases)");
 }
