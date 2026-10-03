@@ -17,13 +17,13 @@
 
 | 步骤 | Windows（PowerShell） | Linux（sh） |
 |---|---|---|
-| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.8.10-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
+| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.8.12-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
 | 2. 配置 API Key | 存入 Windows 凭据管理器（Generic，目标名 `orz-deepseek/agent`；一次即可）：<br>`cmdkey /generic:orz-deepseek/agent /user:agent /pass:你的DeepSeek_API_Key` | 用环境变量（Windows 凭据管理器通道的显式例外）：<br>`export ORZ_DEEPSEEK_API_KEY=你的DeepSeek_API_Key` |
 | 3. 初始化安全签发（一次性） | `.\orz-acaf-provision.exe "$env:USERPROFILE\.orz-acaf\keystore" "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br><br>ACAF 默认 fail-closed，未配置会拒绝启动 run（进程可用、run 拒绝执行）。 | `./orz-acaf-provision "$HOME/.orz-acaf/keystore" "$HOME/.orz-acaf/signer-manifest.json"` |
 | 4. 设置启动环境 | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
 | 5. 运行 | `.\orz.exe`（交互 TUI）<br>`.\orz.exe -p "你的任务" --real`（无头模式）<br>`.\orz.exe web`（Web 工作台，打印本地带令牌地址） | `./orz`（交互 TUI）<br>`./orz -p "你的任务" --real`（无头模式）<br>`./orz web`（Web 工作台，打印本地带令牌地址） |
 
-发布包说明与完整性校验见 GitHub Release（最新 [v0.8.10](https://github.com/SilverWhite/orz/releases/tag/v0.8.10)，双平台包＋`SHA256SUMS`）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
+发布包说明与完整性校验见 GitHub Release（最新 [v0.8.12](https://github.com/SilverWhite/orz/releases/tag/v0.8.12)，双平台包＋`SHA256SUMS`）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
 
 ### 常用入口
 

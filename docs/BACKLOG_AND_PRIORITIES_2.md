@@ -1133,3 +1133,14 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **边界**：零源码（S0.5 探针临时补丁跑完即还原、副本仓外）；工件 `D:/tb-eval/0am_p8_run7/`（`evrows_run7.json`＋`s0_5_arrival_calibration.py`＋补丁副本）；门禁复跑全绿；父仓本批本地未推送。
 - 批档：[`182 批档`](audits/182_0CQ_REGISTRATION_S05_ARRIVAL_NEGATIVE_FORECAST_FORM_NARROWED_2026-10-04.md)。
 - 关键词：182 批、0cq 立项、写控误拦两族、读排除模式、祖先链卷根、零误拦勘误、方向裁定、决策相关读数、S0.5、λ̂·Poisson 反向校准、爆发式非平稳、over-dispersion、触发时点持平、形态收窄、仅前推预告段、到达概率不进模型面、计数 58。
+
+### 1.137 2026-10-04 183 批 提交推送与 0.8.12 发行（用户令「请先进行推送吧，最新的双平台安装包也推送上去」；零源码、计数不变 58）
+
+- **推送**：orz 子树 `905bc3f5..54717d06`（7 提交：176/177 P8-a/P8-b·178 审查处置·179 RS-06·180 bump）→ `cli/feat/fusion-architecture` exit 0；父仓 `b5da5375..85e2b463`（11 提交，含 174–182 批）→ `origin/main` exit 0。
+- **打包（`rel-183-stage`，沿 156/147/122 形态）**：`.tmp-b183-package.ps1`——两侧各 6 entries（三件套＋`README.md`＋`SHA256SUMS`＋`carrier-manifest.json`）；包内六件与在役载体 **6/6 MATCH**；manifest `kind=orz-carrier-manifest` `version=0.8.12`。资产＝zip `5f2df0f1…` 28,018,976 B／tar.gz `1870cc7e…` 37,187,937 B／顶层 `SHA256SUMS`。
+- **README（发行前改写）**：包内 `README.md` 由 0.8.10 版改写为 **0.8.12 版**——新增 0.8.12（0am P8 刺激面类型化总线与成因段）与 0.8.11（0cp 动作采样附注直投／0cn budget 注入撤除）两节；版本信息行 `54717d06`／2026-10-04（0.8.12 双平台重建）；RLI 边界行更新。
+- **发行（GitHub Release v0.8.12）**：`gh release create v0.8.12 --target main --title … --notes-file .tmp-b183-release-notes.md`＋三资产；tag `v0.8.12` 指向父仓本档所在提交（轻量 tag，沿 122/156 形态）；**服务端回读** `gh release view v0.8.12 --json assets` 逐资产 digest 与本地产物对照逐位一致；`gh release download` 回下载后与本地 identical。
+- **台账**：README 发布面对齐 v0.8.12（解包文件名＋最新 release 链接）；索引头行 v4.154 → **v4.155**；BACKLOG 计数行 58（本批指针）＋本卷；TODO 计数行＋P1-0am 行；门禁 `check_repository.py` valid。
+- **边界**：零源码（orz 子仓本批无新提交）；中间载体 0.8.11 未单独发行（内容含于 0.8.12，沿 0.6.x／0.8.3–0.8.6／0.8.8–0.8.9 口径）；Linux 载体未重 provision（沿同口径）。
+- 批档：[`183 批档`](audits/183_SUBMIT_PUSH_AND_RELEASE_V0812_2026-10-04.md)。
+- 关键词：183 批、提交推送、orz 子树 `54717d06`、父仓 `85e2b463`、GitHub Release v0.8.12、rel-183-stage、回下载逐位一致、README 发布面对齐、计数 58 不变。
