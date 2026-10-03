@@ -43,9 +43,12 @@
 ## §3 发行（GitHub Release v0.8.12）
 
 - 命令＝`gh release create v0.8.12 --target main --title … --notes-file .tmp-b183-release-notes.md`
-  ＋三资产；tag `v0.8.12` 指向父仓本档所在提交（轻量 tag，沿 122／156 形态）。
-- **服务端回读**：`gh release view v0.8.12 --json assets` 逐资产 digest 与本地产物对照；
-  `gh release download` 回下载后与本地产物比对。
+  ＋三资产；tag `v0.8.12` = `5eb93b60`（父仓本档所在提交，轻量 tag，沿 122／156 形态）；
+  发布后为 **Latest**。
+- **服务端回读**（`gh release view v0.8.12 --json assets`）：三资产 digest 与本地产物**逐位一致**——
+  zip `sha256:5f2df0f1…`／tar.gz `sha256:1870cc7e…`／`SHA256SUMS` `sha256:ab6edfb2…`。
+- **完整回下载复核**（`gh release download v0.8.12`）：三件落地后与本地产物对拍——
+  **`identical=True` 3/3**（字节数逐一相等）⇒ 远端资产＝本地产物，无上传截断／替换。
 
 ## §4 台账与门禁
 
