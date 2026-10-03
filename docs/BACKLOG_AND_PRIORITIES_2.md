@@ -1144,3 +1144,13 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **边界**：零源码（orz 子仓本批无新提交）；中间载体 0.8.11 未单独发行（内容含于 0.8.12，沿 0.6.x／0.8.3–0.8.6／0.8.8–0.8.9 口径）；Linux 载体未重 provision（沿同口径）。
 - 批档：[`183 批档`](audits/183_SUBMIT_PUSH_AND_RELEASE_V0812_2026-10-04.md)。
 - 关键词：183 批、提交推送、orz 子树 `54717d06`、父仓 `85e2b463`、GitHub Release v0.8.12、rel-183-stage、回下载逐位一致、README 发布面对齐、计数 58 不变。
+
+### 1.138 2026-10-04 184 批 0am 预测段设计卷＋实现批（用户令「请开始进行"0am 余项：预测段设计卷＋实现批"吧，做完以后请不要进行重建」；计数不变 58）
+
+- **设计卷**：[`LIF_RLI_FORECAST_SEGMENT_DESIGN_2026-10-04`](LIF_RLI_FORECAST_SEGMENT_DESIGN_2026-10-04.md) v1.0——**仅前推预告段**（182 定案落卷）：闭式前推值（纯自由演化；`prog` λ̂ 期望注入修正不进段）＋趋势（死区 0.05）＋段内越线五值闭集（θ 上：持续/回落/再越线；θ 下：不越线〔S0 实证主态〕/机械升越〔结构性近零、出现即如实渲染〕）；**到达概率不进模型面**（S0 结构否定＋S0.5 经验否定的兑现面）；**零新触发**（P9——只在既有 streak fire 单 fire 行渲染，多 fire 保持机制成因）；horizon 沿用预注册分通道表（`rli_horizon_steps`）零新增参数；非目标登记＝域事件族附预测段／PULL 面扩展／`prog` 前推修正模型面表达／到达概率段重开。
+- **落码（orz `001c7768`，未 bump）**：`RliForecast`/`RliForecastTrend`/`RliSegmentCrossing` 三类型＋`RliChannel::forecast`（纯自由演化＋64 点固定网格越线扫描，τ=0 恒不取、`≥θ` 与 streak 同口径）＋`RliShadow::forecast_segment_text`（`前推(h·T̂): u₀→u_h ↑/↓/→，段内{五值}`）＋`observe_streaks_and_fire` 单 fire 臂接线＋StreakCrossed 注解扩展（「前推=闭式自由演化至h·T̂」）。零契约面（journal schema／`rli.notice.{kind}`／侧车 v2／路由喂入全不动）。
+- **行宽两预算重订**：直投行 `RLI_NOTICE_TEXT_BUDGET` 320→**400B**（合成最坏单 fire 形态实测 **383B**／宽度钉驱动 **372B**）；`rli.now` 面让位 `NOW_BUDGET` 830→**960B**（830B 会把近提醒一并让位＝追溯面事实死亡；保底一条最坏提醒＋省略行 ≤ `BOARD_CAP` 1024B 硬钳制——534 core＋390 notice＋45 省略行＝969B，两条最坏提醒按让位次序退至一条）。
+- **验证**：orz-assurance lib **301/0**（＋预测段钉 3：五值闭集逐值确定性／趋势死区与非法入参／多 fire 不附预测段；宽度钉与预算钉随批更新）；orz-loop lib **849 过／3 忽略／1 失败＝先存偶发**（`retrieval::dispatch::tests::user_cancel_closes_pending_activations_before_run_cancelled` 30ms cancel 竞速窗——**冻结树 `54717d06` 同败**，0aq 负载敏感同族，本批不处置如实登记）；clippy **17=17／71=71 零新增**；触碰面 fmt 干净（examples/credential 差异先存）；重放回归 **run1 与 r178 基线逐位全等、run2 本批树 vs 冻结树逐位全等**（`RUN-72764d4e-2` neutral_zero 16→17/verify_pass_zero 6→5 翻转先存＝r178 基线生成后语料面变动，非本批）；`--selftest`/`--s3-selftest` 过。回归件 `D:/tb-eval/0am_s3/s3_run{1,2}_forecast_regression.json`。
+- **边界**：不重建、不推送（用户令）——双仓本地提交；真机读数留下一真机轮（0bc 同轮观测顺接）；**0am 余项自此清账**。
+- 批档：[`184 批档`](audits/184_0AM_FORECAST_SEGMENT_DESIGN_AND_IMPL_2026-10-04.md)。
+- 关键词：184 批、预测段设计卷、前推预告段、闭式前推值、趋势死区、段内再越线、五值越线闭集、网格 64、单 fire 渲染、到达概率不进模型面、prog 期望注入不进段、行宽 400、NOW_BUDGET 960、BOARD_CAP 连锁、零契约面、零新触发 P9、先存偶发登记、重放两层对拍、计数 58 不变。
