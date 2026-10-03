@@ -1068,3 +1068,16 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - orz `1793ef97`（9 文件 +276/−15）；父仓 pin＋manifest 1486 条随批。**余项＝载体重建＋字面量核证**（下一重建窗口；RLI 侧车 schema v2 字节判据随批）。
 - 批档：[`177 批档`](audits/177_0AM_P8B_BUS_CAUSE_RS06_2026-10-03.md)。
 - 关键词：177 批、0am P8-b、总线布线、ResourceTier、run-start 误喂拦截、标签环、成因段、源：验证失败×3、行宽 320B、0cp D6 勘误、RS-06、fold 无产出者复查、载体重建余项、计数 57。
+
+### 1.131 2026-10-03 178 批 0am 审查处置批——Ctx/Infra streak 显式排除＋deny_class 生产接线＋词表 v2＋S3 修正重放（用户令「做显式排除 Ctx/Infra 吧……请对审查出的全部所有问题进行处理」；计数不变 57）
+
+- **审查前置**：0am 全面审查＝四路并行子代理（设计合理性／assurance 实现深查／loop 布线符合性／验证证据复跑）＋主会话亲核＋θ 动力学量化——**无 P0、6 项 P1、一批 P2**，全量处置。
+- **streak 观察域（要害）**：**Ctx/Infra 显式排除（用户裁决）**——白名单＝err/stall/slow/deny/Verify；审查实证＝单次压缩于死窗 θ 收敛后（q=0.95/η=0.05/θ₀=1.0）经 32·T̂ 实极点慢模态高台几乎必然凑满 k=3 成「ctx×3」单事件回声（S2 §2「防单事件尖峰」意图的反面；实现批曾静默扩面 4→7 且与 rli.rs 自身文档矛盾；S3 重放零总线馈入从未观察）；Ctx/Infra 标签环照记无渲染路径；引擎真差分钉。
+- **deny_class 生产接线**：`feed_lif_deny` 改收码串、21 站点带码单源 `DenyClass::of_code`（serp 两站实测码 `browser_control_*` 如实落 Other；4760 变量码站按 `reason` 逐码判定）＋完成臂信封码解析；**plan_write_lane_denied 臂施工中新发现漏喂补喂＝第 22 站**（消生产-重放分歧）。通道值语义零变化。
+- **其余落码**：run_tests 休眠两臂预接臂（防解封 Verify 死窗）；验证词表 v2（`cargo fmt --check`＋npm run test/nextest/pnpm test/yarn test/bun test＋下划线词界＋`.exe` 归一＋首词守卫闭集 29 程序分段剔除；变更类扩 apply_patch/write/edit）；成因段行宽最坏实测 349B>320B→标签渲染截断计数降序 top-4（284B）＋钉；常数单源（RLI 周期引 1D 侧、1D 构造器 T̂₀ 引 estimator＝RS-06 补 1D 半边、slow_weight 引 SLOW_W_MAX）；重放件 tier 对账改 `ResourceTier::from_wire`；两 example 预存破损修复（176 批 ToolEvent 扩展漏更＝clippy --all-targets 基线红）。
+- **S3 修正重放全量重收（r178 双件仓外）**：注入账目与 175 逐位全等、**J1 恰等闭合保持**（二跑 verify 零注入 35→34/中性 70→71＝唯一改判，守卫表实锤 heredoc `cat > tests/…` 假命中→中性）；J2 三回声/J3 死窗/J4/J5 全部与基线或 176/177 修正态位级全等；**176 批档「53.6%」勘误＝29/55=52.7%**。
+- **文档与治理**：S2 档 v1.2（bank 算术勘误收口、streak 观察域勘误段、词表 v2、§4.4 已知边界与豁免登记①–⑧、J5 处置注＝域机重校准酌处**不动**、§7 如实化）；S0 档 v1.3（P7/P9 边界澄清）；0cp 三处 240B 残留清理；盘点 §13（B02 闭合、B01/B03 随本批重放）；177 批档补记（「四构造点」＝生产 3＋测试助手 1；fold_write_failed 零产出者复查项）；真机轮 Verify streak 读数预注册＋162 批 θ 地板提案纳入视野登记待办。
+- **验证**：orz-assurance lib **297/0**（＋钉 9）＋orz-loop lib **848/0/3**＋双自检绿＋clippy 零新增；flaky 观察＝`user_cancel_closes_pending_activations_before_run_cancelled`（Windows 偶发、干净 HEAD 可复现，非本批引入，登记未处置）。
+- orz `181c9cc9`（14 文件 +723/−78）；父仓 pin＋manifest 随批。**余项不变＝载体重建＋字面量核证＋RS-06 两小件。**
+- 批档：[`178 批档`](audits/178_0AM_REVIEW_DISPOSAL_2026-10-03.md)。
+- 关键词：178 批、0am 审查处置、Ctx/Infra 显式排除、单事件回声封堵、deny_class 接线、22 站点、run_tests 预接臂、词表 v2、首词守卫、行宽截断 top-4、S3 修正重放 r178、heredoc 假命中、53.6% 勘误、S2 v1.2、S0 v1.3、B02 闭合、计数 57。
