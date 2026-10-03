@@ -37,11 +37,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use chrono::DateTime;
+use orz_assurance::lif::router::{ActionClass, DenyClass, StimulusRouting, stimulus_targets};
 use orz_assurance::lif::{
     ChannelKind, Domain, LifEngine, RLI_CHANNELS, RLI_DOMAIN_PROG_LOW, RLI_PREDICTION_STEPS,
     RliAnchors, ToolEvent, ToolOutcome, classify_event_outcome, is_denial_code,
 };
-use orz_assurance::tool_names::{BLACKBOARD_WRITE_TOOL_NAME, CONTEXT_COMPRESS_TOOL_NAME};
 use serde_json::{Value, json};
 
 /// Tiny deterministic xorshift64 PRNG（C1 置换；无新依赖）。
@@ -152,7 +152,15 @@ fn parse_run(path: &Path) -> (String, Vec<Step>) {
             "tool_completed" => {
                 let outcome = classify_event_outcome(&payload);
                 let wall_ms = wall_ms_of(&payload);
-                steps.push(Step::Tool(ts, ToolEvent { outcome, wall_ms }));
+                steps.push(Step::Tool(
+                    ts,
+                    ToolEvent {
+                        outcome,
+                        wall_ms,
+                        policy_denied: false,
+                        routing: None,
+                    },
+                ));
             }
             _ => {}
         }
@@ -993,148 +1001,20 @@ fn main() {
 // 新旧路由对比走真实引擎（[`replay_routed`]）。
 // ============================================================================
 
-/// S2 §4.1 动作类（闭集）。
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-#[allow(clippy::derivable_impls)]
-enum ActionClass {
-    #[default]
-    Neutral,
-    Mutate,
-    Verify,
-    Retrieve,
-    Session,
-    Submit,
-}
+// 0am P8（2026-10-03）：标签器与分派**同源复用** lib router（S2 §5——
+// 生产喂入点与本重放件共用 `orz_assurance::lif::router`，对拍一致性由
+// 构造保证）；本地只保留账目键映射。
 
-impl ActionClass {
-    #[allow(dead_code)]
-    fn key(self) -> &'static str {
-        match self {
-            ActionClass::Mutate => "mutate",
-            ActionClass::Verify => "verify",
-            ActionClass::Retrieve => "retrieve",
-            ActionClass::Session => "session",
-            ActionClass::Submit => "submit",
-            ActionClass::Neutral => "neutral",
-        }
+fn deny_key(dc: DenyClass) -> &'static str {
+    match dc {
+        DenyClass::PermissionTicket => "permission_ticket",
+        DenyClass::PlanLane => "plan_lane",
+        DenyClass::GateGuard => "gate_guard",
+        DenyClass::RetrievalEnable => "retrieval_enable",
+        DenyClass::WriteControl => "write_control",
+        DenyClass::PolicyMarker => "policy_marker",
+        DenyClass::Other => "other",
     }
-}
-
-/// S2 §4.1 终端验证词表（闭集初版）。匹配口径（S3 重放实现，随批登记）：
-/// **大小写不敏感子串＋两侧字母数字词边界**（复合命令 `cd x && python -m
-/// unittest …` 的子命令可命中；`Makefile` 不误命中 `make`）。
-const VERIFY_LEXICON: [&str; 26] = [
-    "cargo test",
-    "cargo build",
-    "cargo check",
-    "cargo clippy",
-    "cargo fmt",
-    "pytest",
-    "python -m pytest",
-    "python -m unittest",
-    "unittest",
-    "make",
-    "npm test",
-    "npm run build",
-    "npx tsc",
-    "go test",
-    "go build",
-    "go vet",
-    "gradle",
-    "mvn",
-    "dotnet test",
-    "dotnet build",
-    "cmake --build",
-    "rake",
-    "eslint",
-    "ruff",
-    "pylint",
-    "mypy",
-];
-
-/// 词边界包含（大小写不敏感）：命中处前一字节与尾后一字节均非 ASCII 字母数字。
-fn word_boundary_contains(hay: &str, needle: &str) -> bool {
-    let h = hay.as_bytes();
-    let n = needle.as_bytes();
-    if n.is_empty() || h.len() < n.len() {
-        return false;
-    }
-    let eq = |a: u8, b: u8| a.eq_ignore_ascii_case(&b);
-    for i in 0..=(h.len() - n.len()) {
-        if !h[i..i + n.len()].iter().zip(n).all(|(&a, &b)| eq(a, b)) {
-            continue;
-        }
-        let before_ok = i == 0 || !h[i - 1].is_ascii_alphanumeric();
-        let after = i + n.len();
-        let after_ok = after >= h.len() || !h[after].is_ascii_alphanumeric();
-        if before_ok && after_ok {
-            return true;
-        }
-    }
-    false
-}
-
-/// 动作类标签器（S2 §4.1；工具名为主、终端命令按词表）。
-fn action_class(tool: &str, command: Option<&str>) -> ActionClass {
-    match tool {
-        "search_replace" => ActionClass::Mutate,
-        "run_tests" => ActionClass::Verify,
-        "read_file" | "list_dir" | "grep" | "search_tool" | "web_search" | "web_fetch" | "lsp" => {
-            ActionClass::Retrieve
-        }
-        // 工具名字面单一源（0ao 扫描钉）：在册常量经 tool_names 引用。
-        t if t == BLACKBOARD_WRITE_TOOL_NAME || t == CONTEXT_COMPRESS_TOOL_NAME => {
-            ActionClass::Session
-        }
-        "blackboard_read"
-        | "compaction_whitelist_add"
-        | "todo_write"
-        | "update_goal"
-        | "ask_user_question" => ActionClass::Session,
-        "submit" => ActionClass::Submit,
-        "run_terminal_cmd" => match command {
-            Some(cmd)
-                if VERIFY_LEXICON
-                    .iter()
-                    .any(|tok| word_boundary_contains(cmd, tok)) =>
-            {
-                ActionClass::Verify
-            }
-            _ => ActionClass::Neutral,
-        },
-        _ => ActionClass::Neutral,
-    }
-}
-
-/// S2 §4.2 拒绝类分组（Deny 标签维）。
-fn deny_class_of(code: &str) -> &'static str {
-    let permission = code.starts_with("permission_")
-        || code.starts_with("control_ticket_rejected")
-        || code.starts_with("control_tool_lane");
-    if permission {
-        return "permission_ticket";
-    }
-    let plan = code.starts_with("plan_")
-        || code.starts_with("submit_")
-        || code.starts_with("console_")
-        || code == "order_slot_busy";
-    if plan {
-        return "plan_lane";
-    }
-    let guard = code.starts_with("content_anchor")
-        || code.starts_with("sealed_tool")
-        || code.starts_with("retired_tool")
-        || code.ends_with("_candidate_count_unbound")
-        || code.ends_with("_candidate_url_missing")
-        || code.ends_with("_candidate_cap_exceeded")
-        || code.starts_with("round_inject_budget");
-    if guard {
-        return "gate_guard";
-    }
-    if code.starts_with("retrieval_") || code.starts_with("nested_subagent") {
-        return "retrieval_enable";
-    }
-    "other"
 }
 
 /// 单事件 S2 路由分派（router 级账目；通道名与注入值）。
@@ -1217,23 +1097,14 @@ fn dispatch_event(
     payload: &Value,
     class: ActionClass,
     wcr_block: bool,
+    deny_class: Option<DenyClass>,
 ) -> (LegacyDispatch, S2Dispatch, ToolEvent, ToolEvent) {
     let legacy_outcome = classify_event_outcome(payload);
     let wall_ms = wall_ms_of(payload);
     let exit_code = payload.get("exit_code").and_then(Value::as_i64);
-    let deny_reason = if payload.get("policy_denial").is_some() {
-        Some("policy_marker")
-    } else if let Some(code) = payload.get("error").and_then(Value::as_str)
-        && is_denial_code(code)
-    {
-        Some(deny_class_of(code))
-    } else if wcr_block {
-        Some("write_control")
-    } else {
-        None
-    };
-    // —— legacy 分派（生产镜像：Error→err / Deny→deny / Success→prog set /
-    // Other→无；wall>60s→slow；间隔>90s→stall 由调用方补）。
+    let policy_denied = payload.get("policy_denial").is_some();
+    let non_zero_exit = exit_code.is_some_and(|c| c != 0);
+    // —— legacy 分派（生产现状逐字镜像，供 J1/J2 对账；不变）。
     let mut legacy = LegacyDispatch::default();
     match legacy_outcome {
         ToolOutcome::Error => legacy.claims.push(("err", 1.0)),
@@ -1246,74 +1117,48 @@ fn dispatch_event(
     {
         legacy.claims.push(("slow", slow_weight(w)));
     }
-    // —— S2 分派（路由表 §2/§3；deny 优先）。
+    // —— S2 分派：lib router 同源（`stimulus_targets`；deny 优先/验证
+    // 豁免/H2 填平全部在 lib 语义内）。
+    let s2_feed = ToolEvent {
+        outcome: legacy_outcome,
+        wall_ms,
+        policy_denied,
+        routing: Some(StimulusRouting {
+            class,
+            deny_class,
+            non_zero_exit,
+            write_control_block: wcr_block,
+        }),
+    };
+    let t = stimulus_targets(&s2_feed);
     let mut d = S2Dispatch {
         class,
         ..S2Dispatch::default()
     };
-    let s2_outcome;
-    let mut s2_wall = wall_ms;
-    if let Some(dc) = deny_reason {
+    if t.deny {
         d.claims.push(("deny", 1.0));
-        d.deny_class = Some(dc);
-        s2_outcome = ToolOutcome::Deny;
-    } else if class == ActionClass::Verify {
-        let failed =
-            matches!(legacy_outcome, ToolOutcome::Error) || exit_code.is_some_and(|c| c != 0);
-        if failed {
-            d.claims.push(("verify", 1.0));
-        } else {
-            d.verify_pass = true;
-        }
-        // Verify 动力学不在 S3（P8）——既有词表无位 ⇒ Other；Slow 验证豁免
-        // ⇒ wall 撤（防既有引擎误注）。
-        s2_outcome = ToolOutcome::Other;
-        s2_wall = None;
-    } else {
-        match legacy_outcome {
-            ToolOutcome::Error => {
-                d.claims.push(("err", 1.0));
-                s2_outcome = ToolOutcome::Error;
-            }
-            ToolOutcome::Success => {
-                if class == ActionClass::Mutate {
-                    d.claims.push(("prog", 1.0));
-                    s2_outcome = ToolOutcome::Success;
-                } else {
-                    d.neutral = true;
-                    s2_outcome = ToolOutcome::Other;
-                }
-            }
-            ToolOutcome::Other => {
-                if exit_code.is_some_and(|c| c != 0) {
-                    // H2 填平：非验证类非零退出入 Err。
-                    d.claims.push(("err", 1.0));
-                    s2_outcome = ToolOutcome::Error;
-                } else {
-                    d.neutral = true;
-                    s2_outcome = ToolOutcome::Other;
-                }
-            }
-            ToolOutcome::Deny => unreachable!("deny handled above"),
-        }
-        if let Some(w) = wall_ms
-            && w > 60_000
-        {
-            d.claims.push(("slow", slow_weight(w)));
-        }
+        d.deny_class = t.deny_class.map(deny_key);
     }
-    (
-        legacy,
-        d,
-        ToolEvent {
-            outcome: legacy_outcome,
-            wall_ms,
-        },
-        ToolEvent {
-            outcome: s2_outcome,
-            wall_ms: s2_wall,
-        },
-    )
+    if t.verify {
+        d.claims.push(("verify", 1.0));
+    }
+    if t.err {
+        d.claims.push(("err", 1.0));
+    }
+    if t.prog_set {
+        d.claims.push(("prog", 1.0));
+    }
+    if let Some(w) = t.slow {
+        d.claims.push(("slow", w));
+    }
+    d.verify_pass = class == ActionClass::Verify && !t.verify && !t.deny;
+    let legacy_feed = ToolEvent {
+        outcome: legacy_outcome,
+        wall_ms,
+        policy_denied: false,
+        routing: None,
+    };
+    (legacy, d, legacy_feed, s2_feed)
 }
 
 /// 解析单卷 journal 为路由化步骤流（两遍：先取 call_id→命令/写控审查与
@@ -1444,22 +1289,35 @@ fn parse_routed(path: &Path) -> (String, Vec<RoutedStep>, SideClaims) {
                 let tool = payload.get("tool").and_then(Value::as_str).unwrap_or("");
                 let call_id = payload.get("call_id").and_then(Value::as_str);
                 let command = call_id.and_then(|id| commands.get(id)).map(|s| s.as_str());
-                let class = action_class(tool, command);
+                let class = ActionClass::of_tool(tool, command);
                 let blocked = call_id.map(|id| wcr_block.contains(id)).unwrap_or(false);
-                let (mut legacy, mut d, legacy_feed, mut s2_feed) =
-                    dispatch_event(&payload, class, blocked);
+                // 拒绝类解析（喂入点口径，与生产一致）：信封标记／结构化
+                // 拒绝码／写控兜底块。
+                let deny_class = if payload.get("policy_denial").is_some() {
+                    Some(DenyClass::PolicyMarker)
+                } else if let Some(code) = payload.get("error").and_then(Value::as_str)
+                    && is_denial_code(code)
+                {
+                    Some(DenyClass::of_code(code))
+                } else if blocked {
+                    Some(DenyClass::WriteControl)
+                } else {
+                    None
+                };
+                let (mut legacy, mut d, legacy_feed, s2_feed) = dispatch_event(
+                    &payload,
+                    class,
+                    deny_class == Some(DenyClass::WriteControl),
+                    deny_class,
+                );
                 let stall = last_tool_t.map(|prev| ts - prev > 90.0).unwrap_or(false);
                 if stall {
                     legacy.claims.push(("stall", 1.0));
                     d.claims.push(("stall", 1.0));
                 }
-                if d.claims.is_empty() {
+                if d.claims.is_empty() && !d.verify_pass {
                     d.neutral = true;
                 }
-                if s2_feed.wall_ms.is_none() {
-                    // Verify 馈 wall 撤后既不改写 legacy 分派——上一行已算。
-                }
-                let _ = &mut s2_feed;
                 last_tool_t = Some(ts);
                 seq_next += 1;
                 steps.push(RoutedStep {
@@ -1819,43 +1677,48 @@ fn run_s3(root: &Path, out: &Path) {
 
 /// `--s3-selftest`：标签器与分派的最小行为钉（合成事件，不跑语料）。
 fn s3_selftest() {
+    use orz_assurance::lif::ActionClass as AC;
+    use orz_assurance::lif::DenyClass as DC;
+    use orz_assurance::lif::ToolOutcome as TO;
     // 词表匹配：复合命令命中、词界防误命中。
     assert_eq!(
-        action_class(
+        AC::of_tool(
             "run_terminal_cmd",
             Some("cd /workspace && .venv/bin/python -m unittest discover -s tests")
         ),
-        ActionClass::Verify
+        AC::Verify
     );
     assert_eq!(
-        action_class("run_terminal_cmd", Some("cat Makefile")),
-        ActionClass::Neutral
+        AC::of_tool("run_terminal_cmd", Some("cat Makefile")),
+        AC::Neutral
     );
     assert_eq!(
-        action_class("run_terminal_cmd", Some("cargo test --lib")),
-        ActionClass::Verify
+        AC::of_tool("run_terminal_cmd", Some("cargo test --lib")),
+        AC::Verify
     );
-    assert_eq!(action_class("search_replace", None), ActionClass::Mutate);
-    assert_eq!(action_class("read_file", None), ActionClass::Retrieve);
-    // 验证通过（61s）：legacy prog+slow → S2 零注入（slow 豁免）。
-    let p = json!({ "tool": "run_terminal_cmd", "exit_code": 0, "wall_ms": 61_000 });
-    let (legacy, d, _, _) = dispatch_event(&p, ActionClass::Verify, false);
+    assert_eq!(AC::of_tool("search_replace", None), AC::Mutate);
+    assert_eq!(AC::of_tool("read_file", None), AC::Retrieve);
+    // 验证通过（61s）：legacy prog+slow → S2 零注入（slow 豁免；lib 分派）。
+    let p = serde_json::json!({ "tool": "run_terminal_cmd", "exit_code": 0, "wall_ms": 61_000 });
+    let (legacy, d, _, _) = dispatch_event(&p, AC::Verify, false, None);
     assert!(legacy.has("prog") && legacy.has("slow"));
     assert!(d.verify_pass && d.claims.is_empty());
     // 验证失败：verify 注入，不串 err。
-    let p = json!({ "tool": "run_terminal_cmd", "exit_code": 2, "wall_ms": 100 });
-    let (_, d, _, _) = dispatch_event(&p, ActionClass::Verify, false);
+    let p = serde_json::json!({ "tool": "run_terminal_cmd", "exit_code": 2, "wall_ms": 100 });
+    let (_, d, _, _) = dispatch_event(&p, AC::Verify, false, None);
     assert!(d.has("verify") && !d.has("err"));
     // H2 填平：非验证类非零退出（legacy 黑洞）→ err。
-    let p = json!({ "tool": "run_terminal_cmd", "exit_code": 1, "wall_ms": 10 });
-    let (legacy, d, _, _) = dispatch_event(&p, ActionClass::Neutral, false);
+    let p = serde_json::json!({ "tool": "run_terminal_cmd", "exit_code": 1, "wall_ms": 10 });
+    let (legacy, d, _, _) = dispatch_event(&p, AC::Neutral, false, None);
     assert!(!legacy.has("err"));
     assert!(d.has("err"));
     // 写控块 join：legacy err（无码 status=error）→ S2 deny(write_control)。
-    let p = json!({ "tool": "run_terminal_cmd", "status": "error", "error": "command blocked by the mechanical write control backstop (rule: raw-device-write)" });
-    let (legacy, d, _, _) = dispatch_event(&p, ActionClass::Neutral, true);
+    let p = serde_json::json!({ "tool": "run_terminal_cmd", "status": "error", "error": "command blocked by the mechanical write control backstop (rule: raw-device-write)" });
+    let (legacy, d, _, _) = dispatch_event(&p, AC::Neutral, true, Some(DC::WriteControl));
     assert!(legacy.has("err"));
-    assert!(d.has("deny") && d.deny_class == Some("write_control"));
+    assert!(d.has("deny") && d.deny_class == Some(deny_key(DC::WriteControl)));
     assert!(!d.has("err"));
-    println!("s3 routing selftest ok (labeler + dispatch + J2 cases)");
+    // 结构化拒绝码（信封外）：deny＋标签维（TO 未用导入保护）。
+    let _ = (TO::Other, DC::PolicyMarker);
+    println!("s3 routing selftest ok (lib router + dispatch + J2 cases)");
 }

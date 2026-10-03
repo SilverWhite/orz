@@ -601,6 +601,12 @@ pub fn review_command_with(
 ///
 /// v2 文案（设计 §1）：规则 id＋目标＋「已越过保底硬边界」；规则 1 附「需精准
 /// 删除」指引（写明被拦目标、建议改为具体文件/子目录——用户裁决原话）。
+/// block 文案冻结前缀（0am P8，2026-10-03）：写控兜底 block 的机械判定
+/// 锚（loop 侧 ToolError 臂据此置 `write_control_block` 路由键；S2 v1.1
+/// 写控 join 的生产实现）。与 [`block_message`] 单源。
+pub const BLOCK_MESSAGE_PREFIX: &str =
+    "Error: command blocked by the mechanical write control backstop";
+
 pub fn block_message(finding: &CommandFinding) -> String {
     let guidance = if finding.rule == "catastrophic-recursive-delete" {
         "该目标是卷根/根本性树根本体；如需删除，请改为对具体文件或子目录的精准删除。"
@@ -608,10 +614,11 @@ pub fn block_message(finding: &CommandFinding) -> String {
         ""
     };
     format!(
-        "Error: command blocked by the mechanical write control backstop (rule: {rule}). \
+        "{prefix} (rule: {rule}). \
          {detail}. 已越过保底硬边界——命令未执行。{guidance}本闸为封闭枚举灾难保底\
          （{n} 条 block 规则），非沙箱。",
         rule = finding.rule,
+        prefix = BLOCK_MESSAGE_PREFIX,
         detail = finding.detail,
         guidance = guidance,
         n = BLOCK_RULES.len(),

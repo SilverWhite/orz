@@ -89,10 +89,7 @@ use std::f64::consts::{PI, TAU};
 
 use serde::{Deserialize, Serialize};
 
-use super::channels::{
-    ChannelKind, SLOW_W_MAX, SLOW_WALL_MS_THRESHOLD, STALL_GAP_THRESHOLD_SECS, ToolEvent,
-    ToolOutcome,
-};
+use super::channels::{ChannelKind, STALL_GAP_THRESHOLD_SECS, ToolEvent, ToolOutcome};
 use super::temporal::Domain;
 
 /// 影子基座公共参数（设计 §6 初值；语义推导、禁拟合）。
@@ -133,6 +130,9 @@ pub fn rli_horizon_steps(kind: ChannelKind) -> f64 {
         ChannelKind::Err => RLI_PREDICTION_STEPS,
         ChannelKind::Deny => 10.0,
         ChannelKind::Prog => RLI_PREDICTION_STEPS,
+        // 0am P8 新通道（2026-10-03）：默认档（无探针标定读数；语义常数、
+        // 禁拟合——标定须按 0bf 探针先例另批）。
+        ChannelKind::Verify | ChannelKind::Ctx | ChannelKind::Infra => RLI_PREDICTION_STEPS,
     }
 }
 
@@ -234,7 +234,7 @@ pub const RLI_FEATURE_SERIES_CAP: usize = 20;
 /// `pred1_prog`（a2s＝`1·T̂` 闭式前推），与原 `pred_*`（a2＝决策通道的
 /// 分通道 horizon）分列；旧「一阶短视 `u + v·T̂`」注释口径系文档漂移，
 /// 本批收口。
-pub const RLI_ANCHOR_FEATURE_NAMES: [&str; 13] = [
+pub const RLI_ANCHOR_FEATURE_NAMES: [&str; 19] = [
     "u_err",
     "v_err",
     "pred_err",
@@ -248,11 +248,23 @@ pub const RLI_ANCHOR_FEATURE_NAMES: [&str; 13] = [
     "r_prog",
     "slow_prog",
     "fast_prog",
+    // 0am P8（2026-10-03，S2 §8「锚点表随实现批定」）：新三通道只挂 u/v
+    // 两锚点（水平/变化率；pred/env/r 按需后续批次增补——feature 面保持
+    // 最小可读集）。
+    "u_verify",
+    "v_verify",
+    "u_ctx",
+    "v_ctx",
+    "u_infra",
+    "v_infra",
 ];
 /// 自判域近期行窗口（镜像 temporal 的 `RECENT_RECORDS_CAP`）。
 pub const RLI_DOMAIN_RECENT_CAP: usize = 20;
-/// 侧车快照 schema 标识（随 [`RliShadowSnapshot`] 序列化）。
-pub const RLI_SNAPSHOT_SCHEMA: &str = "rli-shadow-v1";
+/// 侧车快照 schema 标识（随 [`RliShadowSnapshot`] 序列化）。**0am P8 升
+/// v2**（2026-10-03）：通道族 5→8，restore 的通道数完备性校验使旧 v1 侧车
+/// 快照整体拒续（fresh 重启＝文档化的降级路径；跨会话影子状态一次性重置，
+/// 会话内不受影响）。
+pub const RLI_SNAPSHOT_SCHEMA: &str = "rli-shadow-v2";
 /// 状态存储定点化（3 位小数；同 DynCtx 舍入契约）。
 pub const RLI_STATE_DECIMALS: f64 = 1_000.0;
 
@@ -263,14 +275,23 @@ pub const RLI_SLOW_PERIOD_SECS: f64 = 600.0;
 pub const RLI_DENY_PERIOD_SECS: f64 = 120.0;
 /// 新鲜度型通道（轮语义）——`ω = 2π/(k·T̂)`。
 pub const RLI_PROG_PERIOD_ROUNDS: f64 = 8.0;
+/// 0am P8（2026-10-03，S2 §2 预注册初值；物理依据见
+/// `VERIFY_TAU_ROUNDS` 注）。
+pub const RLI_VERIFY_PERIOD_ROUNDS: f64 = 8.0;
+pub const RLI_CTX_PERIOD_ROUNDS: f64 = 32.0;
+pub const RLI_INFRA_PERIOD_ROUNDS: f64 = 64.0;
 
-/// 影子通道族（v1 五条；stuck 延后——见模块头）。
-pub const RLI_CHANNELS: [ChannelKind; 5] = [
+/// 影子通道族（v1 五条 ＋ **0am P8 三条**＝八通道；stuck 延后——见模块头）。
+/// 〔勘误：S2 档 §2 标题「5→7」系算术笔误，通道表实为 5+3=8；随 P8 批勘误。〕
+pub const RLI_CHANNELS: [ChannelKind; 8] = [
     ChannelKind::Err,
     ChannelKind::Stall,
     ChannelKind::Slow,
     ChannelKind::Deny,
     ChannelKind::Prog,
+    ChannelKind::Verify,
+    ChannelKind::Ctx,
+    ChannelKind::Infra,
 ];
 
 /// 3 位小数定点化（存储边界；`round` 半程远离零，与 DynCtx 契约同格）。
@@ -286,7 +307,11 @@ pub fn quantize_state(x: f64) -> f64 {
 /// （实极点：持久／适应）。配极表本身即语义常数表（设计 §11）。
 pub fn rli_zeta_for(kind: ChannelKind) -> f64 {
     match kind {
-        ChannelKind::Prog => RLI_PROG_ZETA,
+        // 0am P8（S2 §2）：Verify（失败累积）／Ctx／Infra（水平/新鲜度类）
+        // 走实极点分支——与 prog 同族（持久／适应双模态）。
+        ChannelKind::Prog | ChannelKind::Verify | ChannelKind::Ctx | ChannelKind::Infra => {
+            RLI_PROG_ZETA
+        }
         ChannelKind::Err | ChannelKind::Stall | ChannelKind::Slow | ChannelKind::Deny => RLI_ZETA,
     }
 }
@@ -348,7 +373,7 @@ impl RliAnchor {
 
 /// 锚点序列表（名 → 通道 × 锚点；与 [`RLI_ANCHOR_FEATURE_NAMES`] 同序，
 /// 测试钉住两侧不漂移）。
-pub const RLI_ANCHOR_FEATURE_TABLE: [(&str, ChannelKind, RliAnchor); 13] = [
+pub const RLI_ANCHOR_FEATURE_TABLE: [(&str, ChannelKind, RliAnchor); 19] = [
     ("u_err", ChannelKind::Err, RliAnchor::U),
     ("v_err", ChannelKind::Err, RliAnchor::V),
     ("pred_err", ChannelKind::Err, RliAnchor::Pred),
@@ -362,6 +387,12 @@ pub const RLI_ANCHOR_FEATURE_TABLE: [(&str, ChannelKind, RliAnchor); 13] = [
     ("r_prog", ChannelKind::Prog, RliAnchor::Rhythm),
     ("slow_prog", ChannelKind::Prog, RliAnchor::ModeSlow),
     ("fast_prog", ChannelKind::Prog, RliAnchor::ModeFast),
+    ("u_verify", ChannelKind::Verify, RliAnchor::U),
+    ("v_verify", ChannelKind::Verify, RliAnchor::V),
+    ("u_ctx", ChannelKind::Ctx, RliAnchor::U),
+    ("v_ctx", ChannelKind::Ctx, RliAnchor::V),
+    ("u_infra", ChannelKind::Infra, RliAnchor::U),
+    ("v_infra", ChannelKind::Infra, RliAnchor::V),
 ];
 
 /// 单通道锚点读数（S3 回放导出面；只读快照）。
@@ -1421,6 +1452,13 @@ impl RliShadow {
                 RliChannel::new(ChannelKind::Slow, TAU / RLI_SLOW_PERIOD_SECS),
                 RliChannel::new(ChannelKind::Deny, TAU / RLI_DENY_PERIOD_SECS),
                 RliChannel::new(ChannelKind::Prog, TAU / (RLI_PROG_PERIOD_ROUNDS * t_hat0)),
+                // 0am P8（S2 §2 预注册初值）：轮语义周期 k·T̂，随 T̂ 重导出。
+                RliChannel::new(
+                    ChannelKind::Verify,
+                    TAU / (RLI_VERIFY_PERIOD_ROUNDS * t_hat0),
+                ),
+                RliChannel::new(ChannelKind::Ctx, TAU / (RLI_CTX_PERIOD_ROUNDS * t_hat0)),
+                RliChannel::new(ChannelKind::Infra, TAU / (RLI_INFRA_PERIOD_ROUNDS * t_hat0)),
             ],
             t_hat: t_hat0,
             last_tool_t: None,
@@ -1459,6 +1497,10 @@ impl RliShadow {
             ChannelKind::Slow => 2,
             ChannelKind::Deny => 3,
             ChannelKind::Prog => 4,
+            // 0am P8：新通道索引恒追加（既有五通道索引稳定＝旧侧车快照兼容）。
+            ChannelKind::Verify => 5,
+            ChannelKind::Ctx => 6,
+            ChannelKind::Infra => 7,
         }
     }
 
@@ -1901,11 +1943,17 @@ impl RliShadow {
         }
         self.t_hat = t_hat_new;
         self.steps = self.steps.saturating_add(1);
-        let omega_prog = TAU / (RLI_PROG_PERIOD_ROUNDS * self.t_hat);
+        // 轮语义通道族（prog＋0am P8 的 verify/ctx/infra）：周期 k·T̂ 随
+        // T̂ 重导出（单位换算，非逐轮拟合）。
+        let round_semantic_omega = |k: f64| TAU / (k * self.t_hat);
         for ch in &mut self.channels {
-            if ch.kind == ChannelKind::Prog {
-                ch.omega = omega_prog;
-            }
+            ch.omega = match ch.kind {
+                ChannelKind::Prog => round_semantic_omega(RLI_PROG_PERIOD_ROUNDS),
+                ChannelKind::Verify => round_semantic_omega(RLI_VERIFY_PERIOD_ROUNDS),
+                ChannelKind::Ctx => round_semantic_omega(RLI_CTX_PERIOD_ROUNDS),
+                ChannelKind::Infra => round_semantic_omega(RLI_INFRA_PERIOD_ROUNDS),
+                _ => ch.omega,
+            };
             ch.advance(t);
         }
         for ch in &mut self.channels {
@@ -2040,16 +2088,23 @@ impl RliShadow {
         for ch in &mut self.channels {
             ch.advance(t);
         }
-        match event.outcome {
-            ToolOutcome::Error => self.channel_mut(ChannelKind::Err).inject(t, 1.0),
-            ToolOutcome::Deny => self.channel_mut(ChannelKind::Deny).inject(t, 1.0),
-            ToolOutcome::Success => self.channel_mut(ChannelKind::Prog).inject_set(t, 1.0),
-            ToolOutcome::Other => {}
+        // 0am P8（2026-10-03，S2 路由表）：分派统一走 router 纯函数
+        // （`routing: None`＝旧四值语义，行为不变；生产喂入点恒带路由键）。
+        // 零触发语义（P9）。
+        let targets = crate::lif::router::stimulus_targets(&event);
+        if targets.err {
+            self.channel_mut(ChannelKind::Err).inject(t, 1.0);
         }
-        if let Some(wall_ms) = event.wall_ms
-            && wall_ms > SLOW_WALL_MS_THRESHOLD
-        {
-            let w = ((wall_ms as f64) / 60_000.0).clamp(1.0, SLOW_W_MAX);
+        if targets.deny {
+            self.channel_mut(ChannelKind::Deny).inject(t, 1.0);
+        }
+        if targets.prog_set {
+            self.channel_mut(ChannelKind::Prog).inject_set(t, 1.0);
+        }
+        if targets.verify {
+            self.channel_mut(ChannelKind::Verify).inject(t, 1.0);
+        }
+        if let Some(w) = targets.slow {
             self.channel_mut(ChannelKind::Slow).inject(t, w);
         }
         if long_gap {
@@ -2065,6 +2120,20 @@ impl RliShadow {
         // 决策轮粒度取不到，见 [`Self::sample_anchor_series`]）；0bf 起同点
         // 结算持续越线观察（[`Self::note_sample_point`]）。
         self.note_sample_point(t);
+    }
+
+    /// 0am P8（2026-10-03，S2 §3）：总线事件注入（Ctx/Infra 认领通道；
+    /// 跨档过滤在 [`crate::lif::LifEngine::on_bus_event`] 已完成——本层
+    /// 只注入）。总线事件**非动作采样点**（0cp D1 动作化口径：streak 窗
+    /// 只认决策轮/工具事件/看门狗样），不调 [`Self::note_sample_point`]。
+    pub fn on_bus_event(&mut self, t: f64, kind: ChannelKind) {
+        for ch in &mut self.channels {
+            ch.advance(t);
+        }
+        self.channel_mut(kind).inject(t, 1.0);
+        for ch in &mut self.channels {
+            ch.check(t);
+        }
     }
 
     /// 快照（3 位小数定点化；随会话侧车持久化）。自判域机器状态一并携带
@@ -2370,6 +2439,9 @@ pub fn channel_label(kind: ChannelKind) -> &'static str {
         ChannelKind::Slow => "slow",
         ChannelKind::Deny => "deny",
         ChannelKind::Prog => "prog",
+        ChannelKind::Verify => "verify",
+        ChannelKind::Ctx => "ctx",
+        ChannelKind::Infra => "infra",
     }
 }
 
@@ -3463,8 +3535,9 @@ mod tests {
             "series values finite"
         );
         assert_eq!(shadow.feature("nope", 5), Vec::<f64>::new());
-        // 0be 四项②：短视锚点独立化后名集合 11 → 13（pred1_err/pred1_prog）。
-        assert_eq!(RliShadow::known_feature_names().len(), 13);
+        // 0be 四项②：短视锚点独立化后名集合 11 → 13（pred1_err/pred1_prog）；
+        // 0am P8：新三通道 u/v 锚点 13 → 19（feature 面最小可读集）。
+        assert_eq!(RliShadow::known_feature_names().len(), 19);
         // 序列不随快照持久化（live-only）。
         let snap = shadow.snapshot();
         let mut restored = RliShadow::new();

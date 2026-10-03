@@ -42,6 +42,13 @@ pub const DENY_REFRACTORY_SECS: f64 = 60.0;
 
 pub const PROG_TAU_ROUNDS: f64 = 8.0;
 
+/// 0am P8（S2 路由表 §2 预注册初值；周期＝k·T̂，与 RLI 侧周期同物理依据）：
+/// Verify 验证节律 8·T̂（TDD 循环保守量级）、Ctx 认知负载 32·T̂（会话尺度，
+/// 压缩为 O(每 run 数次) 罕见事件）、Infra 供给摩擦 64·T̂（最罕见族）。
+pub const VERIFY_TAU_ROUNDS: f64 = 8.0;
+pub const CTX_TAU_ROUNDS: f64 = 32.0;
+pub const INFRA_TAU_ROUNDS: f64 = 64.0;
+
 pub const STUCK_TAU_ROUNDS: f64 = 3.0;
 pub const STUCK_THETA_ROUNDS: f64 = 1.5;
 pub const STUCK_REFRACTORY_ROUNDS: f64 = 8.0;
@@ -68,6 +75,13 @@ pub enum ChannelKind {
     Slow,
     Deny,
     Prog,
+    /// 0am P8（2026-10-03，S2 路由表 §2）：验证摩擦——验证类动作的失败累积
+    /// （侵蚀面；失败注入、通过零注入的基线参考语义）。
+    Verify,
+    /// 0am P8：认知负载——上下文机械的活动节律（compressed＋fold advance）。
+    Ctx,
+    /// 0am P8：供给摩擦——环境/供给层劣化（transport/探针翻转/资源族）。
+    Infra,
 }
 
 /// A completed tool call, as consumed by the engine.
@@ -88,6 +102,14 @@ pub enum ToolOutcome {
 pub struct ToolEvent {
     pub outcome: ToolOutcome,
     pub wall_ms: Option<u64>,
+    /// 0q 口径：policy_denial 信封标记（写点在喂入点自检跳过盖章的同一
+    /// 事实；0am P8 起进入刺激分派——deny 优先级最高）。
+    pub policy_denied: bool,
+    /// 0am P8（2026-10-03，S2 路由表）：机械路由键（动作类/拒绝类/载荷
+    /// 事实）。`None`＝未路由——合成事件与旧调用面的兼容语义，按旧四值
+    /// 语义分派（Success→Prog 等）；生产喂入点（tool_run 完成臂/
+    /// ToolError 臂）恒填。字段与分派见 [`super::router`]。
+    pub routing: Option<super::router::StimulusRouting>,
 }
 
 impl ToolEvent {
@@ -95,6 +117,8 @@ impl ToolEvent {
         Self {
             outcome: ToolOutcome::Error,
             wall_ms,
+            policy_denied: false,
+            routing: None,
         }
     }
 
@@ -102,6 +126,8 @@ impl ToolEvent {
         Self {
             outcome: ToolOutcome::Deny,
             wall_ms,
+            policy_denied: false,
+            routing: None,
         }
     }
 
@@ -109,6 +135,8 @@ impl ToolEvent {
         Self {
             outcome: ToolOutcome::Success,
             wall_ms,
+            policy_denied: false,
+            routing: None,
         }
     }
 
@@ -116,6 +144,8 @@ impl ToolEvent {
         Self {
             outcome: ToolOutcome::Other,
             wall_ms,
+            policy_denied: false,
+            routing: None,
         }
     }
 }
@@ -265,6 +295,21 @@ impl FirstOrderChannel {
     /// prog is a non-firing freshness channel: success sets u = 1, τ = 8·T̂.
     pub fn prog() -> Self {
         Self::new(ChannelKind::Prog, PROG_TAU_ROUNDS * 8.0, None, 0.0)
+    }
+
+    /// 0am P8：非 firing 水平通道族（τ 随决策轮按 k·T̂ 重导出；单位换算，
+    /// 非逐轮拟合）。Verify＝验证失败累积（失败注入、通过零注入）；
+    /// Ctx/Infra＝总线事件 1.0 注入。
+    pub fn verify() -> Self {
+        Self::new(ChannelKind::Verify, VERIFY_TAU_ROUNDS * 8.0, None, 0.0)
+    }
+
+    pub fn ctx() -> Self {
+        Self::new(ChannelKind::Ctx, CTX_TAU_ROUNDS * 8.0, None, 0.0)
+    }
+
+    pub fn infra() -> Self {
+        Self::new(ChannelKind::Infra, INFRA_TAU_ROUNDS * 8.0, None, 0.0)
     }
 
     pub fn kind(&self) -> ChannelKind {

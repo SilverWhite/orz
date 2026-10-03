@@ -20,15 +20,18 @@
 pub mod channels;
 pub mod estimator;
 pub mod rli;
+pub mod router;
 pub mod temporal;
 
+pub use router::{ActionClass, BusStimulus, DenyClass, StimulusRouting, stimulus_targets};
+
 pub use channels::{
-    ChannelKind, DENY_REFRACTORY_SECS, DENY_TAU_SECS, DENY_THETA, ERR_REFRACTORY_SECS,
-    ERR_TAU_SECS, ERR_THETA, FirstOrderChannel, PROG_TAU_ROUNDS, SLOW_REFRACTORY_SECS,
-    SLOW_TAU_SECS, SLOW_THETA, SLOW_W_MAX, SLOW_WALL_MS_THRESHOLD, STALL_GAP_THRESHOLD_SECS,
-    STALL_REFRACTORY_SECS, STALL_TAU_SECS, STALL_THETA, STUCK_REFRACTORY_ROUNDS, STUCK_TAU_ROUNDS,
-    STUCK_THETA_ROUNDS, StuckChannel, ToolEvent, ToolOutcome, classify_event_outcome,
-    is_denial_code,
+    CTX_TAU_ROUNDS, ChannelKind, DENY_REFRACTORY_SECS, DENY_TAU_SECS, DENY_THETA,
+    ERR_REFRACTORY_SECS, ERR_TAU_SECS, ERR_THETA, FirstOrderChannel, INFRA_TAU_ROUNDS,
+    PROG_TAU_ROUNDS, SLOW_REFRACTORY_SECS, SLOW_TAU_SECS, SLOW_THETA, SLOW_W_MAX,
+    SLOW_WALL_MS_THRESHOLD, STALL_GAP_THRESHOLD_SECS, STALL_REFRACTORY_SECS, STALL_TAU_SECS,
+    STALL_THETA, STUCK_REFRACTORY_ROUNDS, STUCK_TAU_ROUNDS, STUCK_THETA_ROUNDS, StuckChannel,
+    ToolEvent, ToolOutcome, VERIFY_TAU_ROUNDS, classify_event_outcome, is_denial_code,
 };
 pub use estimator::{
     INTERVAL_BUF_CAP, INTERVAL_CAP_SECS, RoundIntervalEstimator, T_HAT_ENABLE_SAMPLES,
@@ -106,6 +109,11 @@ pub struct LifEngine {
     slow: FirstOrderChannel,
     deny: FirstOrderChannel,
     prog: FirstOrderChannel,
+    /// 0am P8（2026-10-03，S2 路由表）：验证摩擦／认知负载／供给摩擦
+    /// 三通道（非 firing 水平通道，τ 随决策轮 k·T̂ 重导出）。
+    verify: FirstOrderChannel,
+    ctx: FirstOrderChannel,
+    infra: FirstOrderChannel,
     stuck: StuckChannel,
     temporal: TemporalState,
     /// 0am S2（2026-09-17）：RLI 影子族（旁路并行）。`None` = 未启用
@@ -119,6 +127,9 @@ pub struct LifEngine {
     last_time: Option<f64>,
     last_decision_t: Option<f64>,
     last_tool_t: Option<f64>,
+    /// 0am P8：最近一次资源快照档位（跨档过滤记忆；live-only 不随任何
+    /// 持久化面携带——run 级新鲜态）。
+    last_snapshot_tier: Option<&'static str>,
 }
 
 impl Default for LifEngine {
@@ -137,6 +148,9 @@ impl LifEngine {
             slow: FirstOrderChannel::slow(),
             deny: FirstOrderChannel::deny(),
             prog: FirstOrderChannel::prog(),
+            verify: FirstOrderChannel::verify(),
+            ctx: FirstOrderChannel::ctx(),
+            infra: FirstOrderChannel::infra(),
             stuck: StuckChannel::new(),
             temporal: TemporalState::new(),
             rli_shadow: None,
@@ -146,6 +160,7 @@ impl LifEngine {
             last_time: None,
             last_decision_t: None,
             last_tool_t: None,
+            last_snapshot_tier: None,
         }
     }
 
@@ -238,6 +253,10 @@ impl LifEngine {
 
         let t_hat = self.current_t_hat();
         self.prog.set_tau_secs(PROG_TAU_ROUNDS * t_hat);
+        // 0am P8：轮语义通道族 τ 重导出（k·T̂；单位换算）。
+        self.verify.set_tau_secs(VERIFY_TAU_ROUNDS * t_hat);
+        self.ctx.set_tau_secs(CTX_TAU_ROUNDS * t_hat);
+        self.infra.set_tau_secs(INFRA_TAU_ROUNDS * t_hat);
         self.stuck.set_rhythm(t_hat);
         match self.err_tau_mode {
             ErrTauMode::FixedSecs(tau) => self.err.set_tau_secs(tau),
@@ -276,22 +295,24 @@ impl LifEngine {
         self.last_tool_t = Some(t);
 
         self.advance(t);
-        match event.outcome {
-            ToolOutcome::Error => {
-                self.err.spike(t, 1.0);
-            }
-            ToolOutcome::Deny => {
-                self.deny.spike(t, 1.0);
-            }
-            ToolOutcome::Success => {
-                self.prog.spike(t, 1.0);
-            }
-            ToolOutcome::Other => {}
+        // 0am P8（2026-10-03，S2 路由表）：分派统一走 router 纯函数——
+        // `routing: None`（合成事件/旧调用面）＝旧四值语义，行为不变；
+        // 生产喂入点恒带路由键＝S2 语义（Prog 收窄/验证通道/Slow 豁免/
+        // H2 填平）。**零触发语义**（P9）——本函数只决定「通道看见什么」。
+        let targets = router::stimulus_targets(&event);
+        if targets.err {
+            self.err.spike(t, 1.0);
         }
-        if let Some(wall_ms) = event.wall_ms
-            && wall_ms > SLOW_WALL_MS_THRESHOLD
-        {
-            let w = ((wall_ms as f64) / 60_000.0).clamp(1.0, SLOW_W_MAX);
+        if targets.deny {
+            self.deny.spike(t, 1.0);
+        }
+        if targets.prog_set {
+            self.prog.spike(t, 1.0);
+        }
+        if targets.verify {
+            self.verify.spike(t, 1.0);
+        }
+        if let Some(w) = targets.slow {
             self.slow.spike(t, w);
         }
         if long_gap {
@@ -302,6 +323,39 @@ impl LifEngine {
         // 0am S2：影子旁路喂入（同一事件流；不影响 1D 任何输出）。
         if let Some(shadow) = &mut self.rli_shadow {
             shadow.on_tool_event(t, event);
+        }
+    }
+
+    /// 0am P8（2026-10-03，S2 §3 Ctx/Infra 认领）：非工具事件总线注入。
+    /// `host_resource_snapshot` 在此做**跨档过滤**（v1.1：run 首测＝基线
+    /// 不计；引擎记忆上一档位）。零触发语义（P9）。
+    pub fn on_bus_event(&mut self, t: f64, stimulus: BusStimulus) {
+        if self.run_t0.is_none() {
+            self.set_run_origin(t);
+        }
+        let t = self.rel(t);
+        let stimulus = match stimulus {
+            BusStimulus::HostResourceSnapshotTier(tier) => {
+                let crossing = matches!(self.last_snapshot_tier, Some(prev) if prev != tier);
+                self.last_snapshot_tier = Some(tier);
+                if !crossing {
+                    return;
+                }
+                BusStimulus::HostResourceSnapshotTier(tier)
+            }
+            other => other,
+        };
+        let Some(kind) = stimulus.channel() else {
+            return;
+        };
+        self.advance(t);
+        match kind {
+            ChannelKind::Ctx => self.ctx.spike(t, 1.0),
+            ChannelKind::Infra => self.infra.spike(t, 1.0),
+            _ => return,
+        }
+        if let Some(shadow) = &mut self.rli_shadow {
+            shadow.on_bus_event(t, kind);
         }
     }
 
@@ -346,6 +400,9 @@ impl LifEngine {
         self.slow.decay_to(t);
         self.stall.decay_to(t);
         self.deny.decay_to(t);
+        self.verify.decay_to(t);
+        self.ctx.decay_to(t);
+        self.infra.decay_to(t);
     }
 
     /// Fire checks for all threshold channels at the current step time.
@@ -375,6 +432,19 @@ impl LifEngine {
 
     pub fn deny(&self) -> &FirstOrderChannel {
         &self.deny
+    }
+
+    /// 0am P8：新三通道只读面（锚点/诊断）。
+    pub fn verify(&self) -> &FirstOrderChannel {
+        &self.verify
+    }
+
+    pub fn ctx(&self) -> &FirstOrderChannel {
+        &self.ctx
+    }
+
+    pub fn infra(&self) -> &FirstOrderChannel {
+        &self.infra
     }
 
     pub fn prog(&self) -> &FirstOrderChannel {

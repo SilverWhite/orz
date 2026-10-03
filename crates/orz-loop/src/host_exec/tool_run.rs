@@ -4064,6 +4064,20 @@ impl AgentLoopController {
                 } else {
                     orz_assurance::lif::ToolOutcome::Other
                 };
+                // 0am P8（2026-10-03，S2 路由表 §5）：喂入负载扩展——机械
+                // 路由键随事件入引擎（动作类标签器同源 `ActionClass::of_tool`；
+                // H2 填平位＝非零 exit；分派语义见 `stimulus_targets`）。
+                let routing = orz_assurance::lif::StimulusRouting {
+                    class: orz_assurance::lif::ActionClass::of_tool(
+                        &tc.name,
+                        tc.arguments
+                            .get("command")
+                            .and_then(serde_json::Value::as_str),
+                    ),
+                    deny_class: None,
+                    non_zero_exit: matches!(res.exit_code, Some(code) if code != 0),
+                    write_control_block: false,
+                };
                 self.lif
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -4072,6 +4086,8 @@ impl AgentLoopController {
                         orz_assurance::lif::ToolEvent {
                             outcome,
                             wall_ms: Some(wall_started.elapsed().as_millis() as u64),
+                            policy_denied: res.policy_denial.is_some(),
+                            routing: Some(routing),
                         },
                     );
                 stamp_direct(&mut completed_payload);
@@ -4222,6 +4238,15 @@ impl AgentLoopController {
                     payload
                 };
                 // P2-10 F3 (I3): host-level tool error → LIF err event.
+                // 0am P8（2026-10-03，S2 v1.1）：写控兜底 block 判定（冻结
+                // 前缀机械匹配，`BLOCK_MESSAGE_PREFIX` 单源）→ Deny(写控类)
+                //——S3-J2(a) 实证的 err 回声源自此摘除。
+                let write_control_block = match &e {
+                    ToolError::ExecutionFailed(msg) => {
+                        msg.starts_with(orz_tools::types::exec_policy::BLOCK_MESSAGE_PREFIX)
+                    }
+                    _ => false,
+                };
                 self.lif
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -4230,6 +4255,18 @@ impl AgentLoopController {
                         orz_assurance::lif::ToolEvent {
                             outcome: orz_assurance::lif::ToolOutcome::Error,
                             wall_ms: Some(wall_started.elapsed().as_millis() as u64),
+                            policy_denied: false,
+                            routing: Some(orz_assurance::lif::StimulusRouting {
+                                class: orz_assurance::lif::ActionClass::of_tool(
+                                    &tc.name,
+                                    tc.arguments
+                                        .get("command")
+                                        .and_then(serde_json::Value::as_str),
+                                ),
+                                deny_class: None,
+                                non_zero_exit: false,
+                                write_control_block,
+                            }),
                         },
                     );
                 stamp_direct(&mut err_payload);
