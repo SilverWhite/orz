@@ -1098,3 +1098,15 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **0v 闭合入账 26 → 25**（用户裁决「不强硬取证」——判据 9/10 与 CAPTCHA 样本不再追、命中率与 chrome-error 分类偏差观察归档，S1–S4 全部闭合转 `implemented`）。
 - **0z 真机资源安全边界立项登记 25 → 26**（P0，设计完成待放行实施——本轮真机自举两次满占用卡死处置：三个缺口＋一个摩擦项）。
 - **同日全项目只读深审入档**（[`FULL_PROJECT_DEEP_REVIEW`](audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md)，登记不动计数）——0v-C 两项 P0 被同日 orz `ba934af8` 修复闭合覆盖且触发源实锤与报告独立判断（URL 无痕改写）吻合、账本三处同步断裂（报告 P1-5）同日回补；其余 P1/P2 与体系面发现留用户裁决未立项，详见主卷治理注记。
+
+### 1.134 2026-10-04 180 批 0.8.12 双平台载体重建进体——0am P8 面首次进件（用户令「请进行重建吧」；计数不变 57）
+
+- **源冻结**：orz `54717d06`（`905bc3f5` 179 批 RS-06 收口＋bump 0.8.11→0.8.12；`cargo metadata --locked` exit 0、恰两行）；未推送。
+- **Windows**：`build_orz.ps1 -Release -Jobs 2` exit 0（5m04s 暖缓存增量；退出码独立落盘直取）；换装 `.0.8.11-bak` 链——orz.exe 57,101,312（+34,304）`40bdda50…`、orz-signer/orz-acaf-provision 尺寸 Δ0 但哈希变化（`860c9860…`/`06b7e693…`＝179 批 orz-assurance 链接传播，与 155/170 的 Δ0 形态不同，如实记）；ACAF 重 provision（旧 manifest 留 `.bak-20261004-180`；binary_sha256↔换装位逐位一致；keystore 两件 Sep 12 原件未动）；载体清单 3 entries 0.8.12；`--build-info` 0.8.12 os=windows exit 0；冒烟 `--fake-provider -p hello` rc 0（run `RUN-CLI-6ac13438`；首跑经管道取码作废——155 §2-A 纪律）；`dogfood_launch -DryRun` 装配断言全过。
+- **Linux musl**：docker `rust:1.97-slim`（在位无重拉）＋`build_orz_aliyun_trixie.sh` exit 0（32m59s，-j 1）；`.0.8.11-bak` 链于容器末段 cp 前预建（直写换装位形态的回滚点保护）；产物与 orz-target **MATCH 3/3**；ELF 三件 **ET_DYN（PIE）＋PT_INTERP=0（static-pie）**；alpine 3.20/bookworm 双冒烟 `version=0.8.12 os=linux` exit 0；Linux 载体未重 provision（沿同口径）。orz 115,569,504（+53,488）`b141c1ef…`。
+- **身份门**：`run_r0_heavy_official.py` `EXPECTED_CARRIER_SHA256` `c6a0812c…` → **`b141c1ef…`**（注释同步 0.8.12＝源冻结 `54717d06`；适配器未动）；语法解析＋--help rc 0。
+- **字面量核证**（新工具 `scripts/check_carrier_literals.py`，LIFECYCLE active 登记）：NEW 面（0→N 双平台）＝成因段标签环闭集全量（验证失败/写控拦截/计划/车道拒绝/门/护栏拒绝/检索启用拒绝/权限拒绝/策略拒绝/其他拒绝/变更成功/间隔失节律/折叠推进/折叠写失败/资源拒绝/限额命中/探针翻转/资源跨档/传输重试）＋`源：`前缀＋锚点八名（u_verify 2、v_verify 2/1、u_ctx/v_ctx/u_infra/v_infra 各 1）＋词表 v2（cargo fmt --check/pnpm test/bun test）＋179 kill-switch 告警长文案两条；RETAINED 零回归（`rli.notice.` 7→7/1→1、streak_crossed/domain_spike_entry/migration_confirmed 1→1、coverage_gap 5→5/6→6、u_prog 22→22/32→32、slow_prog 3→3、carrier-write 1→1）；GONE 零残留（`预算：`/`rli-shadow-v1`）；`ORZ_LIF_RLI_SHADOW` 2→3＝179 文案携 env 名（预期）。
+- **注记双条（如实记）**：① `rli-shadow-v2` 双平台连续字节 0——13B schema 常量在 to_string/比较两使用点被拆分内联（170 §2-A imm64 家族双平台同形）；功能在件证据＝同模块锚点名/标签环/词表 v2/179 文案全在件＋schema 写读同源 const 构造性保证。② 件内 `0.8.11` 命中 14/9＝依赖 regex-syntax 0.8.11 版本串（Cargo.lock 在案）非 orz 残留；`0.8.12`＝1/2（ahash＋orz 本体）；本体身份以 --build-info 0.8.12 为权威。判据串笔误随批修正（`计划·车道拒绝`→源码字面 `计划/车道拒绝`；判据串以源码为唯一权威）。
+- **边界**：打包顺延、未推送未发行（发布面停 v0.8.7）；Linux 未重 provision（沿同口径）。**0am 余项收敛＝真机轮 Verify streak 查准/转向相关预注册读数（随下一真机轮）；按 2026-09-20 顺序裁决载体重建后进 0bc。**
+- 批档：[`180 批档`](audits/180_CARRIER_REBUILD_V0812_0AM_P8_ENTRY_2026-10-04.md)。
+- 关键词：180 批、0.8.12 重建、源冻结 `54717d06`、0am P8 面首次进件、`b141c1ef` 身份门、ACAF 重 provision 860c9860、signer 哈希传播、static-pie×3、双冒烟 0.8.12、标签环在件、词表 v2 在件、rli-shadow-v2 拆分内联、regex-syntax 版本串判读、check_carrier_literals、计数 57。

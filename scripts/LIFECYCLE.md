@@ -33,6 +33,7 @@
 | `tb21_round_gate.py` | TB 2.1 本轮 k=1 成绩读数 + 与官方 V4.1 参照线（90.6）比对 | 回合读数件（2026-09-13 设立；**静默旁路**：只读、容忍半程数据、退出码恒 0、**不进 CI 门禁也不阻断跑批**） |
 | `tb21_friction_scan.py` | TB 2.1 整轮 journal/日志 → 摩擦清单（工具失败/模型侧工具名错/框架信号/角色拒绝/权限拒绝/传输重试/哨兵/长会话/检索/终端态/0z 资源事件）+ 归因 | 回合读数件（2026-09-13 设立；**静默旁路**同左；R1 基线扫描入档 `evaluation/round-v41-k1/`） |
 | `ops_bridge.ps1` / `ops_bridge.sh` / `ops_executor.ps1` + `ops-bridges.json` | OPS-PROTOCOL 参考执行器 | `reference` 面（不生产接线） |
+| `check_carrier_literals.py` | 载体重建批字面量核证（字节搜索判据面：NEW/RETAINED/GONE 三组；170 批 §2-A imm64 内联注记内嵌档注释） | 载体重建批复现入口（2026-10-04 180 批设立；判据清单随重建窗口演进） |
 
 ## retained（批次开放中的常设工具件）
 
