@@ -1412,14 +1412,17 @@ fn not_found_suggestions<'a>(name: &str, registered: &[&'a str]) -> Vec<&'a str>
     let table_hit = NOT_FOUND_SUGGESTION_TABLE
         .iter()
         .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        // Echo the live registered spelling (not the table literal) so a
+        // name_override casing variant can't send the model into a second
+        // case-sensitive not-found (2026-10-04 review fix).
         .and_then(|(_, target)| {
             registered
                 .iter()
-                .any(|r| r.eq_ignore_ascii_case(target))
-                .then_some(*target)
+                .find(|r| r.eq_ignore_ascii_case(target))
+                .copied()
         });
-    if let Some(target) = table_hit {
-        return vec![target];
+    if let Some(live) = table_hit {
+        return vec![live];
     }
     let name_lower = name.to_lowercase().into_bytes();
     let mut scored: Vec<(usize, usize, &str)> = registered
@@ -2357,7 +2360,9 @@ mod tests {
     }
 
     /// Table arm: observed cross-harness command names map to the shell tool
-    /// even though the lexical rules cannot reach them (prefix `run_c` = 5).
+    /// even though the lexical rules cannot reach them (shared prefix with
+    /// the shell tool is `run_` = 4 < 8, and the length delta exceeds the
+    /// edit-distance budget).
     #[test]
     fn not_found_suggestion_table_arm() {
         let face = suggestion_face();
@@ -2391,13 +2396,42 @@ mod tests {
         );
     }
 
-    /// Levenshtein arm: the 0S round's top variant is within budget 2.
+    /// Levenshtein arm: the 0S round's top variant is within budget 2. Not
+    /// arm-isolating (the shared prefix also reaches this name) — the
+    /// isolating case lives in `not_found_suggestion_levenshtein_only_arm`.
     #[test]
     fn not_found_suggestion_levenshtein_arm() {
         let face = suggestion_face();
         assert_eq!(
             not_found_suggestions("run_terminal_cpt", &face),
             vec!["run_terminal_cmd"]
+        );
+    }
+
+    /// Levenshtein arm, isolated (2026-10-04 review): `rn_terminal_cmd`
+    /// shares only `r` (1 < 8) with the shell tool yet sits at edit distance
+    /// 1 — the prefix arm cannot reach it, so this case only passes via the
+    /// distance budget.
+    #[test]
+    fn not_found_suggestion_levenshtein_only_arm() {
+        let face = suggestion_face();
+        assert_eq!(
+            not_found_suggestions("rn_terminal_cmd", &face),
+            vec!["run_terminal_cmd"]
+        );
+    }
+
+    /// A table hit echoes the live registered spelling, not the table
+    /// literal (2026-10-04 review fix): with a casing-variant
+    /// `name_override` in the registry the hint must resolve to the name
+    /// that will actually dispatch, never into a second case-sensitive
+    /// not-found.
+    #[test]
+    fn not_found_suggestion_table_hit_echoes_live_casing() {
+        let face = vec!["read_file", "grep", "RUN_TERMINAL_CMD"];
+        assert_eq!(
+            not_found_suggestions("run_command", &face),
+            vec!["RUN_TERMINAL_CMD"]
         );
     }
 
@@ -2439,11 +2473,26 @@ mod tests {
     fn not_found_error_message_carries_hint() {
         let face = vec!["run_terminal_cmd"];
         let err = FinalizedToolset::tool_not_found_error("run_terminal_patch", &face);
+        assert_eq!(err.kind, xai_tool_runtime::ToolErrorKind::NotFound);
         assert!(err.detail.contains("Tool not found: run_terminal_patch"));
         assert!(err.detail.contains("did you mean \"run_terminal_cmd\"?"));
         assert_eq!(
             err.details.as_ref().unwrap()["tool_id"],
             "run_terminal_patch"
+        );
+    }
+
+    /// Two-candidate envelope shape: the "a" or "b" form rides on the same
+    /// message text, ordered by the rule-arm ordering (longer common prefix,
+    /// then smaller edit distance, then name) — both candidates share
+    /// prefix 14 here, so distance decides the order (2026-10-04 review).
+    #[test]
+    fn not_found_error_two_candidates_render_both() {
+        let face = vec!["run_terminal_cmd", "run_terminal_cmd_x"];
+        let err = FinalizedToolset::tool_not_found_error("run_terminal_cd", &face);
+        assert!(
+            err.detail
+                .contains("did you mean \"run_terminal_cmd\" or \"run_terminal_cmd_x\"?")
         );
     }
 

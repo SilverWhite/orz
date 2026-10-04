@@ -540,8 +540,9 @@ fn hidden_message_ranges(
 }
 
 /// **模型面装配**（设计 §1 §2）。无分块时（整段会话即主滑块）除**常驻头
-/// （指针＋D4，0bz S3）**外原样返回 `messages`——头部结构消息自首个轮次即
-/// 在，开窗转换只剩尾部追加（见 [`try_clone_messages_with_resident_head`]）。
+/// （指针，0bz S3）＋窗口尾 D4 机械段（0bz S3′）**外原样返回 `messages`
+/// ——头部结构消息自首个轮次即在，开窗转换只剩尾部追加
+/// （见 [`try_clone_messages_with_resident_head`]）。
 ///
 /// **0bc S2④（2026-09-21）：可失败分配**。本函数是 S1 清单的「模型缓冲」
 /// 巨量分配路径——逐条克隆改 `try_reserve(_exact)` 族；失败以
@@ -554,7 +555,8 @@ pub fn build_model_face(
 ) -> Result<Vec<Message>, std::io::Error> {
     let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
     if blocks.is_empty() {
-        // 0bz S3（2026-09-28）：**常驻头（指针＋D4）自首个轮次起即在**——旧
+        // 0bz S3（2026-09-28）：**常驻头（指针；0bz S3′ 后 D4 落窗口尾）自
+        // 首个轮次起即在**——旧
         // 口径「无分块原样返回」使指针/D4 拖到首个分块形成那一刻才整体插入
         // face 前部 ⇒ 开窗轮前缀全变、整窗 miss（`RUN-CLI-6ab99969` r40 实测
         // 135,754 tk，六轮狗粮「自发塌陷」同族的机理）。注入点＝
@@ -619,11 +621,13 @@ pub fn build_model_face(
     Ok(view)
 }
 
-/// 0bz S3（2026-09-28）：早期（无分块）形态的**常驻头**——指针＋D4 注入到
-/// 首个轮次起点（`round_ranges[0].0`）。该点与开窗后 `preamble_end =
-/// blocks[0].msg_start` 恒同值（首个分块必为首个完整轮），故「无分块 → 有
-/// 分块」的转换只发生尾部追加，face 前缀逐字节稳定。轮次尚未成形时不注入
-/// （成形那一刻 face 仅数 K token，一次性小成本，且此后注入点恒定）。
+/// 0bz S3（2026-09-28）：早期（无分块）形态的**常驻头**——指针注入到首个
+/// 轮次起点（`round_ranges[0].0`）；D4 机械段不进头部，0bz S3′（2026-10-04）
+/// 起落窗口尾＝末条历史之后（与开窗形态同位）。指针注入点与开窗后
+/// `preamble_end = blocks[0].msg_start` 恒同值（首个分块必为首个完整轮），
+/// 故「无分块 → 有分块」的转换只发生尾部追加，face 前缀逐字节稳定。轮次
+/// 尚未成形时不注入（成形那一刻 face 仅数 K token，一次性小成本，且此后
+/// 注入点恒定）。
 fn try_clone_messages_with_resident_head(
     messages: &[Message],
     params: &ModelFaceParams,
@@ -780,7 +784,8 @@ pub fn model_face_estimate(messages: &[Message], params: &ModelFaceParams) -> u6
 pub fn estimate_model_face_tokens(messages: &[Message], params: &ModelFaceParams) -> u64 {
     let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
     if blocks.is_empty() {
-        // 0bz S3：常驻头与 build_model_face 同口径——轮次成形后计入指针/D4。
+        // 0bz S3：常驻结构与 build_model_face 同口径——轮次成形后计入指针
+        // （头部）与 D4（0bz S3′ 起居窗口尾；计数与位置无关）。
         let mut total = crate::controller::estimate_messages_tokens(messages);
         if !crate::action_ledger::round_ranges(messages).is_empty() {
             if let Some(ledger) = params.ledger_path.as_deref() {
@@ -1605,8 +1610,9 @@ mod tests {
     fn resident_head_from_first_round_and_opening_keeps_prefix_byte_stable() {
         // 0bz S3 钉①（2026-09-28；机理实证＝`RUN-CLI-6ab99969` r40：旧口径
         // 指针/D4 拖到首个分块形成才插入 face 前部 ⇒ 开窗轮整窗 miss
-        // 135,754 tk）：指针＋D4 自首个轮次即在 face；首个分块形成（开窗）
-        // 时 face 前缀逐字节不变，只有尾部追加（块表／RUN_END）。
+        // 135,754 tk）：指针自首个轮次即在 face[1]、D4 居窗口尾（0bz S3′
+        // 移位后口径）；首个分块形成（开窗）时 face 前缀逐字节不变，只有
+        // 尾部追加（块表／RUN_END）。
         let params = || ModelFaceParams {
             slider_tokens: 160_000,
             block_tokens: 32_000,
@@ -1670,11 +1676,17 @@ mod tests {
         // 0bz S3′ 钉（2026-10-04）：D4 重渲（epoch 更新）只重价尾部自身——
         // 题面、指针、marker 与全部历史逐字节稳定（「第 2 针」机械锁：
         // recli 四跑离线对账实证 9/9 压缩后 +2 在 D4 头部槽全前缀重价，
-        // 移尾后该重价面收敛到 D4 槽本身）。
+        // 移尾后该重价面收敛到 D4 槽本身）。本 fixture 无压缩 marker；
+        // marker 在场的开窗形状由变体钉
+        // `d4_rerender_diverges_only_at_its_tail_slot_with_marker` 覆盖。
         let mut messages = conversation(2, 1_000);
         for _ in 0..60 {
             messages.extend(conversation(1, 8_000).into_iter().skip(1));
         }
+        assert!(
+            !blocks_outside_slider(&messages, 160_000, 32_000).is_empty(),
+            "钉在开窗路径（已成块）"
+        );
         let params = |d4: &str| ModelFaceParams {
             slider_tokens: 160_000,
             block_tokens: 32_000,
@@ -1701,7 +1713,73 @@ mod tests {
         assert_eq!(
             &before[..div],
             &after[..div],
-            "D4 重渲不得改写其前任何字节（含 marker 与历史）"
+            "D4 重渲不得改写其前任何字节（本 fixture 无 marker；marker 在场形状见变体钉）"
+        );
+    }
+
+    #[test]
+    fn d4_rerender_diverges_only_at_its_tail_slot_with_marker() {
+        // 0bz S3′ 钉变体（2026-10-04 审查处置批）：生产第 2 针的准确形状＝
+        // marker 在场的开窗脸（压缩落地后的 +2 请求）。marker 作为历史区
+        // 普通消息由逐字节前缀比较覆盖；本钉显式断言 fixture 已成块（开窗
+        // 路径）且 marker 确在 face 内，重渲分歧仍只落尾部 D4 槽。
+        let params = |d4: &str| ModelFaceParams {
+            slider_tokens: 160_000,
+            block_tokens: 32_000,
+            ledger_path: Some(std::path::PathBuf::from(".gsa/ledger/current.md")),
+            archive_tag: Some("sess0001".to_string()),
+            run_id: "RUN-TEST".to_string(),
+            d4_block: Some(d4.to_string()),
+            static_overhead_tokens: 0,
+        };
+        let mk_marker = |n: u32, spec: &str| -> String {
+            format!(
+                "{} {}]
+{}{}
+摘要 ID: compaction-RUN-TEST-{n:03}
+台账定位: .gsa/ledger/current.md
+",
+                crate::prompt::CONTEXT_COMPRESSED_PREFIX,
+                BLOCK_MARKER_COMPRESSED_VERSION,
+                BLOCK_MARKER_RANGE_LABEL,
+                spec
+            )
+        };
+        let mut messages = conversation(60, 8_000);
+        // 压缩落地：marker 插入块 1 首轮起点（生产 insert_at 口径）。
+        let blocks = blocks_outside_slider(&messages, 160_000, 32_000);
+        let ranges = crate::action_ledger::round_ranges(&messages);
+        let b1 = blocks.first().expect("block1");
+        let at = ranges[b1.first_round].0;
+        messages.insert(at, mechanical_message(mk_marker(1, "1")));
+        assert!(
+            !blocks_outside_slider(&messages, 160_000, 32_000).is_empty(),
+            "钉在开窗路径（已成块）"
+        );
+        let before = build_model_face(&messages, &params("D4 旧 epoch")).expect("face");
+        let after = build_model_face(&messages, &params("D4 新 epoch ×2")).expect("face");
+        assert!(
+            before
+                .iter()
+                .any(|m| m.content.contains("compaction-RUN-TEST-001")),
+            "marker 必在 face 内（生产第 2 针的准确形状）"
+        );
+        assert_eq!(before.len(), after.len(), "D4 重渲不改面长度");
+        let div = before
+            .iter()
+            .zip(after.iter())
+            .position(|(a, b)| a.content != b.content)
+            .expect("D4 内容差异必现");
+        assert!(
+            div >= before.len() - 3,
+            "分歧必须落在尾部 D4 槽（实际 index {div}/{}）",
+            before.len()
+        );
+        assert_eq!(after[div].content, "D4 新 epoch ×2");
+        assert_eq!(
+            &before[..div],
+            &after[..div],
+            "marker 在场时 D4 重渲同样不得改写其前任何字节（含 marker 与历史）"
         );
     }
 

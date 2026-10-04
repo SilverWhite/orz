@@ -4701,8 +4701,8 @@ mod tests {
         let received = fake.received_requests();
         assert!(received.len() >= 2, "round 2 request exists: {received:?}");
         let round2 = &received[1].messages;
-        // user + [常驻头：指针＋D4（0bz S3，2026-09-28）] + assistant
-        // declaration + tool result
+        // user + [常驻头：指针（0bz S3）] + assistant declaration + tool
+        // result + [窗口尾：D4（0bz S3′，2026-10-04）]
         // (no text-summary duplicate, no per-round budget re-declaration —
         // PUSH→PULL 2026-08-21; the legacy assistant rollup of tool outputs
         // was retired in the S4 fix because DeepSeek thinking-mode 400s on
@@ -6085,8 +6085,8 @@ mod tests {
         let received = fake.received_requests();
         assert!(received.len() >= 2, "round 2 request exists: {received:?}");
         let round2 = &received[1].messages;
-        // user + [常驻头：指针＋D4（0bz S3）] + assistant declaration (with
-        // reasoning) + tool result
+        // user + [常驻头：指针（0bz S3）] + assistant declaration (with
+        // reasoning) + tool result + [窗口尾：D4（0bz S3′）]
         // (no text-summary duplicate, no per-round budget re-declaration —
         // PUSH→PULL 2026-08-21).
         assert_eq!(round2.len(), 5, "protocol shape: {round2:?}");
