@@ -20,7 +20,7 @@
 
 - **前批记录指针**：2026-10-02 164 批（**0cn S2 落码＝budget 轮数记次注入撤除＋ADR §14.82 转录；计数不变 59**——S1 定稿「撤除」落码：逐批 `kind=budget`「已用 N/999 轮」事件零写入、终审报告块预算行退役（墙钟行保留）、`KIND_BUDGET` 标退役（枚举/键保留仅供历史 journal 校验）、orz-bin 三处 e2e 期望双条→单条、零写入钉子；构建/测试验证随 S3 进体批补跑——用户令「暂时不重建」、S3 进体暂缓；档＝[`164 批档`](audits/164_0CN_S2_BUDGET_INJECTION_REMOVAL_2026-10-02.md)。前批＝163 批 0co S3 用户裁决闭合＋0cp 立项＋设计稿 v1.0〔计数不变 59 对冲；0cp S2 待放行〕／162 批 0co S0–S2〔RLI 阈值数据评估〕／161 批补记〔同日三裁决 61 → 59〕。）
 
-- 未闭合总数：**59 项**（口径日期 2026-10-04；本批＝**189 批 0cr SlopCodeBench 官方轮记分卡立项（58 → 59；用户裁决「我同意按这个口径做……请先立项，不急着直接做」；官方口径全目 36 题字母序 k=1、单题单跑每题收一轮、全新容器逐题、上传 Harbor、零预期、主线＝找新摩擦；S1 勘定排期先行）**；详见 BACKLOG `0cr` 节与 TODO `P1-0cr`。前批＝**183 批 提交推送与 0.8.12 发行（零源码；计数不变 58）**；[`183 批档`](audits/183_SUBMIT_PUSH_AND_RELEASE_V0812_2026-10-04.md)。前批＝**182 批 0cq 写控误拦两族立项（57 → 58）＋S0.5 到达概率校准负结果＋预测段形态收窄定案〔仅前推预告段、到达概率不进模型面〕**；[`182 批档`](audits/182_0CQ_REGISTRATION_S05_ARRIVAL_NEGATIVE_FORECAST_FORM_NARROWED_2026-10-04.md)。前批＝181 批 recli 三跑＋S0 对拍（计数不变 57）；[`181 批档`](audits/181_RECLI_RUN3_0AM_VERIFY_S0_FORECAST_BACKTEST_2026-10-04.md)。更早＝**180–174 批（均计数不变 57）**与 173–161 批（批档同目录 audits/）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。本行与 P0/P1/P2 开放项清单、优先级总览表、TODO 路由/勾选、索引 §8 受 `check_repository.py` 机械检查约束（0ab S1 常驻）。）
+- 未闭合总数：**60 项**（口径日期 2026-10-04；本批＝**190 批 0cs 工具名近似提示立项（59 → 60；用户令「近似用途工具名提示值得做……可以直接立项，正常拦截的时候对应返回提示即可」；P2；S1 落码随令可开，S2 载体随下一重建批、S3 真机随 0cr 首题顺带）**；详见 BACKLOG `0cs` 节与 TODO `P2-0cs`。前批＝**189 批 0cr SlopCodeBench 官方轮记分卡立项（58 → 59；用户裁决「我同意按这个口径做……请先立项，不急着直接做」；官方口径全目 36 题字母序 k=1、单题单跑每题收一轮、全新容器逐题、上传 Harbor、零预期、主线＝找新摩擦；S1 勘定排期先行）**；详见 BACKLOG `0cr` 节与 TODO `P1-0cr`。前批＝**183 批 提交推送与 0.8.12 发行（零源码；计数不变 58）**；[`183 批档`](audits/183_SUBMIT_PUSH_AND_RELEASE_V0812_2026-10-04.md)。前批＝**182 批 0cq 写控误拦两族立项（57 → 58）＋S0.5 到达概率校准负结果＋预测段形态收窄定案〔仅前推预告段、到达概率不进模型面〕**；[`182 批档`](audits/182_0CQ_REGISTRATION_S05_ARRIVAL_NEGATIVE_FORECAST_FORM_NARROWED_2026-10-04.md)。前批＝181 批 recli 三跑＋S0 对拍（计数不变 57）；[`181 批档`](audits/181_RECLI_RUN3_0AM_VERIFY_S0_FORECAST_BACKTEST_2026-10-04.md)。更早＝**180–174 批（均计数不变 57）**与 173–161 批（批档同目录 audits/）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。本行与 P0/P1/P2 开放项清单、优先级总览表、TODO 路由/勾选、索引 §8 受 `check_repository.py` 机械检查约束（0ab S1 常驻）。）
 
 
 - **2026-09-15（本轮）**：0ac 检索侧补强设计稿定稿（v1.0）并落裁决——**用户裁决**：代理不做引擎白名单（真机开代理即生效）；**工程裁决**四点（G1 三段预算 `T_acquire` 5 s / `T_first` 10 s / `T_segment` 10 s·页、G2 相关性闸门默认开 + 25% + 词集封顶 12、G3 解包 6 worker / 6 s、落码顺序 G2 → G1 → G3 → G4）；登记为 **0ac S3①-a 子切片**（索引 `DESIGN-RETRIEVAL-LOCAL-SEGMENTED-HARDENING`、TODO `P0-0ac` 补强项）——**不动计数**（时点读数「30 项」；同日后随 0ae/0af/0ah 立项增至 **33 项**，见计数行与 0ab 检查。）
@@ -50,7 +50,7 @@
 |---|---|---|
 | P0 | 当前工作集：设计已冻结，裁决后立即实施 | 0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥⑦（0l）；GAP-APPROVAL-PROMPTER 延期项（0n）；S3/S4 集中实机验证批 T3–T6（0o）；检索子代理双车道 S4（0t）；官方 R4 15 题复跑（0u）；TB 4.0 摩擦探针审计 O1–O7（0w）；NP1 机械身体集成支线（0y）；真机资源安全边界 S4 复验（0z）。已闭合 00/00a/0a/0c/0e/0f/0g/0h/0i/0k/0m（2026-09-19 S4 收口，37 → 36）/0p/0q/0r/0s/0v/0x/1/1b/2/3/3a/3b 与 0d 主项、0ar（2026-09-20 闭合，36 → 35）、0ac＝机械层即时回报与流式检索（2026-09-27 S4 三题实机复验通过，55 → 54）以 `[x]` 单行核对保留在 P0 节各小节 |
 | P1 | 无需裁决，可与 P0 并行 | 组件审计（4）；Windows 证据三项（5）；DeepSeek live 证据（6）；会话上下文监测（6d）；历史卷 verifier 复扫（0aa）；上下文软门（0ae）；滑块上下文 v8（0ah）；黑板写权限放行（0aj）；门禁冻结克隆树漂移（0al）；LIF 升级线（0am，174 批转正开工；S3 全收〔175〕；P8-a/P8-b 进体〔176/177〕；审查处置批〔178〕；RS-06 收口〔179〕；0.8.12 载体进体〔180〕；**recli 三跑真机轮＋S0 前推对拍已落〔181：Verify 首 fire＝死窗未复现、P8 面首次真机、七判据/预算回归全过；在途 skill 全正、到达预告结构性零、同源事件注记〕**；S0.5 收〔到达不可行〕、预测段定案仅前推〔182〕）；严格审查处置（0aq）；运行身份唯一性（0ba）；资源层收口（0bc）；（0bd）；（0bg）；（0bh）；（0bi）；（0bj）；（0bk）；（0bm）；（0bn）；（0bp）；（0br）；（0bs）；（0bt）；S3 摩擦处置（0aw）／（0ax）；ACAF 签名器不可达（0by）；上下文脸面瞬态分叉（0bz）；写控保底化修订（0cb，S1–S4 读数已齐、闭合待裁决）；写控误拦两族（0cq，181 批 §4b；零误拦真机复核已随 188 批收取＝83 审查 0 block，闭合待裁决）；**SlopCodeBench 官方轮记分卡（0cr，2026-10-04 立项 58 → 59〔189 批〕；S1 勘定排期先行）**；Frontier-Bench 试点线（0ci，2026-10-02 立项，评估档 152 批档）；黑板模型面瘦身（0cl 用户令单独立项＝描述＋说明书简明化落码〔154 批〕）；已闭合线九件（灾难兜底/运行身份/0au 退役/英文线/RLI 注解/挑题探针/RLI 阈值/预算撤除/RLI 直投——2026-10-01～03 用户裁决陆续闭合，明细第二卷 §1.6）／0ca／0bx／0bq／0bw／0bv／0be／0bf／0ay／0bl 与其余长尾明细照录第二卷 §1.6 |
-| P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13）；COMPACTION-FOLD-SNAPSHOT S4（14）；EVALUATION-CORPUS-FREEZE 评测语料冻结与首轮执行（15，2026-09-13 立项，深审 S-13 注册；S1/S2 同日完成）；GAP-EVAL-RESULT-SCHEMA-DRIFT 评测结果合约对齐（15 附，2026-09-13 立案并同日修复 `implemented`）。已闭合 0ak（2026-09-18，run `RUN-CLI-6aac0af5` 判据达成：无头 run archived_tokens=505,560≥500K 三键包）；FR-A06 压缩交互设计批（0ap，2026-09-18 用户令纳入排期，首步设计评估稿、取舍随稿裁决）；命令行引号与长行取用摩擦（0bb，2026-09-20 立项，0am 狗粮轮 F15）；S3 摩擦处置（0at 逐 query 归因）；（0av 批次数读数落盘面）；已闭合 0ce（2026-10-01，146 批，61 → 60：模板族 15 文件＋孤儿 crate 3,018 行＋root 注册行清退，保留面六边实证，preserve_order 特性显式化连带修复）；已闭合 0cf（2026-10-01，147 批 0.8.9 进体闭合 60 → 59：guide 简注＋enum 进体字节判据 ×5）；已闭合 0cg（2026-10-01，147 批 0.8.9 进体闭合 59 → 58：墙钟渲染面归零字节判据＋argv/env 收口实弹探针 ps/environ 双绿） |
+| P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13）；COMPACTION-FOLD-SNAPSHOT S4（14）；EVALUATION-CORPUS-FREEZE 评测语料冻结与首轮执行（15，2026-09-13 立项，深审 S-13 注册；S1/S2 同日完成）；GAP-EVAL-RESULT-SCHEMA-DRIFT 评测结果合约对齐（15 附，2026-09-13 立案并同日修复 `implemented`）。已闭合 0ak（2026-09-18，run `RUN-CLI-6aac0af5` 判据达成：无头 run archived_tokens=505,560≥500K 三键包）；FR-A06 压缩交互设计批（0ap，2026-09-18 用户令纳入排期，首步设计评估稿、取舍随稿裁决）；命令行引号与长行取用摩擦（0bb，2026-09-20 立项，0am 狗粮轮 F15）；**工具名近似提示（0cs，2026-10-04 用户令直接立项 59 → 60〔190 批〕；S1 落码随令可开、排期位＝0cr S2 跑批之前）**；S3 摩擦处置（0at 逐 query 归因）；（0av 批次数读数落盘面）；已闭合 0ce（2026-10-01，146 批，61 → 60：模板族 15 文件＋孤儿 crate 3,018 行＋root 注册行清退，保留面六边实证，preserve_order 特性显式化连带修复）；已闭合 0cf（2026-10-01，147 批 0.8.9 进体闭合 60 → 59：guide 简注＋enum 进体字节判据 ×5）；已闭合 0cg（2026-10-01，147 批 0.8.9 进体闭合 59 → 58：墙钟渲染面归零字节判据＋argv/env 收口实弹探针 ps/environ 双绿） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
 | 条件触发 | 不占当前优先级 | ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL |
 
@@ -1763,7 +1763,7 @@ S4＝报告已落，**计数同步已随提交批落地**。
 
 ## P2 — 生产化决策门
 
-开放项：7 / 8 / 11 / 12 / 13 / 14 / 15 / 0ap / 0at / 0av / 0bb。已闭合 10（MECHANICAL-LAYER-MATH-CALCULUS）、0ak（2026-09-18，run `RUN-CLI-6aac0af5` 无头三键包判据达成）与 0ce（2026-10-01，146 批，61 → 60）、0cf（147 批，60 → 59）、0cg（147 批，59 → 58）以单行核对保留。
+开放项：7 / 8 / 11 / 12 / 13 / 14 / 15 / 0ap / 0at / 0av / 0bb / 0cs。已闭合 10（MECHANICAL-LAYER-MATH-CALCULUS）、0ak（2026-09-18，run `RUN-CLI-6aac0af5` 无头三键包判据达成）与 0ce（2026-10-01，146 批，61 → 60）、0cf（147 批，60 → 59）、0cg（147 批，59 → 58）以单行核对保留。
 ### 0at. 逐 query 归因口径与谱系（P2；2026-09-20 立项，来源＝0ar S3 摩擦深挖 N1；**S1/S2 落码已完成（2026-09-20 过夜批，未提交），S3 口径同步留待**）
 
 - 来源：[`N1–N6 深挖`](audits/0AR_S3_FRICTION_DEEP_DIVE_N1_N6_2026-09-20.md) §2——`batch_close::per_query_usable_counts` 按**逐字 query 串**匹配 `EvidenceRecord::search_query`；子代理自查串与之不同、派生证据（web_fetch/read_file）无 query ⇒ 多 query 批 **4/4 失真**（未归因 4／6／3／6 条，占批级 60–100 %）；且 `source_ledger` 不落归因依据，事后无法复核。
@@ -1788,6 +1788,13 @@ S4＝报告已落，**计数同步已随提交批落地**。
 - 边界：F15 原始记录口径保留在 0am 报告内，本项只承接处置。
 - 入口：[`0am 报告 §5-F15`](audits/0AM_DECODER_FORM_REPLAY_2026-09-20.md) / TODO P2-0bb。
 
+
+### 0cs. 工具名近似提示（P2；2026-10-04 用户令直接立项，59 → 60；别名 TOOL-NOT-FOUND-DID-YOU-MEAN；来源＝188 批 §9 sith 探针摩擦面——模型 2× 调用不存在的 `run_terminal_patch`〔预期 patch 式编辑工具〕，`Tool not found` 裸错误致 2 轮改道；用户令「近似用途工具名提示值得做，框架的唯一目的就是辅助模型更好的工作，这个可以直接立项，正常拦截的时候对应返回提示即可」）
+
+- **方案**：`ToolError::not_found` 装配处（`orz-tools/src/implementations/use_tool/mod.rs:433`＋`registry/types.rs:1460`）附**最近似在役工具名**——注册表闭集内 Levenshtein ≤2 或大小写不敏感前缀/包含匹配，取 top-1（至多 2）；无近似不附。提示落错误信封 message 文案面：零契约面（schema 不动）、零工具面扩张、零注入（仅模型误配时反馈一次）。写控 block 的 detail 面已富（185 批已修），不在本件范围。
+- **判据**：钉子＝近似命中（`run_terminal_patch`→提示 `search_replace`）／不命中两臂；真机＝幻影工具名事件改道轮数下降（随 0cr 台账观察）。
+- **批序**：S1 落码＋钉子 → S2 载体（随下一重建批）→ S3 真机（随 0cr 首题顺带）。**排期位＝0cr S2 跑批之前**（用户令「先做完近似用途工具名提示和该做的以后再进正式sc bench」）。
+- 入口：[`188 批档 §9`](audits/188_RECLI_RUN4_0AM_FORECAST_READINGS_2026-10-04.md) / TODO P2-0cs。
 ### 7. IMPL-CONTROL-FABRIC（`partial`）
 
 - 决策门：**2026-08-15 用户裁决 fail-closed 生产启用放行；2026-08-16
