@@ -9,15 +9,21 @@
 //!   retained），逐字内容一条不删——这是「可按块回放」与「会话归档随黑板
 //!   一起打包、无实际上限」的物理前提（设计 §6 §7、不变量 I3）。
 //! - **模型面**（Model）＝真正发往模型商的上下文＝
-//!   `前置 ＋ 固定指针 ＋ D4 机械段 ＋ 各分块（原文｜机械摘要行）＋ 主滑块 x
-//!   ＋ 尾部 ＋ 分块表 ＋ 结束自述通道行（0bs ①，2026-09-25）`。
+//!   `前置 ＋ 固定指针 ＋ 各分块（原文｜机械摘要行）＋ 主滑块 x ＋ 尾部 ＋
+//!   D4 机械段 ＋ 分块表 ＋ 结束自述通道行（0bs ①，2026-09-25）`。
 //!
-//!   **常驻头自首个轮次即在（0bz S3，2026-09-28）**：固定指针＋D4 的注入时点
+//!   **常驻头自首个轮次即在（0bz S3，2026-09-28）**：固定指针的注入时点
 //!   从「首个分块形成」提前到「首个轮次成形」——旧口径使开窗轮 face 前部
 //!   整体重排（自发塌陷族机理：`RUN-CLI-6ab99969` r40＝135,754 tk 整窗
 //!   miss）。注入点＝`round_ranges[0].0`，与开窗后 `preamble_end` 恒同值 ⇒
 //!   开窗转换只在尾部追加，前缀字节稳定（I6 从「两次压缩之间」延伸到
 //!   「会话全程」）。头部内容零改，只动时点。
+//!
+//!   **D4 机械段落尾部（0bz S3′，2026-10-04）**：D4 是逐 epoch 易变渲染
+//!   （自编辑清单随编辑更新），原居头部（marker 之前）使每次重渲重价其后
+//!   整段前缀——recli 四跑离线对账实证 9/9 压缩后 +2 请求在 D4 槽全前缀
+//!   重价（「第 2 针」未消机理）。落尾部（块表之前）后重渲只重价尾部自身；
+//!   内容零改，只动位置。
 //!
 //!   **分块表落尾部（2026-09-16 实现批，前缀纪律优先）**：表里末块那一行每
 //!   新增一轮就变（区间／估算／计数都在长）⇒ 若像 v7 那样挂在固定指针之后
@@ -575,9 +581,6 @@ pub fn build_model_face(
             crate::action_ledger::build_pointer_message(ledger),
         ));
     }
-    if let Some(d4) = params.d4_block.as_deref() {
-        view.push(mechanical_message(d4.to_string()));
-    }
     for (i, m) in messages.iter().enumerate() {
         if i < preamble_end {
             continue;
@@ -592,6 +595,14 @@ pub fn build_model_face(
         }
         view.push(try_clone_message(m)?);
     }
+    // 0bz S3′（2026-10-04）：**D4 机械段落尾部**（块表之前）——D4 是逐
+    // epoch 易变渲染（自编辑清单随编辑更新），放头部（marker 之前）时每次
+    // 重渲都重价其后的整段前缀（recli 四跑离线对账实证：9/9 压缩后 +2 请求
+    // 在 D4 槽全前缀重价＝「第 2 针」未消的机理）。落尾部后 D4 重渲只重价
+    // 尾部自身，与块表同属窗口尾易变区。内容零改，只动位置。
+    if let Some(d4) = params.d4_block.as_deref() {
+        view.push(mechanical_message(d4.to_string()));
+    }
     // 分块表**落尾部**（前缀纪律；见模块头注）。
     view.push(mechanical_message(render_block_table(
         &blocks, &markers, params,
@@ -601,7 +612,7 @@ pub fn build_model_face(
     // guide`）⇒ 137 工具轮零自述、`run_finished` 仍三键。单一来源＝
     // `model_stop`；每轮尾随（分块表之后＝窗口最末消息）。0bz S3 后的口径：
     // 头部结构消息（指针/D4）已常驻，尾部两行仍待分块出现——尾部追加不破
-    // 前缀，无分块会话不注入。
+    // 前缀，无分块会话不注入。0bz S3′ 后指针常驻头部、D4 落尾部（均常驻）。
     view.push(mechanical_message(
         crate::model_stop::model_stop_resident_line(),
     ));
@@ -623,22 +634,19 @@ fn try_clone_messages_with_resident_head(
     else {
         return try_clone_messages(messages);
     };
-    let mut head: Vec<Message> = Vec::new();
-    if let Some(ledger) = params.ledger_path.as_deref() {
-        head.push(mechanical_message(
-            crate::action_ledger::build_pointer_message(ledger),
-        ));
-    }
-    if let Some(d4) = params.d4_block.as_deref() {
-        head.push(mechanical_message(d4.to_string()));
-    }
-    if head.is_empty() {
-        return try_clone_messages(messages);
-    }
+    // 0bz S3′（2026-10-04）：常驻头只保留指针；D4 机械段落**窗口尾**（与
+    // 开窗形态同位——末条历史之后），逐 epoch 重渲只重价尾部自身。开窗后
+    // D4 位置不变（块表/结束行追加其后），前缀逐字节稳定。
     let mut view = try_clone_messages(messages)?;
-    view.try_reserve_exact(head.len()).map_err(alloc_err_io)?;
-    for (k, m) in head.into_iter().enumerate() {
-        view.insert(at + k, m);
+    view.try_reserve_exact(2).map_err(alloc_err_io)?;
+    if let Some(d4) = params.d4_block.as_deref() {
+        view.push(mechanical_message(d4.to_string()));
+    }
+    if let Some(ledger) = params.ledger_path.as_deref() {
+        view.insert(
+            at,
+            mechanical_message(crate::action_ledger::build_pointer_message(ledger)),
+        );
     }
     Ok(view)
 }
@@ -1617,7 +1625,11 @@ mod tests {
                 .contains(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX),
             "指针必须自首个轮次即在 face[1]"
         );
-        assert_eq!(early[2].content, "D4 机械段（0bz S3 钉）", "D4 紧随指针");
+        assert_eq!(
+            early.last().expect("non-empty").content,
+            "D4 机械段（0bz S3 钉）",
+            "0bz S3′：D4 落窗口尾（常驻头只留指针）"
+        );
         // 估算/计数同口径（常驻头计入）。
         assert!(
             model_face_estimate(&messages, &params())
@@ -1637,11 +1649,60 @@ mod tests {
         );
         let opened = build_model_face(&messages, &params()).expect("face");
         assert_eq!(
-            early[..3],
-            opened[..3],
-            "开窗转换不得改写 face 前缀（题面＋指针＋D4）"
+            early[..2],
+            opened[..2],
+            "开窗转换不得改写 face 前缀（题面＋指针）"
+        );
+        let d4_at = opened
+            .iter()
+            .position(|m| m.content == "D4 机械段（0bz S3 钉）")
+            .expect("D4 必在开窗 face 内");
+        assert!(
+            d4_at >= opened.len() - 3,
+            "0bz S3′：D4 开窗后仍居尾部（块表/结束行之前），实际 index {d4_at}/{}",
+            opened.len()
         );
         assert!(opened.len() > early.len(), "开窗只在尾部追加结构行");
+    }
+
+    #[test]
+    fn d4_rerender_diverges_only_at_its_tail_slot() {
+        // 0bz S3′ 钉（2026-10-04）：D4 重渲（epoch 更新）只重价尾部自身——
+        // 题面、指针、marker 与全部历史逐字节稳定（「第 2 针」机械锁：
+        // recli 四跑离线对账实证 9/9 压缩后 +2 在 D4 头部槽全前缀重价，
+        // 移尾后该重价面收敛到 D4 槽本身）。
+        let mut messages = conversation(2, 1_000);
+        for _ in 0..60 {
+            messages.extend(conversation(1, 8_000).into_iter().skip(1));
+        }
+        let params = |d4: &str| ModelFaceParams {
+            slider_tokens: 160_000,
+            block_tokens: 32_000,
+            ledger_path: Some(std::path::PathBuf::from(".gsa/ledger/current.md")),
+            archive_tag: Some("sess0001".to_string()),
+            run_id: "RUN-TEST".to_string(),
+            d4_block: Some(d4.to_string()),
+            static_overhead_tokens: 0,
+        };
+        let before = build_model_face(&messages, &params("D4 旧 epoch")).expect("face");
+        let after = build_model_face(&messages, &params("D4 新 epoch ×2")).expect("face");
+        assert_eq!(before.len(), after.len(), "D4 重渲不改面长度");
+        let div = before
+            .iter()
+            .zip(after.iter())
+            .position(|(a, b)| a.content != b.content)
+            .expect("D4 内容差异必现");
+        assert!(
+            div >= before.len() - 3,
+            "分歧必须落在尾部 D4 槽（实际 index {div}/{}）",
+            before.len()
+        );
+        assert_eq!(after[div].content, "D4 新 epoch ×2");
+        assert_eq!(
+            &before[..div],
+            &after[..div],
+            "D4 重渲不得改写其前任何字节（含 marker 与历史）"
+        );
     }
 
     #[test]
