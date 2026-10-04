@@ -1186,3 +1186,14 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **边界**：打包/发行顺延（发布面仍 v0.8.12）；未推送；构建告警＝先存源面（orz-host permission.rs unused_imports，触碰面外）；0cq 余＝真机零误拦读数（下一真机轮）。
 - 批档：[`187 批档`](audits/187_CARRIER_REBUILD_V0813_0CQ_S3_2026-10-04.md)。
 - 关键词：187 批、0.8.13 重建、源冻结 a7526cc2、预测段进件、写控修复进件、0e1c10e7 身份门、static-pie×3、双冒烟 0.8.13、bak 链预建、载体清单陈旧面修复、打包顺延、计数 58 不变。
+
+### 1.142 2026-10-04 195 批 提交推送与 0.8.14 发行（用户令「请进行推送吧，并将最新版本的安装包也发布上去」；零源码、计数不变 60）
+
+- **推送**：orz 子树 `54717d06..b5cb57ca`（8 提交：184 落码·185/186 0cq·187 bump·191 0cs S1·192 0bz S3′·193 审查处置·194 bump）→ `cli/feat/fusion-architecture` exit 0；父仓 `75a7d68b..bbf00580`（11 提交，含 184–194 批）→ `origin/main` exit 0。
+- **打包（`rel-195-stage`，沿 183/156/147/122 形态）**：`.tmp-b195-package.ps1`——两侧各 6 entries（三件套＋`README.md`＋`SHA256SUMS`＋`carrier-manifest.json`）；包内六件与在役载体 **6/6 MATCH**；manifest `kind=orz-carrier-manifest` `version=0.8.14`。资产＝zip `9ea58611…` 28,018,899 B／tar.gz `8c10ed32…` 37,202,636 B／顶层 `SHA256SUMS` 193 B `8cd1a4ca…`。
+- **README（发行前改写）**：包内 `README.md` 由 0.8.12 版改写为 **0.8.14 版**——新增 0.8.14（工具名近似提示 0cs／D4 机械段移尾 0bz S3′）与 0.8.13（写控误拦修复 0cq／RLI 前推预告段 0am）两节；版本信息行 `b5cb57ca`／2026-10-04（0.8.14 双平台重建）；RLI 边界行更新（前推预告段已落地）。
+- **发行（GitHub Release v0.8.14）**：`gh release create v0.8.14 --target main --title … --notes-file .tmp-b195-release-notes.md`＋三资产；tag `v0.8.14` 指向父仓本档所在提交（轻量 tag，沿 122/156/183 形态）；服务端回读与回下载复核结果见 [`195 批档`](audits/195_SUBMIT_PUSH_AND_RELEASE_V0814_2026-10-04.md) §3（提交后补录）。
+- **台账**：README 发布面对齐 v0.8.14（解包文件名＋最新 release 链接）；索引头行 v4.166 → **v4.167**；BACKLOG 计数行 60（本批指针）＋本卷；TODO 计数行；门禁 `check_repository.py` valid。
+- **边界**：零源码（orz 子仓本批无新提交）；中间载体 0.8.13 未单独发行（内容含于 0.8.14，沿 0.6.x／0.8.3–0.8.6／0.8.8／0.8.9／0.8.11 口径）；Linux 载体未重 provision（沿同口径）。
+- 批档：[`195 批档`](audits/195_SUBMIT_PUSH_AND_RELEASE_V0814_2026-10-04.md)。
+- 关键词：195 批、提交推送、orz 子树 `b5cb57ca`、父仓 `bbf00580`、GitHub Release v0.8.14、rel-195-stage、回下载逐位一致、README 发布面对齐、计数 60 不变。
