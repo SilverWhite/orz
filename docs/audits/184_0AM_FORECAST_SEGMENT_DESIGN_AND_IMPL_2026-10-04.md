@@ -33,6 +33,7 @@
 
 1. **orz-loop 先存偶发**：`retrieval::dispatch::tests::user_cancel_closes_pending_activations_before_run_cancelled` 本批树上失败（30ms cancel 竞速窗，`close_reasons` 得 0）——**冻结树 `54717d06` 上同样失败**（本批 stash 实测），与 0aq 登记「orz-host 负载敏感」同族（时序敏感非逻辑缺陷）；本批不处置（零范围蔓延），留 0aq/flaky 面随批登记。
 2. **重放回归的两层对拍**：run1 与 r178 基线（`s3_run1_p8a_regression.json`）**逐位全等**；run2 与 r178 基线有一处分类计数翻转（`RUN-72764d4e-2` neutral_zero 16→17／verify_pass_zero 6→5）——**冻结树重放同样 17/5**（本批 stash 实测）⇒ 翻转先存于本批（r178 基线 JSON 生成之后语料面有变动——语料根为 scbench 输出树活体，非本批代码差异）；**本批树 vs 冻结树两轮语料均逐位全等**＝本批零路由/喂入漂移的构造性核证。回归件：`D:/tb-eval/0am_s3/s3_run{1,2}_forecast_regression.json`。
+   **〔2026-10-04 186 批勘误〕**：本条「run2 与 r178 基线有一处翻转」与在盘工件不符——`s3_run2_forecast_regression.json` 与 `s3_run2_20261003_r178.json` **sha256 逐位全等**（对 r178 基线**无翻转**）；该翻转实为对照 **175 时代基线** `s3_run2_20261003.json`（r178 修正前、Oct 3 20:36）才存在（同对照中另见 j4/j5 通道集扩展，均先于本批）。载荷结论（本批树 vs 冻结树两轮逐位全等＝零路由/喂入漂移）**不变且更强**；基线命名混淆随批勘误，正文上句保留作历史原貌。
 3. **fmt 先存差异**：examples／credential 等多处 fmt 差异为冻结树先存（本仓 fmt 非全局门、纪律为触碰面干净）；本批触碰面（`rli.rs`／`controller.rs`）已清零。
 4. 自检：`rli_shadow_replay --selftest`／`--s3-selftest` 全过。
 
