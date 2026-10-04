@@ -44,10 +44,13 @@
 ## §3 发行（GitHub Release v0.8.14）
 
 - 命令＝`gh release create v0.8.14 --target main --title "orz 0.8.14（工具名近似提示与模型面前缀
-  D4 移尾 · 双平台包）" --notes-file .tmp-b195-release-notes.md`＋三资产；tag `v0.8.14` 指向本档
-  所在父仓提交（轻量 tag，沿 122／156／183 形态）。
-- **服务端回读**（`gh release view v0.8.14 --json assets`）与**完整回下载复核**
-  （`gh release download` 对拍）：见本档补记（提交后补录）。
+  D4 移尾 · 双平台包）" --notes-file .tmp-b195-release-notes.md`＋三资产；tag `v0.8.14` = `92ff0ad7`
+  （父仓本档所在提交，轻量 tag，沿 122／156／183 形态）；发布后为 **Latest**。
+- **服务端回读**（`gh release view v0.8.14 --json assets`）：三资产 digest 与本地产物**逐位一致**——
+  zip `sha256:9ea58611…`／tar.gz `sha256:8c10ed32…`／`SHA256SUMS` `sha256:8cd1a4ca…`。
+- **完整回下载复核**（`gh release download v0.8.14`）：三件落地后与本地产物对拍——
+  **`identical=True` 3/3**（字节数逐一相等：zip 28,018,899／tar.gz 37,202,636／`SHA256SUMS` 193）
+  ⇒ 远端资产＝本地产物，无上传截断／替换。
 
 ## §4 台账与门禁
 
