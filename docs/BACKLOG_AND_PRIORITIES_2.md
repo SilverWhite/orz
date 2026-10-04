@@ -1154,3 +1154,13 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **边界**：不重建、不推送（用户令）——双仓本地提交；真机读数留下一真机轮（0bc 同轮观测顺接）；**0am 余项自此清账**。
 - 批档：[`184 批档`](audits/184_0AM_FORECAST_SEGMENT_DESIGN_AND_IMPL_2026-10-04.md)。
 - 关键词：184 批、预测段设计卷、前推预告段、闭式前推值、趋势死区、段内再越线、五值越线闭集、网格 64、单 fire 渲染、到达概率不进模型面、prog 期望注入不进段、行宽 400、NOW_BUDGET 960、BOARD_CAP 连锁、零契约面、零新触发 P9、先存偶发登记、重放两层对拍、计数 58 不变。
+
+### 1.139 2026-10-04 185 批 0cq S1 勘定＋S2 落码——写控误拦两族修复（用户令「接下来请进0cq S1/S2部分吧」；计数不变 58）
+
+- **S1 勘定**：三例 journal sha256 反查全原文到手（`7672ecc56ea3`／`9b93a0ea4d6c`／`7d0e68698f45`）、最小复现全数确证。**勘定勘误＝三例同根**——`path_candidates` 裸词空白拆片把 echo 散文撕成伪词元（`.gsa/usr)` 来自 `"(excluding .gsa/usr) =="`、`/` 来自 `"=== csv / json / yaml / count / ids ==="`）× 规则 1/5 全局词扫描；①另叠加 find `-not -path` 值位被当写目标＋`2>/dev/null` 独立 `>` 词无条件武装规则 5。**182 批登记的「不存在路径近祖先链展开至卷根」归因不成立**（真目标 `t3demo` 裸名不成候选；祖先链机制存在但三例均未触达卷根）——181 §4b/182 机理描述随批勘误。
+- **S2 落码（orz 本批、`exec_policy.rs` 单文件、契约面零变化）**：四件＝① `path_candidates` 拆片收紧（裸词不拆、kv 值保留）；② 规则 1 扫描精准化（新增 `segment_prog_index`——动词与递归旗同段武装、仅扫动词位之后本段词；`cd / && rm -rf t3demo` 头部 `/` 不再算删除目标）；③ 规则 5 arm 收窄（`is_nullish_redirect_target`＝`/dev/null`/`NUL`/fd 数字不武装——顺带修复「读 `.gsa` 日志＋null 重定向被拦」同族相邻面）；④ 规则 5 扫描段内化（`segment_is_write` 仅写段）＋读模式值豁免（`READ_PATTERN_OPTIONS` 15 项前词豁免＋`READ_PATTERN_KV_PREFIXES` 6 项 kv 形态）。
+- **钉＋7**（均带真阳性对照臂）：三真机回归反例→不拦／`cd /` 非删除目标（`rm -rf /`、`cd / && rm -rf /` 仍拦）／null 重定向读 `.gsa` 放行（写 `.gsa` 仍拦）／读模式值豁免（目标位仍拦）／写段局部化（写段目标仍拦）。**全原文核证**＝三条真机命令 verbatim 注入：**Allow／Allow／broad-destructive warn-only**（规则 6 既有留痕面、不阻断）。
+- **验证**：orz-tools 2997/0（＋7 钉−1 探针；既有 2991 零破坏＝旧全局扫描无在案依赖）／assurance 301/0／loop 850/0/3／host 350 过＋5 失败＝冻结树同款先存（stash 实测；`run_tests_timeout_kills_process_tree` 等负载敏感族，0aq 在案）；clippy 26=26 零新增（`map_or→is_none_or` 随批采纳）；触碰面 fmt 干净。
+- **边界**：S3 未动（执行形态随裁：杂项狗粮轮同载 or 直接修码批收口）；载体重建未做（修复进在役载体随重建批）；不推送；残余边界＝非 null 重定向命令全段扫描保守保留（charter「命中即拒」条款）、`bash -c` 脚本内命令覆盖不变。
+- 批档：[`185 批档`](audits/185_0CQ_S1_S2_WRITE_CONTROL_FALSE_BLOCK_FIX_2026-10-04.md)。
+- 关键词：185 批、0cq S1、0cq S2、写控误拦两族修复、散文拆片伪词元、同根勘定勘误、拆片收紧、段内精准化、动词位之后、null 重定向不武装、写段局部化、读模式值豁免、全原文核证、真阳性对照、计数 58 不变。
