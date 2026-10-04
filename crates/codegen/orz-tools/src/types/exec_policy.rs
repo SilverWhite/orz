@@ -38,6 +38,15 @@
 //! ② 动词表补 `install`／`ln`（P3-1——两族可向宿主态目标落盘/建链接）。
 //! 契约面零变化：`carrier-write` id 沿用，祖先 face id（`carrier:*-ancestor`）
 //! 为 L1/L2 文案层，不入 schema 枚举。
+//! **0cq S2（2026-10-04，写控误拦两族修复）**：recli 三跑三条真机误拦
+//! （181 批 §4b；S1 勘定＝三例同根——`path_candidates` 裸词空白拆片把 echo
+//! 散文撕成 `/`、`.gsa/usr)` 伪词元 × 规则 1/5 全局词扫描；另叠加 find 读
+//! 排除模式值位被当写目标）。修复四件：① 裸词不再空白拆片（kv 值保留）；
+//! ② 规则 1 扫描精准化（动词与旗**同段**武装、仅扫**动词位之后**的本段
+//! 词——`cd /` 头部裸 `/` 不再算删除目标）；③ 规则 5 arm 收窄（`>` 目标位
+//! 为 `/dev/null`/`NUL`/fd 数字不武装）＋扫描段内化（仅**写段**）＋读模式
+//! 值豁免（`READ_PATTERN_OPTIONS`／kv 前缀闭集）；真机三例全原文回归钉＋
+//! 真阳性对照钉（`rm -rf /`／写 `.gsa`／目标位 `.gsa` 全保留）。
 
 use std::path::{Path, PathBuf};
 
@@ -295,6 +304,83 @@ const ANCESTOR_SWEEP_VERBS: &[&str] = &[
     "rename",
 ];
 
+/// 读模式选项值位（0cq S2，2026-10-04）：这些选项的**值位词元**是匹配模式/
+/// 查询表达式而非写目标——规则 5 目标扫描跳过其值（读语境豁免；闭集，新增
+/// 表项必改测试）。动机＝recli 三跑误拦①（181 批 §4b / 0cq S1 勘定）：find
+/// 的读排除模式 `-not -path '/workspace/.gsa/*'` 被词法提取为写目标——模型
+/// 显式避开 `.gsa` 反被拦。
+const READ_PATTERN_OPTIONS: &[&str] = &[
+    "-path",
+    "-ipath",
+    "-lname",
+    "-ilname",
+    "-name",
+    "-iname",
+    "-regex",
+    "-iregex",
+    "-wholename",
+    "--exclude",
+    "--include",
+    "--exclude-dir",
+    "--include-dir",
+    "--glob",
+    "--iglob",
+];
+
+/// 读模式选项的 kv 单词元形态前缀（`--exclude=…`；与 [`READ_PATTERN_OPTIONS`]
+/// 同族闭集——前词豁免只看独立词元，kv 形态的值在同一词元内）。
+const READ_PATTERN_KV_PREFIXES: &[&str] = &[
+    "--exclude=",
+    "--include=",
+    "--exclude-dir=",
+    "--include-dir=",
+    "--glob=",
+    "--iglob=",
+];
+
+/// 非写目标的重定向目标位（0cq S2 arm 收窄）：`>/dev/null`／`>NUL`／fd 数字
+/// （`2>&1` 经词法拆分后的 `1`）不构成写目标——仅含此类重定向的命令不武装
+/// 规则 5 目标扫描（纯读＋弃音槽不该开写目标扫描）。
+fn is_nullish_redirect_target(text: &str) -> bool {
+    let n = norm_word(text);
+    n == "/dev/null" || n == "nul" || n.chars().all(|c| c.is_ascii_digit())
+}
+
+/// 段程序位下标（镜像 [`program_entries`] 头部的包装词/赋值跳过逻辑）；
+/// `None`＝段无程序位——内容位词元（`bash -c "…"`）交由内容递归条目，
+/// 本段自身不判。
+fn segment_prog_index(seg: &[Word]) -> Option<usize> {
+    let mut idx = 0;
+    while idx < seg.len() {
+        let w = &seg[idx];
+        let n = norm_word(&w.text);
+        if is_assignment(&w.text) || WRAPPER_WORDS.contains(&n.as_str()) {
+            if CONTENT_WORDS.contains(&n.as_str()) {
+                return None;
+            }
+            idx += 1;
+            continue;
+        }
+        return Some(idx);
+    }
+    None
+}
+
+/// 段是否为写段（0cq S2 规则 5 扫描局部化）：程序位 ∈ 破坏/修改集∪`dd`，
+/// 或段内含重定向词。目标扫描仅及写段——读段（`ls`/`find`/`grep` 段）的
+/// 词元不再逐个比对宿主态目标。
+fn segment_is_write(seg: &[Word]) -> bool {
+    if seg.iter().any(|w| w.text == ">" || w.text == ">>") {
+        return true;
+    }
+    segment_prog_index(seg)
+        .map(|i| {
+            let prog = norm_prog(&seg[i].text);
+            prog == "dd" || DESTRUCTIVE_VERBS.contains(&prog.as_str())
+        })
+        .unwrap_or(false)
+}
+
 /// 递归/强制旗（broad-destructive 的递归腿；warn 面，v1 集沿用）。
 const RECURSIVE_FLAGS: &[&str] = &["-r", "-rf", "-fr", "-recurse", "-force", "/s", "/q"];
 
@@ -384,15 +470,25 @@ pub fn review_command_with(
 
     // ① catastrophic-recursive-delete：删除动词＋递归旗＋目标解析后**恰为**
     //    卷根／根本性树根本体（子目录级精准删除放行——「需精准删除」硬边界）。
-    let delete_verb_present = entries
-        .iter()
-        .any(|e| CATASTROPHIC_DELETE_VERBS.contains(&e.prog.as_str()));
-    if delete_verb_present
-        && words
+    //    **0cq S2（2026-10-04）扫描精准化**：动词与递归旗**同段**才武装；
+    //    目标扫描仅及**动词位之后**的本段词——复合命令其他段的词元（如头部
+    //    `cd /` 的裸 `/`、echo 散文）不再被当作删除目标（recli 三跑误拦②
+    //    ＝`echo "=== csv / json / yaml ==="` 经散文拆片伪造 `/` 词元 × 全局
+    //    扫描，误报卷根删除；0cq S1 勘定）。
+    for seg in &segments {
+        let Some(pi) = segment_prog_index(seg) else {
+            continue;
+        };
+        if !CATASTROPHIC_DELETE_VERBS.contains(&norm_prog(&seg[pi].text).as_str()) {
+            continue;
+        }
+        if !seg
             .iter()
             .any(|w| CATASTROPHIC_RECURSIVE_FLAGS.contains(&norm_word(&w.text).as_str()))
-    {
-        for w in &words {
+        {
+            continue;
+        }
+        for w in seg.iter().skip(pi + 1) {
             for raw in path_candidates(&w.text) {
                 for form in disaster_target_forms(cwd, &raw) {
                     if write_control::is_volume_root(&form) {
@@ -408,8 +504,7 @@ pub fn review_command_with(
                         return CommandReview::Block(CommandFinding {
                             rule: "catastrophic-recursive-delete",
                             detail: format!(
-                                "recursive delete targets a fundamental tree root \
-                                 (`{raw}` ⇒ `{}`)",
+                                "recursive delete targets a fundamental tree root                                  (`{raw}` ⇒ `{}`)",
                                 root.to_string_lossy()
                             ),
                         });
@@ -514,21 +609,51 @@ pub fn review_command_with(
     //    审批组件（设计 §2 条 5）。v3.1 祖先链臂（P2）：扫荡动词（删除/搬移）
     //    下目标为受护目标祖先同落本规则——载体面退役不得连带放行 keystore／
     //    manifest 的扫荡摧毁；入位写（cp/mkdir/install）不触发祖先臂。
+    //    **0cq S2（2026-10-04）三面收窄**（recli 三跑误拦①族；0cq S1 勘定）：
+    //    (a) **arm 面**——重定向词仅当目标位非 null/fd 数字时武装
+    //    （`2>/dev/null` 纯读弃音槽不开写目标扫描）；
+    //    (b) **扫描面段内化**——目标扫描仅及**写段**（程序位 ∈ 破坏/修改集
+    //    ∪`dd`，或段内含重定向词）；读段（ls/find/grep 段）词元不再逐个比对；
+    //    (c) **读模式值豁免**——[`READ_PATTERN_OPTIONS`] 值位词元与
+    //    [`READ_PATTERN_KV_PREFIXES`] 形态不作写目标（find 排除模式等）。
+    let redirect_arms = words.iter().enumerate().any(|(i, w)| {
+        (w.text == ">" || w.text == ">>")
+            && words
+                .get(i + 1)
+                .is_none_or(|n| !is_nullish_redirect_target(&n.text))
+    });
     let has_write_verb = entries
         .iter()
         .any(|e| DESTRUCTIVE_VERBS.contains(&e.prog.as_str()) || e.prog == "dd")
-        || words.iter().any(|w| w.text == ">" || w.text == ">>");
+        || redirect_arms;
     let has_sweep_verb = entries
         .iter()
         .any(|e| ANCESTOR_SWEEP_VERBS.contains(&e.prog.as_str()));
     if has_write_verb || has_sweep_verb {
-        for w in &words {
-            for raw in path_candidates(&w.text) {
-                if let Some(detail) = carrier_target_detail(cwd, &raw, host_state, has_sweep_verb) {
-                    return CommandReview::Block(CommandFinding {
-                        rule: "carrier-write",
-                        detail,
-                    });
+        for seg in &segments {
+            if !segment_is_write(seg) {
+                continue;
+            }
+            for (i, w) in seg.iter().enumerate() {
+                if w.text == ">" || w.text == ">>" {
+                    continue;
+                }
+                let norm = norm_word(&w.text);
+                if READ_PATTERN_KV_PREFIXES.iter().any(|p| norm.starts_with(p)) {
+                    continue;
+                }
+                if i > 0 && READ_PATTERN_OPTIONS.contains(&norm_word(&seg[i - 1].text).as_str()) {
+                    continue;
+                }
+                for raw in path_candidates(&w.text) {
+                    if let Some(detail) =
+                        carrier_target_detail(cwd, &raw, host_state, has_sweep_verb)
+                    {
+                        return CommandReview::Block(CommandFinding {
+                            rule: "carrier-write",
+                            detail,
+                        });
+                    }
                 }
             }
         }
@@ -751,24 +876,27 @@ fn push_drive_qualified_forms(forms: &mut Vec<PathBuf>) {
     }
 }
 
-/// 从词元提取路径候选（`of=…`／`-path=…` 取等号右值；引号剥除；含空白词拆片兜底）。
+/// 从词元提取路径候选（`of=…`／`-path=…` 取等号右值；引号剥除）。
+/// **0cq S2（2026-10-04）拆片收紧**：等号右值保留空白拆片兜底（kv 值偶带
+/// 空白的目标形态）；**裸词不再拆片**——recli 三跑误拦三例同根（181 批
+/// §4b / 0cq S1 勘定）：echo 散文（`"=== csv / json / yaml ==="`、
+/// `"(excluding .gsa/usr) =="`）被空白拆片成 `/`、`.gsa/usr)` 伪词元，
+/// 经全局扫描分别误触规则 1 卷根与规则 5 `.gsa` 臂。引号内的空白本就是
+/// 路径合法字符（整词候选直接可用），拆片只服务散文伪造面。
 fn path_candidates(text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let consider = |out: &mut Vec<String>, value: &str| {
-        push_candidate(out, value);
-        if value.contains(char::is_whitespace) {
-            for piece in value.split_whitespace() {
-                push_candidate(out, piece);
-            }
-        }
-    };
     if let Some((key, value)) = text.split_once('=') {
         if key.is_empty() || key.starts_with('-') || key.eq_ignore_ascii_case("of") {
-            consider(&mut out, value);
+            push_candidate(&mut out, value);
+            if value.contains(char::is_whitespace) {
+                for piece in value.split_whitespace() {
+                    push_candidate(&mut out, piece);
+                }
+            }
             return out;
         }
     }
-    consider(&mut out, text);
+    push_candidate(&mut out, text);
     out
 }
 
@@ -1134,6 +1262,125 @@ fn norm_prog(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    // ─── 0cq S2（2026-10-04）写控误拦两族回归钉 ───────────────────────────
+    // 来源＝recli 三跑三条真机误拦（181 批 §4b；命令原文经 journal sha256
+    // 反查，0cq S1 勘定）。三例同根：`path_candidates` 裸词空白拆片把 echo
+    // 散文撕成 `/`、`.gsa/usr)` 伪词元 × 规则 1/5 全局词扫描；另叠加 find
+    // 读排除模式值位被当写目标。以下三例修复后**必须保持不拦**（block 即红）。
+
+    /// 真机误拦①：find 读排除模式（sha `7672ecc56ea3` 缩尺）——修复前
+    /// Block(carrier-write, "target `/proj/.gsa/*` is inside the `.gsa`
+    /// session volume")；修复后 Allow（arm 面收窄：`2>/dev/null` 不武装＋
+    /// `-path` 值位豁免）。
+    #[test]
+    fn fp_real_machine_find_exclusion_pattern_stays_allowed() {
+        let r = review_linux(
+            "find / -maxdepth 3 -not -path '/proc/*' -not -path '/proj/.gsa/*'              2>/dev/null | head -40",
+        );
+        assert_ne!(
+            rule_of(&r),
+            Some("carrier-write"),
+            "读排除模式不得作写目标: {r:?}"
+        );
+        assert_eq!(r, CommandReview::Allow, "{r:?}");
+    }
+
+    /// 真机误拦②：echo 散文拆片伪形（sha `9b93a0ea4d6c` 缩尺）——修复前
+    /// Block(carrier-write, "target `.gsa/usr)` …")；修复后 Allow（裸词不
+    /// 再空白拆片；整词候选非路径不命中）。
+    #[test]
+    fn fp_real_machine_echo_prose_fragment_stays_allowed() {
+        let r = review_linux(
+            "echo \"== find test-ish (excluding .gsa/usr) ==\" &&              find / -not -path '*/.gsa*' 2>/dev/null",
+        );
+        assert_eq!(r, CommandReview::Allow, "{r:?}");
+    }
+
+    /// 真机误拦③：echo 散文拆片 `/` 词元（sha `7d0e68698f45` 实际触发形态
+    /// ——`"=== csv / json / yaml / count / ids ==="` 拆出裸 `/` × 规则 1
+    /// 全局扫描＝误报卷根删除；0cq S1 勘定勘误 181 §4b 的「不存在路径祖先
+    /// 链展开」机理描述）。修复后无 block（warn 面 broad-destructive 为
+    /// 规则 6 既有留痕、不阻断、不在本族）。
+    #[test]
+    fn fp_real_machine_echo_slash_fragment_no_catastrophic_block() {
+        let r = review_linux(
+            "cd /tmp && rm -rf t3demo &&              echo \"=== csv / json / yaml / count / ids ===\"",
+        );
+        let rule = rule_of(&r);
+        assert_ne!(rule, Some("catastrophic-recursive-delete"), "{r:?}");
+        assert_ne!(rule, Some("carrier-write"), "{r:?}");
+    }
+
+    /// 0cq S2 边界钉：复合命令头部的裸 `/`（`cd /`）不是删除目标——规则 1
+    /// 扫描精准化（动词与旗同段武装、仅扫动词位之后）。
+    #[test]
+    fn compound_head_cd_root_is_not_a_delete_target() {
+        let r = review_linux("cd / && rm -rf t3demo");
+        assert_ne!(rule_of(&r), Some("catastrophic-recursive-delete"), "{r:?}");
+        // 真阳性对照：动词段内的 `/` 仍拦。
+        assert!(matches!(review_linux("rm -rf /"), CommandReview::Block(_)));
+        assert!(matches!(
+            review_linux("cd / && rm -rf /"),
+            CommandReview::Block(_)
+        ));
+    }
+
+    /// 0cq S2 同族臂收窄钉：纯读 `.gsa` 路径＋null 重定向＝Allow（修复前
+    /// `>` 无条件武装规则 5 → 读 `.gsa` 日志被拦）。
+    #[test]
+    fn null_redirect_read_of_gsa_stays_allowed() {
+        assert_eq!(
+            review_linux("cat /proj/.gsa/logs/session.log 2>/dev/null"),
+            CommandReview::Allow
+        );
+        // 真阳性对照：写 `.gsa` 仍拦（重定向目标位真实文件）。
+        assert!(matches!(
+            review_linux("find / -type f > /proj/.gsa/out.txt"),
+            CommandReview::Block(_)
+        ));
+    }
+
+    /// 0cq S2 读模式值豁免钉：写段内的 `--exclude=` kv 形态与 `-path` 值位
+    /// 不作写目标；真阳性对照＝目标位的 `.gsa` 路径仍拦。
+    #[test]
+    fn read_pattern_values_are_not_write_targets() {
+        assert_eq!(
+            review_linux("grep -r --exclude=/proj/.gsa/x foo . > /proj/out.txt"),
+            CommandReview::Allow
+        );
+        assert_ne!(
+            rule_of(&review_linux(
+                "grep -r -path /proj/.gsa/x foo . > /proj/out.txt"
+            )),
+            Some("carrier-write"),
+            "-path 值位豁免"
+        );
+        assert!(matches!(
+            review_linux("grep -r foo /proj/.gsa/x > /proj/out.txt"),
+            CommandReview::Block(_)
+        ));
+    }
+
+    /// 0cq S2 写段局部化钉：读段（ls/find）的 `.gsa` 词元不再逐个比对——
+    /// 同命令的写段之外的读路径不触发规则 5。
+    #[test]
+    fn read_segment_gsa_tokens_are_not_scanned() {
+        assert_eq!(
+            review_linux("ls -la /proj/.gsa && rm -rf tmp/old"),
+            CommandReview::Allow
+        );
+        assert_eq!(
+            review_linux("touch /proj/a && find / -name '/proj/.gsa/*' 2>/dev/null"),
+            CommandReview::Allow
+        );
+        // 真阳性对照：写段内目标仍拦。
+        assert!(matches!(
+            review_linux("ls /proj && cp x /proj/.gsa/y"),
+            CommandReview::Block(_)
+        ));
+    }
+
     use super::*;
 
     fn roots() -> Vec<PathBuf> {
