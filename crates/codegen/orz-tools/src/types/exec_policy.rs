@@ -47,6 +47,10 @@
 //! 为 `/dev/null`/`NUL`/fd 数字不武装）＋扫描段内化（仅**写段**）＋读模式
 //! 值豁免（`READ_PATTERN_OPTIONS`／kv 前缀闭集）；真机三例全原文回归钉＋
 //! 真阳性对照钉（`rm -rf /`／写 `.gsa`／目标位 `.gsa` 全保留）。
+//! **186 批（2026-10-04，全面审查发现处置）**：三件——`segment_is_write`
+//! 重定向臂收窄为**非 nullish** 重定向（复合命令无关写动词 × nullish 读段
+//! 残余误拦面收口）；规则 1 detail 续行文案回归修复（185 批引入 34 空格）；
+//! 读模式豁免两闭集表补 0cb 防膨胀长度钉。
 
 use std::path::{Path, PathBuf};
 
@@ -366,11 +370,24 @@ fn segment_prog_index(seg: &[Word]) -> Option<usize> {
     None
 }
 
+/// 段内是否含**非 nullish** 重定向（与全局 `redirect_arms` arm 收窄同口径的
+/// 段级版；186 批审查处置：`segment_is_write` 的重定向臂由「段内有 `>`」
+/// 收窄为本判定——复合命令中无关写动词武装规则 5 后，仅含 `2>/dev/null`
+/// 类弃音槽的读段不再被当写段扫描；`>` 为段末词（无目标位）保守按真处理）。
+fn segment_has_real_redirect(seg: &[Word]) -> bool {
+    seg.iter().enumerate().any(|(i, w)| {
+        (w.text == ">" || w.text == ">>")
+            && seg
+                .get(i + 1)
+                .is_none_or(|n| !is_nullish_redirect_target(&n.text))
+    })
+}
+
 /// 段是否为写段（0cq S2 规则 5 扫描局部化）：程序位 ∈ 破坏/修改集∪`dd`，
-/// 或段内含重定向词。目标扫描仅及写段——读段（`ls`/`find`/`grep` 段）的
-/// 词元不再逐个比对宿主态目标。
+/// 或段内含**非 nullish** 重定向词（186 批审查处置收窄）。目标扫描仅及写段
+/// ——读段（`ls`/`find`/`grep` 段）的词元不再逐个比对宿主态目标。
 fn segment_is_write(seg: &[Word]) -> bool {
-    if seg.iter().any(|w| w.text == ">" || w.text == ">>") {
+    if segment_has_real_redirect(seg) {
         return true;
     }
     segment_prog_index(seg)
@@ -504,7 +521,8 @@ pub fn review_command_with(
                         return CommandReview::Block(CommandFinding {
                             rule: "catastrophic-recursive-delete",
                             detail: format!(
-                                "recursive delete targets a fundamental tree root                                  (`{raw}` ⇒ `{}`)",
+                                "recursive delete targets a fundamental tree root \
+                                 (`{raw}` ⇒ `{}`)",
                                 root.to_string_lossy()
                             ),
                         });
@@ -613,7 +631,8 @@ pub fn review_command_with(
     //    (a) **arm 面**——重定向词仅当目标位非 null/fd 数字时武装
     //    （`2>/dev/null` 纯读弃音槽不开写目标扫描）；
     //    (b) **扫描面段内化**——目标扫描仅及**写段**（程序位 ∈ 破坏/修改集
-    //    ∪`dd`，或段内含重定向词）；读段（ls/find/grep 段）词元不再逐个比对；
+    //    ∪`dd`，或段内含**非 nullish** 重定向词〔186 批审查处置收窄〕）；
+    //    读段（ls/find/grep 段）词元不再逐个比对；
     //    (c) **读模式值豁免**——[`READ_PATTERN_OPTIONS`] 值位词元与
     //    [`READ_PATTERN_KV_PREFIXES`] 形态不作写目标（find 排除模式等）。
     let redirect_arms = words.iter().enumerate().any(|(i, w)| {
@@ -1381,6 +1400,22 @@ mod tests {
         ));
     }
 
+    /// 186 批审查处置钉：复合命令中无关写动词武装规则 5 后，仅含 nullish
+    /// 重定向的读段不再被当写段扫描（修复前 `touch /proj/a && cat
+    /// /proj/.gsa/… 2>/dev/null` 仍误拦——cat 段的 `2>/dev/null` 被算写段
+    /// 标志）；真阳性对照＝同复合形态下重定向真实写 `.gsa` 仍拦。
+    #[test]
+    fn compound_nullish_redirect_read_segment_stays_allowed() {
+        assert_eq!(
+            review_linux("touch /proj/a && cat /proj/.gsa/logs/session.log 2>/dev/null"),
+            CommandReview::Allow
+        );
+        assert!(matches!(
+            review_linux("touch /proj/a && cat /proj/.gsa/logs/session.log > /proj/.gsa/out.txt"),
+            CommandReview::Block(_)
+        ));
+    }
+
     use super::*;
 
     fn roots() -> Vec<PathBuf> {
@@ -1465,6 +1500,10 @@ mod tests {
         assert_eq!(ELEVATION_PROGRAMS.len(), 4);
         assert_eq!(WRAPPER_WORDS.len(), 32);
         assert_eq!(CONTENT_WORDS.len(), 5);
+        // 0cq S2 读模式值豁免闭集（186 批审查处置补钉——185 批声明闭集但
+        // 漏入本防膨胀钉）。
+        assert_eq!(READ_PATTERN_OPTIONS.len(), 15);
+        assert_eq!(READ_PATTERN_KV_PREFIXES.len(), 6);
         // 0cc v3.1 祖先链臂（P2）：扫荡表＝DELETE_VERBS 全体＋搬移族，且整体
         // ⊆ DESTRUCTIVE_VERBS；`install`/`ln`（P3-1）为写动词但非扫荡动词
         // （入位写不毁祖先）。
