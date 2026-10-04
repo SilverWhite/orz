@@ -1339,6 +1339,111 @@ impl xai_tool_runtime::ToolDispatch for InnerDispatchForToolset {
         xai_tool_runtime::terminal_only(result)
     }
 }
+
+/// 0cs `TOOL-NOT-FOUND-DID-YOU-MEAN` (2026-10-04 user-ratified form): an
+/// unknown tool name may be answered with the nearest in-registry name(s)
+/// in the error message text only — the error kind, `ToolId` and every
+/// schema stay untouched (zero contract face), no tool is added, nothing is
+/// injected. Lookup precedence is single-sourced: exact registry match (the
+/// normal dispatch path) always wins, then this closed evidence table, then
+/// the lexical rules. No semantic inference: the table records only
+/// journal-evidenced phantom names (2026-10-04 corpus scan, 193 deduped
+/// events) whose nearest in-service name is out of the lexical rules'
+/// reach; a table hit counts only when its target is still registered, so
+/// a suggestion can never point outside the live closed set.
+const NOT_FOUND_SUGGESTION_TABLE: &[(&str, &str)] = &[
+    ("run_command", "run_terminal_cmd"),
+    ("run_cmd", "run_terminal_cmd"),
+    ("exec_command", "run_terminal_cmd"),
+    ("terminal_exec", "run_terminal_cmd"),
+    ("run_command_name", "run_terminal_cmd"),
+];
+
+/// Lexical rule arm: minimum shared (case-insensitive) prefix length. Sized
+/// so the dominant observed corruption family (`run_terminal_*`, 13+ shared
+/// chars) fires while short accidental overlaps (`run_…` vs anything) do
+/// not.
+const NOT_FOUND_SUGGESTION_MIN_COMMON_PREFIX: usize = 8;
+
+/// Lexical rule arm: case-insensitive edit-distance budget.
+const NOT_FOUND_SUGGESTION_MAX_LEVENSHTEIN: usize = 2;
+
+/// At most this many candidates are rendered into one message.
+const NOT_FOUND_SUGGESTION_MAX_ITEMS: usize = 2;
+
+/// Case-insensitive edit distance, capped: anything above `cap` reports
+/// `cap + 1` (a row whose minimum already exceeds `cap` exits early). Names
+/// here are tens of bytes, so the plain two-row DP is fine.
+fn levenshtein_capped(a: &[u8], b: &[u8], cap: usize) -> usize {
+    if a.len().abs_diff(b.len()) > cap {
+        return cap + 1;
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0usize; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        curr[0] = i + 1;
+        let mut row_min = curr[0];
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = usize::from(!ca.eq_ignore_ascii_case(&cb));
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+            row_min = row_min.min(curr[j + 1]);
+        }
+        if row_min > cap {
+            return cap + 1;
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()].min(cap + 1)
+}
+
+/// Shared (case-insensitive) prefix length of two names.
+fn common_prefix_len(a: &[u8], b: &[u8]) -> usize {
+    a.iter()
+        .zip(b)
+        .take_while(|(x, y)| x.eq_ignore_ascii_case(y))
+        .count()
+}
+
+/// Nearest in-registry suggestion(s) for an unknown tool name; empty when
+/// nothing near is registered (无近似不附). Table first, then the lexical
+/// rules; rule-arm ordering is longer common prefix, then smaller edit
+/// distance, then name, capped at [`NOT_FOUND_SUGGESTION_MAX_ITEMS`].
+fn not_found_suggestions<'a>(name: &str, registered: &[&'a str]) -> Vec<&'a str> {
+    let table_hit = NOT_FOUND_SUGGESTION_TABLE
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .and_then(|(_, target)| {
+            registered
+                .iter()
+                .any(|r| r.eq_ignore_ascii_case(target))
+                .then_some(*target)
+        });
+    if let Some(target) = table_hit {
+        return vec![target];
+    }
+    let name_lower = name.to_lowercase().into_bytes();
+    let mut scored: Vec<(usize, usize, &str)> = registered
+        .iter()
+        .filter_map(|candidate| {
+            let cand_lower = candidate.to_lowercase().into_bytes();
+            let prefix = common_prefix_len(&name_lower, &cand_lower);
+            let distance = levenshtein_capped(
+                &name_lower,
+                &cand_lower,
+                NOT_FOUND_SUGGESTION_MAX_LEVENSHTEIN,
+            );
+            (prefix >= NOT_FOUND_SUGGESTION_MIN_COMMON_PREFIX
+                || distance <= NOT_FOUND_SUGGESTION_MAX_LEVENSHTEIN)
+                .then_some((prefix, distance, *candidate))
+        })
+        .collect();
+    scored.sort_unstable_by(|a, b| {
+        (std::cmp::Reverse(a.0), a.1, a.2).cmp(&(std::cmp::Reverse(b.0), b.1, b.2))
+    });
+    scored.truncate(NOT_FOUND_SUGGESTION_MAX_ITEMS);
+    scored.into_iter().map(|(_, _, name)| name).collect()
+}
+
 impl FinalizedToolset {
     /// Construct an empty toolset for tests. No tools, no background tasks.
     ///
@@ -1454,10 +1559,23 @@ impl FinalizedToolset {
             .find(|t| t.client_name == tool_name)
             .map(|t| crate::normalization::tool_identity_of(t.metadata.as_ref()))
     }
-    fn tool_not_found_error(tool_name: &str) -> xai_tool_runtime::ToolError {
+    /// Not-found envelope for an unknown client-facing tool name. The
+    /// nearest-name hint (0cs) rides on the message text only; `registered`
+    /// must be the live registry's client names so a suggestion can never
+    /// leave the closed set.
+    fn tool_not_found_error(tool_name: &str, registered: &[&str]) -> xai_tool_runtime::ToolError {
         let tid = xai_tool_protocol::ToolId::new(tool_name)
             .unwrap_or_else(|_| xai_tool_protocol::ToolId::new("unknown").expect("valid"));
-        xai_tool_runtime::ToolError::not_found(tid, format!("Tool not found: {tool_name}"))
+        let mut message = format!("Tool not found: {tool_name}");
+        match not_found_suggestions(tool_name, registered).as_slice() {
+            [] => {}
+            [one] => message.push_str(&format!("; did you mean \"{one}\"?")),
+            [first, second] => {
+                message.push_str(&format!("; did you mean \"{first}\" or \"{second}\"?"));
+            }
+            _ => unreachable!("not_found_suggestions is capped at two"),
+        }
+        xai_tool_runtime::ToolError::not_found(tid, message)
     }
     pub async fn try_parse(
         &self,
@@ -1469,7 +1587,11 @@ impl FinalizedToolset {
             let tool = tools
                 .iter()
                 .find(|t| t.client_name == tool_name)
-                .ok_or_else(|| Self::tool_not_found_error(tool_name))?;
+                .ok_or_else(|| {
+                    let registered: Vec<&str> =
+                        tools.iter().map(|t| t.client_name.as_str()).collect();
+                    Self::tool_not_found_error(tool_name, &registered)
+                })?;
             (tool.reverse_params.clone(), tool.parse_input.clone())
         };
         let canonical_params = if reverse_params.is_empty() {
@@ -1506,7 +1628,11 @@ impl FinalizedToolset {
             let entry = tools
                 .iter()
                 .find(|t| t.client_name == tool_name)
-                .ok_or_else(|| Self::tool_not_found_error(tool_name))?;
+                .ok_or_else(|| {
+                    let registered: Vec<&str> =
+                        tools.iter().map(|t| t.client_name.as_str()).collect();
+                    Self::tool_not_found_error(tool_name, &registered)
+                })?;
             (
                 entry.registry_id.clone(),
                 entry.output_converter.clone(),
@@ -1689,7 +1815,11 @@ impl FinalizedToolset {
             let entry = tools
                 .iter()
                 .find(|t| t.client_name == tool_name)
-                .ok_or_else(|| Self::tool_not_found_error(tool_name))?;
+                .ok_or_else(|| {
+                    let registered: Vec<&str> =
+                        tools.iter().map(|t| t.client_name.as_str()).collect();
+                    Self::tool_not_found_error(tool_name, &registered)
+                })?;
             (
                 entry.registry_id.clone(),
                 entry.output_converter.clone(),
@@ -2176,6 +2306,174 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    // ── 0cs TOOL-NOT-FOUND-DID-YOU-MEAN (2026-10-04 user-ratified form) ──
+
+    /// The evidence table is closed at the ratified size; growing it requires
+    /// a new batch with journal evidence (anti-bloat pin, 0cb style).
+    #[test]
+    fn not_found_suggestion_table_is_pinned() {
+        assert_eq!(NOT_FOUND_SUGGESTION_TABLE.len(), 5);
+    }
+
+    /// Table keys must never collide with a registered client name (exact
+    /// match always wins at runtime; a stale key must not linger here), and
+    /// every table target must be a live managed tool so a hint can never
+    /// point outside the closed set.
+    #[test]
+    fn not_found_suggestion_table_disjoint_from_and_pointing_into_managed_tools() {
+        for (key, target) in NOT_FOUND_SUGGESTION_TABLE {
+            for managed in crate::versions::MANAGED_TOOLS {
+                let client = managed.split(':').next_back().expect("non-empty id");
+                assert!(
+                    !key.eq_ignore_ascii_case(client),
+                    "table key {key:?} collides with managed tool {managed:?}"
+                );
+            }
+            assert!(
+                crate::versions::MANAGED_TOOLS.iter().any(|managed| {
+                    managed
+                        .split(':')
+                        .next_back()
+                        .expect("non-empty id")
+                        .eq_ignore_ascii_case(target)
+                }),
+                "table target {target:?} is not a managed tool"
+            );
+        }
+    }
+
+    fn suggestion_face() -> Vec<&'static str> {
+        vec![
+            "read_file",
+            "grep",
+            "list_dir",
+            "search_replace",
+            "run_terminal_cmd",
+            "web_search",
+            "web_fetch",
+            "blackboard_read",
+        ]
+    }
+
+    /// Table arm: observed cross-harness command names map to the shell tool
+    /// even though the lexical rules cannot reach them (prefix `run_c` = 5).
+    #[test]
+    fn not_found_suggestion_table_arm() {
+        let face = suggestion_face();
+        assert_eq!(
+            not_found_suggestions("run_command", &face),
+            vec!["run_terminal_cmd"]
+        );
+        assert_eq!(
+            not_found_suggestions("exec_command", &face),
+            vec!["run_terminal_cmd"]
+        );
+    }
+
+    /// A table hit counts only when its target is still registered — with a
+    /// face lacking the shell tool the entry must degrade to 无近似不附.
+    #[test]
+    fn not_found_suggestion_table_requires_registered_target() {
+        let face = ["read_file", "grep"];
+        assert!(not_found_suggestions("run_command", &face).is_empty());
+    }
+
+    /// Prefix arm, pin (a): the sith probe's phantom resolves lexically to
+    /// the shell tool (shared prefix `run_terminal_` = 13 ≥ 8; the old
+    /// search_replace expectation was semantic and is retired).
+    #[test]
+    fn not_found_suggestion_prefix_arm_run_terminal_patch() {
+        let face = suggestion_face();
+        assert_eq!(
+            not_found_suggestions("run_terminal_patch", &face),
+            vec!["run_terminal_cmd"]
+        );
+    }
+
+    /// Levenshtein arm: the 0S round's top variant is within budget 2.
+    #[test]
+    fn not_found_suggestion_levenshtein_arm() {
+        let face = suggestion_face();
+        assert_eq!(
+            not_found_suggestions("run_terminal_cpt", &face),
+            vec!["run_terminal_cmd"]
+        );
+    }
+
+    /// Case arm: the observed uppercase miss resolves to the registered
+    /// casing while dispatch itself stays case-sensitive.
+    #[test]
+    fn not_found_suggestion_case_arm() {
+        let face = suggestion_face();
+        assert_eq!(
+            not_found_suggestions("RUN_TERMINAL_CMD", &face),
+            vec!["run_terminal_cmd"]
+        );
+    }
+
+    /// Observed true outliers get no hint (无近似不附).
+    #[test]
+    fn not_found_suggestion_no_near_miss() {
+        let face = suggestion_face();
+        assert!(not_found_suggestions("SEMANTIC_SUMMARY", &face).is_empty());
+        assert!(not_found_suggestions("cursor_agent", &face).is_empty());
+        assert!(not_found_suggestions("invoke", &face).is_empty());
+    }
+
+    /// At most two candidates are ever suggested.
+    #[test]
+    fn not_found_suggestion_capped_at_two() {
+        let face = [
+            "compression_helper_alpha",
+            "compression_helper_beta",
+            "read_file",
+        ];
+        let got = not_found_suggestions("compression_helper_gammma", &face);
+        assert_eq!(got.len(), 2);
+    }
+
+    /// Funnel wiring: the hint rides on the message text of the not-found
+    /// envelope; kind and details shape stay untouched.
+    #[test]
+    fn not_found_error_message_carries_hint() {
+        let face = vec!["run_terminal_cmd"];
+        let err = FinalizedToolset::tool_not_found_error("run_terminal_patch", &face);
+        assert!(err.detail.contains("Tool not found: run_terminal_patch"));
+        assert!(err.detail.contains("did you mean \"run_terminal_cmd\"?"));
+        assert_eq!(
+            err.details.as_ref().unwrap()["tool_id"],
+            "run_terminal_patch"
+        );
+    }
+
+    /// End-to-end through a finalized toolset: an unknown name comes back as
+    /// not-found with the nearest-name hint appended.
+    #[tokio::test]
+    async fn try_parse_unknown_tool_carries_suggestion() {
+        let tmp = TempDir::new().unwrap();
+        let builder = ToolRegistryBuilder::new();
+        let config = ToolServerConfig {
+            tools: vec![ToolConfig {
+                id: "GrokBuild:run_terminal_cmd".to_string(),
+                params: None,
+                name_override: None,
+                params_name_overrides: None,
+                description_override: None,
+                behavior_version: None,
+                kind: None,
+            }],
+            behavior_preset: None,
+        };
+        let ctx = test_session_context(&tmp);
+        let toolset = builder.finalize(config, ctx).expect("finalize succeeds");
+        let err = toolset
+            .try_parse("run_terminal_patch", &serde_json::json!({}))
+            .await
+            .expect_err("unknown tool must not parse");
+        assert!(err.detail.contains("did you mean \"run_terminal_cmd\"?"));
+    }
+
     /// Build a `SessionContext` for tests using a temp dir and real local
     /// filesystem/terminal backends.
     fn test_session_context(tmp: &TempDir) -> SessionContext {
