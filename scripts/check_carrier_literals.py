@@ -15,10 +15,27 @@ from __future__ import annotations
 
 import sys
 
-# 0.8.12 窗口新增面（源冻结 54717d06＝179 批 905bc3f5＋bump；基线 0.8.11 冻结于
-# 6493fdae＝164+168+169，P8-a/P8-b/178/179 全部为本窗新增）。
+# 0.8.13 窗口新增面（源冻结 a7526cc2＝186 批 f0b7f5ac＋bump；基线 0.8.12 冻结于
+# 54717d06——184 预测段＋185/186 写控收窄为本窗新增）。
 EXPECTED_NEW = [
-    # 0am P8-a：快照 schema v2、八通道锚点名
+    # 184 0am 预测段：单 fire 前推预告段（格式模板片＋五值闭集文案＋注解扩展）
+    "前推(",
+    "段内θ上持续",
+    "段内回落",
+    "段内再越线",
+    "段内不越线",
+    "段内越线",
+    "前推=闭式自由演化至",
+    # 185/186 0cq S2：READ_PATTERN 读模式值豁免闭集（长选项串，短串防内联不取）
+    "-wholename",
+    "--exclude-dir",
+    "--include-dir",
+    "--iglob",
+]
+
+# 保留面（0.8.12 窗口在件面全量降入保留＋既有面）。
+EXPECTED_RETAINED = [
+    # 0am P8-a：快照 schema v2、八通道锚点名（0.8.12 窗 NEW → 0.8.13 起保留）
     "rli-shadow-v2",
     "u_verify",
     "v_verify",
@@ -52,10 +69,7 @@ EXPECTED_NEW = [
     # 179：kill-switch 告警长文案（长文案跨平台可见性优于短串）
     "0/false/no/off disable",
     "keeping the RLI channel family enabled",
-]
-
-# 保留面（170 批在件面＋既有面）。
-EXPECTED_RETAINED = [
+    # 既有面
     "rli.notice.",
     "streak_crossed",
     "domain_spike_entry",
@@ -65,6 +79,8 @@ EXPECTED_RETAINED = [
     "u_prog",
     "slow_prog",
     "carrier-write",
+    # 0cq S2 既有块面（185 批起在件）
+    "recursive delete targets a fundamental tree root",
 ]
 
 # 退役面（应为 0；`预算：` 170 批已退役、`rli-shadow-v1` 随 schema v2 退役）。

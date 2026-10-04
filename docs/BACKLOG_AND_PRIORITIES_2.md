@@ -1174,3 +1174,15 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **边界**：重建批随令承接（bump 0.8.13＋双平台，见 §1.141）；不推送；打包/发行顺延。
 - 批档：[`186 批档`](audits/186_REVIEW_FINDINGS_DISPOSAL_2026-10-04.md)。
 - 关键词：186 批、审查发现处置、闭集长度钉补齐、detail 续行回归、34 空格、segment_has_real_redirect、非 nullish 写段标志、复合命令残余误拦面、184 批档勘误、r178 基线命名混淆、网格漏检边界登记、0cq S3 定案、计数 58 不变。
+
+
+### 1.141 2026-10-04 187 批 0.8.13 双平台载体重建进体——0cq S3 收口＋184/185/186 三批进件（用户令「全部处理完成后请进入重建」；计数不变 58）
+
+- **源冻结**＝orz `a7526cc2`（`f0b7f5ac` 186 处置＋bump 0.8.12→0.8.13；`cargo metadata --locked` exit 0、Cargo.toml＋Cargo.lock 恰两行）。
+- **Windows**：`build_orz.ps1 -Release -Jobs 2` exit 0（4m14s 暖缓存）；换装 MATCH 3/3＋`.0.8.12-bak` 链；`--build-info`＝0.8.13 rc0；载体清单 3 entries 0.8.13；ACAF 重 provision rc0（manifest bak-20261004-186；`binary_sha256=8aa9aafd…`↔换装位逐位一致；keystore 未动）；signer/provision 哈希变化（尺寸 Δ0——184 预测段在 orz-assurance 链接传播，180 同形）；orz.exe +6,144 B＝`232b7517…`。
+- **Linux musl**：docker rust:1.97-slim＋trixie 脚本 exit 0（22m16s、-j 1）；`.0.8.12-bak` 链 cp 前预建（180 §6.4 兑现）；MATCH 3/3；ELF static-pie×3；alpine 3.20/bookworm 双冒烟 0.8.13 rc0（`MSYS_NO_PATHCONV=1`——Git Bash 路径转换首跑 127 作废重跑）；载体未重 provision（沿同口径）；载体清单陈旧面顺手刷新 0.8.11→0.8.13；orz +8,488 B＝`0e1c10e7…`（身份门新值）。
+- **进体字节判据**（判据表随批更新 0.8.13 窗，0.8.12 窗全量降入保留）：NEW＝184 预测段 7 面（前推(/段内五值/注解扩展）1/1 全在件＋`--iglob`/`--exclude-dir` 在件；`-wholename`/`--include-dir` 双平台字节 0＝短 ASCII 内联已知形态（功能钉为权威证据）；保留面零回归（0.8.12 账面计数逐项同）＋`recursive delete targets a fundamental tree root` 1/1（186 续行修复恢复）；退役面 0。
+- **身份门**：`b141c1ef…` → `0e1c10e7…`（注释同步；适配器未动）；语法＋--help rc0。**冒烟**：Windows `--fake-provider -p hello` rc0（RUN-CLI-6ac1a9df）＋dogfood DryRun 装配断言全过（v0.8.13 在册识别）。
+- **边界**：打包/发行顺延（发布面仍 v0.8.12）；未推送；构建告警＝先存源面（orz-host permission.rs unused_imports，触碰面外）；0cq 余＝真机零误拦读数（下一真机轮）。
+- 批档：[`187 批档`](audits/187_CARRIER_REBUILD_V0813_0CQ_S3_2026-10-04.md)。
+- 关键词：187 批、0.8.13 重建、源冻结 a7526cc2、预测段进件、写控修复进件、0e1c10e7 身份门、static-pie×3、双冒烟 0.8.13、bak 链预建、载体清单陈旧面修复、打包顺延、计数 58 不变。
