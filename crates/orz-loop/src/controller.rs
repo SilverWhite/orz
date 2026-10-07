@@ -1937,7 +1937,7 @@ impl AgentLoopController {
     /// **空表**口径（不为本面新增豁免）。文案逐字不变 ⇒ digest 不变。
     fn board_guide_body() -> String {
         format!(
-            "【名词】黑板＝会话工作记忆：plan/notes 模型可写，其余分区机械只读。\
+            "【名词】黑板＝会话工作记忆：plan/notes/findings 模型可写，其余分区机械只读。\
              journal＝本 run 事件链（逐行、sha 连锁）；轮 r＝决策轮，块 b＝压缩分块，\
              s＝journal 行号；定位符 `r<轮>·b<块>·s<seq>[#sha8]`＝事件指针\
              （分块表/压缩回执里直接复制；section=journal anchor=… 点读 ≤512B）。\
@@ -3685,7 +3685,10 @@ impl AgentLoopController {
                      `section` is one of: plan (goal + step statuses; step lines start \
                      `- [状态] <step_id>:` — use that id for step_id binding in \
                      console orders), notes (your own scratch notes, written via the \
-                     blackboard write tool), exec (accumulated tool-result log; find \
+                     blackboard write tool), findings (your append-only ledger of \
+                     established results & conclusions from actual work, written \
+                     via the blackboard write tool), exec (accumulated \
+                     tool-result log; find \
                      earlier errors with search=<literal> (≤20 hit rows) or \
                      failures_only=true (failed-target aggregation) — both exec-only), \
                      edits / tool_actions (file-edit records / executed calls folded \
@@ -3738,6 +3741,7 @@ impl AgentLoopController {
                                 "rli",
                                 "journal",
                                 "notes",
+                                "findings",
                             ],
                             "description": "Partition to read — see the tool description for one-line usage per partition.",
                         },
@@ -3807,7 +3811,7 @@ impl AgentLoopController {
             });
         }
         // 0ae D0（2026-09-15，设计 §3，用户裁决 DP-6）：`blackboard_write`
-        // ——模型写入面（section ∈ {plan, notes}，单次 ≤8K）。8 工具面
+        // ——模型写入面（section ∈ {plan, notes, findings}，单次 ≤8K）。8 工具面
         // 冻结纪律的**用户主导显式例外 +1**（2026-09-15 口径「明确提示
         // 可使用黑板」）；只写内存黑板，无外部副作用 → ReadOnly 类（所有
         // 策略自动放行）。无条件声明（不随 plan_first 门）。
@@ -3817,14 +3821,14 @@ impl AgentLoopController {
         {
             tool_defs.push(ToolDef {
                 name: crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME.to_string(),
- description: "Write a note to the blackboard — the fold-proof durable memory: blackboard content survives context folding and compaction — at the 500K hard truncation (T1) only the current slider window survives, so plan/notes on the blackboard remain recoverable via blackboard_read. `section` is \"plan\" (task plan + key intermediate conclusions) or \"notes\" (free-form working notes). Single write is capped at 8K chars — split longer content across writes. The live watermark 【x.xM/10M】 rides every blackboard_read response header. Writes are stamped (round, domain) and journaled; mechanical partitions (edits/exec/actions/processes/temporal/session) are NOT writable.".to_string(),
+ description: "Write a note to the blackboard — the fold-proof durable memory: blackboard content survives context folding and compaction — at the 500K hard truncation (T1) only the current slider window survives, so plan/notes on the blackboard remain recoverable via blackboard_read. `section` is \"plan\" (task plan + key intermediate conclusions), \"notes\" (free-form working notes), or \"findings\" (the append-only ledger of established results & conclusions from actual work). Single write is capped at 8K chars — split longer content across writes. The live watermark 【x.xM/10M】 rides every blackboard_read response header. Writes are stamped (round, domain) and journaled; mechanical partitions (edits/exec/actions/processes/temporal/session) are NOT writable.".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "section": {
                             "type": "string",
-                            "enum": ["plan", "notes"],
-                            "description": "目标分区：plan = 工作计划与关键中间结论；notes = 自由工作笔记。",
+                            "enum": ["plan", "notes", "findings"],
+                            "description": "目标分区：plan = 工作计划与关键中间结论；notes = 自由工作笔记；findings = 已探明内容工作台账（已确立/已验证的发现与结论）。",
                         },
                         "content": {
                             "type": "string",
@@ -5334,6 +5338,82 @@ mod tests {
                 EventType::RunFinished,
             ],
             "{types:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0cu 钉 8（文案护栏，2026-10-07；0cl 瘦身纪律）：blackboard_write /
+    /// blackboard_read 描述与 guide 各恰含一处 `findings` 字样——第三分区
+    /// 的模型面增量收窄为设计定稿的三短句，不回涨瘦身成果。
+    #[tokio::test]
+    async fn findings_copy_appears_exactly_once_per_face() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("ok"),
+            ScriptedResponse::text("ok"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "hi", "RUN-0CU-COPY", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let tools = &fake.received_requests()[0].tools;
+        let write = tools
+            .iter()
+            .find(|t| t.name == crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME)
+            .expect("blackboard_write must be declared");
+        let read = tools
+            .iter()
+            .find(|t| t.name == "blackboard_read")
+            .expect("blackboard_read must be declared");
+        for (face, description) in [("write", &write.description), ("read", &read.description)] {
+            let hits = description.matches("findings").count();
+            assert_eq!(
+                hits, 1,
+                "{face} description must mention findings exactly once: {description}"
+            );
+        }
+        // 209 处置批（P3 护栏补口）：write 的 section 参数描述也受 0cl 纪律
+        // 约束——恰一处 findings（0cu 设计 §5-7 的设计内增量；此前护栏只盖
+        // 主描述与 guide，参数描述无机械上限）。
+        let write_section_desc = write.parameters["properties"]["section"]["description"]
+            .as_str()
+            .expect("write section param description must be a string");
+        assert_eq!(
+            write_section_desc.matches("findings").count(),
+            1,
+            "write section param description must mention findings exactly once: \
+             {write_section_desc}"
+        );
+        // section 枚举三值（read/write 两侧）。
+        let write_enum = write.parameters["properties"]["section"]["enum"].clone();
+        assert_eq!(
+            write_enum,
+            serde_json::json!(["plan", "notes", "findings"]),
+            "{write_enum}"
+        );
+        let read_enum = read.parameters["properties"]["section"]["enum"].clone();
+        assert!(
+            read_enum
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "findings"),
+            "read section enum must include findings: {read_enum}"
+        );
+        // guide 说明书恰一处（分区行扩一词）。
+        let guide = AgentLoopController::render_board_guide();
+        assert_eq!(
+            guide.matches("findings").count(),
+            1,
+            "guide must mention findings exactly once: {guide}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

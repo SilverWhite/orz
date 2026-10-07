@@ -211,12 +211,16 @@ pub struct PlanSection {
     pub model_notes: Vec<NoteEntry>,
 }
 
-/// 0ae D0：`blackboard_write` 的目标分区（DP-6：限 plan 与 notes 两域；
+/// 0ae D0：`blackboard_write` 的目标分区（DP-6 起限模型自有分区；
 /// 机械单写者分区不开放写入，所有权不变）。
+/// 0cu（2026-10-07，用户裁决）+`Findings`：已探明内容工作台账——机制照抄
+/// notes 逐字同构（零新工具零新机制零契约面；`model_note_count` 不含本
+/// 分区，0ae D1 首轮 plan 问询的 plan 责任不被抵扣）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelNoteSection {
     Plan,
     Notes,
+    Findings,
 }
 
 impl ModelNoteSection {
@@ -224,6 +228,7 @@ impl ModelNoteSection {
         match self {
             ModelNoteSection::Plan => "plan",
             ModelNoteSection::Notes => "notes",
+            ModelNoteSection::Findings => "findings",
         }
     }
 
@@ -231,6 +236,7 @@ impl ModelNoteSection {
         match raw {
             "plan" => Some(ModelNoteSection::Plan),
             "notes" => Some(ModelNoteSection::Notes),
+            "findings" => Some(ModelNoteSection::Findings),
             _ => None,
         }
     }
@@ -713,6 +719,13 @@ pub struct Blackboard {
     /// 机械单写者分区所有权不变，本分区唯一写者是模型写入面）。
     #[serde(default)]
     pub notes: Vec<NoteEntry>,
+    /// 0cu（2026-10-07，用户裁决）：模型自有已探明内容工作台账分区——
+    /// `blackboard_write section=findings` 的落点（实际工作中已确立/已
+    /// 验证的发现与结论；机制照抄 notes 逐字同构、零新机制；折叠不灭、
+    /// 随会话延续，本分区唯一写者是模型写入面；serde(default)＝旧板/旧
+    /// 会话快照零迁移）。
+    #[serde(default)]
+    pub findings: Vec<NoteEntry>,
     /// PULL 自描述分区版本计数（2026-08-31，P2-11 第 1 项）——每个分区
     /// 可见内容变化计 1 次，供 `blackboard_read` 增量头读取；仅内存、
     /// 不进任何序列化面（`#[serde(skip)]`，epoch 快照/会话存档不携带）。
@@ -727,6 +740,8 @@ pub struct Blackboard {
 pub struct PartitionRevisions {
     pub plan: u64,
     pub notes: u64,
+    /// 0cu（2026-10-07）：`findings` 分区版本计数（与 notes 同一 bump 落点）。
+    pub findings: u64,
     pub exec: u64,
     pub edits: u64,
     pub tool_actions: u64,
@@ -749,6 +764,7 @@ impl Blackboard {
             plan_epoch: self.plan.plan_epoch,
             plan: self.plan.clone(),
             notes: self.notes.clone(),
+            findings: self.findings.clone(),
             edits: self.edits.clone(),
             tool_actions: self.tool_actions.clone(),
             exec: self.exec.clone(),
@@ -763,7 +779,9 @@ impl Blackboard {
     pub fn restore_epoch_snapshot(&mut self, snapshot: &EpochSnapshot) {
         self.plan = snapshot.plan.clone();
         self.notes = snapshot.notes.clone();
+        self.findings = snapshot.findings.clone();
         self.revisions.notes = self.revisions.notes.saturating_add(1);
+        self.revisions.findings = self.revisions.findings.saturating_add(1);
         self.edits = snapshot.edits.clone();
         self.tool_actions = snapshot.tool_actions.clone();
         self.exec = snapshot.exec.clone();
@@ -784,7 +802,8 @@ impl Blackboard {
     }
 
     /// 0ae D0：模型写入面追加（section=notes → `notes` 分区；
-    /// section=plan → `plan.model_notes`）。分区版本计数同一落点。
+    /// section=plan → `plan.model_notes`；section=findings → `findings`
+    /// 分区〔0cu，机制照抄 notes 逐字同构〕）。分区版本计数同一落点。
     pub fn push_model_note(&mut self, section: ModelNoteSection, entry: NoteEntry) {
         match section {
             ModelNoteSection::Plan => {
@@ -795,10 +814,16 @@ impl Blackboard {
                 self.notes.push(entry);
                 self.revisions.notes = self.revisions.notes.saturating_add(1);
             }
+            ModelNoteSection::Findings => {
+                self.findings.push(entry);
+                self.revisions.findings = self.revisions.findings.saturating_add(1);
+            }
         }
     }
 
     /// 0ae D1 补救规则读数：模型写入面累计条数（notes + plan.model_notes）。
+    /// 0cu 裁决 4：**不含 findings**——findings 写入不抵扣首轮 plan 问询
+    /// 的 plan 责任。
     pub fn model_note_count(&self) -> usize {
         self.notes.len() + self.plan.model_notes.len()
     }
@@ -807,6 +832,12 @@ impl Blackboard {
     /// 空分区 = 「（无）」同空槽纪律）。
     pub fn render_notes_section(&self) -> String {
         render_note_entries(&self.notes)
+    }
+
+    /// 0cu：`blackboard_read section=findings` 渲染（照抄 notes——时间正序、
+    /// 逐条盖章头；空分区 = 「（无）」同空槽纪律）。
+    pub fn render_findings_section(&self) -> String {
+        render_note_entries(&self.findings)
     }
 
     /// 0ae D0：`blackboard_read section=plan` 的模型笔记尾段（plan 视图
@@ -867,6 +898,7 @@ impl Blackboard {
         self.revisions = PartitionRevisions {
             plan: 1,
             notes: 1,
+            findings: 1,
             exec: 1,
             edits: 1,
             tool_actions: 1,
@@ -912,6 +944,7 @@ impl Blackboard {
         vec![
             ("plan", self.revisions.plan),
             ("notes", self.revisions.notes),
+            ("findings", self.revisions.findings),
             ("exec", self.revisions.exec),
             ("edits", self.revisions.edits),
             ("tool_actions", self.revisions.tool_actions),
@@ -1120,6 +1153,10 @@ pub struct EpochSnapshot {
     /// 旧归档（无该字段）经 serde default 兼容读取。
     #[serde(default)]
     pub notes: Vec<NoteEntry>,
+    /// 0cu（2026-10-07）：模型已探明内容台账随 epoch 归档/恢复；
+    /// 旧归档（无该字段）经 serde default 兼容读取（与 notes 同纪律）。
+    #[serde(default)]
+    pub findings: Vec<NoteEntry>,
     pub edits: Vec<EditRecord>,
     pub tool_actions: Vec<ToolActionRecord>,
     pub exec: ExecSection,
@@ -4402,7 +4439,7 @@ mod tests {
         let rev = restored.partition_revisions();
         for (name, value) in rev {
             match name {
-                "plan" | "notes" | "exec" | "edits" | "tool_actions" | "actions"
+                "plan" | "notes" | "findings" | "exec" | "edits" | "tool_actions" | "actions"
                 | "internal_ret" | "external_ret" | "entities" => {
                     assert_eq!(value, 1, "{name} shows one restore change")
                 }
@@ -4723,5 +4760,166 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ===== 0cu（2026-10-07）黑板 findings 第三分区钉组（设计 §8；机制
+    // 照抄 notes——表级/徽章/渲染/快照/D1 不含/水位六类在板，端到端与
+    // 文案两类分别在 tool_run.rs / controller.rs 测试组）=====
+
+    fn finding_entry(round: u64, content: &str) -> NoteEntry {
+        NoteEntry {
+            round,
+            domain: None,
+            timestamp: format!("2026-10-07T00:00:0{round}Z"),
+            content: content.to_string(),
+        }
+    }
+
+    /// 钉 1（表级）：`parse("findings")` → Some（as_str 往返一致）；非法
+    /// section（"finding"/空串）仍 None（负例）。
+    #[test]
+    fn findings_section_table_parse_and_negative() {
+        let parsed = ModelNoteSection::parse("findings").unwrap();
+        assert_eq!(parsed.as_str(), "findings");
+        assert_eq!(
+            ModelNoteSection::parse("findings"),
+            Some(ModelNoteSection::Findings)
+        );
+        assert_eq!(ModelNoteSection::parse("finding"), None);
+        assert_eq!(ModelNoteSection::parse(""), None);
+    }
+
+    /// 钉 3＋4（徽章＋渲染）：写后 `partition_revisions()` findings +1 且
+    /// 固定序在 notes 之后；空分区「（无）」；多条时间正序盖章头；
+    /// section=plan / notes 读取不含 findings 内容（零交叉负例）。
+    #[test]
+    fn findings_badge_and_render_and_zero_crossing() {
+        let bb = SharedBlackboard::new();
+        // 空分区渲染 = 「（无）」同空槽纪律。
+        assert_eq!(bb.read().render_findings_section(), "（无）");
+        {
+            let mut w = bb.write();
+            w.push_model_note(
+                ModelNoteSection::Findings,
+                finding_entry(3, "findings 甲：D4 移尾已实证"),
+            );
+            w.push_model_note(
+                ModelNoteSection::Findings,
+                finding_entry(7, "findings 乙：写控读向豁免在役"),
+            );
+        }
+        let rev = bb.read().partition_revisions();
+        let get = |name: &str| rev.iter().find(|(n, _)| *n == name).unwrap().1;
+        assert_eq!(get("findings"), 2, "两次写入计 2 次变化: {rev:?}");
+        // 固定序：findings 恰在 notes 之后（PULL 增量头 256B 帽内 +1 条）。
+        let names: Vec<&str> = rev.iter().map(|(n, _)| *n).collect();
+        let notes_pos = names.iter().position(|n| *n == "notes").unwrap();
+        assert_eq!(names[notes_pos + 1], "findings", "固定序 notes→findings");
+
+        let rendered = bb.read().render_findings_section();
+        assert!(rendered.contains("findings 甲"), "{rendered}");
+        assert!(rendered.contains("findings 乙"), "{rendered}");
+        // 时间正序：round 3 行在 round 7 行之前。
+        let pos_a = rendered.find("findings 甲").unwrap();
+        let pos_b = rendered.find("findings 乙").unwrap();
+        assert!(pos_a < pos_b, "时间正序渲染");
+        // 零交叉：plan 模型笔记尾段只渲染 plan.model_notes（本板为空 ⇒
+        // None，findings 不注入）；notes 读取面同样零 findings。
+        assert!(
+            bb.read().render_plan_model_notes_tail().is_none(),
+            "plan 尾段不得注入 findings（零交叉）"
+        );
+        assert_eq!(bb.read().render_notes_section(), "（无）");
+    }
+
+    /// 钉 5（快照）：epoch 快照含 findings；restore 后内容归位且
+    /// `revisions.findings == 1`；会话快照归位同（restore_conversation_
+    /// snapshot 统一置 1）。
+    #[test]
+    fn findings_epoch_and_conversation_snapshot_roundtrip() {
+        let bb = SharedBlackboard::new();
+        {
+            let mut w = bb.write();
+            w.push_model_note(
+                ModelNoteSection::Findings,
+                finding_entry(2, "快照前的台账行"),
+            );
+        }
+        let snap = bb.read().epoch_snapshot("2026-10-07T00:00:00Z");
+        assert_eq!(snap.findings.len(), 1, "epoch 快照携带 findings");
+
+        let bb2 = SharedBlackboard::new();
+        bb2.write().restore_epoch_snapshot(&snap);
+        {
+            let r = bb2.read();
+            assert_eq!(r.render_findings_section(), r.render_findings_section());
+            let restored = r.render_findings_section();
+            assert!(restored.contains("快照前的台账行"), "{restored}");
+        }
+        assert_eq!(
+            bb2.read()
+                .partition_revisions()
+                .iter()
+                .find(|(n, _)| *n == "findings")
+                .unwrap()
+                .1,
+            1,
+            "restore 后 findings 版本计 1"
+        );
+
+        // 会话快照：整板归位（findings 随板延续 + 版本计 1）。
+        let conv = bb.read().conversation_snapshot();
+        let bb3 = SharedBlackboard::new();
+        bb3.write().restore_conversation_snapshot(conv);
+        assert!(
+            bb3.read()
+                .render_findings_section()
+                .contains("快照前的台账行"),
+            "会话快照归位携带 findings"
+        );
+        assert_eq!(
+            bb3.read()
+                .partition_revisions()
+                .iter()
+                .find(|(n, _)| *n == "findings")
+                .unwrap()
+                .1,
+            1,
+            "会话快照恢复后 findings 版本计 1"
+        );
+    }
+
+    /// 钉 6（D1 不含，用户裁决 4）：`model_note_count` 不随 findings 写入
+    /// 增长——0ae D1 首轮 plan 问询的 plan 责任不被 findings 抵扣。
+    #[test]
+    fn findings_do_not_count_into_model_note_count() {
+        let mut bb = Blackboard::new();
+        let before = bb.model_note_count();
+        bb.push_model_note(
+            ModelNoteSection::Findings,
+            finding_entry(1, "D1 责任不抵扣"),
+        );
+        assert_eq!(
+            bb.model_note_count(),
+            before,
+            "findings 不进 model_note_count"
+        );
+        // 对照：notes 写入仍计数（0ae D1 口径不变）。
+        bb.push_model_note(ModelNoteSection::Notes, finding_entry(1, "notes 照旧计数"));
+        assert_eq!(bb.model_note_count(), before + 1);
+    }
+
+    /// 钉 7（水位）：findings 写入后 `live_compact_bytes()` 增长（serde
+    /// 全量序列化的自动性护栏）。
+    #[test]
+    fn findings_count_into_live_compact_bytes() {
+        let mut bb = Blackboard::new();
+        let before = bb.live_compact_bytes();
+        let payload = "x".repeat(4096);
+        bb.push_model_note(ModelNoteSection::Findings, finding_entry(1, &payload));
+        assert!(
+            bb.live_compact_bytes() > before,
+            "findings 必须计入 10MiB 软水位（serde 自动性）"
+        );
     }
 }

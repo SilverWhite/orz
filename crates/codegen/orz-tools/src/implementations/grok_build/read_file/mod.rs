@@ -712,9 +712,13 @@ pub(crate) async fn run_read_file(
     // 判定统一单点在 resources::is_path_allowed_for_read（SessionVolume
     // 资源缺席时窗口全关，退回 Task C 纯 workspace 二元判定）。
     // 0p S2 两段门（2026-09-07，ADR-0010 §14.61 设计 B）：会话卷域读取
-    // 先经两段门判决——窗口/直读恒放行；内部区首读返回通知信封（非内容，
-    // B2）并持久化已通知态；二读直接放行（B4）。通知与放行的结构化 seam
-    // 在 SessionVolumeAccess 旗标上，host 侧转译 journal 事件面。
+    // 先经两段门判决——窗口/直读恒放行；**0ct 确认性转换（2026-10-07）**：
+    // 内部区首读不再扣留内容——通知信封随内容同回（教育面保留、限制面
+    // 退役）；`session_volume_opened`（B4 审计）随内容交付同轮落账。
+    // **209 处置批（P3）**：mark 与信封交付同点（文末 content 装配处）——
+    // 首读失败（不存在/读错误）与非文本交付路径不消耗一次性确认。
+    // 结构化 seam 在 SessionVolumeAccess 旗标上。
+    let mut volume_notice_prefix = String::new();
     let volume_verdict = session_volume.as_ref().map(|volume| {
         let noticed = session_volume_access
             .as_ref()
@@ -728,15 +732,9 @@ pub(crate) async fn run_read_file(
             noticed,
         )
     });
-    if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired)
-        && let Some(access) = &session_volume_access
-    {
-        access.mark_noticed(call_id);
-    }
     if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired) {
-        return Ok(ReadFileOutput::PermissionDenied(
-            crate::types::resources::session_volume_notice_text(&cwd.join(".gsa")),
-        ));
+        volume_notice_prefix =
+            crate::types::resources::session_volume_notice_text(&cwd.join(".gsa"));
     }
     if volume_verdict
         == Some(crate::types::resources::SessionVolumeReadVerdict::InternalAfterNotice)
@@ -792,6 +790,7 @@ pub(crate) async fn run_read_file(
         volume_verdict,
         Some(
             crate::types::resources::SessionVolumeReadVerdict::WindowAllowed
+                | crate::types::resources::SessionVolumeReadVerdict::NoticeRequired
                 | crate::types::resources::SessionVolumeReadVerdict::InternalAfterNotice
         )
     );
@@ -1189,6 +1188,21 @@ pub(crate) async fn run_read_file(
         content.push_str(&notice);
         if let Some(c) = content_concise.as_mut() {
             c.push_str(&notice);
+        }
+    }
+    // 0ct 确认性转换：首读通知信封随内容同回（文本内容路径前置一次性
+    // 信封；图像/PDF/超大文件等非文本路径不前置）。**209 处置批（P3）**：
+    // mark 与信封交付同点——未交付即未消耗，失败读/非文本读不消耗一次
+    // 性确认，下次成功文本读仍附信封（同分区并行读的轻微竞态沿
+    // AUTH-PULL-SELF-DESCRIPTION 边界允许）。
+    if !volume_notice_prefix.is_empty() {
+        if let Some(access) = &session_volume_access {
+            access.mark_noticed(call_id);
+            access.mark_opened_this_call(call_id);
+        }
+        content.insert_str(0, &volume_notice_prefix);
+        if let Some(c) = content_concise.as_mut() {
+            c.insert_str(0, &volume_notice_prefix);
         }
     }
     Ok(ReadFileOutput::FileContent(FileContent {
@@ -2750,8 +2764,9 @@ mod tests {
             .unwrap()
     }
 
-    /// 两段门 ①：内部区首读返回通知信封（非内容，含职责图/结构预览/
-    /// 黑板指针/询问句）+ access_state.json 落盘。
+    /// 两段门 ①（0ct 确认性转换后）：内部区首读＝内容照常返回＋一次性
+    /// 通知信封前置（信封含职责图/结构预览/黑板投影指引）+
+    /// access_state.json 落盘。
     #[tokio::test]
     async fn read_file_two_stage_first_read_returns_notice_envelope() {
         let tmp = TempDir::new().unwrap();
@@ -2761,21 +2776,32 @@ mod tests {
         std::fs::write(gsa.join("state.json"), "{}").unwrap();
         let result = run_read(test_resources_with_session_volume(&ws), ".gsa/state.json").await;
         match result {
-            ReadFileOutput::PermissionDenied(notice) => {
-                assert!(notice.contains("[session_volume_notice]"), "{notice}");
-                assert!(notice.contains("ledger/"), "{notice}");
-                assert!(notice.contains("blackboard_read"), "{notice}");
-                assert!(notice.contains("open_after_notice"), "{notice}");
+            ReadFileOutput::FileContent(content) => {
+                assert!(
+                    content.content.contains("[session_volume_notice]"),
+                    "{content:?}"
+                );
+                assert!(content.content.contains("ledger/"), "{content:?}");
+                assert!(content.content.contains("blackboard_read"), "{content:?}");
+                assert!(
+                    content.content.contains("{}"),
+                    "首读内容必须照常返回（确认性非限制性）: {content:?}"
+                );
+                assert!(
+                    !content.raw_output.contains("[session_volume_notice]"),
+                    "raw_output 保持字节真（信封只走模型面 content）: {content:?}"
+                );
             }
-            other => panic!("Expected notice envelope, got {other:?}"),
+            other => panic!("Expected confirmatory first read (content + notice), got {other:?}"),
         }
         let state = std::fs::read_to_string(gsa.join("access_state.json")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&state).unwrap();
         assert_eq!(parsed["notice_shown"], serde_json::json!(true));
     }
 
-    /// 两段门 ②③：二读放行（open_after_notice）+ 跨 prompt 持久
-    /// （重新 open 的资源不再通知——二次会话/进程重启语义）。
+    /// 两段门 ②③（0ct 后）：首读＝内容＋信封同回；二读起信封不再重复
+    /// （一次性确认）+ 跨 prompt 持久（重新 open 的资源不再附信封——二次
+    /// 会话/进程重启语义）。
     #[tokio::test]
     async fn read_file_two_stage_second_read_opens_and_persists() {
         let tmp = TempDir::new().unwrap();
@@ -2783,14 +2809,23 @@ mod tests {
         let gsa = ws.join(".gsa");
         std::fs::create_dir_all(&gsa).unwrap();
         std::fs::write(gsa.join("ledger-current.md"), "seq 1 | run_terminal_cmd\n").unwrap();
-        // 首 prompt：通知。
+        // 首 prompt：内容 + 信封同回。
         let first = run_read(
             test_resources_with_session_volume(&ws),
             ".gsa/ledger-current.md",
         )
         .await;
-        assert!(matches!(first, ReadFileOutput::PermissionDenied(_)));
-        // 二读（同 prompt）：放行。
+        match &first {
+            ReadFileOutput::FileContent(content) => {
+                assert!(
+                    content.content.contains("[session_volume_notice]"),
+                    "首读必须附确认信封: {content:?}"
+                );
+                assert!(content.raw_output.contains("seq 1"));
+            }
+            other => panic!("Expected confirmatory first read, got {other:?}"),
+        }
+        // 二读（同 prompt）：内容照常，信封不再重复。
         let second = run_read(
             test_resources_with_session_volume(&ws),
             ".gsa/ledger-current.md",
@@ -2799,6 +2834,10 @@ mod tests {
         match second {
             ReadFileOutput::FileContent(content) => {
                 assert!(content.raw_output.contains("seq 1"));
+                assert!(
+                    !content.content.contains("[session_volume_notice]"),
+                    "信封只出现一次（一次性确认）: {content:?}"
+                );
             }
             other => panic!("Expected open_after_notice content, got {other:?}"),
         }
@@ -2863,7 +2902,8 @@ mod tests {
     }
 
     /// 0p S2 复审补测（P2-8）：`access_state.json` 损坏（坏 JSON / 字段
-    /// 缺失）→ fail 向「重新通知」安全侧——fresh 装配后首读仍走通知信封。
+    /// 缺失）→ fail 向「重新确认」安全侧——fresh 装配后首读仍附确认信封
+    /// （0ct 后内容照常返回，信封重复＝确认重放）。
     #[tokio::test]
     async fn read_file_two_stage_corrupt_state_fails_toward_renotify() {
         let tmp = TempDir::new().unwrap();
@@ -2873,25 +2913,71 @@ mod tests {
         std::fs::write(gsa.join("state.json"), "{}").unwrap();
         // 正常通知一次（落盘 valid 状态）。
         let first = run_read(test_resources_with_session_volume(&ws), ".gsa/state.json").await;
-        assert!(matches!(first, ReadFileOutput::PermissionDenied(_)));
+        assert!(matches!(first, ReadFileOutput::FileContent(_)));
         assert!(gsa.join("access_state.json").exists());
         // 状态损坏（截断写 / 坏 JSON）。
         std::fs::write(gsa.join("access_state.json"), "{\"notice_sh\":").unwrap();
-        // fresh 装配（跨进程语义）→ 重新通知，绝不默认放行。
+        // fresh 装配（跨进程语义）→ 重新确认（信封随内容同回）。
         let second = run_read(test_resources_with_session_volume(&ws), ".gsa/state.json").await;
         match second {
-            ReadFileOutput::PermissionDenied(notice) => {
-                assert!(notice.contains("[session_volume_notice]"), "{notice}");
+            ReadFileOutput::FileContent(content) => {
+                assert!(
+                    content.content.contains("[session_volume_notice]"),
+                    "corrupt state must re-confirm (fail-safe), got {content:?}"
+                );
             }
-            other => panic!("Corrupt state must re-notify (fail-safe), got {other:?}"),
+            other => panic!("Corrupt state must re-confirm (fail-safe), got {other:?}"),
         }
-        // 损坏修复后（valid 状态已随第二次通知重写）→ 放行。
+        // 损坏修复后（valid 状态已随第二次确认重写）→ 信封不再重复。
         let parsed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(gsa.join("access_state.json")).unwrap())
                 .unwrap();
         assert_eq!(parsed["notice_shown"], serde_json::json!(true));
         let third = run_read(test_resources_with_session_volume(&ws), ".gsa/state.json").await;
-        assert!(matches!(third, ReadFileOutput::FileContent(_)));
+        match third {
+            ReadFileOutput::FileContent(content) => {
+                assert!(!content.content.contains("[session_volume_notice]"));
+            }
+            other => panic!("Expected plain content after re-confirm, got {other:?}"),
+        }
+    }
+
+    /// 209 处置批（P3）：首读失败不消耗一次性确认——内部区不存在路径的
+    /// 首读 = FileNotFound 且已确认态不落盘（canonicalize 失败回退词法
+    /// 路径 → verdict 仍 NoticeRequired，但 mark 已推迟到内容交付点）；
+    /// 随后成功首读仍附确认信封（确认性语义：未交付即未消耗）。
+    #[tokio::test]
+    async fn read_file_two_stage_failed_first_read_does_not_consume_notice() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let gsa = ws.join(".gsa");
+        std::fs::create_dir_all(&gsa).unwrap();
+        std::fs::write(gsa.join("state.json"), "{}").unwrap();
+        // 首读不存在路径（内部区）→ FileNotFound；不落已确认态。
+        let miss = run_read(test_resources_with_session_volume(&ws), ".gsa/nope.md").await;
+        assert!(
+            matches!(miss, ReadFileOutput::FileNotFound(_)),
+            "expected not-found, got {miss:?}"
+        );
+        assert!(
+            !gsa.join("access_state.json").exists(),
+            "failed first read must not consume the one-time notice"
+        );
+        // 随后成功首读：内容＋确认信封同回（信封未被失败读消耗）。
+        let hit = run_read(test_resources_with_session_volume(&ws), ".gsa/state.json").await;
+        match hit {
+            ReadFileOutput::FileContent(content) => {
+                assert!(
+                    content.content.contains("[session_volume_notice]"),
+                    "notice must survive a failed first read: {content:?}"
+                );
+                assert!(
+                    content.content.contains("{}"),
+                    "首读内容必须照常返回: {content:?}"
+                );
+            }
+            other => panic!("expected confirmatory first read, got {other:?}"),
+        }
     }
 
     /// 0p S2 复审补测（P2-8）：通知只放行 canonical 可证实在卷内的路径
@@ -2904,9 +2990,12 @@ mod tests {
         let gsa = ws.join(".gsa");
         std::fs::create_dir_all(&gsa).unwrap();
         std::fs::write(gsa.join("ledger.md"), "row\n").unwrap();
-        // 首读内部区 → 通知（状态落盘）。
+        // 首读内部区 → 内容＋确认信封（状态落盘；0ct 确认性转换）。
         let first = run_read(test_resources_with_session_volume(&ws), ".gsa/ledger.md").await;
-        assert!(matches!(first, ReadFileOutput::PermissionDenied(_)));
+        assert!(
+            matches!(first, ReadFileOutput::FileContent(_)),
+            "首读＝内容照常返回: {first:?}"
+        );
         // 种在窗口形态内的二级 symlink → 卷外（逃逸形态），通知已示。
         let outside = TempDir::new().unwrap();
         std::fs::write(outside.path().join("secret.txt"), "top secret\n").unwrap();
@@ -2953,12 +3042,13 @@ mod tests {
         std::fs::create_dir_all(&keystore).unwrap();
         std::fs::write(keystore.join("installation-key.bin"), "k").unwrap();
         std::fs::write(gsa.join("ledger.md"), "row\n").unwrap();
-        // 先完成通知（对 ledger 首读 → 通知 → 二读放行）。
-        let notice = run_read(test_resources_with_session_volume(&ws), ".gsa/ledger.md").await;
-        assert!(matches!(notice, ReadFileOutput::PermissionDenied(_)));
-        let opened = run_read(test_resources_with_session_volume(&ws), ".gsa/ledger.md").await;
-        assert!(matches!(opened, ReadFileOutput::FileContent(_)));
-        // 已通知态下凭据区仍恒拒。
+        // 先完成确认（对 ledger 首读 → 内容＋信封同回；0ct 确认性转换）。
+        let first = run_read(test_resources_with_session_volume(&ws), ".gsa/ledger.md").await;
+        assert!(
+            matches!(first, ReadFileOutput::FileContent(_)),
+            "首读＝内容照常返回: {first:?}"
+        );
+        // 凭据区恒拒与是否已通知无关（读全开放不含凭据区）。
         let cred = run_read(
             test_resources_with_session_volume(&ws),
             ".gsa/keystore/installation-key.bin",
@@ -3116,8 +3206,9 @@ mod tests {
                 other => panic!("Expected PermissionDenied for ghost terminal-log, got {other:?}"),
             }
         }
-        // 卷内白名单外：journal.jsonl——0p S2 两段门语义（内部区首读 =
-        // 通知信封；取代 0m 的 agent-invisible 恒拒）。
+        // 卷内白名单外：journal.jsonl——0p S2 两段门语义（0ct 确认性转换：
+        // 内部区首读 = 内容照常返回＋一次性确认信封前置；取代 0m 的
+        // agent-invisible 恒拒与 0p 初版的内容扣留）。
         {
             let resources = test_resources_with_session_volume(&ws);
             let input = ReadFileInput {
@@ -3134,13 +3225,17 @@ mod tests {
                     .await
                     .unwrap();
             match result {
-                ReadFileOutput::PermissionDenied(msg) => {
+                ReadFileOutput::FileContent(content) => {
                     assert!(
-                        msg.contains("[session_volume_notice]"),
-                        "journal in symlink target must get the two-stage notice, got {msg}"
+                        content.content.contains("[session_volume_notice]"),
+                        "journal in symlink target must carry the confirmatory notice,                          got {content:?}"
+                    );
+                    assert!(
+                        content.raw_output.contains("\"e\""),
+                        "content must still flow on first read, got {content:?}"
                     );
                 }
-                other => panic!("Expected notice envelope for journal, got {other:?}"),
+                other => panic!("Expected confirmatory first read for journal, got {other:?}"),
             }
         }
     }

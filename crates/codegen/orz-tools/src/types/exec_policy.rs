@@ -51,6 +51,22 @@
 //! 重定向臂收窄为**非 nullish** 重定向（复合命令无关写动词 × nullish 读段
 //! 残余误拦面收口）；规则 1 detail 续行文案回归修复（185 批引入 34 空格）；
 //! 读模式豁免两闭集表补 0cb 防膨胀长度钉。
+//! **0ct（2026-10-07，`.gsa` 读向放行）**：规则 5 写段扫描补**读方向词位
+//! 豁免**（用户裁决「`.gsa` 读全开放、只读不改」；来源＝0cr D4 meshctl
+//! `cp .gsa/… /tmp/…` 读向复制被拦，200 批 §2/§3）——(a) 复制族源位豁免
+//! （复制/安装不改动源，仅落点是写方向；`mv`/`ln`/`tee` 不豁免——搬移即
+//! 源位写／硬链写别名／多落点同写）；(b) 重定向武装段纯读程序豁免
+//! （`cat .gsa/x > /tmp/y` 是读不是写；`find`/`sort`/`sed`/`awk`/`xargs`
+//! 有写向旁路面不入表）。写向保护保留面逐钉对照（落点位 `.gsa` 全拦）。
+//! **212 修复（2026-10-07，209 全民审查 P1 两族旁路收口）**：读向豁免的
+//! 落点竞选旁路——(a) nullish 重定向目标位与 fd 重定向残片（`2>` 分词产出
+//! 裸数字词元）不再竞选"末位落点"（修复前 `cp a .gsa/b > /dev/null`、
+//! `… >/dev/null 2>&1` 整命令放行）；(b) 目标值型旗
+//! （[`COPY_DEST_VALUE_FLAGS`]：`-t`/`--target-directory` 等闭集）在段＝
+//! 整段不豁免（修复前旗值落点位 `.gsa` 被当源位豁免；`=` 形由主扫描 kv
+//! 拆值本已覆盖）。真实语料零实踩（209 调查：官方轮 5 起写向全被拦、
+//! `.gsa` 卷影 234 快照零模型异物），修复为不变量卫生性质；误伤面＝经
+//! `-t` 从 `.gsa` 读向复制的罕见形状（保守方向既登记代价）。
 
 use std::path::{Path, PathBuf};
 
@@ -350,6 +366,148 @@ fn is_nullish_redirect_target(text: &str) -> bool {
     n == "/dev/null" || n == "nul" || n.chars().all(|c| c.is_ascii_digit())
 }
 
+// ─── 0ct 读方向词位豁免（2026-10-07，`.gsa` 读全开放、只读不改）──────────
+
+/// 复制族写动词（读向源位豁免集）：复制/安装类动词**不改动源位**——源是
+/// 读方向，仅落点（目标位词元）是写方向。**不入表**：`mv` 族（搬移即源位
+/// 写——移出 `.gsa` 仍拦）、`ln`（硬链接目标位＝写别名向量，保守照扫）、
+/// `tee`（多落点同时写）。闭集，新增表项必改钉子。
+const COPY_SOURCE_EXEMPT_VERBS: &[&str] = &[
+    "cp",
+    "copy",
+    "copy-item",
+    "cpi",
+    "xcopy",
+    "robocopy",
+    "install",
+];
+
+/// 目标位＝**第 2** 位置词元的复制族（`src dst` 语序——末位是旗
+/// `/MIR` 等不是落点；末位判定会漏拦落点位 `.gsa`）。闭集。
+const COPY_DEST_SECOND_VERBS: &[&str] = &["xcopy", "robocopy"];
+
+/// 操作数恒纯读的程序（重定向武装段豁免集）：段程序 ∈ 本表时除重定向
+/// 目标位外全部词位＝读方向（`cat .gsa/x > /tmp/y` 是读不是写）。
+/// **不入表**（写向旁路面，保守照扫）：`find`（-delete/-exec）、`sort`
+/// （-o 落点）、`sed`（-i 原位写）、`awk`（system() 旁路）、`xargs`
+/// （派生执行）、`tee`（多落点）。闭集，新增表项必改钉子。
+const OPERAND_PURE_READ_PROGRAMS: &[&str] = &[
+    "cat",
+    "ls",
+    "head",
+    "tail",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "stat",
+    "file",
+    "wc",
+    "diff",
+    "strings",
+    "less",
+    "more",
+    "md5sum",
+    "sha1sum",
+    "sha256sum",
+    "cksum",
+    "readlink",
+    "realpath",
+    "dirname",
+    "basename",
+    "which",
+];
+
+/// 目标值型旗（复制族闭集，209 审查 P1 族 b）：段内出现任一（norm 后）即
+/// **整段不豁免**（保守全扫＝0ct 前行为）——此类旗的**分离值是落点**，末位
+/// 位置词元启发式会把真落点当源位豁免（`cp -t <gsa> src`、`install -t …`）；
+/// `=` 形（`--target-directory=<gsa>`）不经本表、由主扫描
+/// [`path_candidates`] 的 kv 拆值直接覆盖。误伤面＝经 `-t` 从 `.gsa` 读向
+/// 复制的罕见形状（保守方向：宁可多扫）。闭集，新增表项必改钉子。
+const COPY_DEST_VALUE_FLAGS: &[&str] =
+    &["-t", "--target-directory", "-destination", "--destination"];
+
+/// 规则 5 写段内的**读方向词位**豁免集（0ct）：写方向不变量（「只读不改」）
+/// 只及真正的落点。返回段内豁免词位下标表；两类豁免——
+/// (a) 复制族段：源位位置词元（目标位可辨时）——目标位＝末个位置词元
+///     （[`COPY_DEST_SECOND_VERBS`] 为第 2 个）；目标位不可辨（无位置词元）
+///     时**不豁免**（保守全扫——命中即拒、绝不因解析失败放行）。`-` 旗、
+///     重定向符号与重定向目标位不进位置词元收集——**目标位不问 nullish**
+///     （209 审查 P1 族 a：`/dev/null` 曾留在位置词元里竞选成"末位落点"，
+///     把真落点位 `.gsa` 豁免成源位）；裸数字词元（`2>` 经分词产出 `2`＋`>`
+///     两词元、`2>&1` 的 `&` 为段分隔）同为重定向残片、不作落点竞选；
+///     [`COPY_DEST_VALUE_FLAGS`] 在段即整段不豁免（族 b）。
+/// (b) 纯读程序段（[`OPERAND_PURE_READ_PROGRAMS`]）：除重定向符号与其
+///     非空目标位外全部词位。
+/// 表外动词/程序返回空表（保守全扫＝0ct 前行为）。
+fn read_direction_exempt_positions(seg: &[Word]) -> Vec<usize> {
+    let Some(pi) = segment_prog_index(seg) else {
+        return Vec::new();
+    };
+    let prog = norm_prog(&seg[pi].text);
+    if COPY_SOURCE_EXEMPT_VERBS.contains(&prog.as_str()) {
+        // 族 b（209）：目标值型旗在段＝落点不可辨 → 整段不豁免（保守全扫）。
+        if seg
+            .iter()
+            .any(|w| COPY_DEST_VALUE_FLAGS.contains(&norm_word(&w.text).as_str()))
+        {
+            return Vec::new();
+        }
+        // 重定向符号与其目标位（**不问 nullish**）＋裸数字词元（`2>` 分词
+        // 残片）——全部不进位置词元收集（主扫描恒覆盖，绝不作落点竞选）。
+        let mut skip: Vec<usize> = Vec::new();
+        for (i, w) in seg.iter().enumerate() {
+            if w.text == ">" || w.text == ">>" {
+                if seg.get(i + 1).is_some() {
+                    skip.push(i + 1);
+                }
+                continue;
+            }
+            if !w.text.is_empty() && w.text.chars().all(|c| c.is_ascii_digit()) {
+                skip.push(i);
+            }
+        }
+        let positional: Vec<usize> = seg
+            .iter()
+            .enumerate()
+            .skip(pi + 1)
+            .filter(|(i, w)| {
+                !norm_word(&w.text).starts_with('-')
+                    && w.text != ">"
+                    && w.text != ">>"
+                    && !skip.contains(i)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let dest = if COPY_DEST_SECOND_VERBS.contains(&prog.as_str()) {
+            positional.get(1).copied()
+        } else {
+            positional.last().copied()
+        };
+        return match dest {
+            Some(dest) => positional.into_iter().filter(|i| *i != dest).collect(),
+            None => Vec::new(),
+        };
+    }
+    if OPERAND_PURE_READ_PROGRAMS.contains(&prog.as_str()) {
+        let mut exempt = Vec::with_capacity(seg.len());
+        let mut after_redirect = false;
+        for (i, w) in seg.iter().enumerate() {
+            if w.text == ">" || w.text == ">>" {
+                after_redirect = true;
+                continue;
+            }
+            if after_redirect {
+                after_redirect = false;
+                continue;
+            }
+            exempt.push(i);
+        }
+        return exempt;
+    }
+    Vec::new()
+}
+
 /// 段程序位下标（镜像 [`program_entries`] 头部的包装词/赋值跳过逻辑）；
 /// `None`＝段无程序位——内容位词元（`bash -c "…"`）交由内容递归条目，
 /// 本段自身不判。
@@ -634,7 +792,10 @@ pub fn review_command_with(
     //    ∪`dd`，或段内含**非 nullish** 重定向词〔186 批审查处置收窄〕）；
     //    读段（ls/find/grep 段）词元不再逐个比对；
     //    (c) **读模式值豁免**——[`READ_PATTERN_OPTIONS`] 值位词元与
-    //    [`READ_PATTERN_KV_PREFIXES`] 形态不作写目标（find 排除模式等）。
+    //    [`READ_PATTERN_KV_PREFIXES`] 形态不作写目标（find 排除模式等）；
+    //    (d) **读方向词位豁免（0ct，2026-10-07）**——写段内源位词元按
+    //    [`read_direction_exempt_positions`] 豁免（复制族源位＋纯读程序段
+    //    非目标位；`.gsa` 台账读全开放、只读不改——落点位写向保护保留）。
     let redirect_arms = words.iter().enumerate().any(|(i, w)| {
         (w.text == ">" || w.text == ">>")
             && words
@@ -653,8 +814,12 @@ pub fn review_command_with(
             if !segment_is_write(seg) {
                 continue;
             }
+            let exempt = read_direction_exempt_positions(seg);
             for (i, w) in seg.iter().enumerate() {
                 if w.text == ">" || w.text == ">>" {
+                    continue;
+                }
+                if exempt.contains(&i) {
                     continue;
                 }
                 let norm = norm_word(&w.text);
@@ -757,14 +922,29 @@ pub fn block_message(finding: &CommandFinding) -> String {
     } else {
         ""
     };
+    // 214（0ct 教育面；212 考虑项 i 落地，用户裁「同意，请落成小批」）：
+    // `.gsa` 会话卷拦截附**备份/暂存指引**——0cs 同构（错误信封内给可执行
+    // 替代物；应答式非主动提醒，不涉 P9 隐式提醒面）。写因调查（212 档 §1）
+    // 实证模型受挫后把 harness 逐调用备份区当自己备份库（官方 5 起写向中
+    // 3 起直接对症：mtl/ttr 备份入 rollback、l2m 写 journal）。仅会话卷臂
+    // 携带（keystore/manifest/祖先臂是秘密与载体保护，备份指引不对症）；
+    // 置于「未执行」语义之后，不软化拦截。
+    let gsa_guidance =
+        if finding.rule == "carrier-write" && finding.detail.contains("session volume") {
+            "若意图是备份/暂存：`/tmp` 与工作区写向不受本闸限制；运行状态可记 \
+         blackboard_write；`.gsa/rollback` 为运行时逐调用备份区，只读使用。"
+        } else {
+            ""
+        };
     format!(
         "{prefix} (rule: {rule}). \
-         {detail}. 已越过保底硬边界——命令未执行。{guidance}本闸为封闭枚举灾难保底\
+         {detail}. 已越过保底硬边界——命令未执行。{guidance}{gsa_guidance}本闸为封闭枚举灾难保底\
          （{n} 条 block 规则），非沙箱。",
         rule = finding.rule,
         prefix = BLOCK_MESSAGE_PREFIX,
         detail = finding.detail,
         guidance = guidance,
+        gsa_guidance = gsa_guidance,
         n = BLOCK_RULES.len(),
     )
 }
@@ -1361,7 +1541,9 @@ mod tests {
     }
 
     /// 0cq S2 读模式值豁免钉：写段内的 `--exclude=` kv 形态与 `-path` 值位
-    /// 不作写目标；真阳性对照＝目标位的 `.gsa` 路径仍拦。
+    /// 不作写目标；真阳性对照＝重定向目标位的 `.gsa` 路径仍拦（0ct 后
+    /// grep 操作数位 `.gsa` 为读方向放行——原「操作数仍拦」断言随 0ct
+    /// 确认性语义翻转，见 `gsa_redirect_armed_pure_read_program_allows_gsa_operand`）。
     #[test]
     fn read_pattern_values_are_not_write_targets() {
         assert_eq!(
@@ -1375,8 +1557,13 @@ mod tests {
             Some("carrier-write"),
             "-path 值位豁免"
         );
-        assert!(matches!(
+        assert_eq!(
             review_linux("grep -r foo /proj/.gsa/x > /proj/out.txt"),
+            CommandReview::Allow,
+            "grep 操作数＝读方向（0ct）"
+        );
+        assert!(matches!(
+            review_linux("grep -r foo > /proj/.gsa/x"),
             CommandReview::Block(_)
         ));
     }
@@ -1412,6 +1599,232 @@ mod tests {
         );
         assert!(matches!(
             review_linux("touch /proj/a && cat /proj/.gsa/logs/session.log > /proj/.gsa/out.txt"),
+            CommandReview::Block(_)
+        ));
+    }
+
+    // ─── 0ct（2026-10-07）`.gsa` 读向放行钉 ────────────────────────────────
+    // 来源＝0cr D4 meshctl 读向复制被拦（200 批 §2/§3；用户裁「.gsa 这个问题
+    // 是读不是写……读肯定是要全部开放的啊，只不改就可以了」＝唯一不变量
+    // 「只读不改」）。以下读向形状修复前 Block(carrier-write)、修复后必须
+    // 不拦（block 即红）；每组附写向真阳性对照臂（写向保护保留面）。
+
+    /// 真机触发例（0cr D4 meshctl，RUN-1a55a270-6 seq67 缩尺）：`.gsa` 台账
+    /// 读向复制——源在 `.gsa`、落点在 /tmp＝读不是写。修复前
+    /// Block(carrier-write, "target `/proj/.gsa/…` is inside the `.gsa`
+    /// session volume")；修复后 Allow（复制族源位豁免）。
+    #[test]
+    fn gsa_read_direction_copy_source_stays_allowed() {
+        assert_eq!(
+            review_linux("cp /proj/.gsa/rollback/3d66aa37/*.bak /tmp/meshctl_prev.py"),
+            CommandReview::Allow,
+            "读向复制（源 .gsa → 落点 /tmp）不得拦: {:?}",
+            review_linux("cp /proj/.gsa/rollback/3d66aa37/*.bak /tmp/meshctl_prev.py")
+        );
+        // 真阳性对照①：落点位 `.gsa` 仍拦（写向保护保留）。
+        assert!(matches!(
+            review_linux("cp x /proj/.gsa/y"),
+            CommandReview::Block(_)
+        ));
+        // 真阳性对照②：源与落点双 `.gsa` 仍拦（落点在卷内＝写）。
+        assert!(matches!(
+            review_linux("cp /proj/.gsa/x /proj/.gsa/y"),
+            CommandReview::Block(_)
+        ));
+    }
+
+    /// 多源复制：目标位＝末个位置词元，其余位置词元皆源位（读向豁免）；
+    /// 落点位翻转即拦。
+    #[test]
+    fn gsa_copy_dest_is_last_positional() {
+        assert_eq!(
+            review_linux("cp /tmp/a /proj/.gsa/b /tmp/dst"),
+            CommandReview::Allow
+        );
+        assert!(matches!(
+            review_linux("cp /tmp/a /tmp/b /proj/.gsa/dst"),
+            CommandReview::Block(_)
+        ));
+    }
+
+    /// xcopy/robocopy 的 `src dst` 语序：目标位＝第 2 位置词元（末位是旗
+    /// `/MIR` 不是落点——末位判定会漏拦落点位 `.gsa`）。
+    #[test]
+    fn gsa_copy_dest_is_second_positional_for_xcopy_robocopy() {
+        assert_eq!(
+            review_linux("robocopy /proj/.gsa/logs /tmp/out /MIR"),
+            CommandReview::Allow
+        );
+        assert!(matches!(
+            review_linux("robocopy /tmp/logs /proj/.gsa/out /MIR"),
+            CommandReview::Block(_)
+        ));
+        assert_eq!(
+            review_linux("xcopy /proj/.gsa/src /tmp/dst"),
+            CommandReview::Allow
+        );
+        assert!(matches!(
+            review_linux("xcopy /tmp/src /proj/.gsa/dst"),
+            CommandReview::Block(_)
+        ));
+    }
+
+    /// `install` 落复制族：源位豁免、落点位扫描。
+    #[test]
+    fn gsa_install_source_exempt_dest_scanned() {
+        assert_eq!(
+            review_linux("install -m 600 /proj/.gsa/key /tmp/copy"),
+            CommandReview::Allow
+        );
+        assert!(matches!(
+            review_linux("install -m 600 /tmp/key /proj/.gsa/keystore"),
+            CommandReview::Block(_)
+        ));
+    }
+
+    /// 不入复制豁免表的保守面：`mv` 搬移即源位写（移出 `.gsa` 仍拦）、
+    /// `ln` 硬链接目标位＝写别名向量（保守不豁免）、`tee` 多落点同写。
+    #[test]
+    fn gsa_move_ln_tee_sources_stay_scanned() {
+        assert!(matches!(
+            review_linux("mv /proj/.gsa/x /tmp/y"),
+            CommandReview::Block(_)
+        ));
+        assert!(matches!(
+            review_linux("ln -s /proj/.gsa/x /tmp/link"),
+            CommandReview::Block(_)
+        ));
+        assert!(matches!(
+            review_linux("cat /proj/.gsa/x | tee /tmp/a /proj/.gsa/b"),
+            CommandReview::Block(_)
+        ));
+    }
+
+    /// 重定向武装段的纯读程序：除重定向目标位外全部词位＝读方向
+    /// （`cat .gsa/x > /tmp/y` 是读不是写）；真阳性对照＝目标位 `.gsa` 仍拦。
+    #[test]
+    fn gsa_redirect_armed_pure_read_program_allows_gsa_operand() {
+        assert_eq!(
+            review_linux("cat /proj/.gsa/logs/session.log > /tmp/out.txt"),
+            CommandReview::Allow
+        );
+        assert_eq!(
+            review_linux("grep -r foo /proj/.gsa/x > /proj/out.txt"),
+            CommandReview::Allow
+        );
+        assert_eq!(
+            review_linux(
+                "touch /proj/a && head -50 /proj/.gsa/runs/RUN-1/events.jsonl > /tmp/e.txt"
+            ),
+            CommandReview::Allow
+        );
+        // 真阳性对照：重定向目标位 `.gsa` 仍拦（写向保护保留）。
+        assert!(matches!(
+            review_linux("grep -r foo > /proj/.gsa/out.txt"),
+            CommandReview::Block(_)
+        ));
+        assert!(matches!(
+            review_linux("cat /tmp/x > /proj/.gsa/out.txt"),
+            CommandReview::Block(_)
+        ));
+    }
+
+    /// 纯读表排除项（写向旁路面，保守不豁免——段内 `.gsa` 词元照扫）：
+    /// `find`（-delete/-exec）、`sort`（-o 落点）、`sed`（-i 原位写）、
+    /// `awk`（system() 旁路）、`xargs`（派生执行）。
+    #[test]
+    fn gsa_operand_pure_read_table_excludes_write_capable_readers() {
+        assert!(matches!(
+            review_linux("find /proj/.gsa -name '*' -delete > /tmp/log"),
+            CommandReview::Block(_)
+        ));
+        assert!(matches!(
+            review_linux("sort /proj/.gsa/x > /tmp/out"),
+            CommandReview::Block(_)
+        ));
+        assert!(matches!(
+            review_linux("sed -n 1p /proj/.gsa/x > /tmp/out"),
+            CommandReview::Block(_)
+        ));
+    }
+
+    /// 复制族段与重定向并存：重定向目标位不进位置词元收集（`cp src dst
+    /// > log` 的落点位仍是 dst——`log` 误当末位目标会把落点位 `.gsa`
+    /// 豁免成源位）。
+    #[test]
+    fn gsa_copy_dest_detection_ignores_redirect_targets() {
+        assert!(matches!(
+            review_linux("cp /tmp/a /proj/.gsa/b > /tmp/log"),
+            CommandReview::Block(_)
+        ));
+        assert_eq!(
+            review_linux("cp /proj/.gsa/x /tmp/y > /tmp/log"),
+            CommandReview::Allow
+        );
+    }
+
+    /// 209 审查 P1 族 a（212 修复钉）：nullish 重定向目标位（`/dev/null`）
+    /// 与 fd 重定向残片（`2>` 分词产出裸数字词元；`2>&1` 的 `&` 为段分隔）
+    /// **不问 nullish 一律不作落点竞选**——修复前真落点位 `.gsa` 被当源位
+    /// 豁免整命令放行；读向形状（真落点在卷外）必须保持 Allow。
+    #[test]
+    fn gsa_nullish_redirect_target_and_fd_shards_never_dest_candidates() {
+        // 修复前 Allow（旁路）→ 修复后必须 Block。
+        assert!(
+            matches!(
+                review_linux("cp /tmp/a /proj/.gsa/b > /dev/null"),
+                CommandReview::Block(_)
+            ),
+            "nullish redirect target must not become the dest candidate"
+        );
+        assert!(
+            matches!(
+                review_linux("cp /tmp/a /proj/.gsa/b >/dev/null 2>&1"),
+                CommandReview::Block(_)
+            ),
+            "fd-dup shard must not become the dest candidate"
+        );
+        // 读向回归：真落点在卷外仍放行（读全开放不因本修复收窄）。
+        assert_eq!(
+            review_linux("cp /proj/.gsa/x /tmp/y > /dev/null"),
+            CommandReview::Allow
+        );
+        assert_eq!(
+            review_linux("cp /proj/.gsa/x /tmp/y >/dev/null 2>&1"),
+            CommandReview::Allow
+        );
+    }
+
+    /// 209 审查 P1 族 b（212 修复钉）：目标值型旗（`-t`/`--target-directory`
+    /// 分离值形）在段＝落点不可辨 → 整段不豁免（保守全扫）——修复前真落点
+    /// （旗值位 `.gsa`）被当源位豁免整命令放行。`=` 形不经本表、由主扫描
+    /// kv 拆值覆盖（本钉一并锁住）。误伤面（经 `-t` 从 `.gsa` 读向复制被
+    /// 拒）为保守方向的既登记代价，钉住备查。
+    #[test]
+    fn gsa_dest_value_flags_disable_source_exemption() {
+        // 修复前 Allow（旁路）→ 修复后必须 Block。
+        assert!(
+            matches!(
+                review_linux("cp -t /proj/.gsa/dir /tmp/src"),
+                CommandReview::Block(_)
+            ),
+            "flag-value dest must be scanned"
+        );
+        assert!(matches!(
+            review_linux("cp --target-directory /proj/.gsa/dir /tmp/src"),
+            CommandReview::Block(_)
+        ));
+        assert!(matches!(
+            review_linux("cp --target-directory=/proj/.gsa/dir /tmp/src"),
+            CommandReview::Block(_)
+        ));
+        assert!(matches!(
+            review_linux("install -t /proj/.gsa/dir /tmp/src"),
+            CommandReview::Block(_)
+        ));
+        // 误伤面备查（保守方向既登记代价）：`-t` 读向复制也拒。
+        assert!(matches!(
+            review_linux("cp -t /tmp/dst /proj/.gsa/x"),
             CommandReview::Block(_)
         ));
     }
@@ -1504,6 +1917,39 @@ mod tests {
         // 漏入本防膨胀钉）。
         assert_eq!(READ_PATTERN_OPTIONS.len(), 15);
         assert_eq!(READ_PATTERN_KV_PREFIXES.len(), 6);
+        // 0ct 读方向词位豁免闭集（2026-10-07）。
+        assert_eq!(COPY_SOURCE_EXEMPT_VERBS.len(), 7);
+        assert_eq!(COPY_DEST_SECOND_VERBS.len(), 2);
+        assert_eq!(OPERAND_PURE_READ_PROGRAMS.len(), 24);
+        // 212 修复（209 审查 P1 族 b）目标值型旗闭集。
+        assert_eq!(COPY_DEST_VALUE_FLAGS.len(), 4);
+        // 0ct 保守边界：搬移/链接/多落点不入复制豁免表；写旁路读者不入
+        // 纯读表；复制族 ⊆ 写动词表（本就是写段才扫描）；纯读表与写动词
+        // 表互斥（相交会令写动词段整体豁免——写向不变量翻穿）。
+        for verb in ["mv", "move", "move-item", "mi", "ln", "tee"] {
+            assert!(
+                !COPY_SOURCE_EXEMPT_VERBS.contains(&verb),
+                "move/link/multi-dest verbs must stay fully scanned: {verb}"
+            );
+        }
+        for prog in ["find", "sort", "sed", "awk", "xargs", "tee"] {
+            assert!(
+                !OPERAND_PURE_READ_PROGRAMS.contains(&prog),
+                "write-capable readers must stay fully scanned: {prog}"
+            );
+        }
+        for verb in COPY_SOURCE_EXEMPT_VERBS {
+            assert!(
+                DESTRUCTIVE_VERBS.contains(verb),
+                "copy family must stay inside the write-verb table: {verb}"
+            );
+        }
+        for prog in OPERAND_PURE_READ_PROGRAMS {
+            assert!(
+                !DESTRUCTIVE_VERBS.contains(prog),
+                "pure-read programs must not be write verbs: {prog}"
+            );
+        }
         // 0cc v3.1 祖先链臂（P2）：扫荡表＝DELETE_VERBS 全体＋搬移族，且整体
         // ⊆ DESTRUCTIVE_VERBS；`install`/`ln`（P3-1）为写动词但非扫荡动词
         // （入位写不毁祖先）。
@@ -2081,6 +2527,10 @@ mod tests {
             msg.contains("精准删除"),
             "rule 1 must carry the precise-delete guidance"
         );
+        assert!(
+            !msg.contains("备份/暂存"),
+            "session-volume suggestion is carrier-write-only: {msg}"
+        );
 
         let CommandReview::Block(f) = review("Set-MpPreference -DisableRealtimeMonitoring 1")
         else {
@@ -2096,5 +2546,49 @@ mod tests {
         let line = warn_line(&f);
         assert!(line.starts_with("[写入管控·提示]"));
         assert!(line.contains("broad-destructive"));
+    }
+
+    /// 214（0ct 教育面；212 考虑项 i）：会话卷拦截信封携带**备份/暂存指引**
+    /// （0cs 同构＝错误信封内给可执行替代物）。仅会话卷臂携带；
+    /// keystore 臂与读向放行不携带；「未执行」语义在前＝不软化拦截。
+    #[test]
+    fn block_message_session_volume_carries_backup_suggestion() {
+        let CommandReview::Block(f) = review_linux("cp /tmp/a /proj/.gsa/b") else {
+            panic!("expected block");
+        };
+        assert_eq!(f.rule, "carrier-write");
+        let msg = block_message(&f);
+        assert!(
+            msg.contains("若意图是备份/暂存"),
+            "session-volume block must carry the backup suggestion: {msg}"
+        );
+        assert!(msg.contains("/tmp") && msg.contains("blackboard_write"));
+        assert!(
+            msg.contains("只读使用"),
+            "rollback semantics must be taught: {msg}"
+        );
+        // 不软化：未执行语义仍在，且建议在其后。
+        let hard = msg.find("已越过保底硬边界——命令未执行").unwrap();
+        let sug = msg.find("若意图是备份/暂存").unwrap();
+        assert!(hard < sug, "suggestion must not soften the block");
+        // 恰一处（0cl 纪律）。
+        assert_eq!(msg.matches("若意图是备份/暂存").count(), 1);
+
+        // keystore/manifest 臂（秘密与载体保护）不带备份指引——判别式为
+        // detail 的 "session volume" 措辞，直接构造非会话卷 finding 验证
+        // （生产中 `.gsa/keystore` 由会话卷臂双覆盖先行，属会话卷拦截口径）。
+        let keystore_finding = CommandFinding {
+            rule: "carrier-write",
+            detail: "target `/x` is inside the ACAF keystore root (`/etc/orz-acaf/keystore`)"
+                .to_string(),
+        };
+        let msg2 = block_message(&keystore_finding);
+        assert!(
+            !msg2.contains("若意图是备份/暂存"),
+            "keystore block must not carry the backup suggestion: {msg2}"
+        );
+
+        // 读向放行不受影响（对照回归）。
+        assert_eq!(review_linux("cp /proj/.gsa/x /tmp/y"), CommandReview::Allow);
     }
 }

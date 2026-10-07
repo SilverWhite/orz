@@ -360,6 +360,8 @@ impl xai_tool_runtime::Tool for GrepTool {
             stderr_pipe,
             probe,
             mut config,
+            volume_notice,
+            volume_access,
         } = match prepare_grep(&ctx, &input).await? {
             GrepStep::Ready(ready) => ready,
             GrepStep::Early(out) => {
@@ -448,13 +450,22 @@ impl xai_tool_runtime::Tool for GrepTool {
             config.files_searched = probe_files_searched(&probe, timeout).await;
         }
 
-        Ok(finalize_grep(
-            stdout_buf,
-            stdout_truncated,
-            stderr_buf,
-            exit_code,
-            &config,
-        ))
+        let mut output =
+            finalize_grep(stdout_buf, stdout_truncated, stderr_buf, exit_code, &config);
+        // 0ct 确认性转换：首读一次性通知信封随结果 stdout 前置（模型面
+        // 读 stdout——stderr 仅错误通道）。209 处置批（P3）：mark 与信封
+        // 交付同点——结果交付才消耗一次性确认。
+        if !volume_notice.is_empty() {
+            if let Some(access) = &volume_access {
+                access.mark_noticed(ctx.call_id.as_str());
+                access.mark_opened_this_call(ctx.call_id.as_str());
+            }
+            let mut prefixed = volume_notice.into_bytes();
+            prefixed.push(b'\n');
+            prefixed.extend_from_slice(&output.stdout);
+            output.stdout = prefixed;
+        }
+        Ok(output)
     }
 }
 
@@ -474,6 +485,8 @@ fn grep_progress_stream(
             stderr_pipe,
             probe,
             mut config,
+            volume_notice,
+            volume_access,
         } = match prepare_grep(&ctx, &input).await {
             Ok(GrepStep::Ready(ready)) => ready,
             Ok(GrepStep::Early(out)) => {
@@ -681,8 +694,20 @@ fn grep_progress_stream(
             config.files_searched = probe_files_searched(&probe, timeout).await;
         }
 
-        let output =
+        let mut output =
             finalize_grep(stdout_buf, stdout_truncated, stderr_buf, exit_code, &config);
+        // 0ct 确认性转换：首读一次性通知信封随结果 stdout 前置（同 run 路径）。
+        // 209 处置批（P3）：mark 与信封交付同点。
+        if !volume_notice.is_empty() {
+            if let Some(access) = &volume_access {
+                access.mark_noticed(ctx.call_id.as_str());
+                access.mark_opened_this_call(ctx.call_id.as_str());
+            }
+            let mut prefixed = volume_notice.into_bytes();
+            prefixed.push(b'\n');
+            prefixed.extend_from_slice(&output.stdout);
+            output.stdout = prefixed;
+        }
         yield xai_tool_runtime::ToolStreamItem::Terminal(Ok(output));
     })
 }
@@ -720,6 +745,12 @@ struct GrepReady {
     /// Same-scope filters for the empty-result probe (`rg --files`).
     probe: GrepProbeArgs,
     config: GrepFormatConfig,
+    /// 0ct 确认性转换（2026-10-07）：内部区首读的一次性通知信封——随结果
+    /// stdout 前置（内容与搜索照常执行；非空仅首读一次）。
+    volume_notice: String,
+    /// 209 处置批（P3）：mark 与信封交付同点——非空时在结果装配处补
+    /// mark_noticed/mark_opened（派生失败路径不消耗一次性确认）。
+    volume_access: Option<crate::types::resources::SessionVolumeAccess>,
 }
 
 /// Filters that define the search scope, mirrored onto the empty-result probe
@@ -851,8 +882,12 @@ async fn prepare_grep(
     // 契约接管（ADR-0010 §14.56 D3）：仅两个白名单窗口形态放行，其余内部
     // 面 agent-invisible。判定统一单点在 resources::is_path_allowed_for_read。
     // 0p S2 两段门（2026-09-07，ADR-0010 §14.61 设计 B）：会话卷域搜索
-    // 先经两段门判决——窗口恒放行；内部区首读返回通知信封（B2）并持久化
-    // 已通知态；二读放行（B4）。同 read_file。
+    // 先经两段门判决——窗口恒放行；**0ct 确认性转换（2026-10-07）**：内部
+    // 区首读不再以信封替代内容——搜索照常执行，一次性通知信封随结果
+    // stdout 前置；`session_volume_opened`（B4）随内容交付落账。
+    // **209 处置批（P3）**：mark 与信封交付同点（两处结果装配处）——
+    // 派生失败（spawn 错误等 Early 路径）不消耗一次性确认。同 read_file。
+    let mut volume_notice = String::new();
     let volume_verdict = session_volume.as_ref().map(|volume| {
         let noticed = session_volume_access
             .as_ref()
@@ -862,21 +897,8 @@ async fn prepare_grep(
             &volume.0, &cwd, &workdir, None, noticed,
         )
     });
-    if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired)
-        && let Some(access) = &session_volume_access
-    {
-        access.mark_noticed(&call_id);
-    }
     if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired) {
-        return Ok(GrepStep::Early(GrepSearchOutput {
-            stdout: Vec::new(),
-            stderr: crate::types::resources::session_volume_notice_text(&cwd.join(".gsa"))
-                .into_bytes(),
-            exit_code: 1,
-            match_count: 0,
-            file_matches: Vec::new(),
-            files_searched: None,
-        }));
+        volume_notice = crate::types::resources::session_volume_notice_text(&cwd.join(".gsa"));
     }
     if volume_verdict
         == Some(crate::types::resources::SessionVolumeReadVerdict::InternalAfterNotice)
@@ -952,6 +974,7 @@ async fn prepare_grep(
         volume_verdict,
         Some(
             crate::types::resources::SessionVolumeReadVerdict::WindowAllowed
+                | crate::types::resources::SessionVolumeReadVerdict::NoticeRequired
                 | crate::types::resources::SessionVolumeReadVerdict::InternalAfterNotice
         )
     );
@@ -1167,6 +1190,8 @@ async fn prepare_grep(
         child,
         stdout_pipe,
         stderr_pipe,
+        volume_notice,
+        volume_access: session_volume_access.clone(),
         probe: GrepProbeArgs {
             workdir: workdir.clone(),
             glob: input.glob.clone(),
@@ -3251,8 +3276,8 @@ mod tests {
         resources
     }
 
-    /// 两段门 ①②（grep 面）：内部区搜索首读返回通知信封（非内容）；
-    /// 二读直接执行（open_after_notice——命中真实内容）。
+    /// 两段门 ①②（grep 面，0ct 确认性转换后）：内部区搜索首读＝搜索
+    /// 照常执行＋一次性通知信封随 stdout 前置；二读起信封不再重复。
     #[tokio::test]
     async fn grep_two_stage_notice_then_open() {
         let tmp = TempDir::new().unwrap();
@@ -3265,7 +3290,7 @@ mod tests {
         )
         .unwrap();
 
-        // 首读 → 通知信封（exit 1、无匹配内容）。
+        // 首读 → 内容（真实命中）＋信封同回（exit 0）。
         let mut first = make_grep_input("pip install");
         first.path = Some(".gsa/ledger".to_string());
         let tool = GrepTool;
@@ -3276,13 +3301,19 @@ mod tests {
         )
         .await
         .unwrap();
-        let err = String::from_utf8_lossy(&out.stderr);
-        assert!(err.contains("[session_volume_notice]"), "{err}");
-        assert!(err.contains("open_after_notice"), "{err}");
-        assert_eq!(out.exit_code, 1);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("[session_volume_notice]"),
+            "首读必须附确认信封: {stdout}"
+        );
+        assert!(
+            stdout.contains("pip install"),
+            "首读内容必须照常返回（确认性非限制性）: {stdout}"
+        );
+        assert_eq!(out.exit_code, 0);
         assert!(ws.join(".gsa").join("access_state.json").exists());
 
-        // 二读 → 放行（真实命中）。
+        // 二读 → 内容照常，信封不再重复。
         let mut second = make_grep_input("pip install");
         second.path = Some(".gsa/ledger".to_string());
         let out2 = xai_tool_runtime::Tool::run(
@@ -3299,6 +3330,10 @@ mod tests {
             "second read must execute, not re-notify\nstdout: {stdout}\nstderr: {stderr}"
         );
         assert!(stdout.contains("pip install"), "hit expected: {stdout}");
+        assert!(
+            !stdout.contains("[session_volume_notice]"),
+            "信封只出现一次（一次性确认）: {stdout}"
+        );
     }
 
     /// 0p S2 复审 P2 修复（先存旁路收口）：两段门未开门时，workspace 根

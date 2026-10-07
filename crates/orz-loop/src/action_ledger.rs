@@ -370,7 +370,7 @@ fn tool_result_pointer_line(
     format!(
         "{TOOL_RESULT_POINTERIZED_PREFIX}（窗口内超大结果）] 正文 {chars} 字符已移出模型上下文\
          ——**逐字原文已落盘**：{archive}（read_file offset/limit 分页；\
-         首读若收到 session_volume_notice 通知信封，再读一次即放行）。\n\
+         首次读 `.gsa` 会附一次性 [session_volume_notice] 确认提示，不影响内容读取）。\n\
          关联索引：{journal}；终端输出的完整日志另见其结果尾部原有指针。\n\
          这是**读取当时的快照**，\
         可能已陈旧：编辑或据此决策前请以新鲜读取为准。\n\
@@ -466,7 +466,7 @@ fn replay_pointer_line(path: &str, archive_root: &std::path::Path, call: &str) -
         "{REPLAY_TOOL_RESULT_PREFIX} 本条是**回放块**（当时按块读回的历史原文），已在溢出时\
          优先移出模型上下文（可再生）：原文仍在该按块档案里，重读即恢复。\n\
          重读指针：{display}（read_file offset/limit 分页；\
-         首读若收到 session_volume_notice 通知信封，再读一次即放行）。\n\
+         首次读 `.gsa` 会附一次性 [session_volume_notice] 确认提示，不影响内容读取）。\n\
          关联索引：call_id={call}。这是**读取当时的快照**，可能已陈旧。"
     )
 }

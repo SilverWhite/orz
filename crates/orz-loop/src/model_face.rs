@@ -856,8 +856,8 @@ fn mechanical_message(content: String) -> Message {
 ///
 /// 2026-09-16 实现批：① 三键补齐（`台账 [seq]` 来自 marker 反解，缺则如实留空）；
 /// ② 未闭合**残段**显式标注（它不参与压缩/截断）；③ 回放指针附**两段门**提示
-/// （`.gsa` 内部区首读返回通知信封，再读一次放行——回放是生命线，不能让模型
-/// 把首次拒绝读成「路径不可用」）。
+/// （0ct 确认性转换后＝`.gsa` 内部区首读附一次性确认提示，不影响内容读取——
+/// 回放是生命线，提示只为认知不对齐兜底）。
 pub fn render_block_table(
     blocks: &[ContextBlock],
     markers: &FaceMarkers,
@@ -931,7 +931,8 @@ pub fn render_block_table(
                 .unwrap_or_else(|| "（见分块摘要 marker）".to_string());
             line.push_str(&format!(
                 " | 原文回放: {path}（read_file offset/limit 分页；\
-                 首读若收到 session_volume_notice 通知信封，再读一次即放行）"
+                 首次读 `.gsa` 会附一次性 [session_volume_notice] 确认提示，\
+                 不影响内容读取）"
             ));
         }
         lines.push(line);
@@ -1177,7 +1178,7 @@ pub fn render_block_numbers(numbers: &[u32]) -> String {
 pub fn replay_line(block: &ContextBlock, path: &str) -> String {
     format!(
         "- 块#{} 轮次 {}-{}: 完整内容见 {}（read_file offset/limit 分页；\
-         首读若收到 session_volume_notice 通知信封，**再读一次**即放行；\
+         首次读 `.gsa` 会附一次性 [session_volume_notice] 确认提示，不影响内容读取；\
          内容截至轮次 {}；文件可能已变更，编辑前须新鲜读取）",
         block.number,
         block.first_round + 1,

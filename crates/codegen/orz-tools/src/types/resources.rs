@@ -780,17 +780,19 @@ pub fn is_path_allowed_for_read(
 }
 
 // ==== 0p S2 两段门（2026-09-07，ADR-0010 §14.61 设计 B；修订 §14.56
-// agent-invisible 语义为「内部区两段式有界开放」）====
+// agent-invisible 语义为「内部区两段式有界开放」；**0ct 确认性转换
+// 2026-10-07**——两段门退役限制语义：首读内容照常返回、通知信封随内容
+// 同回，`notice` per-call 旗标与其 host 侧 policy_denial 转译臂随批退役
+// （journal 闭集保留 `session_volume_notice` code 供历史回放））====
 
 /// 会话卷两段门访问状态（设计 §3.B3）：`notice_shown` 持久化于
 /// `{cwd}/.gsa/access_state.json`（跨 prompt / 跨进程一次；卷缺席
 /// fail-closed 基线不变——文件在卷上，卷不在则无从持久化也无从读取）。
 /// `access_state.json` 自身是机制文件，不受两段门管辖。
 ///
-/// `notice_this_call` / `opened_this_call` 是 per-call 瞬态旗标——host
-/// 装配侧在 `call_tool` 返回后取走（take），转译成 ToolCompleted 事件面的
-/// `policy_denial{source=permission, code=session_volume_notice}` 与
-/// `session_volume_opened`（设计 §3.B2/B4/C，闭合 W2 D-3）。结构化 seam
+/// `opened_this_call` 是 per-call 瞬态旗标——host 装配侧在 `call_tool`
+/// 返回后取走（take），转译成 ToolCompleted 事件面的
+/// `session_volume_opened`（设计 §3.B4/C，闭合 W2 D-3）。结构化 seam
 /// 在旗标上，绝不做输出文本前缀判定（FUS-CONSOLE-POLICY-DENIAL 纪律）。
 #[derive(Clone)]
 pub struct SessionVolumeAccess(pub std::sync::Arc<std::sync::Mutex<SessionVolumeAccessInner>>);
@@ -817,7 +819,6 @@ pub struct SessionVolumeDenial {
 /// 与工具侧 `ToolCallContext.call_id` 同源。
 #[derive(Default)]
 struct SessionVolumeCallFlags {
-    notice: bool,
     opened: bool,
     denial: Option<SessionVolumeDenial>,
 }
@@ -855,9 +856,11 @@ impl SessionVolumeAccess {
         self.0.lock().unwrap().notice_shown
     }
 
-    /// 内部区首读：登记通知已给 + call-id 键控瞬态旗标 + 持久化
-    /// （best-effort——写盘失败不 fail 工具调用；内存态本次 run 仍生效，
-    /// 跨 prompt 降级为「通知重放一次」，绝不泄漏内容）。
+    /// 内部区首读：登记通知已给 + 持久化（best-effort——写盘失败不 fail
+    /// 工具调用；内存态本次 run 仍生效，跨 prompt 降级为「通知重放一次」，
+    /// 绝不泄漏内容）。**0ct 确认性转换（2026-10-07）**：通知不再扣留
+    /// 内容——本方法只管持久化「已确认」态，首读内容由工具照常返回（信封
+    /// 随内容同回）；原 per-call notice 旗标随限制语义退役。
     pub fn mark_noticed(&self, call_id: &str) {
         let mut inner = self.0.lock().unwrap();
         if !inner.notice_shown {
@@ -876,10 +879,9 @@ impl SessionVolumeAccess {
                 payload.to_string(),
             );
         }
-        if inner.flags.len() >= SESSION_VOLUME_FLAGS_CAP {
-            inner.flags.clear();
-        }
-        inner.flags.entry(call_id.to_string()).or_default().notice = true;
+        // call_id 参数保留（旗标表键控口径不变——0ct 后本方法只持久化，
+        // 不再置 per-call 旗标；签名不动以收敛触碰面）。
+        let _ = call_id;
     }
 
     /// 二读放行旗标（B4：journal 记 `session_volume_opened`）。
@@ -901,11 +903,6 @@ impl SessionVolumeAccess {
         if flags.denial.is_none() {
             flags.denial = Some(SessionVolumeDenial { code, reason });
         }
-    }
-
-    pub fn take_notice_this_call(&self, call_id: &str) -> bool {
-        let mut inner = self.0.lock().unwrap();
-        std::mem::take(&mut inner.flags.entry(call_id.to_string()).or_default().notice)
     }
 
     pub fn take_opened_this_call(&self, call_id: &str) -> bool {
@@ -937,8 +934,10 @@ impl SessionVolumeAccess {
 /// - `CredentialsDenied`：凭据/秘密区（keystore/、one_shot_permit/、
 ///   grok-home/、chrome-profile*/）→ **恒拒**（B1 永久拒类，不因通知
 ///   放开——0p S2 复审修复：卷内既有凭据落点不得随两段门事实放开）；
-/// - `InternalAfterNotice`：内部区（canonical 在卷内）且已通知（B4 二读放行）；
-/// - `NoticeRequired`：内部区首读（B2 通知信封）；
+/// - `InternalAfterNotice`：内部区（canonical 在卷内）且已通知——内容放行
+///   （B4 审计随内容交付落账）；
+/// - `NoticeRequired`：内部区首读（**0ct 确认性转换 2026-10-07**：内容
+///   照常返回，通知信封随内容同回——原「信封替代内容」限制语义退役）；
 /// - `Denied`：词法在域内但 canonical 逸出卷外（symlink 逃逸/幽灵白名单
 ///   形态）→ **恒拒**——两段门不放松 GAP-GSA-SYMLINK-STALE-TEST 安全
 ///   语义（通知放行只对 canonical 可证实在卷内的路径生效）。
@@ -1166,30 +1165,30 @@ fn ledger_region_preview(dir: &std::path::Path, region: &str) -> String {
     }
 }
 
-/// B2 首读通知信封文本（非内容）：职责图 + 区域分类 + 台账结构预览 +
-/// 黑板指针 + 询问句。返回给模型的 deny 载体是本文本；结构化 seam
-/// （policy_denial code=session_volume_notice）由 host 侧旗标转译。
+/// B2 首读通知信封文本（**0ct 确认性转换，2026-10-07**：两段门退役限制
+/// 语义——首读内容照常返回，本信封作为一次性确认提示随内容同回；用户
+/// 裁决「.gsa 读取的两段门只是确认性设计，不是限制性设计」「.gsa 台账是
+/// 完全开放的」）。职责图 + 区域分类 + 台账结构预览 + 黑板投影指引。
+/// 凭据/秘密区永久拒面与 symlink 逃逸恒拒面不受本转换影响。
 pub fn session_volume_notice_text(lexical_root: &std::path::Path) -> String {
     let ledger = session_volume_region_preview(lexical_root, "ledger");
     let runs = session_volume_region_preview(lexical_root, "runs");
     let conversations = session_volume_region_preview(lexical_root, "conversations");
     format!(
-        "[session_volume_notice] `.gsa` 是运行时会话卷（审计证据面），默认 \
-         agent-invisible；首次访问先说明职责，本轮不返回内容。\n\
+        "[session_volume_notice] `.gsa` 是运行时会话卷（审计证据面）；本通知为\
+         一次性确认提示，内容读取不受影响（台账读全开放）。\n\
          职责图：ledger/=机械动作台账（工具与订单的追加审计记录）；\
-         runs/=运行 journal（事件链，不可散读）；conversations/=跨 prompt \
-         会话侧车。\n\
-         凭据/秘密区永久不可读（不因本通知放开）：keystore/、\
+         runs/=运行 journal（事件链，黑板机械投影优先）；conversations/=\
+         跨 prompt 会话侧车。\n\
+         凭据/秘密区永久不可读（不因读全开放放开）：keystore/、\
          one_shot_permit/、grok-home/、chrome-profile*/。\n\
-         直读窗口（始终可读，无需本通知）：session/terminal/*.log、\
+         直读窗口（始终可读）：session/terminal/*.log、\
          run_tests_output.txt、resources_state.json；access_state.json \
          为门状态机制文件，同级直读。\n\
          当前结构：{ledger}；{runs}；{conversations}。\n\
          这些信息黑板多数已有按需投影：blackboard_read section=exec 支持 \
          failures_only=true（失败目标聚合）与 search=<字面子串>（全历史\
-         检索），优先用黑板。\n\
-         若确需台账原文，请再次读取同一路径——将直接放行（\
-         open_after_notice）。"
+         检索），优先用黑板。"
     )
 }
 

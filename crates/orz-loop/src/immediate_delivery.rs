@@ -846,9 +846,16 @@ mod tests {
         );
 
         // 0ae D0：blackboard_write 的 section 扩展枚举与 ModelNoteSection
-        // 同源（复用 plan_write 事件族的契约面）。
+        // 同源（复用 plan_write 事件族的契约面）；0cu（2026-10-07）+findings。
         let plan_write = runtime_schema("plan-write-event-payload-v0.2.schema.json");
         let section = schema_enum(&plan_write, "/properties/section");
-        assert_eq!(section, vec!["plan".to_string(), "notes".to_string()]);
+        assert_eq!(
+            section,
+            vec![
+                "plan".to_string(),
+                "notes".to_string(),
+                "findings".to_string()
+            ]
+        );
     }
 }

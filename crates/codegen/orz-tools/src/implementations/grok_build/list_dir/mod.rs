@@ -562,8 +562,12 @@ impl xai_tool_runtime::Tool for ListDirTool {
 
         let call_id = ctx.call_id.as_str().to_owned();
         // 0p S2 两段门（2026-09-07，ADR-0010 §14.61 设计 B）：会话卷域列目录
-        // 先经两段门判决——窗口恒放行；内部区（含卷根）首读返回通知信封
-        // （B2）并持久化已通知态；二读放行（B4）。同 read_file/grep。
+        // 先经两段门判决——窗口恒放行；**0ct 确认性转换（2026-10-07）**：
+        // 内部区（含卷根）首读不再以信封替代内容——列目录照常执行，一次性
+        // 通知信封随列表同回；`session_volume_opened`（B4）随内容交付落账。
+        // **209 处置批（P3）**：mark 与信封交付同点（列表装配处）——列目录
+        // 失败不消耗一次性确认。同 read_file/grep。
+        let mut volume_notice_prefix = String::new();
         let volume_verdict = session_volume.as_ref().map(|volume| {
             let noticed = session_volume_access
                 .as_ref()
@@ -574,15 +578,9 @@ impl xai_tool_runtime::Tool for ListDirTool {
             )
         });
         if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired)
-            && let Some(access) = &session_volume_access
         {
-            access.mark_noticed(&call_id);
-        }
-        if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired)
-        {
-            return Ok(ListDirOutput::PermissionDenied(
-                crate::types::resources::session_volume_notice_text(&cwd.join(".gsa")),
-            ));
+            volume_notice_prefix =
+                crate::types::resources::session_volume_notice_text(&cwd.join(".gsa"));
         }
         if volume_verdict
             == Some(crate::types::resources::SessionVolumeReadVerdict::InternalAfterNotice)
@@ -633,6 +631,7 @@ impl xai_tool_runtime::Tool for ListDirTool {
             volume_verdict,
             Some(
                 crate::types::resources::SessionVolumeReadVerdict::WindowAllowed
+                    | crate::types::resources::SessionVolumeReadVerdict::NoticeRequired
                     | crate::types::resources::SessionVolumeReadVerdict::InternalAfterNotice
             )
         );
@@ -755,7 +754,7 @@ impl xai_tool_runtime::Tool for ListDirTool {
             parts.push(format!("truncated={truncated}"));
             format!("\n(scope: {})", parts.join(", "))
         });
-        let output = if trimmed_body.is_empty() && is_legacy {
+        let mut output = if trimmed_body.is_empty() && is_legacy {
             format!("- {}/\n  no children found", display_path.display())
         } else {
             format!(
@@ -765,6 +764,15 @@ impl xai_tool_runtime::Tool for ListDirTool {
                 scope_footer
             )
         };
+        // 0ct 确认性转换：首读一次性通知信封随列表同回（模型面读 content）。
+        // 209 处置批（P3）：mark 与信封交付同点——列表装配才消耗一次性确认。
+        if !volume_notice_prefix.is_empty() {
+            if let Some(access) = &session_volume_access {
+                access.mark_noticed(&call_id);
+                access.mark_opened_this_call(&call_id);
+            }
+            output = format!("{volume_notice_prefix}\n{output}");
+        }
         Ok(ListDirOutput::Content(ListDirContent {
             content: output,
             absolute_root_path: path,
@@ -1829,8 +1837,8 @@ mod tests {
         }
     }
 
-    /// 两段门 ①②（list_dir 面）：内部区列目录首读返回通知信封；
-    /// 二读放行（真实列出台账目录内容）。
+    /// 两段门 ①②（list_dir 面，0ct 确认性转换后）：内部区列目录首读＝
+    /// 真实列出内容＋一次性通知信封前置；二读起信封不再重复。
     #[tokio::test]
     async fn list_dir_two_stage_notice_then_open() {
         let tmp = TempDir::new().unwrap();
@@ -1848,10 +1856,17 @@ mod tests {
         .await
         .unwrap();
         match &first {
-            ListDirOutput::PermissionDenied(notice) => {
-                assert!(notice.contains("[session_volume_notice]"), "{notice}");
+            ListDirOutput::Content(c) => {
+                assert!(
+                    c.content.contains("[session_volume_notice]"),
+                    "首读必须附确认信封: {c:?}"
+                );
+                assert!(
+                    c.content.contains("current.md"),
+                    "首读内容必须照常返回（确认性非限制性）: {c:?}"
+                );
             }
-            other => panic!("Expected notice envelope, got {other:?}"),
+            other => panic!("Expected confirmatory first listing, got {other:?}"),
         }
         assert!(ws.join(".gsa").join("access_state.json").exists());
 
@@ -1865,6 +1880,10 @@ mod tests {
         match &second {
             ListDirOutput::Content(c) => {
                 assert!(c.content.contains("current.md"), "open must list: {c:?}");
+                assert!(
+                    !c.content.contains("[session_volume_notice]"),
+                    "信封只出现一次（一次性确认）: {c:?}"
+                );
             }
             other => panic!("Expected open_after_notice listing, got {other:?}"),
         }

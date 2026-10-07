@@ -1371,7 +1371,8 @@ impl AgentLoopController {
         }
         // 0ae D0（2026-09-15，设计 §3，用户裁决 DP-6）：`blackboard_write`
         // ——模型写入面（8 工具面冻结的用户主导显式例外 +1）。可写分区限
-        // plan 与 notes 两域（机械单写者分区所有权不变）；单次 ≤8K 字符；
+        // 模型自有分区（plan/notes＋0cu findings；机械单写者分区所有权
+        // 不变）；单次 ≤8K 字符；
         // 写入走既有结构化盖章（(round, domain) 写时盖章 + ts 墙钟）；落
         // journal 复用 `plan_write` 事件族并扩展 `section` 字段（schema
         // v0.2 增量，零新族）。
@@ -1384,7 +1385,7 @@ impl AgentLoopController {
                 {
                     let error: String = format!(
                         "invalid {BLACKBOARD_WRITE_TOOL_NAME} section: {section_raw:?} — 可写分区限 \
-                         plan|notes（机械单写者分区 edits/exec/actions/processes/temporal/\
+                         plan|notes|findings（机械单写者分区 edits/exec/actions/processes/temporal/\
                          session 不开放模型写入）"
                     );
                     let mut completed = serde_json::json!({
@@ -2666,6 +2667,11 @@ impl AgentLoopController {
                 // 0ae D0：模型自有工作笔记分区（blackboard_write 落点）。
                 let bb = self.blackboard.read();
                 bb.render_notes_section()
+            } else if section == "findings" {
+                // 0cu（2026-10-07）：模型已探明内容工作台账分区（照抄 notes
+                // ——live 渲染、时间正序、不进折叠展开集）。
+                let bb = self.blackboard.read();
+                bb.render_findings_section()
             } else if section == "exec" && (failures_only.is_some() || search.is_some()) {
                 // 0p S1（2026-09-07，ADR-0010 §14.61 设计 A1/A2）：自信息面
                 // 派发——failures_only 走 failure_agg 聚合行集（P2-12 行语义
@@ -5050,6 +5056,97 @@ mod tests {
         assert!(
             read_back.is_some(),
             "blackboard_read(section=notes) must return the written note verbatim"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0cu 钉 2（端到端，2026-10-07）：`blackboard_write(section=findings)`
+    /// → 权限自动放行 → `plan_write{section:"findings"}` 出账（schema 枚举
+    /// +1 值）→ `blackboard_read(section=findings)` 读回逐字一致——机制
+    /// 照抄 notes 的端到端接线钉。
+    #[tokio::test]
+    async fn blackboard_write_findings_lands_event_and_reads_back() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            // 轮 1：模型写已探明结论（findings 域）。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_write".to_string(),
+                arguments: serde_json::json!({
+                    "section": "findings",
+                    "content": "0cu 钉子：findings 写入必须可回读",
+                }),
+                call_id: "call-bbw-f".to_string(),
+            }]),
+            // 轮 2：模型回读同一分区。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({ "section": "findings" }),
+                call_id: "call-bbr-f".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "写结论并回读",
+                "RUN-BBW-F",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // ① 写入成功（ReadOnly 类全策略自动放行——权限面零改的实证）。
+        let completed: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert!(
+            completed.iter().any(|p| {
+                p["tool"] == serde_json::json!("blackboard_write")
+                    && p["exit_code"] == serde_json::json!(0)
+                    && p["section"] == serde_json::json!("findings")
+            }),
+            "findings write must complete with exit_code 0: {completed:?}"
+        );
+        // ② `plan_write{section:"findings"}` 出账（契约面 +1 值的实证）。
+        let plan_writes: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::PlanWrite)
+            .map(|e| e.payload)
+            .collect();
+        assert!(
+            plan_writes.iter().any(|p| {
+                p["plan_id"] == serde_json::json!("blackboard_write")
+                    && p["section"] == serde_json::json!("findings")
+                    && p["outcome"] == serde_json::json!("accepted")
+            }),
+            "findings write must journal a plan_write event: {plan_writes:?}"
+        );
+        // ③ 回读一致：findings 分区逐字读回。
+        let received = fake.received_requests();
+        let read_back = received
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .filter(|m| m.role == Role::Tool)
+            .map(|m| m.content.clone())
+            .find(|c| c.contains("0cu 钉子：findings 写入必须可回读"));
+        assert!(
+            read_back.is_some(),
+            "blackboard_read(section=findings) must return the written finding verbatim"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

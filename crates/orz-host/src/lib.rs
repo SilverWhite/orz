@@ -1453,13 +1453,14 @@ impl OrzHost {
             ..Default::default()
         };
         // 0p S2 两段门 / W2 D-3（2026-09-07，ADR-0010 §14.61 设计 B/C）：
-        // 会话卷访问状态的 per-call 瞬态旗标转译——内部区首读通知 →
-        // 结构化 `policy_denial{source=permission, code=session_volume_
-        // notice}` + exit_code=1；普通读沙箱拒绝 → `policy_denial`
-        // （code=outside_workspace 等）+ exit_code=1；二读放行 →
-        // `session_volume_opened`（journal 记 open_after_notice）。结构化
-        // seam 在资源旗标上，绝不做输出文本前缀判定
-        // （FUS-CONSOLE-POLICY-DENIAL 纪律）。
+        // 会话卷访问状态的 per-call 瞬态旗标转译——普通读沙箱拒绝 →
+        // `policy_denial`（code=outside_workspace 等）+ exit_code=1；内容
+        // 交付 → `session_volume_opened`（journal 记 open_after_notice）。
+        // **0ct 确认性转换（2026-10-07）**：内部区首读不再扣留内容——通知
+        // 信封随内容同回，原 `notice` 旗标 → `policy_denial{code=session_
+        // volume_notice}` + exit 1 的转译臂随限制语义退役（journal 闭集
+        // 保留该 code 供历史回放）。结构化 seam 在资源旗标上，绝不做输出
+        // 文本前缀判定（FUS-CONSOLE-POLICY-DENIAL 纪律）。
         {
             let access = self
                 .registry
@@ -1474,16 +1475,7 @@ impl OrzHost {
                 // 并发工具批下 take 只消费本调用的信封，绝不错配到同批
                 // 其他调用。finish_call 清理条目（Err 路径漏调由旗标表
                 // 容量上限兜底）。
-                if access.take_notice_this_call(call_id) {
-                    tool_result.exit_code = Some(1);
-                    tool_result.policy_denial = Some(orz_loop::host::PolicyDenial {
-                        source: orz_loop::host::PolicyDenialSource::Permission,
-                        code: "session_volume_notice".to_string(),
-                        reason: "session volume first access: duties and structure preview \
-                                 provided; read again to open (open_after_notice)"
-                            .to_string(),
-                    });
-                } else if let Some(denial) = access.take_denial_this_call(call_id) {
+                if let Some(denial) = access.take_denial_this_call(call_id) {
                     tool_result.exit_code = Some(1);
                     tool_result.policy_denial = Some(orz_loop::host::PolicyDenial {
                         source: orz_loop::host::PolicyDenialSource::Permission,
@@ -4338,9 +4330,10 @@ mod tests {
         );
 
         // 3) 卷内非窗口面：0p S2 两段门（ADR-0010 §14.61 设计 B，取代
-        //    0m 的 agent-invisible 恒拒）——内部区首读返回通知信封
-        //    （非内容 + 职责图/结构预览/黑板指针/询问句），access_state
-        //    落盘；二读放行（open_after_notice）。
+        //    0m 的 agent-invisible 恒拒）——**0ct 确认性转换（2026-10-07）**：
+        //    内部区首读＝内容照常返回＋一次性确认信封前置（exit 0、无
+        //    policy_denial——原 notice→denial 转译臂随限制语义退役），
+        //    access_state 落盘；二读内容照常且信封不再重复。
         let denied = host
             .call_tool(
                 "read_file",
@@ -4351,19 +4344,15 @@ mod tests {
             .expect("deny path surfaces as a result envelope");
         assert!(
             denied.output.contains("[session_volume_notice]"),
-            "non-window volume interior first read must return the notice envelope: {}",
+            "non-window volume interior first read must carry the confirmatory notice: {}",
             denied.output
         );
-        // D-3 闭合（设计 C）：拒绝信封结构化——policy_denial{source=
-        // permission, code=session_volume_notice} + exit_code=1（journal
-        // 面由 host_exec 落 status=error + policy_denial，见 orz-loop 测试）。
-        let denial = denied
-            .policy_denial
-            .as_ref()
-            .expect("structured denial envelope");
-        assert_eq!(denial.source.as_str(), "permission");
-        assert_eq!(denial.code, "session_volume_notice");
-        assert_eq!(denied.exit_code, Some(1));
+        assert!(
+            denied.policy_denial.is_none(),
+            "notice must no longer bridge to a denial envelope: {:?}",
+            denied.policy_denial
+        );
+        assert_eq!(denied.exit_code, Some(0));
         let opened = host
             .call_tool(
                 "read_file",
@@ -4434,9 +4423,11 @@ mod tests {
 
     /// 0p S2 复审 P1-1 修复回归（2026-09-07，ADR-0010 §14.61 设计 B）：
     /// 带桥 host（生产装配形态）下，`.gsa` 内部区读由桥放行、落入工具层
-    /// 两段门——通知信封（policy_denial code=session_volume_notice）与
-    /// 二读放行（session_volume_opened）在**穿透桥的全链**上可达。修复前
-    /// 桥镜像先拒，两段门在带桥路径不可达（W2 D-3 原形）。
+    /// 两段门——**0ct 确认性转换（2026-10-07）后**：首读＝内容＋一次性
+    /// 信封同回（exit 0、无 policy_denial——原 notice→denial 转译臂随限制
+    /// 语义退役）＋ `session_volume_opened` 审计标记在**穿透桥的全链**上
+    /// 可达；二读内容照常且信封不再重复。修复前桥镜像先拒，两段门在带桥
+    /// 路径不可达（W2 D-3 原形）。
     #[tokio::test]
     async fn bridge_yields_internal_reads_and_envelope_lands() {
         let dir = test_dir();
@@ -4467,7 +4458,7 @@ mod tests {
             "bridge must yield internal-region reads to the tool-layer gate"
         );
 
-        // ② 工具层两段门：首读通知信封 + 结构化 policy_denial（exit 1）。
+        // ② 工具层两段门（确认性）：首读＝内容＋信封同回（exit 0、无 denial）。
         let first = host
             .call_tool(
                 "read_file",
@@ -4478,17 +4469,26 @@ mod tests {
             .expect("first read returns");
         assert!(
             first.output.contains("[session_volume_notice]"),
-            "notice envelope expected: {}",
+            "confirmatory notice expected: {}",
             first.output
         );
-        let denial = first
-            .policy_denial
-            .as_ref()
-            .expect("structured denial envelope on the bridged path");
-        assert_eq!(denial.code, "session_volume_notice");
-        assert_eq!(first.exit_code, Some(1));
+        assert!(
+            first.output.contains("[1] row"),
+            "content must flow on first read (confirmatory, not restrictive): {}",
+            first.output
+        );
+        assert!(
+            first.policy_denial.is_none(),
+            "notice must no longer bridge to a denial envelope: {:?}",
+            first.policy_denial
+        );
+        assert_eq!(first.exit_code, Some(0));
+        assert!(
+            first.session_volume_opened,
+            "content-delivering first read must set the B4 audit marker"
+        );
 
-        // ③ 二读放行 + session_volume_opened 审计标记。
+        // ③ 二读：内容照常，信封不再重复（一次性确认）。
         let second = host
             .call_tool(
                 "read_file",
@@ -4500,6 +4500,11 @@ mod tests {
         assert!(
             second.output.contains("[1] row"),
             "content served after notice: {}",
+            second.output
+        );
+        assert!(
+            !second.output.contains("[session_volume_notice]"),
+            "notice appears exactly once: {}",
             second.output
         );
         assert!(
