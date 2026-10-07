@@ -36,7 +36,7 @@
 ## §3 框架内部信息标签总清单
 
 > **清点口径**:全部来源为当日源码实读(`orz-assurance/src/journal/event.rs` EventType 枚举、`orz-loop/src/mechanical_audit.rs` KIND 常量、`orz-loop/src/blackboard.rs` 分区、会话侧车结构与 `.gsa` 状态件)+ 二跑 journal 实测发生谱(23/70 型实际发生)。**在役/退役状态以枚举注释与批次史标注;逐标签的产出条件在路由设计档(S2)使用前须逐一复核**。
-> **总况**:journal 事件类型枚举 **70 变体**(在役可产 **≈62**;退役/零产 **8**,枚举保留仅供历史回放);判官规则族 **48**;mechanical_audit 注入面 kind **10**(退役 2);黑板 PULL 分区 **11**;会话侧车与系统状态面 **6 组**。journal 本身即已是「schema 化、类型化、全量落盘」的事件总线——**类型化总线不需要新建采集面,只需要读侧路由纪律**。
+> **总况**:journal 事件类型枚举 **70 变体**(在役可产 **≈62**;退役/零产 **8**,枚举保留仅供历史回放);判官规则族 **48**;mechanical_audit 注入面 kind **10**(退役 2);黑板 PULL 分区 **11**;会话侧车与系统状态面 **6 组**。journal 本身即已是「schema 化、类型化、全量落盘」的事件总线——**类型化总线不需要新建采集面,只需要读侧路由纪律**。〔**2026-10-07 勘误(209 处置批)**:0cu 增设模型可写分区 `findings`(204 批落码)后,黑板 PULL 分区 **11 → 12**(§3.3 清单随增);本档其余计数不变。〕
 
 ### §3.1 journal 事件类型(event_type,70 变体)
 
@@ -142,7 +142,7 @@
 
 ### §3.3 黑板 PULL 分区(11)
 
-`plan` / `notes`(模型可写两域)/ `exec`(订单台账)/ `edits`(编辑台账)/ `actions`(动作结果板,receipt_id 点读)/ `session`(预算+状态行)/ `temporal`(now/recent/feature 三意图)/ `rli`(RLI 读数面)/ `guide`(框架说明书)/ `deps`(依赖图)/ `journal`(anchor 定位符回查)。黑板含逐分区**版本计数**(增量头未读徽章面)。
+`plan` / `notes`(模型可写两域)/ `exec`(订单台账)/ `edits`(编辑台账)/ `actions`(动作结果板,receipt_id 点读)/ `session`(预算+状态行)/ `temporal`(now/recent/feature 三意图)/ `rli`(RLI 读数面)/ `guide`(框架说明书)/ `deps`(依赖图)/ `journal`(anchor 定位符回查)。黑板含逐分区**版本计数**(增量头未读徽章面)。〔**2026-10-07 勘误(209 处置批)**:0cu 增设 `findings`(模型已探明内容工作台账,模型可写第三域,204 批落码)——本清单 **11 → 12**,`findings` 插入 `notes` 之后(与 `partition_revisions()` 固定序一致);标题计数保留原文作历史快照。〕
 
 ### §3.4 会话侧车与系统状态面(持续态,非事件)
 

@@ -55,9 +55,10 @@
     "section": {
       "enum": [
         "plan",
-        "notes"
+        "notes",
+        "findings"
       ],
-      "description": "0ae D0 (2026-09-15): blackboard_write 复用 plan_write 事件族时的目标分区（plan|notes）；plan-first 结构化计划写不带此字段（缺省 = 结构化计划面）。"
+      "description": "0ae D0 (2026-09-15): blackboard_write 复用 plan_write 事件族时的目标分区（plan|notes）；plan-first 结构化计划写不带此字段（缺省 = 结构化计划面）。0cu (2026-10-07): +findings（模型已探明内容工作台账分区）。"
     },
     "content_chars": {
       "type": "integer",

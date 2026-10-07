@@ -3748,6 +3748,18 @@ probe_accuracy 族成立——该族的形状子规则要求分区精确等于 2
    二读放行并记 `open_after_notice`；通知状态会话卷级持久化（跨
    prompt 一次）；terminal-log/run_tests 窗口与 resources_state 只读
    维持直读；卷缺席 fail-closed 不变。
+   〔**2026-10-07 就地勘误（0ct，v1.86；用户裁决「.gsa 读取的两段门只是
+   确认性设计，不是限制性设计…….gsa 台账是完全开放的」）**：本条限制
+   语义退役＝**读全开放**——内部区首读**内容照常返回**，一次性确认信封
+   随内容同回（不再以信封替代内容、不再要求二读）；`notice` 旗标 →
+   `policy_denial{code=session_volume_notice}` + exit 1 的 host 转译臂
+   退役，`session_volume_notice` code 保留 journal 闭集仅供历史回放
+   （生产零写入，沿 `attention_ladder` kind 先例）；第 4 项拒绝信封纪律
+   仅对真实拒绝类（CredentialsDenied／逃逸 Denied）继续适用；
+   `open_after_notice`（B4 审计）随内容交付同轮落账（mark 与信封交付
+   同点——未交付即未消耗，209 处置批 P3）；唯一不变量＝**只读不改**
+   （L2 写向保护与凭据区/逃逸恒拒不变；读向放行不得反噬写向面）。
+   转录与处置＝0ct S1/S2（204 批）＋审查处置（209 批）。〕
 3. **key 不落卷不变量**：`.gsa` 全部持久化写入路径统一接 orz-secrets
    脱敏，卷内零 sk- 命中为回归判据与两段门放开的先决条件。
 4. **拒绝信封统一**：权限门 deny 与失败返回同纪律——结构化

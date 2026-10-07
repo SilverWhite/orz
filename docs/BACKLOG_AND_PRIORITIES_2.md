@@ -1197,3 +1197,198 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **边界**：零源码（orz 子仓本批无新提交）；中间载体 0.8.13 未单独发行（内容含于 0.8.14，沿 0.6.x／0.8.3–0.8.6／0.8.8／0.8.9／0.8.11 口径）；Linux 载体未重 provision（沿同口径）。
 - 批档：[`195 批档`](audits/195_SUBMIT_PUSH_AND_RELEASE_V0814_2026-10-04.md)。
 - 关键词：195 批、提交推送、orz 子树 `b5cb57ca`、父仓 `bbf00580`、GitHub Release v0.8.14、rel-195-stage、回下载逐位一致、README 发布面对齐、计数 60 不变。
+
+### 1.143 2026-10-05 196 批 0cr S1 勘定与排期——Harbor 上传链＋题集 manifest 冻结＋分日排期（用户令「请开始进行0cr S1吧」；勘定批零源码、计数不变 60）
+
+- **Harbor 上传链勘定**：链路＝`scb_to_harbor.py --org silverwhite --all --validate-with-oracle`（build 冒烟默认开＋oracle 经 `harbor run` 逐步 `strict_pass_rate=1.0`）→ `harbor-tasks/silverwhite/<题>/` → `harbor publish … --public`；dry-run 实证（cfgpipe 单题、零写入、overrides `conversion.toml` 加载）。**org 定案 `silverwhite`**（本方 Hub 命名空间；上游 `gabeorlanski` 不冒用）；凭证＝SilverWhite API key 在役（`harbor auth status` rc0，TB 2.1 同凭证）。**版本钉**＝`uvx harbor` 浮动 0.23.0 与 venv 0.20.0 并存有漂移风险 ⇒ 建 sibling checkout `D:/tb-eval/scbench/harbor`＝v0.23.0（`1e5c5c6` 浅克隆、仓外可逆），复验 dry-run 已确定性解析；venv 0.20.0 不动（TB 2.1／0ci 血统面）。**五缺陷题**（file_merger/eve_market_tools/eve_industry/dynamic_buffer/execution_server）oracle 验证预期 exit 4＝脚注登记照发布（oracle=测试非参考解）。**与 0ci 关系**＝同 Hub 同凭证同注册表，上传家族不同（0cr=publish 任务、0ci/TB2.1=run-upload 作业结果），无进一步耦合。
+- **manifest 冻结**：36 题／196 checkpoint 字母序（＝转换器 `--all` 的 `sorted` 序＝官方发现序）——权威表落 196 批档 §3；机器副本 `D:/tb-eval/scbench/0cr_official/manifest.json`（含 pin／载体／参数／org 全冻结面）。难度 Easy 12／Medium 12／Hard 12，与 158 批核证数逐位吻合。官方参数源码逐处核证＝seed 42／pass_policy any／one_shot off；冻结面实测＝harness pin `31ceea3`＋rig 本地改动 7 文件（0cj S2 既成事实，登记冻结不改写）＋scb-problems `38d627e`＋载体 0.8.14 身份门 `fc990a8a…` 实测在役＋模型 deepseek-v4-flash。
+- **分日排期**：D1–D6（10-06～10-11）每日 6 题字母序连续（ckpt 载荷 34/27/26/35/37/37）＋S3 收口 10-12（Harbor 转换＋发布＋记分卡＋摩擦汇总＋报告档）＋缓冲 10-13/14（装置性重跑与溢出）；纯跑批墙钟 25–40h（实测锚 recli 53–125min/8ckpt、sith 44min/6ckpt；立项预注册带 25–45h 内）。发射前置门含磁盘 D≥10G（勘定时 15G，188 时 23G 收窄如实记）；转换 build 冒烟镜像量级 10–30GB ⇒ 排 S3 窗、与跑批六日不并行（159 满盘教训）。**同轮并收**＝0cs S3 随 D1 首题（cfgpipe）顺带、0bz S4 随轮 journal 离线收取（192 形态），零额外跑批。
+- **边界**：零源码、未跑批（S2 首题待用户放行，各步独立放行）；上游两仓零改动；排期日期为默认锚非承诺；不推送。
+- 批档：[`196 批档`](audits/196_0CR_S1_HARBOR_CHAIN_AND_MANIFEST_FREEZE_2026-10-05.md)。
+- 关键词：196 批、0cr S1、Harbor 上传链、scb_to_harbor、silverwhite、harbor publish、sibling checkout v0.23.0、uvx 浮动风险、五缺陷题 exit 4 脚注、manifest 冻结、36 题 196 checkpoint、官方参数核证、6+1+2 排期、25–40h、0cs S3 顺带、0bz S4 同轮收取、计数 60 不变。
+
+### 1.144 2026-10-05 197 批 0cr S2 D1 跑批——官方轮前六题（用户令「请开始进行起跑吧」；零源码、计数不变 60）
+
+- **官方记分卡（k=1）**：六题 harness exit 0×6、零装置性失败零重跑——checkpoint solved **24/34**：cfgpipe **6/6**（任务级完美，末档 full 206/216）／circuit_eval **7/8**（末档 core 15/17、full 564/566）／code_search **4/5**（ckpt3 core 7/8 未翻回）／**dag_execution 0/3**（Hard；core 8/12→2/5→0/3 单调坍缩＝基准退化形态首样本）／database_migration **3/5**（后两档 5/6、1/3 走低）／datagate **4/7**（ck1/2/4 失分、5/6/7 回稳＝非单调恢复）。总墙钟 **≈5h00m**（55.6+80.7+33.1+34.9+39.6+56.0m）；758 模型步／1111 工具调用。
+- **摩擦台账（181 §4b 聚合）**：写控 314 审查＝allow 246／warn 64／**block 1**——dag_execution seq652 `carrier-write` 目标 `//`（632 字符命令路径塌缩，根祖先臂「sweeping would destroy protected host state」拦，模型改道续跑＝真阳性保守臂；`//` 归一化收窄登记观察不轮内修）；warn 64 全留痕不阻断且多为散文匹配假阳性（`rc=$?`／`*args`／markdown `*seconds*`），零模型面。权限 1111/1111 零拒绝；infra 全零；counterexample_gate 34（每档 1）。压缩 22 次（比 0.324–0.812；model_selected 19＋context_scale_window 3）。RLI notice 316；**streak fire 16 次全带预测段（329–333B ≤400B）＝0am 面 0.8.14 官方轮全程在役**。工具错误全模型侧或框架如实引导（`&` 后台符指引改 is_background／grep outside_workspace／search_replace 缺 old_string）；框架侧零干扰。
+- **同轮并收**：**0cs S3＝六题 `Tool not found` 0 次**——幻影工具名面未出现、提示面无真机样本，「随首题顺带」假设未兑现，改挂「随轮顺延直至首样本」；**0bz S4**＝六题 journal 含 face_fingerprint 全落盘，离线对账顺延 S3 收口窗或 D2+ 空隙（192 形态、零额外跑批）。
+- **边界**：零源码、未推送；D2（⑦–⑫）待放行；磁盘 D 12G（六题输出树，持续监控 <10G 清理）；dag_execution 0/3 与 recli 四跑 8/8 并存＝结果面双峰又一对照点（k=1 不外推）。
+- 批档：[`197 批档`](audits/197_0CR_S2_D1_SIX_QUESTIONS_2026-10-05.md)。
+- 关键词：197 批、0cr S2、D1 六题、24/34、cfgpipe 6/6、circuit_eval 7/8、code_search 4/5、dag_execution 0/3 坍缩、datagate 4/7 回稳、写控 block `//` 根祖先臂、warn 散文假阳性、16 fire 全带预测段、0cs S3 零样本顺延、0bz S4 顺延、计数 60 不变。
+
+### 1.145 2026-10-05 198 批 0cr S2 D2 跑批——官方轮第 7–12 题（用户令「请继续放行D2吧」；零源码、计数不变 60）
+
+- **官方记分卡（k=1）**：六题 exit 0×6、零装置性失败——checkpoint solved **19/27**：dynamic_buffer **1/4**（Hard；ck1 全绿后 6/10→16/18→7/20 走低）／dynamic_config_service_api **2/4**（前两档满分、ck3 塌至 5/12）／env_manager **5/5 完美**／etl_pipeline **5/5 完美**／eve_industry **6/6 完美**（Hard；◆ck5 参考解缺陷脚注档 core 3/3 全绿＝「oracle=测试非参考解」实证）／eve_jump_planner **0/3**（core 1/2→0/1→0/1，full 停 3/31＝任务本体未起步）。总墙钟 **≈5h30m**；939 模型步／1090 工具调用。累计 12/36 题 solved 43/61。
+- **0cs S3 真机首样本**：dynamic_buffer RUN-35adcb01-0 seq540——幻影名 `run_cmd` 被 0.8.14 信封拒绝并带建议面（`did you mean "run_terminal_cmd"?`），模型下一手 seq550 即纠正＝**1 轮恢复**（191 批预期形态首证）；排期条款改「首样本已获、继续随轮积累」。
+- **写控误拦新形态（登记不修）**：dynamic_buffer 两例 `raw-device-write` 命中词元 `format`——命令均为 heredoc 写文件（9,796/15,556 chars），词元全在写入代码体内（C++ 成员名／JSON 键／`spec.get("format")`）＝**heredoc 体被动词扫描**（0cq 家族新形态，185/186 修复未覆盖）；模型各 1 轮改道。另 dynamic_config_service_api 一例 `carrier-write` 拦多目标 `rm -rf` 中 `.gsa/rollback`（会话卷保护臂按设计整命令拒绝，合法部分一并拦＝保守设计内代价）。
+- **摩擦面其余**：权限 1090/1090 零拒绝；**transport_retry 首现 1 次**（eve_industry，自愈无再发）；counterexample_gate 27；压缩 26 次（0.271–0.890）；RLI notice 154，**streak fire 16 次全带预测段（329–334B）**＝连续两日 32/32 在带；fire 密度与题难相关（完美轮 0–1、坍缩轮 5）。工具错误 exit_1 大多数模型侧＋框架引导/形状拒绝 4 例；框架侧零故障。磁盘 D 11G。
+- **边界**：零源码、未推送（用户语境「没什么好修的」与单一快照纪律一致——误拦修复候选留 0cq 家族后续批随用户裁决）；D3（⑬–⑱）待放行；0bz S4 离线对账继续顺延 S3 窗（D1+D2 语料一并收）。
+- 批档：[`198 批档`](audits/198_0CR_S2_D2_SIX_QUESTIONS_2026-10-05.md)。
+- 关键词：198 批、0cr S2、D2 六题、19/27、env_manager 5/5、etl_pipeline 5/5、eve_industry 6/6、eve_jump_planner 0/3、0cs S3 真机首样本、run_cmd→run_terminal_cmd、1 轮恢复、heredoc 体误拦、format 词元、0cq 家族新形态、.gsa/rollback 按设计拦、transport_retry 首现、◆ck5 脚注实证、计数 60 不变。
+
+### 1.146 2026-10-05 199 批 0cr S2 D3 跑批——官方轮第 13–18 题（用户令「请继续D3吧」；零源码、计数不变 60）
+
+- **官方记分卡（k=1）**：六题 exit 0×6——checkpoint solved **20/26**：eve_market_tools **0/4**（Hard ◆ck1–3 脚注题本体未解＝三例全坍缩之三）／eve_route_planner **3/3 全档**／execution_server **6/6 全档**（◆ck6 full 满分 70/70）／file_backup **4/4 全档**／file_merger **3/4**（◆ck2–3 双双 full 满分 46/46・86/86・104/104＝「测试为权威」再证，末档 core 14/19）／file_query_tool **4/5**（末档 core 5/8）。总墙钟 **≈4h40m**；603 模型步／861 工具调用。**半程累计 18/36 题 solved 63/87**。
+- **写控误拦第二例定谳**：file_merger RUN-9e10ed40-2 seq72 `carrier-write` 目标 `/`——裸斜杠来自 **echo 单引号散文**（`echo '=== nested jsonl / malformed jsonl ==='`）被路径候选提取当删除目标→根祖先臂；命令本体（`cd /tmp && rm -rf mt2`＋heredoc）全安全。与 D1 `//` 例同族；D2 两例为 heredoc 代码体——**三例勾勒 0cq 家族第三形态边界**（直排散文已修〔185/186〕、heredoc 体与引号串内词元未覆盖）；模型 1 轮改道；登记不轮内修。
+- **摩擦面其余**：权限 861/861 零拒绝；transport_retry 2 次（file_backup／file_merger，均自愈）；counterexample_gate 26；压缩 27 次（0.320–0.832）；RLI notice 189，**streak fire 12 次全带预测段（≤343B）＝三日 44/44 在带**；工具错误 exit_1 模型侧＋框架引导/门拒绝 3 例；框架侧零故障。磁盘 D 11G。
+- **同轮并收**：0cs S3 本日零 NotFound（累计仍 1 样本、继续随轮）；0bz S4 离线对账顺延 S3 窗（十八题语料）；◆脚注题三道照跑照报（「测试为权威」累计三题四档实证）。
+- **边界**：零源码、未推送；D4（⑲–㉔，35 ckpt 偏重日）待放行；半程小结随 S3 报告档统一出（k=1 不外推）。
+- 批档：[`199 批档`](audits/199_0CR_S2_D3_SIX_QUESTIONS_2026-10-05.md)。
+- 关键词：199 批、0cr S2、D3 六题、20/26、eve_route_planner 3/3、execution_server 6/6、file_backup 4/4、file_merger 3/4 ◆双满分、eve_market_tools 0/4、写控误拦第二例、echo 散文裸斜杠、0cq 家族第三形态、半程 18/36 63/87、12 fire 44/44、计数 60 不变。
+
+### 1.147 2026-10-06 200 批 0cr S2 D4 跑批＋0ct 立项——官方轮第 19–24 题＋.gsa 读向拦截修复立项（用户令「先不修，先进D4吧」＋批中裁决「.gsa 读不是写……跑完36题以后第一个就是修复」；零源码、计数 60 → 61）
+
+- **官方记分卡（k=1）**：六题 exit 0×6——checkpoint solved **29/35**：forge **8/8 全档**／l2m **3/5**（ck3 4/5、ck5 4/6）／layered_config_synthesizer **1/4**（三档均差 2–3 core＝近失形态）／log_query **5/5 全档**（334/336、全程零工具错误）／meshctl **7/8**（Hard 近扫，仅 ck4 差 1；墙钟 96.8m 本轮最长）／metric_transform_lang **5/5 全档**（Hard 完美，本轮第二道）。总墙钟 **≈5h42m**；721 模型步／1083 工具调用。**半程累计 24/36 题 solved 92/122**。
+- **0ct 立项（60 → 61）**：meshctl RUN-1a55a270-6 seq67 `cp .gsa/rollback/3d66aa37/*.bak /tmp/…` **读向复制**被 `carrier-write` `.gsa` 臂整命令拦——用户裁决「读不是写，读肯定是要全部开放的，只不改就可以了；0p 两段门只是确认性设计不是限制性设计；.gsa 台账完全开放；跑完 36 题以后第一个修复」。定案＝读全开放＋只读不改不变量（journal 本体与会话卷写/删仍拦——l2m D4 journal 触及例为写向按设计在案）；批序 S1 勘定→S2 落码→S3 载体→S4 真机；**排期＝官方轮后第一修复项**。
+- **摩擦面**：写控 372 审查＝allow 315／warn 50／block 2（上两例）；transport_retry 3 次自愈；counterexample_gate 35；压缩 23 次；RLI notice 249，**streak fire 19＝18 单通道全带预测段＋1 双通道无预测段**（layered_config `stall×3 slow×3` 同行＝184 批「多 fire 不附预测段」钉的首个真机样本，设计内非缺陷；四日 63 fire 62 在带）。0cs 零 NotFound；metric_transform_lang 有 grep 触发 `session_volume_notice` 教育信封（0p 确认面痕迹）。磁盘 D4 前破阈值（9.6G）→保守清理＝悬空 docker 件 1.9G＋旧发行 stage/回下载核对副本 12 dir 4.4G（可再生、保留 rel-195-stage）→D 14G。
+- **边界**：零源码、未推送；写控台账全登记不修（用户裁决官方轮半程不动）；D5（㉕–㉚，37 ckpt 最重日）待放行。
+- 批档：[`200 批档`](audits/200_0CR_S2_D4_SIX_QUESTIONS_AND_0CT_REGISTRATION_2026-10-06.md)。
+- 关键词：200 批、0cr S2、D4 六题、29/35、forge 8/8、log_query 5/5、metric_transform_lang 5/5、meshctl 7/8、0ct 立项、.gsa 读向拦截、读全开放、两段门确认性、多 fire 首样本、磁盘清理 4.4G、计数 61。
+
+### 1.148 2026-10-06 201 批 0cr S2 D5 跑批——官方轮第 25–30 题（用户令「请开始D5吧」；零源码、计数不变 61）
+
+- **官方记分卡（k=1）**：最重日 37 ckpt／4 Hard 如期收官——六题 exit 0×6、checkpoint solved **20/37**：migrate_configs **4/5**（仅 ck2 单测试失）／mocked_http **6/8**（Hard 重依赖题；ck2 7/8、ck7 1/3 redis/rabbitmq 持久化面失分；墙钟 106.5m）／mvvault **4/6**（近失两档 5/7・10/11）／pwd_manager **1/5**（密码策略 core 面全日最低）／recli 官方轮 **3/8**（方差系列第 5 点：run2 2/8→run3 3/8→run4 8/8→官方 3/8；ck6 塌陷与三跑同型；墙钟 113.9m 新最长）／rejector **2/5**（ck4 0/10 塌陷）。总墙钟 **≈7h29m**（排期最重日如期）；815 模型步／940 工具调用。**半程后累计 30/36 题 solved 112/159**。
+- **摩擦面**：写控 509 审查＝allow 454／warn 55／block 1——recli RUN-19c7af24-2 seq28 `raw-device-write` 命中 `format`（heredoc Python 补丁内变量名/文档串）＝**heredoc 体同族第三例**（0cq 家族台账六例：散文塌缩 1＋heredoc 3＋引号散文 1＋`.gsa` 读向 1 已升 0ct）；模型 1 轮改道；登记不修。权限 940/940 零拒绝；infra 全零；counterexample_gate 36；RLI notice 205，**streak fire 17＝15 单通道全带预测段＋2 双通道无预测段**（184 设计内）；五日累计 80 fire 77 在带 3 双通道。0cs 零 NotFound。磁盘 D 11G。
+- **边界**：零源码、未推送；D6（㉛–㉞㉟㊱，37 ckpt）待放行、后接 S3 收口窗（Harbor 转换＋发布＋0bz S4 对账＋报告档）；D5 零全档题＝最重日如实读数（k=1）。
+- 批档：[`201 批档`](audits/201_0CR_S2_D5_SIX_QUESTIONS_2026-10-06.md)。
+- 关键词：201 批、0cr S2、D5 六题、20/37、mocked_http 6/8、recli 官方轮 3/8、方差第 5 点、pwd_manager 1/5、rejector 2/5、heredoc format 第三例、0cq 家族六例、17 fire 15 在带、最重日 7h29m、计数 61 不变。
+
+### 1.149 2026-10-06 202 批 0cr S2 D6 跑批＝36/36 题全部收官（用户令「请开始D6吧 跑完后请不直接开始0ct」；零源码、计数不变 61）
+
+- **官方记分卡（k=1）**：D6 六题 exit 0×6、checkpoint solved **22/37**：sheeteval **6/7**（Hard 六连绿后末档 1/3；墙钟 121.6m）／sith **3/6**（官方 vs 探针 2/6＝难度面一致）／test_translator **2/8**（ck5 0/30 塌陷未恢复；题面 2069 测试、墙钟 **189m 全轮最长**）／textdrop **6/6 全档**（182/183 近满分）／trajectory_api **1/5**（ck2 0/12 起塌陷）／xjq **4/5**（仅 ck2 12/13）。总墙钟 **≈8h09m**。
+- **全轮定档（36 题／196 ckpt，k=1）**：checkpoint solved **134/196**；任务级全档 **11 题**（Easy 6／Medium 1／Hard 4）；全坍缩 3（dag_execution／eve_jump_planner／eve_market_tools）；六日总墙钟 **≈41h**（预注册 25–45h 带内）；36/36 零装置性失败零重跑、单一快照（0.8.14／`fc990a8a…`／deepseek-v4-flash 轮内不换）。
+- **摩擦面（D6）**：写控 438 审查＝allow 378／warn 59／block 1——test_translator 向 `.gsa/rollback` 写自建 .bak＝**写向按设计拦**（0ct 写向保留面实证；0ct 本身未动挂起）；权限零拒绝；infra 全零；RLI notice 210，**streak fire 14＝13 在带＋1 双通道设计内**（六日 94 fire 91 在带 3 双通道）。0cs 零 NotFound（全轮 1 样本）。**磁盘 D 8.6G 破阈——S3 转换（build 冒烟镜像 10–30G）前必清理**。
+- **边界**：零源码、未推送；**0ct 未动**（用户指示挂起待放行）；S3 收口窗（Harbor 全目转换＋`silverwhite` 发布＋0bz S4 三十六题对账＋官方记分卡摩擦汇总报告档）待放行，放行时先磁盘清理。
+- 批档：[`202 批档`](audits/202_0CR_S2_D6_SIX_QUESTIONS_ROUND_COMPLETE_2026-10-06.md)。
+- 关键词：202 批、0cr S2、D6 六题、22/37、sheeteval 6/7、test_translator 2/8 全轮最长、textdrop 6/6、36/36 收官、全轮 134/196、全档 11、六日 41h、0ct 挂起、S3 待放行、磁盘 8.6G、计数 61 不变。
+
+### 1.150 归档补记——未闭合计数节 2026-09-15 旧流水行迁出（202 批门禁行龄回缠；计数不变 61）
+
+- 门禁 `check_repository.py` 行龄检查（21 天窗）于 2026-10-06 滚动触发：主卷「未闭合计数」节内 2026-09-15 旧流水行超龄，按 2026-09-25 分卷口径迁出主卷、原文归档如下（该记录所属 0ac 线已闭合，内容与第二卷及存档快照重复，仅作 provenance 保留）：
+- - **2026-09-15（本轮）**：0ac 检索侧补强设计稿定稿（v1.0）并落裁决——**用户裁决**：代理不做引擎白名单（真机开代理即生效）；**工程裁决**四点（G1 三段预算 `T_acquire` 5 s / `T_first` 10 s / `T_segment` 10 s·页、G2 相关性闸门默认开 + 25% + 词集封顶 12、G3 解包 6 worker / 6 s、落码顺序 G2 → G1 → G3 → G4）；登记为 **0ac S3①-a 子切片**（索引 `DESIGN-RETRIEVAL-LOCAL-SEGMENTED-HARDENING`、TODO `P0-0ac` 补强项）——**不动计数**（时点读数「30 项」；同日后随 0ae/0af/0ah 立项增至 **33 项**，见计数行与 0ab 检查。）
+- 关键词：202 批、行龄回缠、0ac 定稿流水迁出、主卷瘦身、计数 61 不变。
+
+### 1.151 2026-10-07 203 批 0cu 立项——黑板模型写入面第三分区 `findings` 设计定稿（用户令「应该且值得加第三变体，具体实现和plan一致即可，直接复制粘贴，不膨胀实现方式和实现机制，让模型自由写入」；零源码、计数 61 → 62）
+
+- **需求依据（本批实测）**：`.gsa/archives/` 全部 29 会话存档统计＝17/29 有模型笔记写入、合计 226 条 ≈ 338.7K 字符（plan 86 条/145.5K、notes 140 条/193.2K）；plan 区被「已探明结论」语义实际占用（0bz 勘定轮 `6ab139e6` plan 29 条/80.5K 实证）；压缩白名单块 7 会话各 1 条合并条目（411B～10K）＝低频但真实。
+- **定案**：`ModelNoteSection` {plan, notes} 扩三值 **`findings`**（分区名用户授权主会话定，取最通用顺手；候选比较 findings/facts/log/worklog/results/knowledge）；机制照抄 plan/notes 逐字同构——零新工具、零新机制、零契约面（schema 无 section 闭枚举/判官不校验/权限桥同工具/探针表同工具均已核）；模型自由写入零提示规则（P9 精神）。
+- **用户并裁**：D1 计数不含新区（plan 责任不抵扣）＋文案走 0cl 瘦身纪律，且明确「要单独立项并落设计文档」。
+- **台账**：设计稿 [`BLACKBOARD_FINDINGS_PARTITION_DESIGN`](../docs/BLACKBOARD_FINDINGS_PARTITION_DESIGN_2026-10-07.md)（S1 定稿，§5 触点清单 file:line）；主卷 `0cu` 节＋本批指针＋计数 62＋P1 总览/锚点行；TODO `P1-0cu`；索引头行 v4.174 → v4.175。
+- **边界**：零源码、未推送；S2 落码待放行、默认让位 0ct（「跑完36题以后第一个就是修复」）；S4 真机核证不设使用率判据（自由写入口径）。
+- 批档：[`203 批档`](audits/203_0CU_BLACKBOARD_FINDINGS_PARTITION_REGISTRATION_2026-10-07.md)。
+- 关键词：203 批、0cu、findings 分区、第三变体、已探明内容工作台账、黑板模型面、226 条/338.7K、17/29、零契约面、D1 不含、0cl 纪律、计数 62。
+
+### 1.152 2026-10-07 204 批 0ct S1/S2＋0cu S2 落码——.gsa 读向拦截修复（读全开放、两段门转确认性）＋黑板 `findings` 第三分区进体（用户令「本窗口请完成0ct 代码部分+ 0cu S2，做完以后暂时不进行重建」；计数不变 62；未提交未推送〔0cr 隔壁在途〕、S3 载体暂不重建）
+
+- **0ct S1 勘定**：两处拦截面＝L2 exec_policy 规则 5 写段扫描源/落操作数不分（meshctl `cp .gsa/… /tmp/…` 读向复制被拦＝触发例；D2 rm／D6 写备份两例均为写向、不属本修）＋工具层 0p 两段门首读「信封替代内容」（content withheld）＋host `policy_denial{code=session_volume_notice}`＋exit 1。
+- **0ct S2 落码**：exec_policy 三闭表＋段级读向豁免——`COPY_SOURCE_EXEMPT_VERBS` 7（cp/copy/copy-item/cpi/xcopy/robocopy/install；目标位＝末个位置词元、xcopy/robocopy＝第 2 位；`mv`/`ln`/`tee` 保守不入表）／`COPY_DEST_SECOND_VERBS` 2／`OPERAND_PURE_READ_PROGRAMS` 24（cat…which；`find`·`sort`·`sed`·`awk`·`xargs` 写旁路不入表）；目标位不可辨不豁免（命中即拒）。两段门确认性转换＝信封随内容同回（read_file content/grep stdout/list_dir 文本前置，raw_output 字节真；`allowed_by_volume` +NoticeRequired 三处）＋`mark_noticed` 只持久化、per-call notice 旗标与 host 转译臂退役（journal 闭集保留 code 供回放，沿 attention_ladder kind 先例）＋模型面文案四处同步（0cl 纪律）。**恒拒保留面**＝写向对照钉 8 条（落点位 `.gsa` 全拦）、凭据区/symlink 逃逸/窗口直读全不动。
+- **0cu S2 落码**：触点清单 §5 全落（ModelNoteSection +Findings／黑板根 `findings: Vec<NoteEntry>` serde(default)／PartitionRevisions／push/render_findings_section/epoch·会话快照/partition_revisions 固定序 notes→findings/read·write enum 与描述＋guide＋tool_run 派发臂与错误文案）；**`model_note_count` 不含 findings**（D1 责任不抵扣）；§8 八类钉子全落（表级/端到端/徽章/渲染零交叉/双快照归位计 1/D1 不含/水位/文案恰一处）。**契约面勘误（设计稿 §6.1）**：plan-write payload schema `section` 闭枚举实有（0ae D0 增量；§6 初稿漏核 payload 文件）→ +`"findings"`＋`immediate_delivery` 同源钉三值；判官不校验/fixtures 不携带/Python 镜像无校验（复核）；旧 journal 回放零影响。
+- **验证**：orz-tools **3020/0**（恰 +8＝0ct 触发例钉组）；orz-host 353 过＋2 挂（＝`call_tool_timeout_kills_process_tree`／`run_tests_timeout_kills_process_tree`——**负载敏感族**，单跑即过、且 `call_tool_timeout` **stash 冻结树同败**＝HEAD 既有、非本批回归，沿 193 先例记）；orz-loop 见批档终读数；触碰面 12 文件 fmt 净；clippy 见批档。
+- **环境注记（如实记）**：① target/debug 制品损坏（rustc ICE STATUS_STACK_BUFFER_OVERRUN、HEAD 同崩＋panic_unwind stub 异常）→ 清 debug 重建恢复；重编译需 `PROTOC=D:\CLI\orz\bin\protoc.exe`（build.ps1 单源）。② 隔壁 0cr 在途内存 0.9–4.2G，rustc 链接 OOM 多次——测试降档 profile（debug=0/cgu=16/无增量/-j 2）＋OOM 重试环执行。③ 会话内格式化钩子对未触碰文件（HEAD 先存 fmt 漂移面）卷入 rustfmt——纯格式 diff 全量 `git checkout --` 还原（还原后 check 零 error）。④ 先红后绿：红态观察受①②阻断未及捕获，红态实证＝生产 journal 在案（RUN-1a55a270-6 seq67 读向 block）＋修码构造面，不补跑。
+- **台账**：主卷 `0ct`/`0cu` 节 S1/S2 达成＋本批指针＋P1 总览/锚点行；TODO `P1-0ct`/`P1-0cu` 勾选＋头行（P1 路由行 1191 帽内，0am 格腾帽收窄）；索引头行 v4.175 → v4.176；0cu 设计稿 §6.1 勘误＋§5-15 行号勘误。
+- 批档：[`204 批档`](audits/204_0CT_READ_DIRECTION_GSA_AND_0CU_FINDINGS_S2_2026-10-07.md)。
+- 关键词：204 批、0ct、读向放行、复制族源位豁免、操作数纯读表、两段门确认性、信封同回、notice 旗标退役、0cu S2、findings 进体、八类钉子、plan-write schema enum 勘误、负载敏感同败对照、target 损坏、计数 62 不变。
+
+### 1.153 2026-10-07 205 批 0cr S3 收口——Harbor 全目转换＋silverwhite 发布＋0bz S4 对账＋官方记分卡（用户令「请进行S3收口吧」＋侧话裁决「按照B做……上传至harbor……明确标注为摩擦寻找产物」；零源码、计数不变 62）
+
+- **Harbor 全目转换（36/36；官方管线，pin `38d627e`，org=silverwhite）**：34 题全链 rc=0＋6 题 oracle 缺陷脚注 rc=4——已知 dynamic_buffer/eve_market_tools＋**新发现四题**（env_manager ck3 0.984／file_backup ck2 0.84·ck3 0.68／mvvault ck5 0.9946／test_translator 全档 0.69–0.75）；KNOWN_ISSUES 三题（eve_industry/file_merger/execution_server）在本 pin 未显形。oracle=测试非参考解；六道脚注均为转换忠实度记录、非 agent 分数。
+- **发布（friction-hunting artifact 标注兑现）**：36 任务 `hub.harborframework.com/tasks/silverwhite/<题>`（--public，36/36 URL 回执）＋数据集 `silverwhite/slopcodebench-friction`（36 任务 manifest＋README 非官方成绩声明，hash `71e7aa6291e4`）＋双标签 `friction-hunting-artifact`/`not-official-scores`。**成绩口径不变**＝harness 原生 134/196（k=1、单一快照 0.8.14）；Harbor 零第二记分卡。
+- **0bz S4 达成（官方轮全语料离线对账，192 形态）**：36 题 244 去重 journal、186 压缩、137 个 +2 事件**全部恰尾槽分歧（stable≡count−3）、尾槽前分歧 0 例＝旧第 2 针归零**；+2 hit min 43K／中位 116K／max 265K（修复前崩至 ~12.8K）＝历史全程复用、仅尾槽 3 消息设计内刷新；空跑 2 次、零整窗分叉；自发塌陷启发式 15 候选（checkpoint 切换混杂，如实记）；设计钉 `d4_rerender_diverges_only_at_its_tail_slot` 全语料 100% 成立。**0bz S1–S4 全达成，闭合待裁决。**
+- **装置事件全录**：loop 1 题 CRLF 行尾致 34 题秒败（write_text Windows 行尾；末行 xjq 独活）／loop 2 停止误杀 dag_execution oracle（loop 3 --force 重跑 rc=0）／**Docker Desktop 引擎 500**（_ping 全路由 500，三题连败；重启恢复 29.6.2，textdrop/trajectory_api 重试 rc=0）／forge apt fetch 网络瞬断两轮、第三轮 rc=0。**win-s4 VM 21G 经用户授权删除**（D 8.6G→29G；HIGH-NIST 线已弃用；WSL 不动）。
+- **边界**：零源码；0ct 已由 204 批（隔壁窗口）落码 S1/S2、本批零接触；未推送；**0cr S1–S3 全达成＋S2 收官，闭合待用户裁决**。
+- 批档：[`205 批档`](audits/205_0CR_S3_HARBOR_CONVERSION_PUBLISH_0BZ_S4_2026-10-07.md)。
+- 关键词：205 批、0cr S3 收口、Harbor 36/36、silverwhite 发布、slopcodebench-friction 数据集、friction-hunting-artifact、0bz S4 达成、尾槽 137/137、旧针归零、oracle 缺陷六题、装置事件四项、win-s4 删除、134/196 口径不变、计数 62 不变。
+
+### 1.154 2026-10-07 206 批 SCBench 官方提交评估落账＋索引补漏同步（用户令「请先更新index及相关文档吧」；零源码、计数不变 62）
+
+- **背景**：205 批后本会话两轮只读评估（官方成绩整合现状＋上传可行性）＋用户追问「k=1 跑完整 SCBench 找摩擦即设计，前期调研是否出问题」——核证后落账，并顺带把索引 §6/§8 自 173 批以来的缺漏补齐。
+- **152 批 §3 勘误（「官方榜单需 ≥5 试次/题」核不可证）**：论文实验设置原文「we select a single run per model」（25 配置 11 模型、无重复试次/种子披露）；scbench.ai 榜单页与 contributing 页均无试次门槛或成绩提交流程（contributing 只讲做题贡献与 ≈$500/轮成本自述）。152 原句系评估期成本提醒、非判据；0cr「官方口径严格」＝官方题目序＋默认参数＋判分器＋k=1（196 批冻结），与论文单跑同形——**前期调研无问题**。
+- **官方评价对照（只读核证）**：榜单 v1.0 Top＝GPT 5.5/Codex 28.1% Isolated Solve、Opus 4.6/Claude Code 20.9%；本轮任务级全档 30.6%／checkpoint 68.4%（any 口径迭代式）方向性高于全部在榜条目，但口径未对齐（isolated vs iterative／strict vs any）＋k=1 方差大，仅作评判参考不对榜。
+- **官方上传判定**：对外形态＝205 批 Harbor 摩擦产物发布（双标签）已兑现；榜单成绩提交非本线目标且无公开通道，不提出；**遗留缺口＝全轮报告档**（142 批报告形态，Harbor README「see round report」悬空）——候选，待用户裁决放行。
+- **索引补漏同步（主工单）**：§6 增 EVAL-SLOPCODE-BENCH-OFFICIAL-ROUND（0cr）／EVAL-FRONTIER-BENCH-PILOT（0ci）两入口；§8 `pending` 增 0cq／0cr／0cs／0ct／0cu 五条目＋0bz 状态行推进（S4 达成闭合待裁决）＋0cl 状态行推进（S3 进体达成 155 批）；§8 `implemented` 增 0cn／0cp 闭合条目（173 批裁决「0cp/0cn可闭合」）；头行 v4.177 → v4.178。
+- **边界**：零源码；未提交未推送；0cr／0bz 闭合仍待用户裁决；全轮报告档未动工（候选登记）。
+- 批档：[`206 批档`](audits/206_SLOPCODE_OFFICIAL_SUBMISSION_EVAL_AND_LEDGER_SYNC_2026-10-07.md)。
+- 关键词：206 批、152 勘误、single run per model、无试次门槛、k=1 官方口径、榜单对照 28.1%、上传判定、Harbor 已发布、全轮报告档候选、索引 §6/§8 补漏、0cn/0cp 移 implemented、计数 62 不变。
+
+### 1.155 2026-10-07 207 批 SCBench 全轮报告档（用户令「现在请写全轮报告档吧，综合一下36题的整体结果和具体摩擦情况」；零源码、计数不变 62）
+
+- **新档**：[`SCB_V1_36_FULL_ROUND_REPORT`](SCB_V1_36_FULL_ROUND_REPORT_2026-10-07.md)（TB2.1 142 批报告的 SCBench 对应物；逐题读数全部机械提取自 `readings_<题>.txt`，不引二手账面）。
+- **定档读数**：checkpoint **134/196（68.4%）**／任务级全档 **11/36（30.6%；Easy 7／Medium 2／Hard 2——机械复算，更正 202 档「6/1/4」）**／全坍缩 **3**（dag_execution／eve_jump_planner／eve_market_tools）／逐题墙钟合计 **≈36.5h**（批口径 ≈41h 并存注记）／4,593 模型步／6,157 工具调用／186 次压缩。
+- **报告结构**：口径与装置（单一快照 0.8.14＋deepseek-v4-flash、官方参数、k=1 论文同形）→ 收官总账与难度面 → 36 题逐题表 → 形态学（全档 11 含六题 late-ckpt 全绿＝「后期档必然坍缩」局部证伪、近失族 ≥9、非单调恢复、recli 五跑方差）→ 官方对照（榜单 Top GPT 5.5/Codex 28.1% 口径不可直比声明＋三条边界）→ **摩擦汇总**（写控 9 例逐一验尸＝0cq 家族 6＋按设计 3、185/186 已修形态零复发、0ct、0cs n=1、RLI 94 fire 91 在带＋双通道首样本、0bz S4 尾槽 137/137 旧针归零＋+2 hit 中位 116K、transport_retry 6 自愈、框架引导零故障、跑批窗零装置失败＋转换窗四件）→ 转换忠实度脚注（6 题中 4 新发现可 upstream 候选）→ **四处账目更正**（202 难度分布 6/1/4→7/2/2、D3–D5 运行全档计数 9/12/12→收官清单 11、D6 合计行 1567/2984→1621/3184、墙钟 41h/36.5h 双口径）→ 披露要件八条 → 边界六条 → 复现入口。
+- **兑现关系**：Harbor 数据集 README「see round report」悬空引用自此兑现（指向本档仓内路径）；206 批登记的报告档候选缺口销项。
+- **边界**：零源码；未提交未推送；0cr／0bz 闭合仍待用户裁决；新发现 4 题 upstream 与 0cq/0ct 候选修复均未动工。
+- 批档：[`207 批档`](audits/207_SCB_FULL_ROUND_REPORT_2026-10-07.md)。
+- 关键词：207 批、全轮报告、134/196、全档 11（7/2/2）、坍缩 3、近失族、摩擦汇总、写控 9 例验尸、0bz S4 旧针归零、四处账目更正、see round report 兑现、计数 62 不变。
+
+### 1.156 2026-10-07 209 批 0ct/0cu 全民审查处置——P2/P3 全量处置、P1 写向旁路两族挂起待裁（用户令「请先处理全部的P2和P3，这个P1我先再想一想」；落码批、计数不变 63；未提交未推送沿 204 批）
+
+- **审查输入**：同日全民审查三面（设计合理性／实现合理性／设计-实现符合性；12 文件 diff 逐行＋快照/PULL/判官/Python 镜像/ADR 上下文核证＋钉组实测复跑＋临时探针实锤后复原）。
+- **P2×1（ADR 誊写义务）**：vol-14 §14.61 第 2 项就地勘误＋主文件 v1.86 补记＝两段门确认性转换转录（读全开放、首读内容照常＋信封随回、notice→denial 转译臂退役、code 留闭集供回放；唯一不变量只读不改）。
+- **P3×5 全落**：①三读工具确认信封 deferred marking——mark 与交付同点（read_file 文本装配点／grep 两处结果装配点 GrepReady 增 volume_access／list_dir 列表装配点），失败读/非文本读不消耗一次性确认，新钉 `read_file_two_stage_failed_first_read_does_not_consume_notice`（InternalAfterNotice 读前 B4 审计维持 0p 语义不动）；②0cu 护栏钉补 write section 参数描述恰一处断言；③0cu 设计稿 §4.1 勘误＝「findings/notes 行进近窗明细池」与 v0.3 上游不符（B 池只含 exec/edits/tool_actions；实现零触点为正确、fold-proof 自动成立），203 档 §2.2 随注；④刺激面总线总清单黑板分区 11→12 两处勘误；⑤204 档读数口径勘回（3020＝通过数 vs 3026＝--list 总数含 6 ignored；3012+8=3020 ✓ 零漂移）。
+- **P1 挂起（用户裁决项，零改动）**：exec_policy `read_direction_exempt_positions` 写向旁路两族——族 a nullish 重定向目标（`cp x .gsa/y > /dev/null`、`>/dev/null 2>&1`）竞选成落点使真实落点被豁免、族 b 旗值落点（`cp -t`/`--target-directory`/`install -t`）被当源位豁免；5 形状实测 Allow（修复前 Block）、写向对照钉 8 条未覆盖；**S3 载体进体前置门**；修复方向在案（209 档 §0）。
+- **验证**：orz-tools lib 3021/0（另 6 ignored；two_stage 8/8 含新钉、gsa_ 17/17）；orz-host 并行 350/5 挂→单跑全量 355/0（负载敏感族定性维持）；orz-loop 857/2——双挂（`user_cancel_closes_pending_activations_before_run_cancelled`／`cancel_during_permission_await_resolves_then_terminates`）定谳＝触碰面外竞速族（dispatch.rs 与 HEAD 逐位一致、204 终轮同树全绿、192/193 stash 同败先例；HEAD 干净 worktree 对照两次被 orz-assurance rustc ICE〔STATUS_STACK_BUFFER_OVERRUN，204 §6.2 同族、新 target 亦复现〕阻断，未遂如实记）；clippy orz-tools 26/orz-loop 3 全存量零新增；fmt 触碰面净（blackboard.rs 4439 204 测试 hunk 随批修平；rustfmt 曾卷入 1299 HEAD 先存漂移面已外科回退）。
+- **台账**：本档；ADR 两处；0cu 设计稿 §4.1／203 档／总清单／204 档四件勘误；BACKLOG 指针行/计数行（63 不变）/P1 总览行（0am 等压缩腾帽）/0ct·0cu 节处置注记/锚点行；TODO 头行/P1 路由行（1192 帽内）/P1-0ct 节（**P1 挂起新勾选项**）/P1-0cu 节；索引头行 v4.180 → v4.181；门禁 `valid: false` error_count 1＝orz submodule dirty（204/209 两批未提交直接结果，沿 204 同型）。
+
+### 1.157 2026-10-07 208 批 0cv 立项——DeepSeek 接口名对齐（用户令「接口名称确实也应该改了，目前官方使用的应该是deepseek-flash吧？请查证，并且对接口修改这一步专门立个小项」；零源码、计数 62 → 63；完成序顺延＝209 批隔壁窗先行，沿 205 先例）
+
+- **S0 核证（官方 pricing 页）**：现行接口名两枚＝`deepseek-flash`（底模 DeepSeek-V4.1-Flash）／`deepseek-v4-pro`（底模 V4-Pro-0813）；**`deepseek-v4-flash` 降 legacy 别名仍收单、底层由 V4.1-Flash 承接（Flash 价位）**——用户纠正「接口名旧／实际 V4.1」与官方文档吻合；TB2.1 142 批 2026-09-30 注记同源。**读数口径结论＝历史读数（TB2.1 82.0%／0cr 134/196）同底模可比、改名是账面清晰化非模型切换。**
+- **改面盘点（S1 冻结用初版）**：①在役预检 `assurance/adapter_preflight.py` 补 legacy 臂→建议 `deepseek-flash`（现仅拦 deepseek-chat/reasoner 退役名）＋`assurance/tests/test_adapter_integration.py` 模型清单；②TB 驱动 6 件（run_official_2.1.sh／run_official_21_k1_browser.sh／run_sweep_5.sh/.ps1／run_pro_gpt2.sh／probe_deepseek.sh——TB2.1 已收官、随下次使用批改、不回改 dated 日志）；③SCBench 侧＝0cr 发射模板＋`scan_0cr.py` OUT_ROOT（**outputs 路径按模型名开键**——换名后输出树路径变）＋未来 0ci 驱动；④**orz 生产零硬编码确认**（web_search client `deepseek-v4-flash` 仅测试夹具）＝零改动面；⑤dated 工件不改（_s4_dna config／corpus-freeze json／历史台账）。
+- **提交路径复核（同批，用户追问「官方有成绩提交路径吧？」）**：官方**无文档化成绩提交流程**（README／FAQ／docs/evaluation／docs/metrics／contributing 全查无；亦无试次数门槛）；**事实上的入榜通道＝Harbor 公开 run**（榜单页按 Model×Harness 聚合公开 run——「Showing best version by % Checkpoints」；题目本体即以 Harbor dataset 分发）；silverwhite 转换任务已发布，后续若以 Harbor runtime 跑 orz 并 `--public` 发布即构成榜单可见条目——属新决策随用户裁决；Discord＝人工协调通道。**207 报告 §2（模型接口名注记）／§6（提交路径更正）／BACKLOG 0cr 206-bullet 三处同步纠正。**
+- **边界**：零源码；未提交未推送；改名执行（S2 起）随用户放行；orz 生产零硬编码＝本项不触发载体重建。
+- 批档：[`208 批档`](audits/208_0CV_DEEPSEEK_IFACE_ALIGN_2026-10-07.md)。
+- 关键词：208 批、0cv 立项、deepseek-flash 现行名、legacy 别名路由 V4.1-Flash、读数同底模可比、改面五点、orz 零硬编码、无文档化提交流程、Harbor 公开 run 事实通道、报告 §2/§6 纠正、计数 63、完成序顺延。
+
+### 1.158 2026-10-07 210 批 SCB 报告 §13＝官方多维聚合离线补账（用户令「先走离线聚合吧，把结果补充进 SCB_V1_36_FULL_ROUND_REPORT」；零重跑、计数不变 63）
+
+- **核实结论（承接「塌陷程度等参数是否按官方口径得出」之问）**：官方多维数据在 0cr 轮随跑已采齐——官方 harness eval 时自动产出每档 `checkpoint_results.jsonl`（strict/core/isolated 三 pass rate＋`scb-check==0.1.3` verbosity/erosion）；**多维缺口属出账口径选择，不构成重跑理由**。
+- **全轮读数（196 ckpt）**：isolated 满通过 **60/196＝30.6%**（榜首 GPT 5.5/Codex「Isolated Solve」28.1% 同构口径方向性略高；榜单聚合公式未文档化、待官方确认）／strict 满通过 44/196＝22.4%（论文 Opus 4.6 17% 同构）／isolated·strict·core 均值 79.8%·83.0%·83.4%／verb·ero 均值 0.289·0.613（榜首 0.269·0.494；ero 偏高如实记）／verb·ero 增长率 58.75%·65%（论文 ~80% 常态以下）。
+- **难度面与塌陷信号面**：isolated 均值 Easy 91.1%→Hard 72.1%；首→末档走低 9 例（eve_route_planner 1.00→0.38、dynamic_buffer 0.93→0.18、dag_execution 0.85→0.00 等）＋反向 5 例（env_manager 0.36→0.88 等）＝非单调恢复官方口径成立。
+- **工件与报告**：`0cr_official/multidim_aggregate.py`／`.json`／`_out.txt`（只读聚合、题集与 manifest 一一核实）；207 报告新增 **§13**（定义源码核证＋全轮表＋难度面＋塌陷面＋边界）＋§1 摘要行＋§12 复现入口行。
+- **边界**：零重跑零模型调用零源码；未提交未推送；上榜路径决策（Discord 询问／Harbor 试点）待用户裁决。
+- 批档：[`210 批档`](audits/210_SCB_MULTIDIM_AGGREGATE_2026-10-07.md)。
+- 关键词：210 批、官方多维聚合、checkpoint_results.jsonl、scb-check 0.1.3、isolated 满通过 30.6%、strict 满通过 22.4%、verb 0.289、ero 0.613、塌陷信号面、离线补账零重跑、报告 §13、计数 63 不变。
+
+### 1.159 2026-10-07 212 批 0ct P1 两族旁路收口——原 P1 恢复执行＋`.gsa` 写因调查＋备份区考虑项登记（用户令「原P1可以正常做」「需要进一步考虑如何处理模型想要备份」；计数不变 63；未提交未推送沿 204 批）
+
+- **前置调查（同日，入档 212 档 §1）**：41 任务树/303 journal/234 卷影穷举——官方轮 `.gsa` 写向拦截 5 起（13.9% 题发生率；dcfg rm rollback／l2m 写 journal／meshctl 读向 cp＝0ct 触发例／mtl 写 rollback 备份槽／ttr 自建 .bak），零成功写入（卷影零模型异物、rollback 4,562 文件全 harness 模式）、零旁路实踩、block 后 1 轮改道零 `.gsa` 重试；读占 82/87 且几乎全走 shell（两段门信封官方轮仅 2 起＝旁路常态）；写因＝模型受挫后把 harness 逐调用备份区（prompt 未文档化）当自己备份库。**SCB §7.1 漏记 mtl seq194＝官方 block 实为 10 例（D4 日账 372 vs 加总 367 差 5），如实登记不回改**。
+- **P1 修复（exec_policy 单文件）**：族 a＝重定向目标位不问 nullish 排除出位置词元收集＋裸数字残片排除（tokenizer 落地＝`2>` 产出 `2`＋`>` 两词元、`2>&1` 的 `&` 为段分隔——旁路真身是裸数字 `2` 竞选"末位落点"）；族 b＝闭表 `COPY_DEST_VALUE_FLAGS`（`-t`/`--target-directory`/`-destination`/`--destination`）在段即整段不豁免；`=` 形由主扫描 `path_candidates` kv 拆值本已覆盖（钉锁）。新钉 2（修复前 Allow 形状→Block＋读向 Allow 回归＋`-t` 误伤面备查）＋防膨胀 1；旧钉 17 全绿；orz-tools lib 3023/0；clippy 26 全存量；fmt 净（裸 `rustfmt --edition 2021` 与本仓 2024 let-chains 不符的经验与 209 blackboard 1299 卷入同源并记）。**S3 载体前置门解除**。
+- **备份区考虑项（不计，留裁决）**：模型受挫时刻有自备份冲动但 /tmp/工作区/blackboard 从未被尝试＝「选错区」非「无区可用」；候选 (i) 0ct 信封 rollback 语义教学／(ii) 正式备份面立项／(iii) 观察。
+- **台账**：本卷；212 档；TODO 头行/P1 路由行/P1-0ct 节；BACKLOG 指针/计数（63）/P1 行/0ct 节/锚点；索引头行 v4.183 → v4.184。
+
+
+### 1.160 2026-10-07 213 批 SCB 官方询问信草稿落稿（未发送）（用户令「请先落一份草稿吧，暂时不发」；零源码、计数不变 63；211 空号——隔壁窗 210→212 跳号——顺延 213）
+
+- **落盘**：[`docs/en/SCB_OFFICIAL_INQUIRY_DRAFT_2026-10-07.md`](en/SCB_OFFICIAL_INQUIRY_DRAFT_2026-10-07.md)（双语，发送时 EN 前置 CN 置后；DRAFT 状态＋发送前核对清单）。
+- **三诉求**：①非 Harbor Run 进榜途径询问（外部 harness-native run／第三方 agent 行；学生预算理由如实）；②4 参考解缺陷 upstream（env_manager／file_backup／mvvault／test_translator；**署名链两轮纠正定稿＝Harbor 转换 oracle 验证＋AI 辅助复核 GLM 5.3 Flash**，非 orz 发现；机械证据 rc=4＋逐测试对照；agent 全绿旁证 env_manager 5/5；非 CS 背景人工边界披露）；③orz 建议征求。
+- **事实修正与锚定**：初稿 v0.8.17 误记修正 **v0.8.14**（单一快照 `b5cb57ca`）；harness pin `31ceea3`／题库 `38d627e`／官方默认参数；模型 DeepSeek-V4.1-Flash（legacy 别名注记）；≈41h／157.49 RMB；成绩用 fully-passed checkpoints 措辞（30.6%／22.4%）＋verb/ero 均值。
+- **渠道**：GitHub issue 主（公开、可附 25MB、可引用）＋Discord server 贴链接副（不 DM；附件免费 10MB/件）。
+- **起跑时刻核对（用户核对成本用）**：立项 10-04／S1 勘定 10-05／D1＝10-05 01:11 cfgpipe 起（run 目录 `20261005T0111`）／D2 07:10／D3 15:56／D4 21:51（跨零点）／D5＝10-06 05:07／D6＝10-06 14:30（末题 23:20）／S3 转换＝10-07 01:35–06:10；span≈47h、逐题墙钟合计 ≈36.5h（批口径 ≈41h）。
+- **边界**：信未发送；附件三件待放行生成；发送后 issue 链接与发送事实随批落账。
+- 批档：[`213 批档`](audits/213_SCB_OFFICIAL_INQUIRY_DRAFT_2026-10-07.md)。
+- 关键词：213 批、官方询问信草稿、双语 EN 前置、三诉求、GLM 5.3 Flash 署名、rc=4 机械证据、非 CS 边界披露、v0.8.14 修正、起跑时刻 10-05 01:11、六日两日历日、36.5h/41h、211 空号顺延、计数 63 不变。
+
+### 1.161 2026-10-07 214 批 `.gsa` 拦截建议面——会话卷拦截信封附备份/暂存指引（212 考虑项 i 落地；写控设计稿 v4.1 §8；用户令「我同意，请落成小批吧，并将这一设计补充进写控拦截设计的设计稿中」；计数不变 63；未提交未推送）
+
+- **形态**：`block_message` 单点——`carrier-write` 命中会话卷臂（detail 含 `session volume`）时于「命令未执行」后追加「若意图是备份/暂存：`/tmp` 与工作区写向不受本闸限制；运行状态可记 blackboard_write；`.gsa/rollback` 为运行时逐调用备份区，只读使用」。定性＝0cs 同构应答式（非 P9 主动提醒）／不软化拦截／建议不询问／单源 0cl 一句／零契约面／零新工具；keystore/manifest/祖先臂不携带（秘密与载体保护指引不对症）。
+- **落点勘定**：用户原案「并进幻影提示」的挂载点勘正＝0cs 是派发期工具名查表面，备份意图的可靠信号在写控拦截时刻——建议面挂拦截信封（5/5 官方写向命中；ttr/mtl 得 /tmp 替代路径、l2m 得 blackboard 指引）。
+- **钉**：新钉 1（会话卷臂携带恰一处＋未执行语义在前＋keystore 臂不携带〔直接构造非会话卷 finding〕＋读向回归）＋规则 1 钉补负例；orz-tools lib 3024/0；clippy 26 全存量；fmt 净。
+- **设计稿**：WRITE_CONTROL_BACKSTOP_REVISION_DESIGN 升 v4.1（头行/沿革＋新增 §8：触发来源/形态/定性边界六条/误伤面与预期收益/钉位）。
+- **台账**：本卷；214 档；TODO P1-0ct 节考虑项行；BACKLOG 指针/计数（63）/0ct 节（212＋214 段曾被 213 批改写吞没、214 批重放并如实记）/锚点；索引头行顺延。
+
+
+### 1.162 2026-10-07 215 批 SCB 报告 §14＝成本与消耗对账（用户提供 DeepSeek 控制台分项＋用户令「可落进报告文档中」；零重跑、计数不变 63；214 占号顺延）
+
+- **分项（控制台，用户照录）**：hit 693,859,598／miss 606,333,056／output 87,526,542（console 四列中后两列均 output 分项），合计 **1,447,719,196 tokens**；实收 **¥157.49**（run 窗口国庆假期全程低谷价）。
+- **账单复核**：off-peak 官方价目（USD 数值同 numerics 的 RMB 计）复算 ¥2.08＋¥90.95＋¥52.52＝**¥145.55**；实收＝×1.082（+8.2%，计费粒度/折算量级）——**对账成立**。出入登记：中文文档页价目（miss ¥1–2／out ¥4–8 每 M）与实收差 ~6 倍、待控制台单价列核；反推等效单价 ≈ hit ¥0.0035／miss ¥0.176／out ¥0.71 每 1M。
+- **效率与结构**：315.2K tokens/步（输入 283.1K＋输出 19.06K 思考链）／40.2M tokens/题；hit 占输入 53.4%；账单大头＝miss 62.5%＋输出 36.1%＋命中 1.4%＝「缓存折价把 53% 输入变 1.4% 账单（4.7 倍有效折价）」；**miss 46.6% 构成＝每步新增段下限＋186 次压缩 prefix 手术（0bz 移尾已压至尾槽）＋36 冷启动**——hit/miss 同量级为长会话正常读数。
+- **成本表现（论文 Table 1 对照）**：per-run $22.0 vs 最低 GPT 5.3 Spark $84.46＝**1/3.8**；$/CKPT $0.112 vs $0.91＝**1/8.1**；$/isolated 满通过档 $0.37。"$500/run"出自 contributing 页非论文（论文实测 $84–423）。
+- **边界**：控制台分项用户提供、照录未核（harness 计量字段为零）；汇率 7.15 近似；零重跑零源码；未提交未推送。
+- 批档：[`215 批档`](audits/215_SCB_COST_BREAKDOWN_2026-10-07.md)。
+- 关键词：215 批、成本对账、1,447.7M tokens、hit 53.4%／miss 46.6%、¥145.55 vs ¥157.49、$/CKPT $0.112、per-run 1/3.8、GPT 5.3 Spark 对照、缓存折价、报告 §14、计数 63 不变、214 占号顺延。
+
+### 1.163 2026-10-07 216 批 已达成项集中闭合——九件（用户令「已达成的内容可以进行闭合了，请先闭合目前已经可以闭合的内容吧」；零源码、零子跑批、**63 → 54**；未提交未推送）
+
+- **闭合九件**：P1 八件＝**0aj** 黑板写权限放行（判据面满足〔`RUN-CLI-6aaad7c8`：`blackboard_write` ×8 全 `allow_once`→`plan_write` ×8→读回 exit 0〕）、**0am** LIF 动力学升级线（S1–S4＋P8 全达成、预测段真机读数〔188〕；翻转裁决以闭合承载＝1D／RLI 并存维持）、**0bc** 资源层收口与可失败分配（S4 判据①–⑥逐条对账全落、S3 轮 `RUN-CLI-6ab00c8a`、读数面齐〔09-22＋188〕）、**0bk** 压缩区间解析偏差修正（S3 真机＝5 次压缩削减 44–63%）、**0bz** 上下文脸面瞬态分叉（S4＝旧第 2 针归零、+2 事件 137/137 恰尾槽）、**0cb** 写控保底化修订（S4＝拦截 215→个位数、2/5 翻盘、零误拦）、**0cq** 写控误拦两族（零误拦真机复核〔188，83 审查 0 block〕）、**0cr** SlopCodeBench 官方轮（S1–S3 全达成＝134/196＋Harbor 36/36 发布＋报告档〔207〕＋§13〔210〕＋§14〔215〕）；P2 一件＝**0cs** 工具名近似提示（S1〔191〕＋S2 0.8.14 进体〔194〕＋S3 真机读数〔198 首样本、n=1 不作充分性结论〕）。
+- **性质**：纯账本批——零源码、零子仓改动、零重跑；判据依据一律沿用既有批档与既有真机读数，不重开验证。
+- **台账**：本卷；[`216 批档`](audits/216_ACHIEVED_ITEMS_CLOSURE_2026-10-07.md)；BACKLOG 计数行（63 → 54）＋优先级总览 P1/P2 行＋P1/P2 开放项锚点行＋九件条目闭合记录；TODO 计数行＋P1/P2 路由行＋九节勾选面全勾；TODO2 §2 九件单行核对；索引头行 v4.187 → v4.188＋§8 `pending` → `implemented` 七条迁移。
+- 关键词：216 批、已达成项集中闭合、63 → 54、0aj、0am、0bc、0bk、0bz、0cb、0cq、0cr、0cs、零源码账本批、索引 v4.188。
