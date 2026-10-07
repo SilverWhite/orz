@@ -1,8 +1,9 @@
-# SlopCodeBench 官方询问信（草稿，未发送；213 批落稿）
+# SlopCodeBench 官方询问信（**已发送：issue #40**；213 批落稿）
 
-> **状态**：DRAFT——用户令「请先落一份草稿吧，暂时不发」。
-> **形态**：双语（发送时英文在前、中文在后）；主通道＝GitHub issue（`SprocketLab/slop-code-bench`），
-> 副通道＝Discord server 贴 issue 链接（`discord.gg/BrC4BA9sVj`；不直接 DM）。
+> **状态**：**已发送**——2026-10-07 由用户手动发至 `SprocketLab/slop-code-bench`
+> **issue #40**（https://github.com/SprocketLab/slop-code-bench/issues/40 ；2026-10-07T13:37:41Z，
+> OPEN，无标签）。**实际发送＝仅英文**（用户裁决：英文开发者仓库，中文版只留档）；**Discord 通道
+> 经用户裁决取消**（只发 issue）。附件远端 sha256 已复核＝本档重打包版。
 > **事实锚**：0cr 官方轮＝2026-10-05 01:11（本地）D1 cfgpipe 起跑 → 10-07 凌晨 D6 收尾，
 > 六日（D1–D6）压缩两日历日，逐题墙钟合计 ≈36.5h（批口径 ≈41h），账单 157.49 RMB；
 > 载体 orz v0.8.14 单一快照（`b5cb57ca`）；模型 DeepSeek-V4.1-Flash（legacy 接口名
@@ -14,7 +15,7 @@
 
 ## English (send first)
 
-**Subject: [SlopCodeBench] External harness-native run (orz agent, k=1, 36 problems) — data contribution + leaderboard inclusion question + 4 reference-solution defects**
+**Subject: External harness-native run (DeepSeek-V4.1-Flash / deepseek-flash + orz agent, k=1, 36 problems) — data contribution + leaderboard inclusion question + 2 oracle-validation re-checks**
 
 Hello!
 
@@ -38,11 +39,15 @@ Three things I'd like to ask:
 
 (b) If a narrower form is required, or if there is a documented submission process I have not found, could you point me to it?
 
+Related: I see issue #33 ("Custom Agent Evaluation and Leaderboard Submission") asks a similar question — a reply there would help us just as much.
+
 As a personal open-source project, external review and suggestions matter a great deal to me; a leaderboard entry would give me many more opportunities to receive such feedback and thereby improve orz further.
 
-② During the oracle-verification step of the Harbor conversion, an AI review (GLM 5.3 Flash) identified 4 reference-solution defects beyond KNOWN_ISSUES: env_manager, file_backup, mvvault, test_translator. The supporting evidence is that the agent's own runs passed these checkpoints (e.g. env_manager 5/5) — taken together, this points further to defects in the reference solutions themselves rather than in the tests.
+② During the oracle-verification step of the Harbor conversion, the official `scb_to_harbor.py --validate-with-oracle` returned rc=4 on 6 problems; on four of them (env_manager, file_backup, mvvault, test_translator) the per-checkpoint reference readings contrast sharply with the agent readings at the same checkpoints (see the attachment). **After checking your issue tracker I have to correct my own framing**: **env_manager (ck3, 184/187) and test_translator (unpinned TypeScript toolchain) are already recorded in issue #27**, and test_translator has been fixed by PR30 — those two are duplicate confirmations, not new findings. For what it is worth, our pin (`38d627e`) still reproduces the test_translator failures, which may help you judge whether that fix has reached this pin.
 
-I should note that I am not from a CS background and my manual review is limited to the natural-language level, so I cannot independently reach a definitive conclusion. I have therefore attached the mechanical evidence (oracle rc=4 exit codes and per-test comparisons) so that you can verify it.
+That leaves two things we would ask you to re-check: (1) **file_backup** — on our pin its Core pass rate is 0.0 at ck2 and ck3, whereas the audit in #27 exonerated this problem as a platform artifact, so the two observations disagree; (2) **mvvault** — ck5 (strict 0.9946 / core 0.875) does not appear in the existing records.
+
+I should note that I am not from a CS background and my manual review is limited to the natural-language level, so I cannot independently reach a definitive conclusion. Everything above is raw tool output (rc=4 exit codes and per-checkpoint pass rates), attached for you to verify.
 
 ③ If you would be willing to offer any suggestions on orz itself, I would be very grateful.
 
@@ -76,11 +81,15 @@ SilverWhite
 
 (b) 若需要更窄的最小形态，或存在我未找到的文档化提交流程，您方可否指点？
 
+补充：我看到 issue #33（Custom Agent Evaluation and Leaderboard Submission）已问过相近的问题，若您方愿意在该帖一并回复，对我们同样有帮助。
+
 作为一个个人开源项目，外部审查与建议对我很重要；若能进入榜单，我便有更多机会获得这类反馈，从而更好地改进 orz。
 
-② 在 Harbor 转换的 oracle 验证环节，经 AI 复核（GLM 5.3 Flash）发现 4 个 KNOWN_ISSUES 之外的参考解缺陷：env_manager／file_backup／mvvault／test_translator。旁证是这些题的 agent 跑批反而全绿（如 env_manager 5/5）——两点综合，进一步指向参考解本身存在缺陷，而非测试。
+② 在 Harbor 转换的 oracle 验证环节，官方 `scb_to_harbor.py --validate-with-oracle` 在 6 题上返回 rc=4；其中 env_manager／file_backup／mvvault／test_translator 四题的逐档读数与 agent 同档读数反差明显（详见附件）。**回查您方 issue 区后，我需要更正自己的定性**：其中 **env_manager（ck3，184/187）与 test_translator（TypeScript 工具链未钉版本）已由 issue #27 记录**，test_translator 并已由 PR30 修复——这两条属重复确认、不是新发现；另需说明，我们的 pin（`38d627e`）仍复现 test_translator 的失败，或可供您方判断修复是否已进入该 pin。
 
-需要说明的是，我本人非 CS 专业，人工复核仅限于自然语言层面，无法独立给出确定性结论，因此缺陷的机械证据（oracle 验证 rc=4 退出码与逐测试对照）随附件给出，方便您方复核。
+因此想请您方复核的只剩两点：(1) **file_backup**——在本 pin 上 ck2／ck3 的 Core 组通过率为 0.0，而 #27 的审计曾把本题作为平台假象排除，两处观察不一致；(2) **mvvault**——ck5（strict 0.9946／core 0.875）未见于既有记录。
+
+需要说明的是，我本人非 CS 专业，人工复核仅限于自然语言层面，无法独立给出确定性结论，因此以上全部为官方工具的原始读数（rc=4 退出码与逐档通过率），随附件给出，方便您方复核。
 
 ③ 若您方愿意对 orz 本身提出任何建议，我将不胜感激。
 
@@ -94,17 +103,17 @@ SilverWhite
 
 1. 全轮报告：英文精简版 `1_SCB_full_round_report_EN.md`（中文原版见仓库 `docs/SCB_V1_36_FULL_ROUND_REPORT_2026-10-07.md`）；
 2. 合并逐档记录：`multidim_aggregate.json`＋`merged_checkpoint_results.jsonl`／`.csv`／`.summary.json`（196 行＝36 题逐档）；
-3. 4 缺陷明细：oracle rc=4 **逐档通过率**＋agent 同档对照＋官方转换日志（`SCB_REFERENCE_SOLUTION_DEFECTS_2026-10-07.md`；限于工具产物可得性，对照粒度是**逐档**而非逐个测试名）；
+3. oracle 验证失败逐档证据（含上游 #27 已记录项的更正说明）：rc=4 **逐档通过率**＋agent 同档对照＋官方转换日志（`SCB_REFERENCE_SOLUTION_DEFECTS_2026-10-07.md`；对照粒度是**逐档**而非逐个测试名）；**请重点看 file_backup 与 mvvault 两条**；
 4. 逐题官方读数：`readings_<题>.txt`×36（含每题 `tools:` 汇总，用于核证检索面零调用）＋提取器 `scan_0cr.py`。
 
-**打包件**：`slopcodebench-orz-attachments-2026-10-07.zip`（52 文件／198 KB／sha256 `ca5a52e6…`；含四件＋`MANIFEST.md`＋`SHA256SUMS`）。
+**打包件**：`slopcodebench-orz-attachments-2026-10-07.zip`（52 文件／199,335 B／sha256 `e77151a90b38293835e338200621ea3a537e81f642bb32e648cddf2bda34cdb0`；含四件＋`MANIFEST.md`＋`SHA256SUMS`）。
 
 ## 发送前核对清单
 
 - [x] 英文版按定稿中文版重译（2026-10-07 完成，EN 为 CN 定稿之译文）；
-- [ ] 版本号／数据与账面最终对表（v0.8.14、30.6%／22.4%／0.289／0.613、157.49 RMB）；
-- [ ] 运行环境段与本机实测对表（i5-12400F／16 GB／Windows 11 Pro／Docker Desktop 29.6.2／WSL2）；
-- [ ] 能力说明段与镜像实测对表（`slop-code:python3.12` 无浏览器；36 题检索面零调用）；
-- [x] 附件包生成（上列四件；2026-10-07：zip 52 文件／198 KB／sha256 `ca5a52e6…`）；
-- [ ] issue 标签/版区选择＋Discord 频道选择；
-- [ ] 发送后：issue 链接与发送事实落账。
+- [x] 版本号／数据与账面最终对表（v0.8.14、30.6%／22.4%／0.289／0.613、157.49 RMB；取自报告 §13／§14 与 215 批）；
+- [x] 运行环境段与本机实测对表（i5-12400F／16 GB／Windows 11 Pro／Docker Desktop 29.6.2／WSL2；主会话实读）；
+- [x] 能力说明段与镜像实测对表（`slop-code:python3.12` 无浏览器；36 题检索面零调用；主会话实测＋逐题读数复算）；
+- [x] 附件包生成（上列四件；2026-10-07 上游更正后**重打包**：zip 52 文件／199,335 B／sha256 `e77151a9…`）；
+- [x] 版区与标签：仅发 GitHub issue、**未挂标签**（2026-10-07，#40）；Discord 经用户裁决取消；
+- [x] 发送：2026-10-07 **issue #40**（链接与发送事实已落账；附件远端 sha256 已复核一致）。

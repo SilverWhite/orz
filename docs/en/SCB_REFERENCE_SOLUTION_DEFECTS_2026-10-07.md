@@ -1,7 +1,11 @@
-# SlopCodeBench — reference-solution defects beyond KNOWN_ISSUES (4 problems): mechanical evidence
+# SlopCodeBench — oracle-validation failures at pin `38d627e`: checkpoint-level evidence (2 items already tracked upstream)
 
 > **Status**: attachment 3 of the SCBench official-inquiry letter (2026-10-07). Prepared for the
 > problem maintainers; raw tooling output, transcribed without interpretation.
+> **Upstream check (done before sending)**: the four problems in §3 were originally listed by us as
+> "defects beyond KNOWN_ISSUES". That framing is **withdrawn** — issue **#27** already records two of
+> them, and one of those is already fixed. See §0 for exactly what is new and what is a duplicate
+> confirmation.
 > **Where this comes from**: the oracle-validation step of the **official** `scb_to_harbor.py`
 > conversion pipeline while converting the full 36-problem set to Harbor tasks. This is the
 > conversion tool's own verdict, not our judgement of the problems.
@@ -10,9 +14,29 @@
 > here with the raw evidence so you can verify directly.
 > **What we are not claiming**: we are not the authors of these problems or their tests, and we are
 > not asserting a root cause inside the reference solutions. We are reporting that **the official
-> pipeline's oracle validation fails on these four problems at this pin**, and giving the
-> checkpoint-level comparison that made us think the reference solution — rather than the tests —
-> is the more likely culprit.
+> pipeline's oracle validation returns rc=4 on these problems at this pin**, and giving the
+> checkpoint-level comparison between the reference solution and our agent run.
+
+---
+
+## 0. Upstream context (what is already known, and what is not)
+
+Checked on 2026-10-07, before sending:
+
+| Item | Upstream status | Consequence for this document |
+|---|---|---|
+| `env_manager` ck3 | **Already recorded in issue #27** ("Pinned answer keys fail evaluation in the official image"), same reading — *fails three regression tests, 184/187* | duplicate confirmation, **not** a new finding |
+| `test_translator` | **Already recorded in #27**: graded TypeScript through unpinned `npx ts-node --esm`; all eight TypeScript checkpoints fail when `npx` resolves current npm-latest `typescript`. Maintainer reply: addressed by **PR30, pinning `typescript@5.3`** | duplicate confirmation + one datum: our pin (`38d627e`) **still reproduces it**, so the fix may post-date this pin |
+| `dynamic_buffer` (ck2–4) | Already recorded in #27 (`48/50, 102/104, 122/172`) | recorded here only for comparison (§4) |
+| `file_backup` | Not listed as a defect; the #27 audit **exonerated** it in the official image as a platform artifact (APFS glob case-sensitivity) | **still worth re-checking**: on our pin its Core pass rate is 0.0 at ck2/ck3, which does not match the exoneration |
+| `mvvault` | **Not found** in #27 or the related audit sweep | the one item with no upstream record we could find |
+
+Auditor's pins in #27 differ from ours (runner `06b5c06` / problems `ef6a9dd` versus our problems
+`38d627e`), so a disagreement between the two accounts is possible without either being wrong.
+
+**Revised ask** (what we would actually like you to look at): `file_backup` (§3.2) and `mvvault`
+(§3.3). The other two sections are kept because they are what the tool emitted at this pin, and
+because the agent-side contrast may still be useful to you.
 
 ---
 
@@ -72,6 +96,10 @@ passes **100%** of the checkpoint's own tests (isolated) and the whole Core grou
 strict number comes from other checkpoint-accumulated tests; at the checkpoint in question the
 reference solution is the one that does not close its own suite.
 
+**Upstream**: this checkpoint and this reading (184/187, three regression tests from checkpoints 1–2)
+are **already recorded in issue #27**. Kept here as an independent confirmation at a different pin,
+not as a new finding.
+
 ### 3.2 file_backup — `rc=4`, checkpoint_2 / 3 / 4
 
 Tool output:
@@ -94,6 +122,10 @@ Reading: this is the sharpest case. At ck2 and ck3 the reference solution's **Co
 0.0** — it fails the entire Core group — and its isolated rate drops to 0.22 at ck3, while the agent
 run passes Core at both checkpoints and closes the problem 4/4 checkpoints overall.
 
+**Upstream**: `file_backup` is **not** listed as a defect in #27; the audit there **exonerated** it in
+the official image as a platform artifact (APFS glob case-sensitivity). Our pin disagrees. **This is
+one of the two items we would like re-checked.**
+
 ### 3.3 mvvault — `rc=4`, checkpoint_5
 
 Tool output:
@@ -109,6 +141,10 @@ Agent run at ck5: core 8/8, full 174/185, strict 0.9405, **isolated 1.0000**.
 
 Reading: reference solution short by one test in the checkpoint's own suite (isolated 0.9667) and by
 one Core test; the agent run passes 100% of that checkpoint's own tests and the full Core group.
+
+**Upstream**: we found **no record** of this problem in issue #27 or in the related audit sweep, at
+either pin. **This is the other item we would like re-checked — and the only one of the four with no
+upstream record we could locate.**
 
 ### 3.4 test_translator — `rc=4`, checkpoint_1 through checkpoint_8
 
@@ -145,6 +181,11 @@ agent run passes the entire Core group at ck1 and ck3. Two further structural ob
 reference oracle produced **no** `strict_pass_rate` for ck7 and **no step result at all** for ck8 —
 worth a look on your side independently of the pass rates.
 
+**Upstream**: recorded in #27 as a toolchain-hermeticity issue (unpinned `npx ts-node` resolving
+npm-latest `typescript`) and reported fixed by **PR30** (`typescript@5.3`). Our pin `38d627e` still
+reproduces the failure, so the fix does not appear to be in this pin — that, rather than the defect
+itself, is the only new information here.
+
 ---
 
 ## 4. Known-issue footnotes (recorded for completeness, not part of the four)
@@ -163,12 +204,16 @@ problems converted at `rc=0`.
 
 ## 5. What would settle this
 
-The decisive check is on your side and is cheap: run the reference solution for the checkpoints listed
-above and look at which tests fail. If the failing tests assert behaviour that the problem statement
-does not require (or that the reference solution itself contradicts), the reference solution needs
-the fix; if they assert required behaviour, then the reference solution genuinely does not satisfy its
-own specification and the checkpoint's expectations may need revision. Either way, the raw tool
-output above is what the official pipeline produced at pin `38d627e`.
+For the two revised asks the decisive check is on your side and is cheap: on this pin, run the
+reference solution for `file_backup` ck2/ck3 and for `mvvault` ck5 and look at which tests fail. If the
+failing tests assert behaviour the problem statement does not require — or that the reference solution
+itself contradicts — the reference solution needs the fix; if they assert required behaviour, the
+reference solution does not satisfy its own specification. Separately, for `test_translator` it would
+help to know whether PR30's `typescript@5.3` pin is present in `38d627e` or only after it.
+
+For the record, the raw tool output above is what the official pipeline produced at pin `38d627e`;
+the two duplicate-confirmation sections are kept because a second pin reaching the same reading is
+not nothing, and because the agent-side contrast may be useful to you.
 
 ## 6. Files in this attachment
 

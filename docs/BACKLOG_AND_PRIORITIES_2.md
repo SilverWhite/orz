@@ -1445,3 +1445,33 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **台账**：本卷；[`221 批档`](audits/221_SCB_LETTER_ATTACHMENT3_AND_PACKAGE_2026-10-07.md)；信件附件清单 1–4 改包内实名＋补打包件行、核对清单「附件包生成」勾选；BACKLOG 计数行（54 不变）＋本批指针；TODO 计数行；索引头行 v4.193 → v4.194。
 - **边界**：零源码零跑批；附件 3 为工具产物转述、不含根因判断；**信未发送**；未提交未推送。
 - 关键词：221 批、附件 3、参考解缺陷机械证据、oracle rc=4、逐档对照（订正自逐测试）、env_manager／file_backup／mvvault／test_translator、四件打包、198 KB、sha256 ca5a52e6、计数 54 不变、索引 v4.194、信未发送。
+
+### 1.168 2026-10-07 222 批 SCB 询问信上游先例核出、② 口径更正、附件 3 改写与重打包（用户令「请修改我们新建中的口径吧，就按照你建议的改法即可」；**上游先例核出＋口径更正＋重打包批**，零源码零跑批、计数不变 54；信改由用户手动发、仍未发送）
+
+- **上游先例核出（本批只读回查）**：目标仓 `SprocketLab/slop-code-bench` 的 **issue #27**（benchmark auditor kimjune01，2026-09-25）已记录我们准备报的 4 题中的 2 题——**env_manager ck3 同读数 184/187**；**test_translator** 为 `npx ts-node` 未钉版本所致、维护者回复**已由 PR30 钉 `typescript@5.3` 修复**；该审计还把 **file_backup 排除**为平台假象（APFS glob 大小写）。另核出 **issue #33**「Custom Agent Evaluation and Leaderboard Submission」已问同类进榜问题、无人回复。pin 差异如实记（#27 用 runner `06b5c06`／problems `ef6a9dd`；我方 problems `38d627e`）。
+- **信件更正（CN 权威＋EN 同步）**：主题行 `+4 reference-solution defects`→`+2 oracle-validation re-checks`；① 增 #33 互引；② 重写三段（工具 rc=4 事实／撤回「新发现」定性并承认 #27／收窄为 file_backup 与 mvvault 两条复核）；附件清单第 3 条改口径。
+- **附件 3 改写**：标题改口（`…beyond KNOWN_ISSUES (4 problems)`→`…at pin 38d627e (2 items already tracked upstream)`）；新增 §0 上游上下文表＋Revised ask；逐节加 Upstream 注（重复确认 vs 冲突 vs 无记录）；§5 收窄为两条复核请求＋PR30 是否进入 `38d627e` 的询问。重复确认段落**保留不删**（第二 pin 同读数是证据）。
+- **重打包**：因附件 3 变更重打包 `slopcodebench-orz-attachments-2026-10-07.zip`＝52 文件／199,335 B／sha256 `e77151a9…`（前版 198,029 B／`ca5a52e6…` 作废）；信件打包件行与核对清单同步。
+- **粘贴件与防错**：`0cr_official/issue_2026-10-07_title.txt`＋`issue_2026-10-07_body.md`（从定稿自动抽取；EN 在前 CN 在后；7,288 字符；含 #27/#33、无旧「4 缺陷」表述）；目标仓库唯一确认 `SprocketLab/slop-code-bench`（237★），近似名 `dburkhardt/slop-code-bench`、`Dongximing/slop-code-bench`（0★ 空仓）为陷阱。
+- **台账**：本卷；[`222 批档`](audits/222_SCB_LETTER_UPSTREAM_PRIOR_ART_AND_CLAIM_CORRECTION_2026-10-07.md)；BACKLOG 计数行（54 不变）＋本批指针；TODO 计数行；索引头行 v4.194 → v4.195。
+- **边界**：零源码零跑批；发送改为用户手动；未提交未推送。
+- 关键词：222 批、上游先例、issue #27、issue #33、PR30、口径更正、撤回新发现、file_backup／mvvault 复核、附件 3 改写、重打包 e77151a9、粘贴件、目标仓库确认、计数 54 不变、索引 v4.195。
+
+### 1.169 2026-10-07 223 批 SCB 官方询问信发送落账——issue #40（用户帖出链接＋「话说 issue 好少」；**发送落账批**，零源码零跑批、计数不变 54；未提交未推送）
+
+- **发送事实（回读核验）**：`SprocketLab/slop-code-bench` **issue #40**（2026-10-07T13:37:41Z、OPEN、作者 SilverWhite、**无标签**）；标题＝定稿 181 字符版（`DeepSeek-V4.1-Flash / deepseek-flash`）；正文核心 4,970 字符 **EN-only**（含 #27／#33 引用、无「4 缺陷」旧表述；①②③ 经用户采纳改为 `1./2./3.`）＋末尾附件行。
+- **远端附件复核（发送链闭环）**：发布后重新下载附件 URL＝**199,335 B／sha256 `e77151a90b38293835e338200621ea3a537e81f642bb32e648cddf2bda34cdb0`**，与本地重打包版**逐位一致**——旧包（198,029 B／`ca5a52e6…`，内含「4 新发现」旧附件 3）**未误传**。正文核心与本地粘贴件逐字一致（唯一差异＝编号形式）。
+- **仓库活跃度观察（回应「issue 好少」）**：全仓累计 21 条 issue（open 6／closed 15，2026-03 起按月 1–6 条）；仓库建于 2025-12-17、最新 release v0.3（2026-04-21）、237★／44 fork／watchers 3、最后 push 2026-09-22。释义＝年轻小规模仓；**#27 有作者与维护者往复（问题帖会被读到）**，但 **#33 同类进榜问题长期无人回复**——诉求①需按「可能长期无回复」预期。
+- **台账**：本卷；[`223 批档`](audits/223_SCB_INQUIRY_LETTER_SENT_ISSUE40_2026-10-07.md)；信件头行/状态行/形态行改「已发送」并记 #40、发送前核对清单七项全勾；BACKLOG 计数行（54 不变）＋本批指针；TODO 计数行；索引头行 v4.195 → v4.196。
+- **边界**：零源码零跑批；只发英文、Discord 取消（用户裁决）；**后续＝等待回复**（若长期无回复，可待裁决在 #33 追加一条简短指向 #40 的评论，不重复正文、不 DM）；未提交未推送。
+- 关键词：223 批、询问信发送、issue #40、EN-only、Discord 取消、附件远端 sha256 复核、e77151a9、无标签、仓库活跃度 21 条、#27 有回复、#33 无人回复、计数 54 不变、索引 v4.196、等待回复。
+### 1.170 2026-10-07 224 批 提交推送与 0.8.15 发行（用户令「请将最新的0.8.15推送上去吧，发布这个版本包」；**零源码——提交推送＋双平台打包发行＋README 发布面对齐批**；计数不变 54）
+
+- **推送**：orz 子树 `cli/feat/fusion-architecture`＝`10cfe765`（218 bump；本批 `ls-remote` 复核远端逐位一致、零待推）；父仓 `origin/main`＝`2e6f6615` → 本批三提交（222／223 落账＋224 本批）。
+- **打包（`rel-224-stage`）**：沿 195／183／156／122 形态（`.tmp-b224-package.ps1`）＝两侧各 **6 entries**（三件套＋`README.md`＋`SHA256SUMS`＋`carrier-manifest.json`）；包内六件与在役载体 **6/6 MATCH**；manifest `kind=orz-carrier-manifest` `version=0.8.15`；包内 README 由 0.8.14 版改写为 **0.8.15 版**——新增 0.8.15 节（0ct `.gsa` 读向全开放＋两段门转确认性＋P1 两族旁路收口＋会话卷拦截信封备份/暂存指引／0cu 黑板 `findings` 第三分区／0cv 接口名对齐 `deepseek-flash`）＋Linux 解包文件名＋版本信息行（`10cfe765`／2026-10-07）。
+- **资产**：`orz-0.8.15-windows-x86_64.zip` **28,034,248 B** `76a9f860…`／`orz-0.8.15-linux-x86_64.tar.gz` **37,218,091 B** `fafb261d…`／顶层 `SHA256SUMS` **193 B**。
+- **在役载体真值（与 218 批账面逐位一致）**：WIN `orz.exe` 57,135,104 `c9f30c75…`／`orz-signer.exe` 6,740,480 `f86158ed…`／`orz-acaf-provision.exe` 6,640,128 `c887b1a9…`；LIN `orz` 115,615,912 **`75515440…`（身份门值）**／`orz-signer` 1,397,544 `f1a1d784…`／`orz-acaf-provision` 1,215,992 `5893eec4…`。版本核证＝`orz.exe --build-info`＝`0.8.15 os=windows` rc0＋Linux 容器内 `0.8.15 os=linux` rc0。
+- **发行**：`gh release create v0.8.15 --target main`（父仓本档所在提交，轻量 tag；沿 122／156／183／195 形态）＋三资产；服务端回读与完整回下载逐位复核随 225 批补记。
+- **台账**：本卷；[`224 批档`](audits/224_SUBMIT_PUSH_AND_RELEASE_V0815_2026-10-07.md)；README 发布面对齐 0.8.15（解包文件名＋最新 release 链接）；BACKLOG 计数行（54 不变）＋本批指针行（并修正 219–223 批未滚动的失效指针）；TODO 计数行；索引头行 v4.196 → v4.197。
+- **边界**：零源码（orz 子仓本批无新提交）；中间载体 0.8.13／0.8.14 内容一并含于成品线（0.8.13 未单独发行先例）；Linux 载体未重 provision（沿同口径）；第二卷 `1.166` 存在邻窗重号（218／220），本批不回改。
+- 关键词：224 批、提交推送、GitHub Release v0.8.15、rel-224-stage、6/6 MATCH、README 发布面对齐、deepseek-flash 首个发行包、findings 第三分区、.gsa 读向全开放、计数 54 不变、索引 v4.197。
