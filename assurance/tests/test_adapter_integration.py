@@ -212,7 +212,7 @@ class AdapterPreflightTests(unittest.TestCase):
         self.assertFalse(receipt["checks"]["model_id_not_deprecated"])
 
     def test_preflight_accepts_current_deepseek_models(self) -> None:
-        for model_id in ("deepseek-v4-pro", "deepseek-v4-flash"):
+        for model_id in ("deepseek-v4-pro", "deepseek-flash"):
             with self.subTest(model_id=model_id):
                 receipt = run_adapter_preflight(
                     adapter_id=ADAPTER_ID,
@@ -237,6 +237,86 @@ class AdapterPreflightTests(unittest.TestCase):
             run_id=RUN_ID,
         )
         self.assertFalse(receipt["checks"]["model_id_not_deprecated"])
+
+    # ── 0cv S2 (2026-10-07): legacy-alias advisory arm (GAK-10) ──
+    # `deepseek-v4-flash` is a *legacy* alias still accepted by the
+    # DeepSeek API (requests are served by DeepSeek-V4.1-Flash at Flash
+    # pricing; 208 批 pricing-page verification) — preflight must not
+    # block it, but must record an advisory so new profiles converge on
+    # the current `deepseek-flash` name.
+
+    def test_preflight_warns_on_legacy_deepseek_v4_flash(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="deepseek-v4-flash",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+            ipg_receipt_valid=True,
+            gate_chain_complete=True,
+            output_schema_known=True,
+        )
+        # The legacy alias is still served — preflight passes …
+        self.assertTrue(receipt["preflight_passed"])
+        # … but the legacy arm records the advisory.
+        self.assertFalse(receipt["checks"]["model_id_not_legacy_alias"])
+        self.assertTrue(
+            any("deepseek-flash" in w for w in receipt["warnings"]),
+            receipt["warnings"],
+        )
+
+    def test_preflight_warns_on_legacy_vision_alias(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="deepseek-v4-flash-vision-exp",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+            ipg_receipt_valid=True,
+            gate_chain_complete=True,
+            output_schema_known=True,
+        )
+        self.assertTrue(receipt["preflight_passed"])
+        self.assertFalse(receipt["checks"]["model_id_not_legacy_alias"])
+
+    def test_preflight_no_warning_on_current_deepseek_flash(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="deepseek-flash",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+        )
+        self.assertTrue(receipt["checks"]["model_id_not_legacy_alias"])
+        self.assertEqual(receipt["warnings"], [])
+
+    def test_preflight_legacy_check_case_insensitive(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="DeepSeek-V4-Flash",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+        )
+        self.assertFalse(receipt["checks"]["model_id_not_legacy_alias"])
+
+    def test_preflight_deprecated_message_suggests_current_name(self) -> None:
+        receipt = run_adapter_preflight(
+            adapter_id=ADAPTER_ID,
+            provider="deepseek",
+            model_id="deepseek-chat",
+            endpoint="https://api.deepseek.com/chat/completions",
+            conversation_id=CONV_ID,
+            run_id=RUN_ID,
+        )
+        self.assertTrue(
+            any("deepseek-flash" in e for e in receipt["errors"]),
+            receipt["errors"],
+        )
 
     # ── GAK-08: thinking / sampling mutual exclusion ──
 

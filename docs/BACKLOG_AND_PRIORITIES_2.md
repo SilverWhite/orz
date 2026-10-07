@@ -1392,3 +1392,56 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **性质**：纯账本批——零源码、零子仓改动、零重跑；判据依据一律沿用既有批档与既有真机读数，不重开验证。
 - **台账**：本卷；[`216 批档`](audits/216_ACHIEVED_ITEMS_CLOSURE_2026-10-07.md)；BACKLOG 计数行（63 → 54）＋优先级总览 P1/P2 行＋P1/P2 开放项锚点行＋九件条目闭合记录；TODO 计数行＋P1/P2 路由行＋九节勾选面全勾；TODO2 §2 九件单行核对；索引头行 v4.187 → v4.188＋§8 `pending` → `implemented` 七条迁移。
 - 关键词：216 批、已达成项集中闭合、63 → 54、0aj、0am、0bc、0bk、0bz、0cb、0cq、0cr、0cs、零源码账本批、索引 v4.188。
+
+### 1.164 2026-10-07 217 批 0cv S1–S4＝DeepSeek 接口名对齐执行（用户令「请先进行0cv吧」＝208 边界「改名执行随用户放行」的放行；assurance＋orz＋SCBench 工具面落码＋真机探针三步；**计数不变 54**；闭合待裁决）
+
+- **S1 冻结＋208 ④ 勘误（本批最重要发现）**：改面清单四类冻结（A 本批改／B 随下次使用批改＝TB 驱动 6 件＋scripts 9 件 dated 驱动／C dated 不改＝ADAPTER_CONTRACT 冻结 fixture 等／D 零改动确认）；**208 批「orz 生产零硬编码」系误断**——`gateway/transport.rs MAIN_AGENT_MODEL`（生产主模型单一真源、env `ORZ_MAIN_AGENT_MODEL` 覆盖不动）＋`orz-host/tools.rs web_search_config` 回退默认两处生产面实存，208 当时仅勘到 web_search 测试夹具；208 §5「不触发载体重建」依据随之失效。
+- **S2 落码**：①assurance＝GAK-10 legacy 建议臂（`_LEGACY_DEEPSEEK_ALIASES` 两枚→`deepseek-flash`；**建议不拦**——官方仍收单；receipt +`warnings[]`／checks +`model_id_not_legacy_alias` 可选、schema 同步零回归）＋GAK-07 消息改建议新名＋钉 6（**先红 5 failed→绿 37/37**）；②orz `af6fa9a0`（4 文件 +12/−5，不推送）＝`MAIN_AGENT_MODEL`→`deepseek-flash`＋web_search 回退＋默认钉＋探针常量＋live test 字面；③SCBench＝新 config `deepseek-flash.yaml`（legacy yaml 保留供 dated 复现）＋`scan_0cr.py` OUT_ROOT 改 `SCB_OUT_ROOT` env 可覆盖（默认 0cr legacy 树不动）。
+- **验证**：orz-loop lib 858/1（在案 `user_cancel_closes` 30ms 竞速偶发）；orz-host lib 失败族 **stash 冻结树对拍＝先前既有**（冻结树 7 失败、带改 5–6 逐轮漂移、timeout/进程树/symlink 族＝0aq 在案负载敏感记录、零新增）；clippy `-p orz-host -p orz-loop --all-targets` **41=41 stash 对拍恒等**；触碰 hunks fmt 净（tools.rs :620 仓内既有漂移未触碰）；父仓全量 pytest 2454 过/9 失败＝存量（8×`.tmp-0bvs4-work` vendored 噪声＋1×doctor 或子仓脏树预期态）。
+- **S3 真机三步**：`/models` **恰两枚现行名**［`deepseek-flash`＋`deepseek-v4-pro`；legacy 名已不在发现列表——pricing 页「仍收单」仅指补全端点，GAK-09 探针将判 not-found、与 GAK-10 臂互补］；`deepseek-flash` 最小补全 **HTTP 200 model 回显**（usage 正常、36 tokens）；SCBench dry-run＝`deepseek/deepseek-flash` 解析 name/internal 均 `deepseek-flash` ⇒ 输出树键 **`outputs/deepseek-flash`**、legacy 解析保留。
+- **S4 注记条款**：后续报告/台账新名＋legacy 路由注记（「legacy 别名仍收单、底模同代同价、读数可比」）；207 报告 §2 注记 208 已在位、定档不动。
+- **边界**：载体 0.8.14 仍发 legacy 名（同后端承接），**进体随 0ct/0cu S3 同一 0.8.15 重建批**（一次重建进体三件、随用户令放行）；零契约面；TB 驱动与 dated 驱动不回改；orz 批提交不推送。
+- 批档：[`217 批档`](audits/217_0CV_S1_S4_DEEPSEEK_IFACE_ALIGN_EXEC_2026-10-07.md)。
+- 关键词：217 批、0cv S1–S4、deepseek-flash、GAK-10 legacy 建议臂、warnings 字段、208 ④ 勘误、MAIN_AGENT_MODEL、SCB_OUT_ROOT、outputs/deepseek-flash、/models 恰两枚、0.8.15 重建合流、af6fa9a0、计数 54 不变。
+
+### 1.165 2026-10-07 219 批 213 询问信修订——运行环境段＋诉求①改准＋成本美元值＋检索面能力说明（用户两轮令「是否考虑把本机配置和环境加上去」→「我同意你提到的三处修改，限制披露要做，因为本地浏览器和http通道差别很大」；**信件修订批**，零源码、计数不变 54；信未发送）
+
+- **运行环境段（本机实测）**：消费级单机／Intel i5-12400F（6 核 12 线程）／16 GB／Windows 11 专业版（build 26200）／Docker Desktop 29.6.2（WSL2 后端、Linux 容器 x86_64、Docker VM 12 vCPU／8 GB）；严格串行、一次一题、每题全新容器；时区 Asia/Hong_Kong。**关键定性＝推理全由 DeepSeek API 承担，本机只影响墙钟、不影响模型行为，无 GPU 无本地推理**。
+- **能力说明段（检索面）**：镜像实测＝`docker run --entrypoint sh slop-code:python3.12` 逐名探测 chrome／chromium／firefox 全无命中、`/opt` 空 ⇒ 官方镜像无浏览器、容器内只剩 HTTP 搜索/抓取通道；零调用实证＝36 份 `readings_*.txt` 的逐题 `tools:` 汇总全扫，`web_search`／`web_fetch`／`browser_read`／`browser_control` **0 命中**（全轮 6,157 工具调用全为本地工具）。口径＝浏览器与 HTTP 非等价能力，本轮成绩只反映本地工具形态、对联网任务无说明力。
+- **诉求①改准**：改按 208 批复核结论提问——(a) 以官方 Harbor 管线跑一轮并公开上传，是否即形成可见的 Model×Harness 记录；(b) 最小可行形态／文档化流程；并补「已发布为 `silverwhite` 数据集」语境。
+- **成本美元值**：`¥157.49 ≈ US$22`（与 215 批报告 §14 per-run $22.0 同源）。
+- **台账**：本卷；[`219 批档`](audits/219_213_INQUIRY_LETTER_REVISION_2026-10-07.md)；信件本体 `docs/en/SCB_OFFICIAL_INQUIRY_DRAFT_2026-10-07.md`（附件清单 +4、核对清单 +2）；BACKLOG 计数行（54 不变）＋本批指针；TODO 计数行；索引头行 v4.189 → v4.191（v4.190 预留邻窗 218 批）。
+- **边界**：零源码零跑批（镜像探针为只读 docker run）；信仍未发送、附件四件待放行；未提交未推送（与邻窗 0cv 在途改动同树）。
+- 关键词：219 批、213 询问信修订、运行环境段、i5-12400F、Docker Desktop 29.6.2、API 推理不在本机、检索面能力说明、镜像无浏览器、检索面零调用、诉求①改准、US$22、计数 54 不变、索引 v4.191、218 让号。
+
+
+### 1.166 2026-10-07 218 批 0.8.15 双平台载体重建进体＝0ct／0cu／0cv 三件（用户令「请开始进行重建吧」；邻窗让号批〔219 批注「218 让号邻窗 0.8.15 重建批」〕；源冻结 orz `10cfe765`；零源码语义增量、计数不变 54；未推送未发行）
+
+- **源冻结**：orz `10cfe765`＝`93672eca`（204/209/212/214 批 0ct/0cu 落码）＋`af6fa9a0`（217 批 0cv 落码）＋bump 0.8.14→0.8.15（Cargo.toml＋Cargo.lock 恰两行、`cargo metadata --locked` exit 0）。
+- **Windows**：`build_orz.ps1 -Release -Jobs 2` **exit 0（6m06s 暖缓存）**；换装 `D:/tb-eval/orz-windows/` **MATCH 3/3**（orz.exe 57,135,104 +18,432＝`c9f30c75…`／signer Δ0＝`f86158ed…`／provision Δ0＝`c887b1a9…`）、`.0.8.14-bak` 链预建；`--build-info`＝0.8.15 windows rc0；载体清单 3 entries；**ACAF 重 provision exit 0**（旧 manifest 留 `bak-20261007-218`；`binary_sha256=f86158ed…`↔换装位一致；keystore Sep 12 mtime 未动）。**首跑偏航如实记**＝Git Bash 反斜杠参数被 MSYS 剥除 ⇒ provision 把 drive-relative 名当相对路径、误生成散落 keystore/manifest 副本（真 keystore 未触）——清理散落件后正斜杠重跑成立。
+- **Linux musl**：docker `rust:1.97-slim`＋trixie 脚本 **exit 0**（`-j 1` 暖 /target）；`.0.8.14-bak` 链宿主预建；产物 **MATCH 3/3**（orz 115,615,912 +22,704＝**`75515440…` 身份门新值**／signer +16＝`f1a1d784…`／provision Δ0＝`5893eec4…`）；**static-pie×3**（ET_DYN＋PT_INTERP=0）；alpine 3.20/bookworm 双冒烟 0.8.15 rc0；Linux 不重 provision（沿同口径）；清单刷新。
+- **进体字节判据（双平台 python 字节直数；方法注＝grep 对 `--` 前缀模式吞成选项假阴性、WIN log 含 GB 中文横幅被判二进制，均 cat -v／直数复跑）**：**0ct**＝`--target-directory` 0→1（212 族 b 闭表成员）＋`若意图是备份/暂存` 0→1（214 备份指引）＋`session_volume_notice` WIN 6→5／LIN 7→6（notice→denial 转译臂退役恰减一、journal 闭集保留）；**0cu**＝`findings` 3→62（WIN）／3→59（LIN）＝enum＋描述/guide＋派发/渲染臂进体；**0cv**＝退役判据连续 `deepseek-v4-flash` 2→0（双平台；旧两处＝MAIN_AGENT_MODEL＋web_search 回退）＋新名判据＝**len14 邻接折叠 0→1**（连续字面 0 系 LLVM 立即数物化、`movabs(deepseek)` 1→3，非缺失如实记）。**194 窗保留面零回归**（did you mean " 2/2、run_command_name 1/1、D4 渲染串 1/1、前推( 1/1、rli.notice. 7/1、coverage_gap 5/6、u_prog 22、slow_prog 3/3、carrier-write 1/1、ORZ_LIF_RLI_SHADOW 3/3、streak_crossed/domain_spike_entry/migration_confirmed 1/1）；退役面 `预算：`／`rli-shadow-v1` 0/0；负例 `cursor_agent` 0/0。
+- **冒烟**：WIN `--fake-provider -p hello` 整轮 rc0（run `RUN-CLI-6ac63765`）＋`dogfood_launch -DryRun` 装配断言全过（carrier v0.8.15 在册、sha `C9F30C75…`）。
+- **身份门换装**：`run_r0_heavy_official.py` `EXPECTED_CARRIER_SHA256` `fc990a8a…`→**`75515440…`**（注释同步 93672eca＋af6fa9a0＋bump；adapter `6d55c26e…` 未动；语法＋`--help` rc0）。
+- **构建告警（如实记）**：WIN 1＝orz-host permission.rs `unused_imports`（187 批在案先存）；LIN 8＝unused 族先存＋rustup 工具链通知＋rg PATH 提示。源清单随批再生成 1,486 条（差 6 行＝217 四行未提交面＋bump 两行）。
+- **边界**：未推送未发行（发布面停 v0.8.14〔195 批〕）；0ct S4／0cu S4 真机复核待下一真机轮；0cv 闭合待用户裁决；**并行窗交织如实记＝219 批（213 修订）同日先行落账并把 218 让号本批，索引 v4.190 跳号（v4.189→v4.191 邻窗实写），本批落账取 v4.192**。
+- 批档：[`218 批档`](audits/218_CARRIER_REBUILD_V0815_0CT_0CU_0CV_2026-10-07.md)。
+- 关键词：218 批、0.8.15 重建、源冻结 10cfe765、0ct 进体、0cu 进体、0cv 进体、75515440 身份门、ACAF f86158ed、static-pie×3、alpine/bookworm 0.8.15、deepseek-v4-flash 2→0、findings 3→62/59、len14 折叠、RUN-CLI-6ac63765、218 让号、v4.190 跳号、计数 54 不变。
+
+### 1.166 2026-10-07 220 批 SCB 询问信附件 1／2 产出——英文精简版全轮报告＋196 档合并逐档记录（用户令「请继续」＝承接 219 批尾；**附件产出批**，零源码零跑批、计数不变 54）
+
+- **附件 1（仓内新档）**：`docs/en/SCB_V1_36_FULL_ROUND_REPORT_EN.md`——中文 authority `docs/SCB_V1_36_FULL_ROUND_REPORT_2026-10-07.md` 的英文精简版，14 节齐备（摘要／口径与装置／收官总账／36 题逐题表／形态学／官方对照／摩擦台账 8 小节／转换脚注／账目更正／披露清单／边界／复现入口／多维聚合／成本）；术语按 `TRANSLATION_GLOSSARY` v1.0，题单位用 SCBench 官方词 `problem`；固定声明行在件；关键读数（134/196、11/36、60/196、44/196、0.289/0.613、¥157.49≈$22.0、$/CKPT $0.112）与中文版逐位一致。
+- **附件 2（仓外工件）**：生成器 `0cr_official/merge_checkpoint_results.py`（只读枚举 36 个 0cr run 目录）→ `merged_checkpoint_results.jsonl`（196 行＝36 题逐档）＋`.csv`（18 列复核子集）＋`.summary.json`；自校验 problems=36／checkpoints=196／isolated_full_pass=60／strict_full_pass=44／core_full_pass=134＝与报告 §13 逐位一致；两产物 sha256 记入 summary。
+- **术语表**：§3 文档映射 +1 行（`SCB_V1_36_FULL_ROUND_REPORT_EN.md` ↔ 中文 authority）；信件附件清单 1／2 两条改为已产出并补路径。
+- **台账**：本卷；[`220 批档`](audits/220_SCB_LETTER_ATTACHMENTS_EN_REPORT_AND_MERGED_RECORDS_2026-10-07.md)；BACKLOG 计数行（54 不变）＋本批指针；TODO 计数行；索引头行 v4.192 → v4.193。
+- **边界**：附件 3（4 缺陷明细）与附件 4（逐题工具分布）尚未成包，核对清单「附件包生成」项仍未勾；英文报告为 LLM 辅助译文、中文原版权威（中文若修订英文须同步）；未提交未推送。
+- 关键词：220 批、附件 1 英文精简版全轮报告、SCB_V1_36_FULL_ROUND_REPORT_EN、附件 2 196 档合并记录、merged_checkpoint_results、60/44/134 自校验、术语表映射、problem 词形、计数 54 不变、索引 v4.193。
+
+### 1.167 2026-10-07 221 批 SCB 询问信附件 3 产出与四件打包（用户令「请进行吧」；**附件产出＋打包批**，零源码零跑批、计数不变 54）
+
+- **附件 3（仓内新档）**：`docs/en/SCB_REFERENCE_SOLUTION_DEFECTS_2026-10-07.md`——官方 `scb_to_harbor.py --validate-with-oracle` 的 rc=4 工具输出原文照录（**工具自己的裁决，非我们对题目的判断**）＋agent 同档对照。四题：**env_manager** ck3 strict 0.98396 × agent 同档 isolated 1.0000／core 3/3；**file_backup** ck2 strict 0.84／core 0.0／iso 0.5556、ck3 strict 0.67647／core 0.0／iso 0.2222、ck4 strict 0.75281 × agent 三档 core 1/1；**mvvault** ck5 strict 0.99459／core 0.875／iso 0.96667 × agent isolated 1.0000／core 8/8；**test_translator** ck1–6 strict 0.688–0.756（ck1/2/4/5 core 0.6667）＋ck7 缺 strict／ck8 缺 step result × agent ck1 core 21/21。已登记对照＝dynamic_buffer／eve_market_tools 两侧同档皆败（非新缺陷）。
+- **四件打包**：`0cr_official/package_attachments.py`（确定性 zip）→ `slopcodebench-orz-attachments-2026-10-07.zip`＝52 文件／198,029 B／sha256 `ca5a52e6…`；包内 `1_SCB_full_round_report_EN.md`／`2_merged_checkpoint_records/`／`3_reference_solution_defects/`（含 6 份官方转换日志＋convert_summary3）／`4_per_problem_readings/`（readings×36＋两提取器）／`MANIFEST.md`／`SHA256SUMS`；尺寸远低于 GitHub issue 25 MB 与 Discord 10 MB/件上限。
+- **诚实订正**：对照粒度「逐测试」→「**逐档**」——oracle 逐测试日志的临时目录已随会话清理、先查未果，如实降级并写明可由维护者复跑参考解取得逐测试名。
+- **台账**：本卷；[`221 批档`](audits/221_SCB_LETTER_ATTACHMENT3_AND_PACKAGE_2026-10-07.md)；信件附件清单 1–4 改包内实名＋补打包件行、核对清单「附件包生成」勾选；BACKLOG 计数行（54 不变）＋本批指针；TODO 计数行；索引头行 v4.193 → v4.194。
+- **边界**：零源码零跑批；附件 3 为工具产物转述、不含根因判断；**信未发送**；未提交未推送。
+- 关键词：221 批、附件 3、参考解缺陷机械证据、oracle rc=4、逐档对照（订正自逐测试）、env_manager／file_backup／mvvault／test_translator、四件打包、198 KB、sha256 ca5a52e6、计数 54 不变、索引 v4.194、信未发送。

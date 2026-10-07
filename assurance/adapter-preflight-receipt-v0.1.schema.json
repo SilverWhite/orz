@@ -49,6 +49,7 @@
         "adapter_capabilities_match_manifest": { "type": "boolean" },
         "output_schema_known": { "type": "boolean" },
         "model_id_not_deprecated": { "type": "boolean" },
+        "model_id_not_legacy_alias": { "type": "boolean" },
         "thinking_sampling_exclusive": { "type": "boolean" },
         "model_id_known_by_provider": { "type": "boolean" }
       }
@@ -66,6 +67,7 @@
       }
     },
     "errors": { "type": "array", "items": { "type": "string" } },
+    "warnings": { "type": "array", "items": { "type": "string" } },
     "limitations": { "type": "array", "items": { "type": "string" } }
   },
   "$defs": {

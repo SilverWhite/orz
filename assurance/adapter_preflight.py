@@ -16,6 +16,17 @@ _DEPRECATED_DEEPSEEK_ALIASES: frozenset[str] = frozenset({
     "deepseek-reasoner",
 })
 
+# Legacy aliases verified 2026-10-07 per the official pricing page
+# (https://api-docs.deepseek.com/quick_start/pricing): the identifiers
+# below are still accepted, but requests are served by the current
+# generation named in the mapping (Flash pricing tier).  Unlike the
+# retired aliases above these must not block a run — they only record
+# an advisory so new profiles converge on the current name (0cv).
+_LEGACY_DEEPSEEK_ALIASES: dict[str, str] = {
+    "deepseek-v4-flash": "deepseek-flash",
+    "deepseek-v4-flash-vision-exp": "deepseek-flash",
+}
+
 # Thinking mode ignores these sampling parameters silently on the
 # DeepSeek API side — local preflight must reject declaring both
 # so we never record unexecuted sampling settings as provenance.
@@ -98,10 +109,24 @@ def run_adapter_preflight(
         checks["model_id_not_deprecated"] = False
         errors.append(
             f"model_id {model_id!r} is a deprecated alias that was retired "
-            "on 2026-07-24; use deepseek-v4-pro or deepseek-v4-flash instead"
+            "on 2026-07-24; use deepseek-v4-pro or deepseek-flash instead"
         )
     else:
         checks["model_id_not_deprecated"] = True
+
+    # GAK-10 (0cv, 2026-10-07): legacy DeepSeek aliases still served by
+    # the current generation — record an advisory, never a failure.
+    warnings: list[str] = []
+    if provider == "deepseek" and model_lower in _LEGACY_DEEPSEEK_ALIASES:
+        current_name = _LEGACY_DEEPSEEK_ALIASES[model_lower]
+        checks["model_id_not_legacy_alias"] = False
+        warnings.append(
+            f"model_id {model_id!r} is a legacy alias that is still served "
+            f"(routed to {current_name!r}); use {current_name!r} for new "
+            "profiles"
+        )
+    else:
+        checks["model_id_not_legacy_alias"] = True
 
     # GAK-08: thinking mode silently ignores sampling parameters on
     # the DeepSeek API.  Reject profiles that declare both so we
@@ -145,6 +170,7 @@ def run_adapter_preflight(
         "adapter_id": adapter_id,
         "preflight_passed": preflight_passed,
         "checks": checks,
+        "warnings": warnings,
         "manifest_checks": {
             "provider": provider,
             "model_id": model_id,
