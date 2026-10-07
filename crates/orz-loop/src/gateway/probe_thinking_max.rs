@@ -37,7 +37,9 @@ use serde_json::{Value, json};
 use crate::gateway::credentials::read_agent_api_key;
 use crate::gateway::transport::DEFAULT_DEEPSEEK_API_BASE;
 
-const MODEL: &str = "deepseek-v4-flash";
+// 0cv (2026-10-07): tracks MAIN_AGENT_MODEL — legacy `deepseek-v4-flash`
+// alias still served, but the probe measures the current official name.
+const MODEL: &str = "deepseek-flash";
 const ROUND_CAP: usize = 6;
 /// Per-request wall-clock guard (thinking max on the 256K single-round
 /// budget is still slow by design — this only catches true hangs).

@@ -32,7 +32,7 @@ pub fn web_search_config(reader: &dyn CredentialReader) -> WebSearchConfig {
             base_url: std::env::var("ORZ_WEB_SEARCH_BASE_URL")
                 .unwrap_or_else(|_| "https://api.deepseek.com".to_string()),
             model: std::env::var("ORZ_WEB_SEARCH_MODEL")
-                .unwrap_or_else(|_| "deepseek-v4-flash".to_string()),
+                .unwrap_or_else(|_| "deepseek-flash".to_string()),
             extra_headers: Default::default(),
             alpha_test_key: None,
         },
@@ -714,7 +714,7 @@ mod tests {
             } => {
                 assert_eq!(api_key, "sk-test-key");
                 assert_eq!(base_url, "https://api.deepseek.com");
-                assert_eq!(model, "deepseek-v4-flash");
+                assert_eq!(model, "deepseek-flash");
             }
             other => panic!("expected Enabled, got {other:?}"),
         }

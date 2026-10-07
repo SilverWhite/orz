@@ -3150,7 +3150,7 @@ mod tests {
         let config = WebSearchConfig::Enabled {
             api_key: key,
             base_url: "https://api.deepseek.com".to_string(),
-            model: "deepseek-v4-flash".to_string(),
+            model: "deepseek-flash".to_string(),
             extra_headers: Default::default(),
             alpha_test_key: None,
         };

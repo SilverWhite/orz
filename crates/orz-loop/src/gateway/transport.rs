@@ -66,7 +66,12 @@ pub const DEFAULT_DEEPSEEK_API_BASE: &str = "https://api.deepseek.com";
 /// Main-agent model id (single source of truth — the live test and the
 /// production `--real` gateway share it, so a model change cannot drift
 /// between the two).
-pub const MAIN_AGENT_MODEL: &str = "deepseek-v4-flash";
+///
+/// 2026-10-07 (0cv): `deepseek-v4-flash` → current official
+/// `deepseek-flash`.  The old id is a legacy alias still served by the
+/// same backend (DeepSeek-V4.1-Flash, Flash pricing), so carriers built
+/// before this rename stay functional.
+pub const MAIN_AGENT_MODEL: &str = "deepseek-flash";
 
 /// Main-agent model id for the production gateway — `ORZ_MAIN_AGENT_MODEL`
 /// env override for evaluation/model-swap runs (e.g. TB B 组 flash→pro
