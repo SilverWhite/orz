@@ -1475,3 +1475,11 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **台账**：本卷；[`224 批档`](audits/224_SUBMIT_PUSH_AND_RELEASE_V0815_2026-10-07.md)；README 发布面对齐 0.8.15（解包文件名＋最新 release 链接）；BACKLOG 计数行（54 不变）＋本批指针行（并修正 219–223 批未滚动的失效指针）；TODO 计数行；索引头行 v4.196 → v4.197。
 - **边界**：零源码（orz 子仓本批无新提交）；中间载体 0.8.13／0.8.14 内容一并含于成品线（0.8.13 未单独发行先例）；Linux 载体未重 provision（沿同口径）；第二卷 `1.166` 存在邻窗重号（218／220），本批不回改。
 - 关键词：224 批、提交推送、GitHub Release v0.8.15、rel-224-stage、6/6 MATCH、README 发布面对齐、deepseek-flash 首个发行包、findings 第三分区、.gsa 读向全开放、计数 54 不变、索引 v4.197。
+### 1.171 2026-10-07 225 批 0.8.15 发行回读核证补记（承接 224 批 §3；**回读核证批**，零源码零跑批零改动、计数不变 54）
+
+- **服务端回读**（`gh release view --json`）：三资产 digest 与本地**逐位一致**——zip `sha256:76a9f860…`（28,034,248）／tar.gz `sha256:fafb261d…`（37,218,091）／`SHA256SUMS` `sha256:012f0498…`（193）；`isDraft=false`／`isPrerelease=false`／列表为 **Latest**；`publishedAt`＝2026-10-07T13:50:10Z；`targetCommitish=main`。
+- **tag 形态**：`gh api /git/ref/tags/v0.8.15` ⇒ `object.type=commit`、`object.sha=9f659c0e…`＝**轻量 tag** 落在 224 批提交（沿 122／156／183／195 形态）；发行正文回读长度 1,929 字符。
+- **完整回下载**（落点 `D:\tb-eval\rel-224-verify`）：zip／tar.gz／`SHA256SUMS` 三件与本地**identical 3/3**（逐字节相等）⇒ 远端资产＝本地产物，无上传截断／替换。
+- **边界如实记（本机网络）**：首轮 `gh release download` 在小件即时完成、两大件长时间 0 字节停摆（进程存活、无读写增长）故中止；改 `curl -L -C -`（断点续传＋停摆中止重试）后两件均完成且哈希逐位一致；range 探测读物已清理。判据以「服务端 digest＋回下载」两路互证为据，网络停摆不构成资产完整性疑点。
+- **台账**：本卷；[`225 补记`](audits/225_RELEASE_V0815_READBACK_VERIFICATION_2026-10-07.md)；BACKLOG 计数行（54 不变）＋本批指针行；TODO 计数行；索引头行 v4.197 → v4.198。
+- 关键词：225 批、回读核证、服务端 digest 逐位一致、回下载 identical 3/3、Latest、轻量 tag 9f659c0e、gh 大文件停摆、curl 续传、计数 54 不变、索引 v4.198。
