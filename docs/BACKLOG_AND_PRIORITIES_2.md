@@ -136,6 +136,101 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.189 2026-10-11 243 批 0.8.16 双平台载体重建进体——0cz S3＋0da S3 合并窗口（**重建批**，零源码语义增量、计数不变 59）
+
+- **用户令**：「请开始进行重建吧」。**流程**（沿 218/194/187 批形态）＝源冻结→bump→双平台重建换装→进体字节判据→ACAF 重 provision→身份门换装→冒烟→落账。
+- **源冻结**＝orz `316107f6`（`39116a81` 238/241/242 落码 25 文件〔0cz S2 context_manage 在役＋0da S2 D1/D2/D5＋replace 族＋0da S2 审查处置＋12 个纯 rustfmt 漂移〕＋bump 0.8.15→0.8.16 恰两行；`cargo metadata --locked` exit 0）；源清单再生成 **1,486 条**（差 27 行）。
+- **Windows**：build_orz.ps1 -Release -Jobs 2 **exit 0（3m53s 暖缓存）**；换装 **MATCH 3/3**（`orz.exe` 57,531,392〔+396,288〕`76904567…`／signer Δ0 `1919b56f…`／provision Δ0 `446d8cc7…`）；`.0.8.15-bak` 链预建；`--build-info`＝0.8.16 os=windows。**ACAF 重 provision** exit 0（旧 manifest bak-20261011-243；binary_sha256↔换装位逐位一致；keystore mtime 未动；零偏航）。
+- **Linux musl**：docker rust:1.97-slim＋trixie 脚本 **exit 0**（-j 1 暖 /target）；直写换装位 **MATCH 3/3**（`orz` 116,019,040〔+403,128〕**`db95ed15…`＝身份门新值**／signer −80 `d462590f…`／provision +56 `a8c2dd4c…`）；**static-pie×3**；alpine 3.20/bookworm 双冒烟 `0.8.16 os=linux` rc0；不重 provision；清单刷新。**首跑偏航如实记**＝docker `-w /orz/orz` 被 MSYS 改写 `B:/Git/orz/orz` ⇒ daemon 拒绝、构建未执行、旧件未触——`MSYS_NO_PATHCONV=1` 重跑成立（218 MSYS 同族教训；冒烟 docker 命令一并修正）。
+- **进体字节判据（0cz＋0da 合并窗口全命中；python bytes.count）**：`clear_all` 0→27（WIN）／1→28（LIN；基线 1 为巧合字节序列如实记）；`context_manage` 0→3/0→3；`keep_recent_rounds` 0→13/13；`handover` 0→38/27；清零 marker 前缀 `[前文上下文已清零` 0→2/2；guide `清空黑板分区` 0→1/1；权限句 `一键清理` 0→8/8；`mode=clear` 0→23/23、`op=clear` 0→42/20；section 枚举 +all 以组合面代证（"all" 不可数、如实记）。**保留面零回归**（218 窗：`--target-directory` 1、`若意图是备份/暂存` 1、`deepseek-v4-flash` 0、`did you mean "` 2、`前推(` 1、负例 `cursor_agent` 0）；`findings` 62→92／59→67＝0da 清空路径增长面非回归。
+- **冒烟**：WIN `--fake-provider -p hello` 整轮 rc=0（run `RUN-CLI-6acabdc9`）；`dogfood_launch -DryRun` 装配断言全过（carrier v0.8.16 在册、sha `76904567…`）。**身份门**：`run_r0_heavy_official.py` `EXPECTED_CARRIER_SHA256` `75515440…`→`db95ed15…`（adapter 未动；语法＋--help rc0）。
+- **S3 判据**：0cz S3＋0da S3 **双达成**（合并同一次重建；设计稿 §9 既定）。S4 狗粮长轮实测待 0cy 卫生前置（D7 五观察项＋0cz 判据）。
+- **台账**：本卷；[`243 批档`](audits/243_CARRIER_REBUILD_V0816_0CZ_0DA_2026-10-11.md)；BACKLOG（指针＋计数行＋0cz/0da 批序＋P1 总览＋开放项锚点＋入口）；TODO（头行＋路由＋两 S3 勾）；索引 v4.215 → v4.216（头行＋§6 两条目＋§8 两片段）。**未推送、未发行**（发布面停 v0.8.15〔225 批〕）。
+- 关键词：243 批、0.8.16 重建、源冻结 `316107f6`、0cz S3 进体、0da S3 进体、`db95ed15…` 身份门、ACAF `1919b56f…`、static-pie×3、`clear_all` 0→27/1→28、MSYS docker 偏航、RUN-CLI-6acabdc9、未推送未发行、v4.216。
+
+### 1.188 2026-10-11 242 批 0da S2 审查处置——跨清零边界块兜底回收＋P3×3 收口（**落码处置批**，orz 子树 3 文件、计数不变 59）
+
+- **用户令**：「请对审查出的全部问题进行处理」（2026-10-11 对 0da S2 在役面全面审查——同 239 批三轴流程复用于 0da 自身；四发现＝P2×1＋P3×3）。
+- **处置面**：① **P2 跨清零边界块兜底回收**＝首轮端点单判据 `is_round_cleared(first_round)`（可压集合/截断 live/T1 计数/滑块读数/块隐藏臂五处）把「含边界前轮＋边界后轮」的跨边界块永久排除在压缩/截断外（分区不保证在清零边界对齐＝D1 同类未推演分支；边界后段不可回收、块表误标「原文」）——修复＝`FaceMarkers::is_block_cleared`（first∧last 整块判据）单一源五处收窄＋块表新增「跨清零边界（前段已移出）」如实标态；跨边界块压缩安全（边界前段已被清零臂隐藏、块档案为 clear.md 超集）；② **P3×3**＝T1 计数 `face_markers` 提升出闭包（241 引入的逐块扫描＋短路失效）／`hidden_message_ranges` clear_end 参数化下传（脏 marker「有前缀无边界行」两段口径分裂消除、公开入口恰算一次）／D5 单调守卫前移至 handover 校验前（「无可清」比「缺交接」更基本；零副作用不变量不变）。
+- **钉＋3**：跨边界块钉（判据/可压读数恰 1/块表标态/压缩后估算回落＋边界轮随块臂隐藏/estimate≡build）／脏 marker 零隐藏钉（面/计数/估算与基线恰差自身）／守卫次序钉（漏带 handover 得中性「已覆盖」非 exit 1）；既有钉组回归全绿。
+- **读数**：orz-loop **872/0＋竞速族 1–2 抖**（user_cancel/cancel_during_permission_await/cancel_mid_multi_tool 轮换抖动、三轮复跑实证 nondeterministic、209 批在案家族、触碰面零交集）；assurance **301/0**；fmt 净；clippy 触碰行零警告。
+- **台账**：本卷；[`242 批档`](audits/242_0DA_S2_REVIEW_DISPOSAL_2026-10-11.md)；BACKLOG（指针＋计数行＋`0da` 批序＋P1 总览＋入口）；TODO（计数＋路由＋`P1-0da` 处置勾选）；索引 v4.214 → v4.215。**未提交、未推送**。
+- 关键词：242 批、0da S2 审查处置、跨清零边界块、is_block_cleared、兜底回收、块表跨清零边界标态、脏 marker 不虚构隐藏、守卫前移、872/0、竞速族抖动、计数不变 59、索引 v4.215。
+
+### 1.187 2026-10-11 241 批 0da S2 落码＋钉子——D1 清零态兜底链修复＋D2/D5 归一守卫＋replace 族在役（**落码批**，orz 子树 8 文件、计数不变 59）
+
+- **用户令（两段）**：①「命名没关系，只要通用，方便模型使用就行」（O1 终审＝clear 族命名定案）②「请开始S2」。
+- **实现面（设计稿 §4–§7 逐条落地；零契约破坏＝判官/Python 镜像/schema/WORK_TOOLS 三处零改动、零新事件类型、零新工具）**：① **D1**＝build_model_face 拆清零态短路（有块清零走常规装配——hidden_message_ranges 的 (0,clear_end) 前置臂＋滑块/压缩/截断/守卫全链恢复；build_cleared_face 保留为无块清零面）＋白名单豁免双路径（前置段 i≥clear_end∨whitelist＋主循环白名单永不隐藏；未清零零行为变化）＋estimate/count 三分同口径＋face_markers 恰算一次〔D4 吸收〕＋agent_loop 三消费点（可压集合/截断 live/T1 计数）补 !is_round_cleared；② **D2 归一**＝marker 插入点＝保留窗第一轮起点 ranges[cur-keep].0＋边界参数 cur-keep（物理/事件/marker 文本/clear.md 四方一致）；**随钉修复档头标签同族 bug**＝clear_transcript_markdown 原传 cur 在 keep>0 虚大、改传 cur-keep（keep=0 恰重合故 0cz 未暴露）；③ **D5**＝二次清零单调守卫（既有边界≥新边界 ⇒ 中性 exit 0「已覆盖目标区间」）＋dump 资格补「旧边界已覆盖⇒跳过」；④ **replace 族**＝blackboard_write op 扩 clear（section 单分区或 all；all 仅与 clear 组合合法否则显式拒绝）＋clear_model_note_sections 单源（清空为空列表＋版本计 1）＋op 解析前移（clear 无需 content；护栏不对称＝无 handover）＋journal plan_write 顶层 op="clear"/content_chars=0/goal「（清空 section）」＋context_manage mode 扩 clear_all（防裸清→**先清板后写 handover**＝板面恰一条【交接摘要】→执行核承继；ContextCompressed mode=clear_all 载荷增 board_entries_removed）；⑤ **提醒面**＝权限句四选择单源句入六块＋guide 一键清理/清空词条＋声明面三枚举（mode+clear_all/op+clear/section+all）＋描述同步＋LITERAL_EXEMPTS 补登 guide 教学句。
+- **钉组**：回落钉（清零态压缩 marker ⇒ face 排除＋估算回落＋读数恰零＋块表已清零/已压缩双态＋estimate≡build 对拍）／白名单双路径钉（有块前置段豁免＋无块保留臂；原 prompt 仍隐藏；无块面 count≡len）／keep 钉（事件边界=marker 文本=marker 落点紧邻保留窗首声明=clear.md 档头「轮 1–2」四方归一）／单调守卫钉（中性回执点名既有边界＋零新 marker＋零边界事件）／replace 族钉（op=clear 单分区 entries_removed=2＋all 三分区全清 revisions=4＋all+append 拒绝＋非法 op 拒绝〔D3〕＋clear_all e2e 板面恰一条 handover＋boundary=4）／权限句四选择七关键词＋六块各携。
+- **读数**：orz-loop **869/0＋1 环境性预存**（869＝864＋5 新钉；1＝user_cancel 30ms 取消窗竞速——**stash 干净 HEAD 3/3 同败实证＝环境性劣化非本批引入**，185/238 批先例同款）；orz-assurance **301/0**（0ao 豁免登记后转绿）；host/bin 编译过；fmt 净；clippy **96＝96 零新增**（stash 对拍）。
+- **D6 勘误随批**：[`238 批档`](audits/238_0CZ_S2_CONTEXT_MANAGE_IMPL_2026-10-11.md)尾部补勘误注记（loop 864→867；13 文件＋12 fmt 漂移＝提交 25 文件口径）。
+- **台账**：本卷；[`241 批档`](audits/241_0DA_S2_CONTEXT_MANAGE_R2_IMPL_2026-10-11.md)；BACKLOG（指针＋计数行＋`0da` 批序＋P1 总览＋开放项）；TODO（计数＋路由＋`P1-0da` S2 勾选）；索引 v4.213 → v4.214＋§6/§8。**未提交、未推送**。
+- 关键词：241 批、0da S2 落码、D1 清零态兜底链修复、常规装配叠清零区间、白名单豁免、无块清零面、三消费点过滤、回落钉、D2 归一、clear.md 档头标签修复、D5 单调守卫、mode=clear_all、op=clear、section=all、四选择权限句、869/0＋1 环境性预存、301/0、clippy 96 零新增、计数不变 59、索引 v4.214。
+
+### 1.186 2026-10-11 240 批 0da S1 设计稿达成——0cz 审查处置方案＋replace 族载体定案（**设计稿批**，零源码、计数不变 59）
+
+- **用户令**：「请开始处理0da吧」。
+- **S1 要点**（权威＝[`设计稿`](MODEL_CONTEXT_CONTROL_R2_DESIGN_2026-10-11.md) v1.0，放行门＝用户）：**O1 载体定案立场＝零新工具三落位**——清理上下文＝`context_manage mode=clear`（零改动承继）；清理黑板＝`blackboard_write op=clear`（section 单分区或 `all`，all 仅与 clear 组合合法、其余显式拒绝）；一键清理＝`context_manage mode=clear_all`。**clear 族命名消歧**（replace_* 为能力速记，replace 语义已被 op=replace_all 占用）。**契约面实证**＝判官（`families_s2c` 只查 refill/validation 耦合）/verifier/conformance/Python 镜像对 journal `section` 值零枚举约束 ⇒ `section="all"` 零契约面；零新事件类型（`ContextCompressed{mode=clear_all}` 全量载荷复用）；WORK_TOOLS 三处零改动。**D1 修复**＝build_model_face 短路拆除（有块清零走常规装配，`hidden_message_ranges` 的 (0,clear_end) 前置臂在位）＋白名单豁免补常规路径＋`build_cleared_face` 保留为无块清零面专用（无块早退不应用 hidden 区间的三岔口实证）＋estimate/count 同口径＋`face_markers` 单次（D4 吸收）＋agent_loop 三消费点（L1286/L1686/L2530）补 `!is_round_cleared`＋回落钉。**D2 修复**＝marker 插入点移保留窗第一轮起点 `ranges[cur-keep].0`＋边界参数 `cur-keep`（物理/事件/marker 文本/clear.md 四方归一；checked_sub 守卫保证无退化）。**D5**＝二次清零单调守卫（boundary 倒退 ⇒ 中性 exit 0）＋dump 资格补「旧边界已覆盖⇒跳过」。**clear_all 执行序**＝防裸清→先清板后写 handover（板面恰一条【交接摘要】，锚点保序）→clear 执行核承继；护栏不对称（黑板臂无 handover）落地；权限句扩四选择单源句入六块。开放项 O1 命名终审／O2 单笔事件／O3 无块面保留／O4 句终稿随放行裁决。
+- **批序**：→ S2 落码＋钉子（待放行）→ S3 与 0cz S3 合并同一次重建 → S4 并入 0cz/0cy 联动轮。
+- **台账**：本卷；[`240 批档`](audits/240_0DA_S1_DESIGN_2026-10-11.md)；BACKLOG（指针＋计数行＋`0da` 批序＋P1 总览＋开放项）；TODO（计数＋路由＋`P1-0da` S1 勾选）；索引 v4.212 → v4.213＋§6/§8。**未提交、未推送**。
+- 关键词：240 批、0da S1、零新工具、clear 族命名、section=all 零契约面、常规装配叠清零区间、白名单豁免、无块清零面、marker 插入点归一、单调守卫、mode=clear_all、op=clear、四选择权限句、计数不变 59、索引 v4.213。
+
+### 1.185 2026-10-11 239 批 0da 立项——MODEL-CONTEXT-CONTROL-R2＝0cz 全面审查处置＋清理操作多样化 replace 族（**立项登记批**，零源码、计数 58 → 59）
+
+- **用户令（三段）**：①「最初的用户任务得留下来才行……现在的清零机制是类0cw的那种形式，黑板和台账不清零，有plan应该问题不大，先不额外对任务保留做机制处理试试看」（任务保留＝零机制既定姿态，S4 观察项「任务漂移」）；②「我考虑应该给模型多样化的选择，replace_all/replace_blackboard/replace_context应该分开给，便于模型按需使用，一键清理/清理黑板/清理上下文都按需选择」；③「本轮审查出的全部问题都得处理，无论大小。请立项一个问题处理批次」。
+- **审查底座（2026-10-11 全面审查，三轴）**：orz 子树 13 文件实现 diff 逐文件实读＋12 个纯 rustfmt 漂移文件去空白甄别＋恢复/串行链路核实＋测试复跑（**orz-loop 867/0〔3 ignored；批档记 864，D6 勘误随处置批落账〕＋orz-assurance 301/0**）。
+- **发现全项（D1–D7）**：**D1（P1）** 清零生效后兜底阶梯与滑块在投影层整体失效（`build_cleared_face` 短路绕过 `hidden_message_ranges` ⇒ T1/700K 守卫/机械压缩只插 marker 不落隐藏、面估算单调上涨；与 0cz 设计稿 §5.3/§9「机制不退役」相悖——设计与实现共有的未推演分支；修复方向＝常规装配叠前置清零区间＋`agent_loop.rs` 三处消费点补 `!is_round_cleared`）；**D2（P2）** `keep_recent_rounds>0` 事件/marker/物理投影三方不一致（marker 插入点移保留窗起点归一或砍参数，S1 定案）；**D3（P3）** `op=replace_all` 派发面无 e2e 钉；**D4（P3）** estimate/count 清零分支双重 `face_markers` 扫描；**D5（P3）** 二次清零重 dump＋keep 过大新 marker 被埋边角；**D6（P3）** 238 批账面两处（「13 文件」vs 工作树 25 文件；loop 864 vs 867）；**D7（P3）** S4 观察项增补。审查确认无误面如实记（防裸清 fail-closed／I3／恢复重建／串行面／三处同批等）。
+- **扩展主项（裁决②）**：`replace_context`（清理上下文，`mode=clear` 承继＋防裸清）／`replace_blackboard`（黑板三分区板面清空——现状空内容校验恒 exit 1 不可清空、10MiB 板面水位无模型可用释放手段；journal 留痕黑板同构）／`replace_all`（一键清理）分开给按需选择；**开放项 O1＝载体形态与命名消歧**（与既有 `blackboard_write op=replace_all` 撞名，S1 定案、零回归底线）；护栏不对称＝上下文臂承继防裸清、黑板臂 journal 在案无需同级护栏。
+- **批序**：S1 设计稿（D1/D2 定稿＋replace 族定案）→ S2 落码＋钉子（D1–D7＋replace 族）→ S3 与 0cz S3 合并同一次重建 → S4 并入 0cz/0cy 联动轮。真机面依赖 0cy 不变。
+- **台账**：本卷；[`239 批档`](audits/239_0DA_MODEL_CONTEXT_CONTROL_R2_2026-10-11.md)；BACKLOG（计数 59＋指针＋P1 总览＋开放项＋`0cz` 批序审查注记＋新 `0da` 节）；TODO（计数＋P1 路由〔含 `0cz` 状态句同步＝S1/S2 达成，238 批未更的账〕＋新 `P1-0da` 节）；索引 v4.211 → v4.212＋§6＋§8。**未提交、未推送**。
+- 关键词：239 批、0da 立项、MODEL-CONTEXT-CONTROL-R2、0cz 全面审查、清零后兜底失效、build_cleared_face、hidden_message_ranges、keep_recent_rounds 不一致、清理操作多样化、replace_context、replace_blackboard、replace_all 一键清理、黑板板面清空、任务保留零机制、58 → 59、索引 v4.212。
+
+### 1.184 2026-10-11 238 批 0cz S2 落码＋钉子——context_manage 第十一主工具（**落码批**，orz 子树 13 文件、计数不变 58）
+
+- **用户令（两段）**：①「就按照方案A走吧」（O1 裁决＝`context_compress` 声明面退役吸收）②「请开始S2」。
+- **实现面（设计稿 §4–§7 逐条落地；零契约破坏）**：① tool_names 单源＋WORK_TOOLS 三处同批（判官/探针/Python 镜像＝26；`context_compress` 表位保留供历史回放）；② controller 声明 `context_manage`（mode/whitelist/handover/keep_recent_rounds；方案 A 压缩注入块同批退役）＋blackboard_write 增 `op`；③ 派发 mode 分流（compress＝0ap 原逻辑逐字保留；clear 执行核＝防裸清校验→交接写入黑板先行〔fail-closed〕→块级＋现场整段回放落盘→marker 只插入→软水位键重置；事件 `ContextCompressed{mode=clear}` 全量载荷）；④ 投影层清零 marker（注入/retained 双注册、零新侧车字段）＋`clear_marker_index` 权威边界（实现批修正：marker〔role=User〕被轮区间吸进前一轮、轮推导会吞 marker 本体——以消息下标为界）＋build/estimate/count 清零态同口径＋块表「已清零」＋读数清零块不入可压集；⑤ `replace_model_note_section`（NoteEntry.op 零迁移＋版本计 1＋【整节重写】/【交接摘要】章；plan_write 顶层增 op＝零新事件类型）；⑥ 单源权限句入**六块**提醒（设计稿列四块、实现批按全部压缩截断提醒面覆盖）＋guide 词条＋action_category other 折叠。
+- **读数**：orz-loop **864/0**（3 ignored）；orz-assurance **301/0**；host/bin 编译过；fmt 净；clippy 零新增。六钉全落（防裸清负例/零 diff/恢复重建/replace_all/单源句七处断言/水位键重置＋字节单调 e2e）；断言随批更新七处（面名单×3＋探针×2＋compress e2e×2）。
+- **预存两件如实记**：① 0ao 扫描钉 HEAD 红＝204 批（93672eca）备份指引文案漏登豁免（stash 实测预存）→本批首登 `LITERAL_EXEMPTS` 转绿；② `user_cancel` 时序测试预存红（30ms 取消窗 vs 60ms 分块流；stash 定界、185 批「冻结树同款先存」同款），不在本批处置。
+- **台账**：本卷；[`238 批档`](audits/238_0CZ_S2_CONTEXT_MANAGE_IMPL_2026-10-11.md)；BACKLOG `0cz` 批序注记；TODO `P1-0cz` S2 勾选＋计数行；索引 v4.210 → v4.211＋§6＋§8。**未提交、未推送**。
+- 关键词：238 批、0cz S2 落码、context_manage 在役、方案 A 吸收退役、清零 marker、clear_marker_index、防裸清、handover 强制交接、op=replace_all、零新事件类型、单源权限句、六钉、864/0、301/0、LITERAL_EXEMPTS 首登、计数不变 58、索引 v4.211。
+
+### 1.183 2026-10-11 237 批 0cz S1 设计稿——模型主控上下文（**设计稿批**，零源码零跑批、计数不变 58）
+
+- **用户令**：「请开始进行0cz吧，0cy留给orz，现在没什么狗粮任务了」——0cy 移交 orz（依赖改时序约束：0cz S1/S2 码面先行、载体与真机随 0cy）；0cz S1 即刻执行。
+- **交付**：[`设计稿`](MODEL_CONTEXT_CONTROL_DESIGN_2026-10-11.md)（v1.0，S1 待放行）。
+- **S1 现场盘点**：① 序号＝**第十一坐实**——主代理声明面现役 10 具（read_file/grep/search_replace/run_terminal_cmd/web_search/web_fetch/blackboard_read/submit/blackboard_write/context_compress；README §2.1 权威名单；controller 三注入点 L3667/L3818/L3859）；② 清零＝**投影层第三动作**有现成承载——v8 本地面只追加 restore-retained marker 逐字不删（I3）＋压缩/T1 块逐字落 `.gsa/compaction/blocks/` 回放先例 ⇒ 清零 marker 零新侧车字段；唯一让步＝I1 显式例外（模型主动＋交接前置＋边界可回放）；③ 黑板三分区皆追加式 ⇒ 全量编辑＝`blackboard_write` 增 `op: append|replace_all`；④ 提醒四块落点（soft/H1 window/T1 mandatory×2/700K guard）。
+- **残余四悬项定案**：mode 参数面＝`context_manage`（compress 承继 0ap 管线＋0am FR4 whitelist；clear 增 `handover` 必填 ≤8K 防裸清〔先写黑板后施边界、写失败中止〕＋`keep_recent_rounds` 默认 0；ReadOnly；无条件声明）；journal 呈现＝**零新事件类型**（编辑＝既有工具调用事件链 params 全量入账，重放即审计）；序号＝第十一＋**开放项 O1**＝context_compress 吸收退役（方案 A 推荐，消「双具冗余」、净面 10）vs 并存（方案 B，面 11）；0cy 接口＝**代码级零耦合**（clear 不触发会话收卷——对话内视野操作非新对话；0ak 流式持久化承载逐字留档，S2 设字节单调核实钉；依赖仅 S4 测量面）。
+- **开放项 O1–O4**（设计稿 §12）：O1 吸收裁决／O2 软档键重置幅度〔立场＝R1/R2＋first_block 重置、H1/T1 越线重武装〕／O3 clear 块级回放落盘〔默认做，S4 零命中可裁〕／O4 提醒句与描述终稿〔S2 终审〕。
+- **台账**：本卷；设计稿；[`237 批档`](audits/237_0CZ_S1_DESIGN_2026-10-11.md)；BACKLOG `0cz` 批序行＋依赖行注记；TODO `P1-0cz` S1 勾选＋S2 细化；索引 v4.209 → v4.210＋§6＋§8。**未提交、未推送**。
+- 关键词：237 批、0cz S1 设计稿、context_manage、第十一坐实、投影层第三动作、清零 marker、handover 强制交接、防裸清、op=replace_all、零新事件类型、0cy 零耦合、O1 吸收裁决、I1 显式例外、计数不变 58、索引 v4.210。
+
+### 1.182 2026-10-11 236 批 0cz 立项——模型主控上下文（**立项登记批**，零源码、计数 57 → 58）
+
+- **用户令（两段裁决）**：①「从0cy里面拿出来吧，因为我考虑这个设计可以被确立为第十一主工具……上下文目前就是模型所能看到的一切，或许模型不应该被控制上下文，而是让模型控制上下文。我考虑将上下文主动清零/压缩开放为新的工具面常驻工具，并且开放黑板的全量编辑，只留.gsa作为客观不可编辑的连续性和科学性承载，LIF/RLI/？？？和机械层全依赖.gsa即可」②「当前压缩机制全量不退役……仅新增新的上下文管理常驻工具，将主动权分给模型，现有机制用于兜底并且在触发机械压缩提醒/兜底时增加一步提醒，提醒模型具有上下文管理权限，是选择主动压缩正常继续还是直接清零后使用台账并继续。开放上下文管理工具更多的是开放主动性……机制本身也是服务于模型的」。
+- **定位**：MODEL-CONTEXT-CONTROL（0cz，P1）＝上下文管理（主动清零/压缩）开放为工具面**常驻主工具**（用户裁决序号＝第十一，确切序号以 S1 注册表盘点为准；单工具带 mode）＋黑板 plan/notes/findings **全量可编辑**（机械留痕不变、直接改 `.gsa` 仍拦）＋现有压缩机制**全量不退役**转兜底＋兜底触发**联动一步权限提醒**（主动压缩正常继续 vs 直接清零后使用台账并继续）；「清零」＝移出视野而非销毁；护栏＝清零前置强制交接写入（板摘要先行）。
+- **查证修正（用户自疑「我说的不一定对」触发）**：「模型倾向一直留上下文」**不成立**——0bg 狗粮轮 7/7 压缩 `mode=model_summary／reason=model_selected`、机械 RHYTHM 线 0 次（`context_scale.rs` 承重件推论）＝提醒一到模型每次都自愿压缩；机制保留的正确理由＝**通道与物理**（模型无自发弃置通道，提醒/工具是通道，兜底是通道失效的保险），并正向预测 0cz 工具采纳率。
+- **S1 三要点已裁（用户同日）**：单工具带 mode；黑板编辑范围＝除 `.gsa` 以外的模型写入面全量；联动提醒跟着现有上下文压缩提醒走＝改叙述（不加新注入点）。批序 S1 设计稿（mode 参数面细节、journal 呈现、序号盘点、0cy 收卷原语接口）→ S2 落码＋钉子 → S3 载体重建进体 → S4 狗粮长轮实测（使用率、时机、清零后成绩维持、与兜底触发交互）。
+- **依赖**：0cy S1+S2 先行（清零的卫生地基；没有它清零＝重演 0cw 污染）；S1 设计稿可与 0cy S1 并行起草；0cy S4 真机核证增加与 0cz 联动复验点；8 工具面冻结纪律的显式用户例外沿 blackboard_write 先例登记。
+- **台账**：本卷；[`236 批档`](audits/236_0CZ_MODEL_CONTEXT_CONTROL_2026-10-11.md)；BACKLOG 计数行（58）＋指针＋`0cz` 专节；TODO 计数行＋P1 路由＋`P1-0cz`；索引 v4.208 → v4.209＋§6＋§8。**未提交、未推送**。
+- 关键词：236 批、0cz 立项、模型主控上下文、第十一主工具、上下文管理常驻工具、主动清零/压缩、黑板全量编辑、机制不退役转兜底、兜底联动一步提醒、移出视野非销毁、强制交接写入、0cy 拆出、57 → 58、索引 v4.209。
+
+### 1.181 2026-10-11 235 批 0cw 形态污染审计实锤＋0cy 立项——.gsa 会话卫生（**审计＋更正＋立项批**，零源码、计数 56 → 57）
+
+- **用户令**：①「不会在0cw这一轮里面黑板没重置吧……不是严格按照官方口径跑的吗」②「.gsa必须是和黑板一样，新对话新台账，上一轮进存档」。
+- **审计实锤**：`.gsa` 会话卷随工作区跨 checkpoint 持久＋0ct 读全开放→cfgpipe ck2 模型实锤（读 ledger 台账→前档 orientation→python 整读前档 conversations messages→摘要自述「上一 session 45 轮档案」）；量化＝188/189 档读跨档台账、82 档读前档会话、33/36 题波及（题间隔离成立、泄漏域＝单题内跨档）。
+- **定性**：0cw 实际形态＝「reset＋档案恢复」混合形态非官方重置形态；V2 报告更正注记落（§4.3「重置即坍缩落空」的真因＝记忆恢复）；233/234 判读更正；0cr 不受影响；摩擦主线顶级收获（会话卷在工作区＋读开放静默击穿基准重置语义）。
+- **0cy 立项（56 → 57）**：GSA-SESSION-HYGIENE＝ledger 会话作用域化（新对话空台账）＋会话收卷整卷 gzip 进 `.gsa/archives/`＋活区清空（把实现拉回 FOLD 既定设计）；批序 S1 设计→S2 落码→S3 载体→S4 真机核证；0cw 干净重跑成本门 S4 后另裁。
+- **台账**：本卷；[`235 批档`](audits/235_0CW_CONTAMINATION_AUDIT_0CY_GSA_HYGIENE_2026-10-11.md)；V2 报告更正注记；BACKLOG 计数行（57）＋指针＋`0cy` 专节＋`0cw` 更正；TODO 计数行＋P1 路由＋`P1-0cy`＋`P1-0cw` 更正；索引 v4.207 → v4.208＋§6＋§8。**未提交、未推送**。
+- 关键词：235 批、0cw 污染、ledger 跨会话、上一 session 45 轮档案、混合形态改签、0cy 立项、会话卫生、新对话新台账、上一轮进存档、56 → 57、索引 v4.208。
+
+### 1.180 2026-10-11 门禁行龄归档——主 BACKLOG 头部两行治理历史行移入本卷（零内容改动）
+
+- **2026-09-19（本轮）**：**检索批次回送与轮级单席位立项 0ar 36 → 37**（用户令「请将 `RETRIEVAL_BATCH_HANDOFF_AND_ROUND_SEAT_DESIGN_2026-09-19.md` 注册进 todo 并排期」）。同批不动其它计数、零代码、零子仓改动；上游为同日检索投量与转化深入分析（r1–r3 九试次 journal 重算），设计稿 v1.0 定稿已具备放行条件（用户 2026-09-19 两轮裁决＋主会话批序裁决全部入稿）。批序 **S1 契约面 → S2 实施（D1→D2→D3）→ S3 同三题 k=1 真机复验**，各步独立放行、**不得跳步合批**，**ADR-0010 转录随 S2**。未立项观察项（F2/F6/F8/F9/F10 与候选 A2／B1–B3／C1–C3）维持不计数。 **同日续（本批）**：**0ar S1 契约面经新狗粮轮实施并验收通过**（run `RUN-CLI-6aad9497`；工作树未提交、不推送；随批携带狗粮启动器 F1 修复与 F4 编码门回查结论）——**未闭合维持 37 项**。
+
+- **2026-09-19 过夜批（本轮）**：用户令「0ar S2 部分＋0aq 审查处置线全部机械可修项＋0m GSA 会话卷 S4 收口；完成后不可提交、推送、重建」——① **0ar S2 三件落码**（D1 阈值回送：宽口径可用计数满 5 即 β 收尾、护栏 10 强制、可见倒数行、提前交付 `[EARLY_DELIVERY]`＋streak anomaly；D2 未达标交回：墙钟到点以「部分证据＋缺口＋指针」正常交回 `dispatch_wallclock_bound`、档位表 240/600/900 → **180/300/450**；D3 合并优先＋溢出拆轮：单激活多 query 上限 3、溢出无 ToolStarted 拒绝 `retrieval_dispatch_deferred_one_per_round`＋一次性重述；契约增量＝`query_entry` 可选 `usable_source_count`；ADR-0010 **§14.73/v1.75** 转录随批）；② **0aq RS 机械可修项**（RS-03/04 部分/05 部分/07/08/10/11/12/13b/13c/14/16 勾选，明细见 0aq 节；RS-06/09/15/17/18 带裁决门未动）；③ **0m S4 收口**（37 → 36）。**全程未提交、未推送、未重建**；报告：[`0AR_S2_RS_MECHANICAL_0M_S4_OVERNIGHT_2026-09-19`](audits/0AR_S2_RS_MECHANICAL_0M_S4_OVERNIGHT_2026-09-19.md)。
+
+（以上两行原文自主 BACKLOG 头部移入；2026-10-11 门禁「行龄 > 21 天」归档提示执行；详录见第二卷各批节。）
+
 ## 2. 主 TODO 开放项路由行移出段（2026-09-22 分卷）
 
 ### 2.1 2026-09-21 批
@@ -1475,6 +1570,83 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **台账**：本卷；[`224 批档`](audits/224_SUBMIT_PUSH_AND_RELEASE_V0815_2026-10-07.md)；README 发布面对齐 0.8.15（解包文件名＋最新 release 链接）；BACKLOG 计数行（54 不变）＋本批指针行（并修正 219–223 批未滚动的失效指针）；TODO 计数行；索引头行 v4.196 → v4.197。
 - **边界**：零源码（orz 子仓本批无新提交）；中间载体 0.8.13／0.8.14 内容一并含于成品线（0.8.13 未单独发行先例）；Linux 载体未重 provision（沿同口径）；第二卷 `1.166` 存在邻窗重号（218／220），本批不回改。
 - 关键词：224 批、提交推送、GitHub Release v0.8.15、rel-224-stage、6/6 MATCH、README 发布面对齐、deepseek-flash 首个发行包、findings 第三分区、.gsa 读向全开放、计数 54 不变、索引 v4.197。
+### 1.179 2026-10-11 234 批 0cw S4 收取与对拍——四层对拍＋榜单核证＋V2 全轮报告（**分析＋对拍＋报告批**，零源码零跑批、计数不变 56）
+
+- **用户令**：「请开始进行S4吧」。**交付**：[`SCB_V2_RESET_FORM_FULL_ROUND_REPORT_2026-10-11`](SCB_V2_RESET_FORM_FULL_ROUND_REPORT_2026-10-11.md)＋复算件 `s4_0cw_ab.py`（196 行逐档八指标机械复算）。
+- **四层要点**：①逐档 131 vs 134（−3）但 **strict/isolated 满通过 +17/+22 档反超**；②逐题双侧极端（meshctl −0.958 vs eve_jump_planner +0.833，|Δ|≥0.1 共 20 题）；③**相位 92.0→74.5 缓降 ≈ 0cr 94.0→77.7，论文重置队列 64.6→35.5 坍缩——「重置即坍缩」被同模型对照落空**（末档满分 20/36）；④轨迹级 erosion 86.1%/verbosity 83.3%＝退化轴不随形态移动（226 判断成立）。难度面＝连续性收益集中 Hard（+9.7pp）、Medium 重置 +7.1pp、Easy 持平；全解 15 vs 11（0cw 独有 6/0cr 独有 2）。
+- **榜单核证**：hub 38 job 全量核验（36 题全 public＋precheck；零数据残件 `b31a3480` 删除、本地证据保留）；**scbench.ai 榜单未自动聚合 orz 条目（19 条论文系不变）——208 批「事实入榜通道」聚合环节未自动发生，如实登记**；后续＝#40 回贴附 hub 链接／Discord 通道／观察聚合周期（随裁决）。方向性注记：isolated 满通过 41.8% vs 榜单 top 28.1%（口径未完全对齐）。
+- **台账**：本卷；[`234 批档`](audits/234_0CW_S4_ABDUCTION_AND_LEADERBOARD_2026-10-11.md)；BACKLOG 指针＋`0cw` S4 达成；TODO 头行＋P1 路由＋S4 勾选；索引 v4.206 → v4.207＋§6＋§8。**未提交、未推送；0cw 闭合待用户裁决**。
+- 关键词：234 批、0cw S4、四层对拍、相位缓降、重置即坍缩落空、strict/isolated 反超、Hard 集中、榜单未聚合、V2 报告、闭合待裁决、计数 56 不变、索引 v4.207。
+
+### 1.178 2026-10-10 233 批 0cw S3 全目收官——36/36 题 196 档＋vs 0cr 终账 −3 档（**跑批收官批**，评测侧、零 orz/父仓源码、计数不变 56）
+
+- **收官读数**：2026-10-08 03:23 → 10-10 23:46（三历日，官方低谷窗调度）；36/36 题、196/196 档零 trial errored；满分档 **131/196（66.8%）**、core 均值 **0.814**、全解 **15/36**；花销 **¥212.41**（≈$30.4，低于 $40–80 估计）；36 job 全 public（recli/pwd_manager 断窗补传 ×2）。
+- **vs 0cr 终账（第一层）**：131 vs 134（**−3 档**）；全解 15 vs 11；重置优 10 题（+16：eve_jump_planner +3、sith +3、datagate/l2m/mvvault +2）vs 连续优 8 题（−19：meshctl **−7** 八档全零〔已验证真实成绩〕、env_manager/sheeteval −4）；dag_execution 同坍、18 题持平。总分面两形态基本无差、分歧极度逐题化；正式四层对拍归 **S4 待放行**。
+- **事故账（零费用损失）**：code_search 构建失败重跑（0.975）；代理断窗 ×2 计 15 题次秒败全部重跑落定＋起跑器出网预检门（232 §3E）；`job_state` 判定勘误；余额监控改直连。
+- **台账**：本卷；[`233 批档`](audits/233_0CW_S3_FULL_ROUND_COMPLETE_2026-10-10.md)；BACKLOG 指针＋`0cw` S3 达成；TODO 头行＋P1 路由＋S3 勾选达成；索引 v4.205 → v4.206＋§6＋§8。**未提交、未推送**。
+- 关键词：233 批、0cw S3 收官、196 档、131 满分档、−3 档、15 全解、meshctl 全零、逐题分化、¥212.41、预检门、S4 待放行、计数 56 不变、索引 v4.206。
+
+### 1.177 2026-10-08 232 批 0cw S3 起跑——成本门放行＋起跑器落码＋全目 36 题逐题直跑（**实施＋跑批启动批**，评测侧本地件、零 orz/父仓源码、计数不变 56）
+
+- **用户令**：「请启动0cw S3吧，每个checkpoint都收结果，早上8点以后就不放新的跑分了，因为9点就要到计费高峰期了，8点前的正常收尾即可」＝成本门放行＋两新约束（每 checkpoint 收结果／**08:00 停放新题门**〔在途题正常收尾〕）。
+- **形态裁决**：起跑器＝**逐题单 job 串行**（227「全目直跑」的承载形态细化）——harbor 单 job 无题间时间门，逐题 job 是唯一能同时落实 08:00 门/暂停权/断点续跑/逐题即时上传的形态；与 0cr 串行同形；Hub 每题一公开 job，Model×Harness 聚合核证留 S4。
+- **起跑器**（`D:/tb-eval/scbench/run_0cw_s3.py`，stdlib-only）：36 题官方字母序 p01–p36（数据集目录实扫＋恰 36 校验）；逐题 harbor 0.23 job（config 经 `--print-config` 干跑核证＝与 230 §7 预检逐位同形）；每题毕解析逐档 `step_result.json`＋`reward.json` → `s3_checkpoint_ledger.jsonl`（八指标＋sid/stop/rounds/elapsed/2h 帽读数）＋题级行 `s3_problem_ledger.jsonl`（status/core_mean/hub URL/题前后余额）；DeepSeek 余额 10min 轮询（`s3_balance_log.jsonl`）＋**¥30 余额守卫**；`S3_PAUSE` 文件暂停权；终态跳过/unfinished 拒覆盖的断点续跑；errored 照记不重跑（k=1 零重试，重跑与否留 S4）。
+- **起跑读数（首窗口）**：03:22:55 启动、起始余额 **¥243.98**；03:23 p01 `cfgpipe` 起跑（job `0cw-s3-p01-cfgpipe`）；install 自检过（0.8.15 linux、`continuous=False`、`7200s/grace 180s`）＋**step 1/6 在证**。窗口规划（非裁决）：单题 ≈40–90 min，本窗预计新完成 5–8 题，余题后续低谷窗重入续跑（`python run_0cw_s3.py` 幂等）。
+- **台账**：本卷；[`232 批档`](audits/232_0CW_S3_LAUNCH_RUNNER_2026-10-08.md)；BACKLOG 指针＋`0cw` 专节 S3 起跑注记；TODO 头行＋P1 路由＋S3 勾选行在跑注记；索引头行 v4.204 → v4.205＋§6 `0cw` S3 注记＋§8 pending 桶。**未提交、未推送**。
+- 关键词：232 批、0cw S3 起跑、成本门放行、08:00 停放新题门、计费高峰、每 checkpoint 收结果、逐题单 job 串行、余额守卫、S3_PAUSE、断点续跑、起始余额 243.98、cfgpipe step 1/6、计数 56 不变、索引 v4.205。
+
+### 1.176 2026-10-08 231 批 0cx 立项——第三 LIF 组件插件化（？？？，暂时闭源；**立项登记批**，零源码、计数 55 → 56）
+
+- **用户裁决**：第三 LIF 组件（事件特征提取、解耦于压力、纯粹事件建模）可用作 orz 第三组件，**做成插件**、orz 侧只留接入/消费接口；组件本体**暂不外发开源**（orz 首个暂时闭源组件）；登记以 **？？？** 代称。
+- **接口设计（S0 冻结前草案）**：接入＝journal typed events＋run/session 边界＋时间戳（离线重放先行）；消费＝显著事件条目/事件概括/`r·b·s` 锚点（≤240B/条），消费点＝压缩边界承接（0bz 尾槽）＋PULL 显著面（零常驻注入）；纪律对齐 P7/P8/P9。
+- **来源链**：0cr「记忆保正确性不保质量」→ 事件特征可读性假说 → 借用探针三前提（短时程可学习／零样本边界对齐／正交可读结构——记录在组件侧桌面审计档，不入境）；动力学深入探究不做（应用层为主）。
+- **台账**：本卷；[`231 批档`](audits/231_0CX_THIRD_LIF_PLUGIN_REGISTRATION_2026-10-08.md)；BACKLOG 计数行（56）＋指针＋P2 锚点＋`0cx` 专节；TODO 计数行＋P2 路由＋`P2-0cx` 节；索引 v4.203 → v4.204＋§6 条目＋§8 pending 桶。**未提交、未推送**。
+- 关键词：231 批、0cx 立项、第三 LIF 组件、？？？、暂时闭源、插件化、接入/消费接口、压缩承接、PULL 显著面、计数 56、索引 v4.204。
+
+### 1.175 2026-10-08 229 批 CONTEXT-GIST-TRANSPLANT-PROBE 立案存档＋压缩凹陷 v0 初测（**candidate 存账批**，零源码零跑批、计数不变 55）
+
+- **触发**：0cr「记忆保住正确性、保不住代码质量」读数引出用户假设（事件规律与特征 vs 记录本身；上下文质量＝事件特征清晰度 vs 窗口）＋用户等价观察「gist 移植≈每 checkpoint 强制压缩」（内容成立、连续性不成立 ⇒ 探针＝内容匹配、连续性二分）＋用户令存档与先做压缩凹陷测量。
+- **主档**：[`CONTEXT_GIST_TRANSPLANT_PROBE_2026-10-07`](../docs/CONTEXT_GIST_TRANSPLANT_PROBE_2026-10-07.md)（假设面 a/b＋竞争解释〔正确性有反馈回路、质量没有〕／探针清单 P1–P4／学界相关工作〔ACON 2025 `arXiv:2510.00615`、2026-01 自主记忆管理、2026 压缩综述＝充分状态近似、经典线 induction heads／ICL 隐式权重更新／gist tokens／AutoCompressors／ICAE／MemGPT／lost in the middle／fuzzy-trace〕／增量位置＝未见重置型基准 checkpoint 边界的内容匹配-连续性二分移植对照）。candidate **不占计数**；触发器＝0cw S4 收口后或用户另行放行。
+- **P1 压缩凹陷 v0 读数**（0cr 36 题 journal 离线；扫描自校验压缩 186 与台账恰等；run 200＝196+4 拆双 run 如实记、步 4,493＝−2.2% snapshot 覆盖差）：压缩后窗（K=5）exit≠0 2.5%／重复 3.1% vs 全体基线 2.1%／2.6%——**无凹陷尖峰**；run 后半段重复率 6.8% 高企＝重跑常态、与压缩无特异关联。与命题 a 相容（折叠丢记录无即时失措）；弱代理边界如实记。复现件＝仓外 `0cr_official/compression_dip_v0.py`。
+- **台账**：本卷；BACKLOG 本批指针＋计数行指针＋条件触发行；TODO 计数行；索引头行 v4.201 → v4.202＋§6 probe 条目＋§8 candidate 桶。**未提交、未推送**。
+- 关键词：229 批、gist 移植 candidate、事件特征可读性、内容匹配连续性二分、压缩凹陷 v0、186 恰等、无即时凹陷、充分状态近似、计数 55 不变、索引 v4.202。
+
+### 1.175 2026-10-08 230 批 0cw S2 适配器落码＋冒烟——重置形态与连续模式双判据达成（**实施＋冒烟批**，评测侧本地件、零 orz/父仓源码、计数不变 55）
+
+- **落码（`D:/tb-eval/scbench/scb_agents/`）**：`orz_acp_driver.py`（容器内驱动三模式＝step〔官方重置形态：每 checkpoint 全新 `orz --stdio --real`＋全新会话〕／daemon〔连续形态服务端：unix socket 单进程单会话〕／client〔连 daemon、缺则自启〕；软看门狗 deadline−grace→`session/cancel`→grace 杀进程；wire transcript＋`step_result.json`＋journal 副本落 logs-dir；零密钥纪律）＋`orz_multistep.py`（harbor `BaseInstalledAgent` 子类、import path 接入：三件上传＋ACAF provision fail-closed＋trust＋`--build-info` 版本捕获；指令经上传文件；env 白名单〔key/ACAF 四件/ALLOW_* 网络随 policy/`deepseek-flash`/`MAX_TOOL_ROUNDS=999`〕；`--ak continuous=true` 连续开关；journal→ATIF＋metadata 步证据、usage 轴 null）。
+- **冒烟读数（dag_execution 3 档×2 轮；harbor v0.23.0；载体 0.8.15 `75515440…`；k=1；两 job 0 错误）**：重置轮＝三 sid 三 RUN 全焕新（`f25e9227`/`3e8e955e`/`06fe6a8b`）＋core 0.417→0.600→0.000（ck2 上升＝工作区跨档持久实证；ck3 坍缩与 0cr 同题同型＝表现面）／连续轮＝daemon 自启＋sid 恒一 `27567c00`＋RUN 后缀 `-0/-1/-2` 递增＝0cr 形态精确复现＋轮数 52→28→16 递减（上下文携带形状）。2h 帽接线＝`timeout_cfg=7200 grace=180` 逐档在证（未触发如实记）；ACAF＝reset ck1 44 issued/consumed＋cont 90 issued；零密钥两轮全净。
+- **设备侧修复（非 0cw 范围，如实登记）**：Docker Desktop system 模式解析死端口 3128（netstat 无监听）→ 沿 09-19 先例备份 `settings-store.json.bak-20261008` → manual 指向活端口 7890（docker.io/debian 双通实测）→ 彻底重启；ghcr 拉取 9s＋容器内 apt 过。
+- **台账**：本卷；[`230 批档`](audits/230_0CW_S2_ADAPTER_IMPL_SMOKE_2026-10-08.md)；BACKLOG 指针＋`0cw` 专节 S2 达成；TODO 头行＋P1 路由＋S2 勾选；索引头行 v4.202 → v4.203＋§6 `0cw` S2 注记＋§8 pending 桶。**未提交、未推送**。批号顺延说明：229＝并发 gist 探针批（226 撞号批按 228 §6 转 229）。
+- 关键词：230 批、0cw S2、scb_agents、ACP 驱动三模式、每 checkpoint 全新进程＋新会话、daemon 自启、sid 恒一、RUN 后缀递增、工作区跨档持久、2h 帽接线、ACAF issued、零密钥、Docker 代理死端口修复、计数 55 不变、索引 v4.203。
+
+
+### 1.174 2026-10-07 228 批 0cw S1 勘定——官方论文与上榜口径全参数定案（**勘定批**，零源码零跑批、计数不变 55）
+
+- **触发（用户令「请开始0cw S1吧，这一次请完全按照官方论文和上榜口径进行」）**：226 批 S1 三件（Harbor 承载形态／适配器 reset 模式设计／0cr 报告勘正）全数落定，另收口 226 悬项「2h 帽是否施加」。
+- **官方承载形态勘定**：官方题目仓 scb-problems（pin `38d627e`）将 36 题双发布为 Harbor 数据集 `gabeorlanski/slopcodebench`（README L18＋Hub 页「36 multi-step Harbor tasks」、官方命令 `harbor run -d ...@latest -a <agent> -m <model>`）；一 Harbor 任务＝一题、checkpoint 链＝task.toml `[[steps]]`（每档 name/artifacts(source=/app)/min_reward 全 0.0/[steps.agent] timeout_sec=7200）；harbor v0.23.0 `MultiStepTrial`＝逐档串行、容器跨档存活、每档独立 verifier、**默认每步全新 agent run**（`resume_trajectory` 显式开启才续会话）＝官方重置形态原生承载；自带 acp agent 每步重拉进程同形佐证。
+- **2h 帽收口＝施加、零覆盖**：论文 App C／官方 docs checkpoint 示例「(2 hours)」／作者 harness `DEFAULT_WAIT_TIMEOUT=7200`／官方任务字段 7200 四源一致；步超时＝步异常中止该题后续档（官方执行器行为、如实登记）；0cr 无帽面（test_translator 189m）在 0cw 将被帽。
+- **适配器设计定案（S2 落码输入）**：自定义 harbor agent（`BaseInstalledAgent` 子类、import path 接入，评测侧本地件沿 tb_agents 先例）＝install 照搬 TB2.1 形态（三件上传＋ACAF provision fail-closed＋trust＋自检）＋run() 每 checkpoint 全新 `orz --stdio --real` 进程＋全新 ACP 会话（重置证据面＝每步新 session id＋新 journal RUN-CLI-*）；`continuous=true` 开关复现 0cr 连续形态（默认 false＝官方形态）；软看门狗同值 7200＋grace（session/cancel→Cancelled→杀进程）防挂死滞留；usage 轴 null 如实登记（orz ACP 仅发 AgentMessageChunk、journal v0.2 无 usage 字段，花销透明＝227 实时监控＋215 式报告）；逐档 journals 随 artifacts 公开（零密钥面）。
+- **口径杂项**：k=1＝harbor `n_attempts` 默认；seed＝harbor 无该轴、N/A 如实登记（42 系独立 harness 口径）；模型名 `deepseek-flash`（0cv 对齐）；0cr 报告 §5「证伪」/§6「归因」可比性勘正以报告 §15 注记落（dated 档不回改）；0ct/0cu S4 不搭本轮维持原判；205 批 silverwhite 数据集件定位不动。
+- **台账**：本卷；[`228 批档`](audits/228_0CW_S1_OFFICIAL_FORM_ADJUDICATION_2026-10-07.md)；BACKLOG 本批指针＋`0cw` 专节 S1 达成；TODO 头行＋P1 路由行＋`P1-0cw` S1 勾选；索引头行 v4.200 → v4.201＋§6 `0cw` S1 注记＋§8 pending 桶；0cr 报告 §15。**未提交、未推送**。
+- 关键词：228 批、0cw S1 勘定、官方口径、Harbor 多步任务、gabeorlanski/slopcodebench、[[steps]]、MultiStepTrial、resume_trajectory 默认关、每 checkpoint 全新进程＋新会话、2h 帽施加、seed N/A、continuous 开关、usage 轴 null、0cr 报告 §15、计数 55 不变、索引 v4.201。
+
+
+### 1.173 2026-10-07 227 批 0cw S3 规模裁决落账（**裁决落账批**，零源码零跑批、计数不变 55）
+
+- **裁决（用户令「试试吧，先依旧按照36题顺序跑，不跑子集，看看具体花销再说，到时候实在不行就暂停」）**：0cw S3＝**全目 36 题按官方字母序直跑、不跑子集**（6 题试水选项否决）；跑批中**实时监控** DeepSeek 控制台实价花销；**用户保留中途暂停权**——成本门由 226 批「起跑前单点放行」细化为「起跑后实时监控＋随时暂停」；低谷价时段执行在案（墙钟相应拉长，排期随 S1/S2 后定）。
+- **#40 用户手动追评核回（`6041122591`，2026-10-07T15:29:36Z）**：实发采用保守口径变体（"none are aimed at the benchmark"）＝v0.8.15 增量三件（读向修复／findings 分区／接口名）＋以 v0.8.15 重跑而非钉旧快照＋低谷价窗执行；至此 #40＝主楼＋两追评（`6040701347` 形态更正／`6041122591` 版本与重跑窗）构成完整对外账面；上游回复不阻塞 S1/S2。
+- **台账**：本卷；[`227 批档`](audits/227_0CW_S3_SCALE_ADJUDICATION_2026-10-07.md)；BACKLOG 本批指针＋`0cw` 专节三处；TODO 计数行＋`P1-0cw` S3 行；索引头行 v4.199 → v4.200＋§6 `0cw` S3 注记。**未提交、未推送**。
+- 关键词：227 批、0cw S3 裁决、全目直跑、不跑子集、实时花销监控、暂停权、成本门细化、低谷价、#40 手动追评、6041122591、计数 55 不变、索引 v4.200。
+
+### 1.172 2026-10-07 226 批 0cw 立项——SCBench 官方重置形态 Harbor run 轮（每 checkpoint 新会话；**立项批**，零源码零跑批、计数 54 → 55）
+
+- **触发链**：225 补记后用户问「我们是否捕捉到与论文不一样的趋势」→ 只读对比核出**形态分歧**（本批 §1 证据面）→ #40 追评公开更正与重跑承诺（`issuecomment-6040701347`）→ 用户令「请立项新的每checkpoint新对话sc bench轮吧，并且这一轮走harbor run」。
+- **形态分歧核证（三路独立证据）**：论文 §2「we do not provide the prior conversation's context」＋形式化模型 yᵢ=πθ(xᵢ, yᵢ₋₁)＋App C「agent session data reset between checkpoints」；harness pin `31ceea3`＝runner.py `_setup_for_checkpoint` 首档后每档 `finish_checkpoint(reset_context=True)`（L662）、claude_code/codex 的 `--continue`/`resume --last` 仅重试臂；HumanLayer 复测文档「Fresh context window per checkpoint」。**误读链勘正**：158 批 S0 §2.1「claude_code resume 维持跨档连续会话」系误读（resume 只在重试臂）→ orz 适配器 `agents/orz/agent.py` reset() 据此刻意保留跨档 ACP 会话 → 196 批 §4 误登记为「官方 SCBench 长程语义」——dated 档不回改，以本批与 0cw S1 勘正注记为准。
+- **跨形态对照（0cr 连续 vs 论文重置队列；跨模型混杂在案）**：质量退化轴几乎不动（轨迹级 erosion/verbosity 上升 80.6%/77.8% vs 77%/75.5%——本批轨迹级复算）；正确性保持轴剧变（11/36 任务全解 vs 0/36；core 相位 94.0→77.7 vs 64.6→35.5；strict 满通过 22.4% vs 14.8%；isolated 满通过 30.6% vs 28.1%；erosion 均值 0.613 偏高如实记）。
+- **0cw 定义**：同模型（deepseek-flash，底模同 V4.1-Flash）跨形态 A/B＋Harbor 公开 run 榜单条目（兑现 #40 ①）＋摩擦主线；口径 k=1／seed 42／any／全目 36 题；载体 0.8.15；混杂登记＝载体差（0.8.14→0.8.15）＋成本估计 $40–80（重置形态跨档缓存命中归零，S3 成本门）；批序 S1 勘定（Harbor 承载形态＋适配器 reset 模式设计＋0cr 报告 §5/§6 勘正）→ S2 落码冒烟 → S3 跑批公开上传 → S4 对拍收口。
+- **台账**：本卷；[`226 批档`](audits/226_0CW_RESET_FORM_HARBOR_ROUND_REGISTRATION_2026-10-07.md)；BACKLOG 计数行（55）＋本批指针行＋P1 总览行＋`0cw` 专节；TODO 计数行＋P1 路由行＋`P1-0cw` 节；索引头行 v4.198 → v4.199＋§6 新增 0cw＋0cr 条目勘正＋§8 pending 桶。**未提交、未推送**。
+- 关键词：226 批、0cw 立项、重置形态、每 checkpoint 新会话、Harbor run、连续会话变体、跨形态 A/B、榜单条目、reset_context、158 误读勘正、196 误登记勘正、成本门、计数 55、索引 v4.199。
+
 ### 1.171 2026-10-07 225 批 0.8.15 发行回读核证补记（承接 224 批 §3；**回读核证批**，零源码零跑批零改动、计数不变 54）
 
 - **服务端回读**（`gh release view --json`）：三资产 digest 与本地**逐位一致**——zip `sha256:76a9f860…`（28,034,248）／tar.gz `sha256:fafb261d…`（37,218,091）／`SHA256SUMS` `sha256:012f0498…`（193）；`isDraft=false`／`isPrerelease=false`／列表为 **Latest**；`publishedAt`＝2026-10-07T13:50:10Z；`targetCommitish=main`。

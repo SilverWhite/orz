@@ -2362,7 +2362,13 @@ _WORK_TOOLS = frozenset(
         # 同批先例的**表格数据同步**（Rust 探针 / 判官 / 本表；设计 §4-4）。
         # probe-partition 子集校验要求本表收录全部可声明工作工具；判别规则
         # 零改动（0ap「零 Python 镜像改动」按零规则改动口径执行，S0 取证）。
+        # 0cz S2（2026-10-11，方案 A）：声明面退役、表位保留（历史 journal
+        # 回放仍需；Rust 判官表同口径）。
         "context_compress",
+        # 0cz S2（2026-10-11）：`context_manage`（上下文管理第十一主工具；
+        # 单工具带 mode＝compress 承继 0ap 管线＋clear 主动清零）——三处
+        # 同批先例照抄（表格数据同步；判别规则零改动）。
+        "context_manage",
         "todo_write",
         "update_goal",
         "enter_plan_mode",
