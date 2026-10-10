@@ -18,10 +18,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use chrono::DateTime;
-use orz_assurance::lif::{
-    ChannelKind, LifEngine, RLI_CHANNELS, ToolEvent,
-    classify_event_outcome,
-};
+use orz_assurance::lif::{ChannelKind, LifEngine, RLI_CHANNELS, ToolEvent, classify_event_outcome};
 use serde_json::{Value, json};
 
 const HORIZONS: [f64; 5] = [1.0, 2.0, 5.0, 10.0, 30.0];
@@ -52,7 +49,11 @@ fn find_journals(root: &Path) -> Vec<PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.file_name().map(|n| n == "events.jsonl").unwrap_or(false) {
+            } else if path
+                .file_name()
+                .map(|n| n == "events.jsonl")
+                .unwrap_or(false)
+            {
                 out.push(path);
             }
         }
@@ -95,7 +96,15 @@ fn parse_run(path: &Path) -> Vec<Step> {
                 let outcome = classify_event_outcome(&payload);
                 let wall_ms = wall_ms_of(&payload);
                 // 0am 审查处置（2026-10-03）：补 ToolEvent 176 批新增字段（legacy 语义不变）。
-                steps.push(Step::Tool(ts, ToolEvent { outcome, wall_ms, policy_denied: false, routing: None }));
+                steps.push(Step::Tool(
+                    ts,
+                    ToolEvent {
+                        outcome,
+                        wall_ms,
+                        policy_denied: false,
+                        routing: None,
+                    },
+                ));
             }
             _ => {}
         }

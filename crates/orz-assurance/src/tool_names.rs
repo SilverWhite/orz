@@ -24,7 +24,22 @@ pub const BLACKBOARD_WRITE_TOOL_NAME: &str = "blackboard_write";
 /// `DESIGN-COMPRESSION-INTERACTION` §1）。知情发起 D3 模型参与压缩窗口
 /// ＋响应自带滑块读数表；纯内存压缩状态操作（无文件/网络/黑板外部副作用，
 /// ReadOnly 类）。名字自诞生即落本表——不产生第二份字面。
+///
+/// **0cz S2（2026-10-11，方案 A 用户裁决）声明面退役**：`context_manage`
+/// 入列第十一（单工具带 mode，吸收 compress 通道），`context_compress` 不再
+/// 被 controller 声明；本常量与 WORK_TOOLS 表位**保留**——journal 历史族
+/// 回放与旧会话判官仍需该名字（历史族不删先例，同 `compaction_whitelist_add`
+/// 封存形态）。
 pub const CONTEXT_COMPRESS_TOOL_NAME: &str = "context_compress";
+
+/// `context_manage`——上下文管理第十一主工具（0cz，2026-10-11 用户裁决；
+/// [`MODEL_CONTEXT_CONTROL_DESIGN_2026-10-11`] §4）。**单工具带 mode**：
+/// `mode=compress` 承继 0ap 管线（知情发起压缩窗口＋读数表），`mode=clear`
+/// ＝主动清零（投影层边界 marker＋块回放落盘；`handover` 强制交接前置＝
+/// 防裸清）。纯内存投影状态操作＋黑板合法写路径 → ReadOnly 类。8 工具面
+/// 冻结纪律的用户主导显式例外 +3（blackboard_write +1 / context_compress +2
+/// 先例顺延）；方案 A：`context_compress` 同批声明面退役、管线由本工具承继。
+pub const CONTEXT_MANAGE_TOOL_NAME: &str = "context_manage";
 
 #[cfg(test)]
 mod tests {
@@ -36,7 +51,25 @@ mod tests {
     /// 0ao 落码后**当前为空**——生产判等面全部收敛到常量，生产文案面
     /// （format! 可拼接处）亦经隐式捕获收敛。新增豁免必须在此登记理由，
     /// 钉子即豁免清单本体（0ao 判据口径）；空表＝任何新生产字面直接报红。
-    const LITERAL_EXEMPTS: &[(&str, &str, &str)] = &[];
+    /// 0cz S2（2026-10-11）补登记：exec_policy 备份指引文案面（204 批
+    /// 93672eca 的 0ct 214 考虑项落地，`block_message` 单点教学文案）——
+    /// 当时漏登豁免致扫描钉红（HEAD 实测预存、非本批引入）；按 0ao 口径
+    /// 具名登记。
+    /// 0da S2（2026-10-11）补登记：黑板 guide「清空黑板分区」教学句
+    /// （`board_guide_body` 单点文案；该 guide 同段已有
+    /// blackboard_write 的 format! 常量拼接位，教学句为行内工具名直呼）。
+    const LITERAL_EXEMPTS: &[(&str, &str, &str)] = &[
+        (
+            "codegen/orz-tools/src/types/exec_policy.rs",
+            "blackboard_write；`.gsa/rollback` 为运行时逐调用备份区，只读使用。",
+            "214 批 0ct 备份指引（写控拦截信封的模型面教学文案；字面教学不引常量）",
+        ),
+        (
+            "orz-loop/src/controller.rs",
+            "清空黑板分区＝blackboard_write \\",
+            "0da S2 黑板 guide 清空教学句（文案面直呼工具名；同段已有常量拼接位）",
+        ),
+    ];
 
     fn crates_root() -> PathBuf {
         // CARGO_MANIFEST_DIR = <orz>/crates/orz-assurance ⇒ 源树在 ../..。
@@ -144,6 +177,7 @@ mod tests {
         for (ident, name) in [
             ("BLACKBOARD_WRITE_TOOL_NAME", BLACKBOARD_WRITE_TOOL_NAME),
             ("CONTEXT_COMPRESS_TOOL_NAME", CONTEXT_COMPRESS_TOOL_NAME),
+            ("CONTEXT_MANAGE_TOOL_NAME", CONTEXT_MANAGE_TOOL_NAME),
         ] {
             let mut definition_sites = 0;
             for file in &files {

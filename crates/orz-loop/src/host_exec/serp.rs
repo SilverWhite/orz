@@ -108,7 +108,10 @@ impl AgentLoopController {
         // = 主车道/grill，false = 外部检索车道）；无预算面（测试/legacy
         // 形态）记 null。
         let lane = serp_budget.map(|b| {
-            if b.lock().unwrap_or_else(|e| e.into_inner()).reserves_session_floor() {
+            if b.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .reserves_session_floor()
+            {
                 "main"
             } else {
                 "external"

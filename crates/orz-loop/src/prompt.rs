@@ -84,6 +84,9 @@ pub fn is_injected_block_text(content: &str) -> bool {
         // injected text (see `context_compressed_marker`) — never
         // persisted back into the conversation.
         || content.starts_with(CONTEXT_COMPRESSED_PREFIX)
+        // 0cz S2（2026-10-11，设计 §5）：`[前文上下文已清零 …]`——模型主动
+        // 清零的投影层边界 marker，机械注入文本，绝不持久化。
+        || content.starts_with(crate::model_face::CLEAR_MARKER_PREFIX)
         // A6 §8 C.2 (2026-08-08): the resident compaction-whitelist
         // message repeats every round — mechanical injected text, never
         // persisted back (model-written, but a resident framework-
@@ -184,8 +187,13 @@ pub fn context_compressed_marker(
 /// compaction marker (rolling single pointer, `[前文上下文已压缩` prefix) and
 /// the resident whitelist (`[压缩白名单` prefix). Every other mechanical
 /// injected block is still filtered from the persisted conversation.
+/// 0cz S2（2026-10-11，设计 §5.1）：清零 marker（`[前文上下文已清零` 前缀）
+/// 同为 restore-retained——恢复后清零边界由此重建（会话是唯一真源、零新
+/// 侧车字段）。
 pub fn is_restore_retained_block(content: &str) -> bool {
-    content.starts_with(CONTEXT_COMPRESSED_PREFIX) || content.starts_with(WHITELIST_PREFIX)
+    content.starts_with(CONTEXT_COMPRESSED_PREFIX)
+        || content.starts_with(crate::model_face::CLEAR_MARKER_PREFIX)
+        || content.starts_with(WHITELIST_PREFIX)
 }
 
 /// D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6): the
@@ -716,7 +724,6 @@ mod tests {
         let bare = build_status_line(None, &[]);
         assert!(bare.contains("目标: （无）"));
         assert!(bare.contains("无计划步骤"));
-
     }
 
     #[test]

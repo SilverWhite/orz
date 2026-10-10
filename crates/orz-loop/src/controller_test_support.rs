@@ -99,7 +99,10 @@ impl LoopHost for DeliveryHost {
         self.journal.journal_dir().to_path_buf()
     }
     fn workspace_snapshot(&self) -> Option<std::collections::HashMap<String, (u64, u64, u32)>> {
-        self.snapshots.lock().unwrap_or_else(|e| e.into_inner()).pop_front()
+        self.snapshots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop_front()
     }
     async fn request_permission(
         &self,

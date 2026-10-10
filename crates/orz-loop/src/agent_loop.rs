@@ -1281,9 +1281,16 @@ async fn compress_blocks_now(
     let markers = crate::model_face::face_markers(messages);
     // 可压集合＝**已闭合**且仍为原文的块（末块仍在增长 ⇒ 摘要会与正文漂移而
     // 落空）；同一块在会话内不重复计数（去重键＝块号，设计 §12）。
+    // 0da S2（设计 §4.4，D1）：清零块不进可压集合——已随边界移出面（误入
+    // 会致 H1 窗口对幽灵块开窗、freed 虚构）。242 批（P2）：判据收窄为
+    // **整块已清零**——跨边界块的边界后段仍在窗口，照常参与压缩回收。
     let compressible: Vec<crate::model_face::ContextBlock> = blocks
         .iter()
-        .filter(|b| b.closed && markers.state(b.number) == crate::model_face::BlockState::Live)
+        .filter(|b| {
+            b.closed
+                && markers.state(b.number) == crate::model_face::BlockState::Live
+                && !markers.is_block_cleared(b.first_round, b.last_round)
+        })
         .cloned()
         .collect();
     // 0bk（2026-09-24）：三态区间解析消费。**Unrecognized ⇒ 如实回报＋不压缩**
@@ -1683,9 +1690,16 @@ async fn truncate_model_face_blocks(
     let markers = crate::model_face::face_markers(messages);
     // 2026-09-16 实现批（审查 R-1）：只截**已闭合**块。未闭合的**残段**
     // 留在模型面（它仍在增长；截断它＝隐藏工作现场，违反 I1）。
+    // 0da S2（设计 §4.4，D1）：清零块不进截断集合（已随边界移出面；误入
+    // 会重落已隐藏块档案＋freed 虚构）。242 批（P2）：判据收窄为**整块
+    // 已清零**——跨边界块的边界后段仍在窗口，照常参与 T1 截断回收。
     let live: Vec<crate::model_face::ContextBlock> = blocks
         .iter()
-        .filter(|b| b.closed && markers.state(b.number) == crate::model_face::BlockState::Live)
+        .filter(|b| {
+            b.closed
+                && markers.state(b.number) == crate::model_face::BlockState::Live
+                && !markers.is_block_cleared(b.first_round, b.last_round)
+        })
         .cloned()
         .collect();
     // 触发线：T1＝阶梯的硬截断档；守卫＝700K 异常保险。
@@ -2526,12 +2540,17 @@ pub(crate) async fn run_agent_loop(
                 .any(|f| f.tier == crate::context_scale::LadderTier::HardTruncate);
             // T1 三步升级的形态判定：**没有可压分块**（溢出在滑块内／无可执行
             // 动作）或**已两次窗口未产出** ⇒ 机械截断兜底；否则 ⇒ 强制开窗。
+            // 0da S2（设计 §4.4，D1）：清零块不计（已移出面）。242 批（P2＋
+            // P3）：判据收窄为**整块已清零**（跨边界块的边界后段照常参与）；
+            // `face_markers` 提升至闭包外单次计算（闭包内逐块全量扫描且失去
+            // `b.closed` 短路——241 批引入的效率回退）。
+            let t1_markers = crate::model_face::face_markers(messages);
             let t1_compressible = face_blocks
                 .iter()
                 .filter(|b| {
                     b.closed
-                        && crate::model_face::face_markers(messages).state(b.number)
-                            == crate::model_face::BlockState::Live
+                        && t1_markers.state(b.number) == crate::model_face::BlockState::Live
+                        && !t1_markers.is_block_cleared(b.first_round, b.last_round)
                 })
                 .count();
             let t1_cut = has_truncate && (t1_compressible == 0 || t1_window_failures >= 2);
@@ -7231,9 +7250,11 @@ mod tests {
     }
 
     fn context_compress_call(call_id: &str) -> ToolCall {
+        // 0cz S2（2026-10-11，方案 A）：压缩知情发起改走 `context_manage`
+        // （mode=compress；管线承继，本测随批改名）。
         ToolCall {
-            name: "context_compress".to_string(),
-            arguments: serde_json::json!({}),
+            name: "context_manage".to_string(),
+            arguments: serde_json::json!({ "mode": "compress" }),
             call_id: call_id.to_string(),
         }
     }
@@ -7306,11 +7327,12 @@ mod tests {
             .unwrap();
         assert_eq!(answer, "终答");
 
-        // ① 两次调用都 exit 0（fail-soft 三态信封）。
+        // ① 两次调用都 exit 0（fail-soft 三态信封）。0cz S2：事件工具名
+        // 随方案 A 改指 context_manage。
         let cc: Vec<_> = events(&dir)
             .into_iter()
             .filter(|e| {
-                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_compress"
+                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_manage"
             })
             .collect();
         assert_eq!(cc.len(), 2, "{:?}", cc.len());

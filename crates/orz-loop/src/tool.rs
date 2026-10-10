@@ -21,7 +21,7 @@ use orz_assurance::gates::ipg::{
 
 use crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME;
 use crate::host::{RiskClass, ToolPolicy};
-use orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME;
+use orz_assurance::tool_names::{CONTEXT_COMPRESS_TOOL_NAME, CONTEXT_MANAGE_TOOL_NAME};
 
 /// Dispatches tool calls with pre/post assurance checks.
 #[derive(Debug, Clone, Default)]
@@ -86,7 +86,14 @@ impl ToolDispatcher {
         // 压缩状态操作**——请求开 D3 模型参与压缩窗口 ＋返回滑块读数，无
         // 文件/网络/黑板外部副作用，ReadOnly 类（所有策略自动放行）。8 工具
         // 面冻结的用户主导显式例外 +2；名字自诞生即走 tool_names 单源。
+        // 0cz S2（方案 A）：声明面退役、类表位保留（历史会话回放仍需）。
         CONTEXT_COMPRESS_TOOL_NAME,
+        // 0cz S2（2026-10-11，设计 §4）: `context_manage`＝上下文管理第十一
+        // 主工具——**纯内存投影状态操作＋黑板合法写路径**（mode=compress
+        // 承继 0ap 管线；mode=clear 施加投影边界 marker＋块回放落盘，落盘面
+        // 属 `.gsa` 客观承载，与既有压缩落盘同性质），无外部副作用 →
+        // ReadOnly 类（所有策略自动放行）。8 工具面冻结的用户主导显式例外 +3。
+        CONTEXT_MANAGE_TOOL_NAME,
         // GAP-RETRIEVAL-TOOLS (2026-08-10): `project_doc_index` is a
         // workspace-local read (discovery + query) — ReadOnly class
         // (auto-allowed under every policy; the retrieval subagent's
@@ -192,6 +199,12 @@ impl ToolDispatcher {
             // 0ap: the compression-window request mutates in-memory
             // compression state only — honest "other" fold (same family as
             // the whitelist/action-bar/plan writes).
+            "other"
+        } else if tool_name == CONTEXT_MANAGE_TOOL_NAME {
+            // 0cz S2: context manage mutates in-memory projection state
+            // (+ blackboard handover write) only — honest "other" fold,
+            // same family as context_compress (NOT a "read": clear/compress
+            // are state operations, and the action board should say so).
             "other"
         } else if Self::is_shell_tool(tool_name) {
             "terminal"

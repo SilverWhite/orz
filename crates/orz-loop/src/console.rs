@@ -3348,7 +3348,11 @@ mod tests {
             assert_eq!(err.code, expected_code, "{arguments}");
         }
         assert!(
-            executor.seen.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
+            executor
+                .seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty(),
             "static validation must fail before any execution"
         );
     }
@@ -3382,7 +3386,13 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.step, STEP_CONTRACT);
         assert_eq!(err.code, CODE_INVALID_SCRIPT);
-        assert!(executor.seen.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
+        assert!(
+            executor
+                .seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        );
     }
 
     /// P0-C S3 审查收口（2026-08-16）：注册不变式补齐——内部动作携带
@@ -3653,7 +3663,11 @@ mod tests {
             MAX_SCRIPT_STEPS_PER_ORDER
         );
         assert_eq!(
-            executor.seen.lock().unwrap_or_else(|e| e.into_inner()).len(),
+            executor
+                .seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
             MAX_SCRIPT_STEPS_PER_ORDER * 2
         );
     }
@@ -3723,7 +3737,14 @@ mod tests {
             "workspace.read_file"
         );
         // 第三步未执行。
-        assert_eq!(executor.seen.lock().unwrap_or_else(|e| e.into_inner()).len(), 2);
+        assert_eq!(
+            executor
+                .seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
+            2
+        );
         // trace 含 script 失败事件（code 保留内层）。
         let failed: Vec<&TraceEvent> = trace
             .events
@@ -3790,7 +3811,14 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.step, STEP_EXECUTE);
         assert_eq!(err.code, CODE_SCRIPT_RESPONSE_LIMIT);
-        assert_eq!(executor.seen.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
+        assert_eq!(
+            executor
+                .seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
+            1
+        );
     }
 
     /// P0-C S4 (2026-08-16)：单步 host 截止（结构化 `timed_out` 信号）→
@@ -3864,7 +3892,14 @@ mod tests {
         assert!(timeouts[0].is_none());
         drop(timeouts);
         // 第二步未执行。
-        assert_eq!(executor.seen.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
+        assert_eq!(
+            executor
+                .seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
+            1
+        );
         assert_eq!(consumed, 1);
     }
 
@@ -3934,7 +3969,14 @@ mod tests {
         assert_eq!(err.upstream.as_ref().unwrap()["script_step"], 2);
         // 第 1、2 步都越过了执行边界 → 2 单位；第 3 步未执行。
         assert_eq!(consumed, 2);
-        assert_eq!(executor.seen.lock().unwrap_or_else(|e| e.into_inner()).len(), 2);
+        assert_eq!(
+            executor
+                .seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
+            2
+        );
     }
 
     /// R2 全面审查处理补测：PTC 脚本步骤的 `target` 与参数路径同样走
@@ -4123,7 +4165,10 @@ mod tests {
                 arguments.clone(),
                 call_id.to_string(),
             ));
-            self.timeouts.lock().unwrap_or_else(|e| e.into_inner()).push(timeout);
+            self.timeouts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(timeout);
             self.results
                 .lock()
                 .unwrap()
@@ -4583,7 +4628,10 @@ mod tests {
         )
         .await
         .expect("workspace-wide grep without target must pass");
-        assert_eq!(seen.lock().unwrap_or_else(|e| e.into_inner())[0].1, json!({"pattern": "foo"}));
+        assert_eq!(
+            seen.lock().unwrap_or_else(|e| e.into_inner())[0].1,
+            json!({"pattern": "foo"})
+        );
         // 带 target 无 path → 注入 path。
         issue_action(
             &registry,

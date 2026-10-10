@@ -263,7 +263,10 @@ impl AcafClient {
     /// journal) and the D-16 GoalRevisionV1 rejection branch.
     #[doc(hidden)]
     pub fn inject_verify_failure(&self, kind: TicketKind, detail: &str) {
-        *self.injected_verify_failure.lock().unwrap_or_else(|e| e.into_inner()) = Some((kind, detail.to_string()));
+        *self
+            .injected_verify_failure
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some((kind, detail.to_string()));
     }
 
     /// e2e-only seam (2026-08-16 review fix): kill the signer child WITHOUT
@@ -543,10 +546,17 @@ impl AcafClient {
         // The snapshot is taken in its own statement so the std Mutex guard
         // is dropped before the body may lock again (a guard held across
         // the if-let body would deadlock on the inner clear).
-        let injected = self.injected_verify_failure.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let injected = self
+            .injected_verify_failure
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         if let Some((fail_kind, detail)) = injected {
             if fail_kind.as_str() == ticket.ticket_kind {
-                *self.injected_verify_failure.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                *self
+                    .injected_verify_failure
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = None;
                 return Err(AcafClientError::Closed(format!(
                     "injected verify failure for {} (e2e seam): {detail}",
                     ticket.ticket_kind,

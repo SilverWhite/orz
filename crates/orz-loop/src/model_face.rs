@@ -63,6 +63,12 @@ use std::path::{Path, PathBuf};
 /// 分块表注入前缀（注册进 `prompt::is_injected_block_text`，绝不持久化）。
 pub const BLOCK_TABLE_PREFIX: &str = "[上下文分块表";
 
+/// 0cz S2（2026-10-11，设计 §5）：模型主动清零 marker 前缀（注册进
+/// `prompt::is_injected_block_text`〔绝不持久化〕与
+/// `prompt::is_restore_retained_block`〔恢复后边界由此重建——会话是唯一
+/// 真源、零新侧车字段〕）。
+pub const CLEAR_MARKER_PREFIX: &str = "[前文上下文已清零";
+
 /// 0bs ④（2026-09-25）：分块表的**单源指向行**——通知块（H1 硬提醒／T1 截断
 /// 告知／必定压缩窗口）不再内嵌整表，只给这一行；表本体在窗口**尾部**逐轮
 /// 刷新（同一「说明行」在一份请求里只出现一次）。
@@ -78,6 +84,14 @@ pub const BLOCK_MARKER_COMPRESSED_VERSION: &str = "v0.4-分块压缩";
 /// v8 分块截断 marker 版本号（T1 硬截断；同上复用前缀）。
 pub const BLOCK_MARKER_TRUNCATED_VERSION: &str = "v0.4-分块截断";
 
+/// 0cz S2（2026-10-11，设计 §5）：模型主动清零 marker 版本号（自有前缀
+/// `[前文上下文已清零`，注册进 `prompt::is_injected_block_text`（绝不持久化）
+/// 与 `is_restore_retained_block`（恢复后边界由此重建））。
+pub const CLEAR_MARKER_VERSION: &str = "v0.1-清零";
+
+/// 清零 marker 机器行标签：边界轮号（1 基；轮 < R 的全部内容移出窗口）。
+pub const CLEAR_MARKER_BOUNDARY_LABEL: &str = "清零边界: 第 ";
+
 /// 单个 marker 允许声明的最大块数（防手写/脏数据构造超大集合）。
 const MAX_MARKER_BLOCKS: usize = 512;
 
@@ -91,6 +105,10 @@ pub enum BlockState {
     Compressed,
     /// 已被 T1 硬截断：移出模型面（可按块回放）。
     Truncated,
+    /// 已被模型主动清零（0cz S2）：随边界轮整体移出窗口（可按块回放）。
+    /// 表态由 `FaceMarkers::is_round_cleared` 推导（清零以轮为界，不以块号
+    /// 记录——边界后新建块不受影响）。
+    Cleared,
 }
 
 /// 一个主滑块之外的逻辑分块。
@@ -121,6 +139,9 @@ pub struct ContextBlock {
 pub struct FaceMarkers {
     pub compressed: BTreeSet<u32>,
     pub truncated: BTreeSet<u32>,
+    /// 0cz S2：清零边界（1 基轮号 R——轮 < R 的全部内容移出窗口）。
+    /// 多枚清零 marker 时取**最后**一枚（边界单调前进；早前边界是其子集）。
+    pub cleared_before_round: Option<u32>,
     /// 每块的**外挂台账 `[seq]` 闭区间**（marker 的「台账定位」行反解；
     /// 三元一致的第三键——2026-09-16 实现批补齐，设计 §2 §11）。
     pub ledger_seq: BTreeMap<u32, (u64, u64)>,
@@ -144,8 +165,42 @@ impl FaceMarkers {
     pub fn is_empty(&self) -> bool {
         self.compressed.is_empty()
             && self.truncated.is_empty()
+            && self.cleared_before_round.is_none()
             && self.ledger_seq.is_empty()
             && self.journal_seq.is_empty()
+    }
+
+    /// 0cz S2：该 0 基轮是否已被清零（轮 1 基号 < 边界 R ⇒ 已清零）。
+    pub fn is_round_cleared(&self, round0: usize) -> bool {
+        match self.cleared_before_round {
+            Some(r) => (round0 as u64) + 1 < r as u64,
+            None => false,
+        }
+    }
+
+    /// 0cz S2：清零隐藏区的消息终点（隐藏区间 `[0, end)`；＝边界轮的起点）。
+    /// 轮次不足/无边界 ⇒ 0（无隐藏）。
+    pub fn clear_hidden_end(&self, ranges: &[(usize, usize)]) -> usize {
+        let Some(r) = self.cleared_before_round else {
+            return 0;
+        };
+        if r <= 1 {
+            return 0;
+        }
+        // 隐藏轮 1..=R-1（1 基）＝ 0 基 0..=R-2 ⇒ 终点＝轮 R-1（1 基）的
+        // 区间尾＝轮 R（边界轮）的区间首（marker 插入点）。
+        ranges.get(r as usize - 2).map(|&(_, e)| e).unwrap_or(0)
+    }
+
+    /// 242 批（0da S2 审查处置 P2）：**整块已清零**——first∧last 两端轮次
+    /// 都在边界前。机制排除（可压集合/截断 live/T1 计数/块隐藏臂跳过）与
+    /// 块表「已清零」标态的**单一判据**。跨边界块（first 清零、last 未清零）
+    /// **不**算整块清零：其边界后段仍在窗口，必须照常参与滑块/压缩/截断
+    /// 兜底——首轮端点单判据（`is_round_cleared(first_round)`）会把该段
+    /// 永久排除在回收机制外（审查实证：清零后重生长分区不保证在边界处
+    /// 切分块，跨边界块是可达形态）。
+    pub fn is_block_cleared(&self, first_round: usize, last_round: usize) -> bool {
+        self.is_round_cleared(first_round) && self.is_round_cleared(last_round)
     }
 
     /// 该块的外挂台账 `[seq]` 区间（未外挂 ⇒ `None`）。
@@ -329,7 +384,14 @@ pub fn slider_readout(
     let mut compressible_blocks = 0usize;
     let mut compressible_estimate_tokens = 0u64;
     for b in &blocks {
-        if b.closed && markers.state(b.number) == BlockState::Live {
+        // 0cz S2：已清零块不进可压集合（已移出窗口；compressible＝closed ∧
+        // Live ∧ 未清零）。242 批（P2）：判据收窄为**整块已清零**——跨边界
+        // 块的边界后段仍在窗口，照常可压（首轮端点判据会把它永久排除在
+        // 兜底回收外）。
+        if b.closed
+            && markers.state(b.number) == BlockState::Live
+            && !markers.is_block_cleared(b.first_round, b.last_round)
+        {
             compressible_blocks += 1;
             compressible_estimate_tokens += b.estimate_tokens;
         }
@@ -368,6 +430,12 @@ pub fn render_slider_readout_line(readout: &SliderReadout) -> String {
 pub fn face_markers(messages: &[Message]) -> FaceMarkers {
     let mut out = FaceMarkers::default();
     for m in messages {
+        // 0cz S2：清零 marker（自有前缀，与分块 marker 互斥）——边界取
+        // 最后一次（单调前进；早前边界是其子集）。台账/journal 定位行照常
+        // 反解（清零 marker 同样携带「台账定位」——由执行面写入）。
+        if let Some(r) = parse_clear_boundary(&m.content) {
+            out.cleared_before_round = Some(r);
+        }
         let Some((state, numbers)) = parse_marker_blocks(&m.content) else {
             continue;
         };
@@ -379,7 +447,8 @@ pub fn face_markers(messages: &[Message]) -> FaceMarkers {
                 BlockState::Truncated => {
                     out.truncated.insert(n);
                 }
-                BlockState::Live => {}
+                // 清零态不进块号集合——表态由边界轮推导（is_round_cleared）。
+                BlockState::Live | BlockState::Cleared => {}
             }
         }
         for (number, range) in parse_marker_ledger_seqs(&m.content) {
@@ -397,6 +466,33 @@ pub fn face_markers(messages: &[Message]) -> FaceMarkers {
         }
     }
     out
+}
+
+/// 0cz S2：清零边界的**权威消息下标**（最后一枚 marker 的位置；隐藏区间
+/// `[0, idx)`、marker 本体即存根留在窗口）。marker（role=User）不开新轮、
+/// 会被轮区间吸进前一轮——轮端点推导（[`FaceMarkers::clear_hidden_end`]）
+/// 只作无 marker 消息时的回退。
+pub fn clear_marker_index(messages: &[Message]) -> Option<usize> {
+    messages
+        .iter()
+        .rposition(|m| m.content.starts_with(CLEAR_MARKER_PREFIX))
+}
+
+/// 反解清零 marker 的边界轮号（`清零边界: 第 R 轮`；1 基）。脏数据 ⇒
+/// `None`（边界不虚构）。多方读数一致：`face_markers` 据此维护
+/// `cleared_before_round`。
+pub fn parse_clear_boundary(content: &str) -> Option<u32> {
+    if !content.starts_with(CLEAR_MARKER_PREFIX) {
+        return None;
+    }
+    let line = content
+        .lines()
+        .map(str::trim_start)
+        .find(|l| l.starts_with(CLEAR_MARKER_BOUNDARY_LABEL))?;
+    let rest = line.trim_start_matches(CLEAR_MARKER_BOUNDARY_LABEL);
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let r: u32 = digits.parse().ok()?;
+    (r >= 1).then_some(r)
 }
 
 /// 反解 marker 的 journal seq 区间（`- journal: run=… seq=a–b（…）`；
@@ -502,21 +598,32 @@ pub fn is_block_marker(content: &str) -> bool {
     parse_marker_blocks(content).is_some()
 }
 
-/// 已压缩/已截断块的隐藏消息区间。
+/// 已压缩/已截断块的隐藏消息区间 ＋ 0cz 清零边界区间。
 ///
 /// 双护栏（2026-09-16 实现批，P0 修复）：
 /// ① **未闭合残段永不隐藏**（它仍在增长，隐藏它等于隐藏工作现场）；
 /// ② 区间末端**硬钳到主滑块起点**（`slider_start`）——不变量 I1 的结构性
 ///    保证：任何路径都不能隐藏主滑块及其后的内容（现算区间即便因脏 marker
 ///    越界，也只会在滑块起点处被截断）。
+/// 0cz S2（设计 §5.1）：清零区间（`[0, clear_hidden_end)`）**不受钳 ②**
+/// ——I1 的登记显式例外（模型主动发起＋强制交接写入前置＋边界以 marker
+/// 为界可回放，三条件由执行面保证）；护栏 ① 不适用（清零以轮为界，边界轮
+/// 本身不在隐藏区）。
+/// `clear_end` 由调用方下传（0da S2 前置段同一 gated 推导——「有 marker
+/// 消息且边界可解析」才隐藏，脏 marker 不虚构边界；242 批改参数化：公开
+/// 入口恰算一次，内部不再自查，前置段与主循环同源）。
 fn hidden_message_ranges(
     messages: &[Message],
     ranges: &[(usize, usize)],
     blocks: &[ContextBlock],
     markers: &FaceMarkers,
     slider_start: Option<usize>,
+    clear_end: usize,
 ) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
+    if clear_end > 0 {
+        out.push((0, clear_end));
+    }
     for block in blocks {
         if !block.closed {
             continue;
@@ -532,7 +639,10 @@ fn hidden_message_ranges(
             .map(|&(_, e)| e)
             .unwrap_or_else(|| messages.len());
         let end = slider_start.map_or(end, |s| end.min(s));
-        if end > start {
+        // 242 批（P2）：整块已清零 ⇒ 已被 (0, clear_end) 臂覆盖，跳过；
+        // **跨边界块不再被首轮端点判据排除**——其边界后段（压缩/截断后）
+        // 必须由块臂隐藏，否则 marker 声明「已压缩」而正文仍在面。
+        if end > start && !markers.is_block_cleared(block.first_round, block.last_round) {
             out.push((start, end));
         }
     }
@@ -553,8 +663,27 @@ pub fn build_model_face(
     messages: &[Message],
     params: &ModelFaceParams,
 ) -> Result<Vec<Message>, std::io::Error> {
+    // 0da S2（2026-10-11，设计 §4.1，D1 修复）：清零 marker 在场**不再**短路
+    // 独立装配——有块清零走**常规装配**（`hidden_message_ranges` 的
+    // `(0, clear_end)` 前置臂已在位、不钳 slider_start），边界后内容照常受
+    // 滑块/压缩/截断/700K 守卫钳制（0cz 设计 §5.3/§9「机制不退役」恢复成立；
+    // 239 批审查实证短路使兜底收缩全链失效）。`build_cleared_face` 保留为
+    // **无块清零面**专用（无块早退不应用 hidden 区间，见下）。
+    // 清零隐藏区间有效起点：marker 在场取 marker 消息下标（0cz S2 权威），
+    // 脏数据回退边界轮推导；未清零恒 0（各循环零行为变化）。
+    let markers = face_markers(messages);
+    let clear_end = if markers.cleared_before_round.is_some() {
+        clear_marker_index(messages).unwrap_or_else(|| {
+            markers.clear_hidden_end(&crate::action_ledger::round_ranges(messages))
+        })
+    } else {
+        0
+    };
     let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
     if blocks.is_empty() {
+        if clear_end > 0 {
+            return build_cleared_face(messages, &markers, params);
+        }
         // 0bz S3（2026-09-28）：**常驻头（指针；0bz S3′ 后 D4 落窗口尾）自
         // 首个轮次起即在**——旧
         // 口径「无分块原样返回」使指针/D4 拖到首个分块形成那一刻才整体插入
@@ -565,18 +694,22 @@ pub fn build_model_face(
         // RUN_END 行），前缀逐字节稳定。内容零改，只动时点。
         return try_clone_messages_with_resident_head(messages, params);
     }
-    let markers = face_markers(messages);
     let ranges = crate::action_ledger::round_ranges(messages);
     let start = slider_start(messages, params.slider_tokens);
-    let hidden = hidden_message_ranges(messages, &ranges, &blocks, &markers, start);
+    let hidden = hidden_message_ranges(messages, &ranges, &blocks, &markers, start, clear_end);
     let preamble_end = blocks[0].msg_start;
     // 0bc S2④：一次可失败预留（上界＝len＋4：前置＋指针/D4＋尾部消息＋块表
     // ＋结束自述通道行），此后 push 不再触发不可失败的增长重分配。
     let mut view: Vec<Message> = Vec::new();
     view.try_reserve_exact(messages.len() + 4)
         .map_err(alloc_err_io)?;
-    for m in &messages[..preamble_end] {
-        view.push(try_clone_message(m)?);
+    // 前置段（0da S2 设计 §4.2）：**清零区间内仅保留白名单**（跨清零保留，
+    // 0cz 设计 §5.3；常规路径此前无此豁免＝D1 修复面），区间外原序全推
+    // ——未清零（clear_end=0）时与旧口径逐条等价。
+    for (i, m) in messages.iter().enumerate().take(preamble_end) {
+        if i >= clear_end || m.content.starts_with(crate::prompt::WHITELIST_PREFIX) {
+            view.push(try_clone_message(m)?);
+        }
     }
     if let Some(ledger) = params.ledger_path.as_deref() {
         view.push(mechanical_message(
@@ -589,6 +722,11 @@ pub fn build_model_face(
         }
         // marker 永不隐藏（它承载压缩后的摘要行）。
         if is_block_marker(&m.content) {
+            view.push(try_clone_message(m)?);
+            continue;
+        }
+        // 0da S2：白名单永不隐藏（跨压缩/截断/清零保留；与前置段豁免同口径）。
+        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) {
             view.push(try_clone_message(m)?);
             continue;
         }
@@ -618,6 +756,51 @@ pub fn build_model_face(
     view.push(mechanical_message(
         crate::model_stop::model_stop_resident_line(),
     ));
+    Ok(view)
+}
+
+/// 0cz S2（设计 §5.1）＋0da S2（设计 §4.1/O3）：**无块清零面装配**——
+/// `[边界前白名单块（原序；clear 是超集动作，设计 §5.3）]` ＋ `[台账指针]` ＋
+/// `[边界轮起全部消息逐字（含清零 marker 本体）]` ＋ `[D4]` ＋ `[块表（有块时）]`
+/// ＋ `[结束自述通道行（有块时）]`。0da S2 起**仅服务无块会话**（无块早退
+/// 不应用 hidden 区间；有块清零改走常规装配——D1 修复），块表臂保留使本
+/// 函数独立成立。与常规开窗形态同构：头部结构常驻、尾部易变区追加。
+fn build_cleared_face(
+    messages: &[Message],
+    markers: &FaceMarkers,
+    params: &ModelFaceParams,
+) -> Result<Vec<Message>, std::io::Error> {
+    let ranges = crate::action_ledger::round_ranges(messages);
+    let hidden_end =
+        clear_marker_index(messages).unwrap_or_else(|| markers.clear_hidden_end(&ranges));
+    let mut view: Vec<Message> = Vec::new();
+    view.try_reserve_exact(messages.len() + 4)
+        .map_err(alloc_err_io)?;
+    for m in messages.iter().take(hidden_end) {
+        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) {
+            view.push(try_clone_message(m)?);
+        }
+    }
+    if let Some(ledger) = params.ledger_path.as_deref() {
+        view.push(mechanical_message(
+            crate::action_ledger::build_pointer_message(ledger),
+        ));
+    }
+    for m in messages.iter().skip(hidden_end) {
+        view.push(try_clone_message(m)?);
+    }
+    if let Some(d4) = params.d4_block.as_deref() {
+        view.push(mechanical_message(d4.to_string()));
+    }
+    let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
+    if !blocks.is_empty() {
+        view.push(mechanical_message(render_block_table(
+            &blocks, markers, params,
+        )));
+        view.push(mechanical_message(
+            crate::model_stop::model_stop_resident_line(),
+        ));
+    }
     Ok(view)
 }
 
@@ -659,8 +842,35 @@ fn try_clone_messages_with_resident_head(
 /// 口径（同一过滤、同一追加），但**不克隆任何消息**——只需条数的事件面
 /// （压缩事件 `messages_kept`）用它替代「物化整面再取 `len`」。
 pub fn model_face_message_count(messages: &[Message], params: &ModelFaceParams) -> usize {
+    // 0da S2（设计 §4.1/§4.3，D1＋D4）：`face_markers` 恰算一次；清零态
+    // **不再**独立分支——与 build 同构走常规路径（无块清零面分支保留）。
+    let markers = face_markers(messages);
+    let cleared = markers.cleared_before_round.is_some();
+    let clear_end = if cleared {
+        clear_marker_index(messages).unwrap_or_else(|| {
+            markers.clear_hidden_end(&crate::action_ledger::round_ranges(messages))
+        })
+    } else {
+        0
+    };
     let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
     if blocks.is_empty() {
+        if clear_end > 0 {
+            // 无块清零面计数（build_cleared_face 同口径）。
+            let mut count = messages
+                .iter()
+                .take(clear_end)
+                .filter(|m| m.content.starts_with(crate::prompt::WHITELIST_PREFIX))
+                .count();
+            if params.ledger_path.is_some() {
+                count += 1;
+            }
+            count += messages.len() - clear_end;
+            if params.d4_block.is_some() {
+                count += 1;
+            }
+            return count;
+        }
         // 0bz S3：常驻头与 build_model_face 同口径——轮次成形后 ＋指针 ＋D4。
         let mut count = messages.len();
         if !crate::action_ledger::round_ranges(messages).is_empty() {
@@ -673,12 +883,17 @@ pub fn model_face_message_count(messages: &[Message], params: &ModelFaceParams) 
         }
         return count;
     }
-    let markers = face_markers(messages);
     let ranges = crate::action_ledger::round_ranges(messages);
     let start = slider_start(messages, params.slider_tokens);
-    let hidden = hidden_message_ranges(messages, &ranges, &blocks, &markers, start);
+    let hidden = hidden_message_ranges(messages, &ranges, &blocks, &markers, start, clear_end);
     let preamble_end = blocks[0].msg_start;
-    let mut count = preamble_end;
+    // 前置段计数（0da S2）：清零区间内仅白名单（与 build 前置段同口径）。
+    let mut count = messages
+        .iter()
+        .enumerate()
+        .take(preamble_end)
+        .filter(|(i, m)| *i >= clear_end || m.content.starts_with(crate::prompt::WHITELIST_PREFIX))
+        .count();
     if params.ledger_path.is_some() {
         count += 1;
     }
@@ -690,6 +905,11 @@ pub fn model_face_message_count(messages: &[Message], params: &ModelFaceParams) 
             continue;
         }
         if is_block_marker(&m.content) {
+            count += 1;
+            continue;
+        }
+        // 0da S2：白名单永不隐藏（与 build 主循环同口径）。
+        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) {
             count += 1;
             continue;
         }
@@ -782,8 +1002,22 @@ pub fn model_face_estimate(messages: &[Message], params: &ModelFaceParams) -> u6
 /// [`build_model_face`] 逐条同口径（同一过滤与同一追加），但不克隆整段会话
 /// ——500K 工作点上每轮多次调用，物化版本是 MB 级字符串拷贝。
 pub fn estimate_model_face_tokens(messages: &[Message], params: &ModelFaceParams) -> u64 {
+    // 0da S2（设计 §4.1/§4.3，D1＋D4）：`face_markers` 恰算一次；清零态
+    // **不再**独立分支——与 build 同构走常规路径（无块清零面分支保留，
+    // estimate ≡ build 逐条同口径）。
+    let markers = face_markers(messages);
+    let clear_end = if markers.cleared_before_round.is_some() {
+        clear_marker_index(messages).unwrap_or_else(|| {
+            markers.clear_hidden_end(&crate::action_ledger::round_ranges(messages))
+        })
+    } else {
+        0
+    };
     let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
     if blocks.is_empty() {
+        if clear_end > 0 {
+            return estimate_cleared_face_tokens(messages, &markers, params, clear_end);
+        }
         // 0bz S3：常驻结构与 build_model_face 同口径——轮次成形后计入指针
         // （头部）与 D4（0bz S3′ 起居窗口尾；计数与位置无关）。
         let mut total = crate::controller::estimate_messages_tokens(messages);
@@ -799,12 +1033,17 @@ pub fn estimate_model_face_tokens(messages: &[Message], params: &ModelFaceParams
         }
         return total;
     }
-    let markers = face_markers(messages);
     let ranges = crate::action_ledger::round_ranges(messages);
     let start = slider_start(messages, params.slider_tokens);
-    let hidden = hidden_message_ranges(messages, &ranges, &blocks, &markers, start);
+    let hidden = hidden_message_ranges(messages, &ranges, &blocks, &markers, start, clear_end);
     let preamble_end = blocks[0].msg_start;
-    let mut total = crate::controller::estimate_messages_tokens(&messages[..preamble_end]);
+    // 前置段（0da S2）：清零区间内仅白名单（与 build 前置段同口径）。
+    let mut total = 0u64;
+    for (i, m) in messages.iter().enumerate().take(preamble_end) {
+        if i >= clear_end || m.content.starts_with(crate::prompt::WHITELIST_PREFIX) {
+            total = total.saturating_add(crate::controller::estimate_message_tokens(m));
+        }
+    }
     if let Some(ledger) = params.ledger_path.as_deref() {
         total = total.saturating_add(injected_estimate(
             &crate::action_ledger::build_pointer_message(ledger),
@@ -818,6 +1057,11 @@ pub fn estimate_model_face_tokens(messages: &[Message], params: &ModelFaceParams
             continue;
         }
         if is_block_marker(&m.content) {
+            total = total.saturating_add(crate::controller::estimate_message_tokens(m));
+            continue;
+        }
+        // 0da S2：白名单永不隐藏（与 build 主循环同口径）。
+        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) {
             total = total.saturating_add(crate::controller::estimate_message_tokens(m));
             continue;
         }
@@ -838,6 +1082,41 @@ pub fn estimate_model_face_tokens(messages: &[Message], params: &ModelFaceParams
 /// `estimate_message_tokens` 同尺（chars/2）。
 fn injected_estimate(text: &str) -> u64 {
     text.chars().count() as u64 / 2
+}
+
+/// 0da S2：无块清零面估算（`build_cleared_face` 的不物化镜像——逐条同口径；
+/// 仅由 [`estimate_model_face_tokens`] 的无块清零分支到达，markers/clear_end
+/// 单次计算下传）。
+fn estimate_cleared_face_tokens(
+    messages: &[Message],
+    markers: &FaceMarkers,
+    params: &ModelFaceParams,
+    clear_end: usize,
+) -> u64 {
+    let mut total = 0u64;
+    for m in messages.iter().take(clear_end) {
+        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) {
+            total = total.saturating_add(crate::controller::estimate_message_tokens(m));
+        }
+    }
+    if let Some(ledger) = params.ledger_path.as_deref() {
+        total = total.saturating_add(injected_estimate(
+            &crate::action_ledger::build_pointer_message(ledger),
+        ));
+    }
+    for m in messages.iter().skip(clear_end) {
+        total = total.saturating_add(crate::controller::estimate_message_tokens(m));
+    }
+    if let Some(d4) = params.d4_block.as_deref() {
+        total = total.saturating_add(injected_estimate(d4));
+    }
+    let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
+    if !blocks.is_empty() {
+        let index = injected_estimate(&render_block_table(&blocks, markers, params));
+        let channel = injected_estimate(&crate::model_stop::model_stop_resident_line());
+        total = total.saturating_add(index).saturating_add(channel);
+    }
+    total.saturating_add(params.static_overhead_tokens)
 }
 
 fn mechanical_message(content: String) -> Message {
@@ -871,11 +1150,24 @@ pub fn render_block_table(
             .to_string(),
     );
     for block in blocks {
-        let state = match (block.closed, markers.state(block.number)) {
-            (false, _) => "残段（仍在增长）",
-            (true, BlockState::Live) => "原文",
-            (true, BlockState::Compressed) => "已压缩",
-            (true, BlockState::Truncated) => "已截断",
+        // 0cz S2：清零态优先（**整块**已清零——242 批收拢为 is_block_cleared
+        // 单一判据，与机制排除同源）。
+        let state = if block.closed && markers.is_block_cleared(block.first_round, block.last_round)
+        {
+            "已清零"
+        } else if block.closed && markers.is_round_cleared(block.first_round) {
+            // 242 批（P2）：**跨清零边界块**（首轮在边界前、尾轮在边界后）
+            // ——边界前段已由清零臂移出窗口、边界后段仍在窗口照常参与兜底
+            // （如实标态；本批前误标「原文」）。
+            "跨清零边界（前段已移出）"
+        } else {
+            match (block.closed, markers.state(block.number)) {
+                (false, _) => "残段（仍在增长）",
+                (true, BlockState::Live) => "原文",
+                (true, BlockState::Compressed) => "已压缩",
+                (true, BlockState::Truncated) => "已截断",
+                (true, BlockState::Cleared) => "已清零",
+            }
         };
         let ledger = match markers.ledger_range(block.number) {
             Some((from, to)) => format!("台账 [seq] {from}-{to}"),
@@ -959,6 +1251,21 @@ pub fn block_archive_path(root: &Path, tag: &str, number: u32) -> PathBuf {
 /// 会话卷相对形态（分块表／marker 里给模型看的形态）。
 pub fn relative_block_archive(tag: &str, number: u32) -> String {
     format!(".gsa/compaction/blocks/{tag}-block-{number:04}.md")
+}
+
+/// 0cz S2（设计 §5.2）：清零现场存档（绝对路径）——
+/// `{cwd}/.gsa/compaction/blocks/<tag>-clear.md`（边界前全部轮次逐字留档，
+/// 与按块回放同目录同性质）。
+pub fn clear_archive_path(root: &Path, tag: &str) -> PathBuf {
+    root.join(".gsa")
+        .join("compaction")
+        .join("blocks")
+        .join(format!("{tag}-clear.md"))
+}
+
+/// 0cz S2：清零现场存档的会话卷相对形态。
+pub fn relative_clear_archive(tag: &str) -> String {
+    format!(".gsa/compaction/blocks/{tag}-clear.md")
 }
 
 /// 分块档案/会话标签（session id 前 8 字符；缺省用 run id 的短尾）。
@@ -1150,6 +1457,98 @@ pub fn truncation_marker(
          [/前文上下文已压缩]",
         numbers_text, count, from, to,
     )
+}
+
+/// 0cz S2（设计 §5.4）：清零 marker——投影层边界存根。边界之前的全部内容
+/// 不再渲染（本 marker 即留在窗口里的那一行存根）；`handover_note` 带交接
+/// 写入的落点回执（防裸清护栏的可见面）。
+#[allow(clippy::too_many_arguments)]
+pub fn clear_marker(
+    boundary_round0: usize,
+    blocks_cleared: &[u32],
+    rounds_cleared: usize,
+    archive_path: &Path,
+    session: Option<&str>,
+    replay: &str,
+    handover_note: &str,
+) -> String {
+    let r = boundary_round0 + 1;
+    let numbers_text = if blocks_cleared.is_empty() {
+        "（无分块——边界前内容全部在主滑块面）".to_string()
+    } else {
+        render_block_numbers(blocks_cleared)
+    };
+    let archive_display = archive_path.display().to_string();
+    let session_display = session.unwrap_or("（无）");
+    let replay_block = if replay.is_empty() {
+        String::new()
+    } else {
+        format!("== 原文回放（按块） ==\n{replay}\n")
+    };
+    format!(
+        "[前文上下文已清零 {CLEAR_MARKER_VERSION}]\n\
+         {CLEAR_MARKER_BOUNDARY_LABEL}{r} 轮]\n\
+         已处理分块: {numbers_text}（清零 {rounds_cleared} 轮；读数见清零回执与分块表）\n\
+         交接摘要: {handover_note}\n\
+         清零存档: {archive_display}（边界前全部轮次逐字留档；read_file offset/limit 分页）\n\
+         黑板会话: {session_display}\n\
+         {replay_block}\
+         你主动发起的清零已生效：边界之前的全部内容已移出当前窗口（**未销毁**，逐字留档可回查）。\
+         你的工作计划与结论在黑板（blackboard_read），完整历史在 .gsa 会话记录（读工具可回查）。\
+         请从台账继续。\n\
+         == 模型面声明 ==\n{MODEL_FACE_DECLARATION}\n\
+         [/前文上下文已清零]"
+    )
+}
+
+/// 0cz S2（设计 §5.2）：清零现场逐字留档（边界前 `[0, upto)` 区间整段
+/// markdown——与按块回放互补；模型经 read_file 分页拉回完整前置现场）。
+pub fn clear_transcript_markdown(
+    messages: &[Message],
+    upto: usize,
+    boundary_round0: usize,
+    run_id: &str,
+    session: Option<&str>,
+) -> String {
+    let mut out = format!(
+        "# ORZ 清零现场留档（轮 1–{}）\n\n\
+         - 边界: 第 {} 轮（清零发起轮；本档覆盖其之前全部轮次）\n\
+         - 消息区间: [0, {upto})\n- run: {run_id}\n\
+         - 会话／黑板会话: {}\n- 生成时间: {}\n\n\
+         > 陈旧性标注：内容截至轮次 {boundary}；文件可能已变更，编辑前须新鲜读取。\n",
+        boundary_round0,
+        boundary_round0 + 1,
+        session.unwrap_or("（无）"),
+        crate::controller::chrono_utc_now(),
+        boundary = boundary_round0 + 1,
+    );
+    for (i, m) in messages[..upto.min(messages.len())].iter().enumerate() {
+        let role = match m.role {
+            crate::gateway::model::Role::Assistant => "assistant",
+            crate::gateway::model::Role::Tool => "tool",
+            crate::gateway::model::Role::User => "user",
+            crate::gateway::model::Role::System => "system",
+        };
+        out.push_str(&format!("\n### [{i}] {role}\n"));
+        if m.role == crate::gateway::model::Role::Assistant {
+            for tc in &m.tool_calls {
+                out.push_str(&format!(
+                    "[工具调用] {} args={}\n",
+                    tc.name,
+                    serde_json::to_string(&tc.arguments).unwrap_or_default()
+                ));
+            }
+        }
+        if m.role == crate::gateway::model::Role::Tool {
+            out.push_str(&format!(
+                "（call_id={}）\n",
+                m.tool_call_id.as_deref().unwrap_or("?")
+            ));
+        }
+        out.push_str(&m.content);
+        out.push('\n');
+    }
+    out
 }
 
 /// 块号区间渲染（压缩、合并连续段：`1-4, 6`）。
@@ -2254,6 +2653,593 @@ mod tests {
         assert_eq!(
             div.prev_hash.as_deref(),
             Some(base.entries[1].hash.as_str())
+        );
+    }
+
+    // ===== 0cz S2（2026-10-11，设计 §5）钉组：模型主动清零（投影层第三动作）
+    // ===== 钉②（本地面零 diff / 隐藏口径）＋钉③（marker 反解与恢复重建）
+
+    /// 构造「6 轮 ＋ 边界 marker 插在第 5 轮声明前」的会话（boundary_round0=4
+    /// ⇒ 清零边界＝第 5 轮，轮 1–4 隐藏）。
+    fn cleared_conversation() -> Vec<Message> {
+        let mut messages = conversation(6, 8_000); // ≈4K 估算/轮
+        let marker = clear_marker(
+            4,
+            &[1, 2],
+            4,
+            Path::new(".gsa/compaction/blocks/tag-clear.md"),
+            Some("sess-abcd"),
+            "- 块#1 轮次 1-2: 完整内容见 .gsa/compaction/blocks/tag-block-0001.md\n\
+             - 块#2 轮次 3-4: 完整内容见 .gsa/compaction/blocks/tag-block-0002.md",
+            "黑板 notes r5@normal（【交接摘要】，42 字符）",
+        );
+        let idx = messages
+            .iter()
+            .position(|m| {
+                m.role == Role::Assistant && m.tool_calls.iter().any(|tc| tc.call_id == "c4")
+            })
+            .expect("round 5 declaration");
+        messages.insert(
+            idx,
+            Message {
+                role: Role::User,
+                content: marker,
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            },
+        );
+        messages
+    }
+
+    #[test]
+    fn clear_marker_parses_and_boundary_hides_preboundary_rounds() {
+        let messages = cleared_conversation();
+        let markers = face_markers(&messages);
+        // 钉③（反解）：边界轮号与「最后 marker 优先」语义。
+        assert_eq!(markers.cleared_before_round, Some(5));
+        assert!(markers.is_round_cleared(0));
+        assert!(!markers.is_round_cleared(4), "边界轮本身不清零");
+        // 注册面：注入文本（绝不持久化）＋ restore-retained（恢复重建）。
+        let marker_content = messages
+            .iter()
+            .find(|m| m.content.starts_with(CLEAR_MARKER_PREFIX))
+            .unwrap()
+            .content
+            .clone();
+        assert!(crate::prompt::is_injected_block_text(&marker_content));
+        assert!(crate::prompt::is_restore_retained_block(&marker_content));
+
+        let params = ModelFaceParams {
+            slider_tokens: 12_000,
+            block_tokens: 12_000,
+            ledger_path: None,
+            archive_tag: None,
+            run_id: "RUN-CZ".to_string(),
+            d4_block: None,
+            static_overhead_tokens: 0,
+        };
+        // 钉②（装配口径）：边界前（含原 prompt 前言）全部隐藏；边界轮起逐字
+        // 保留；marker 本体在窗口（存根）。
+        let face = build_model_face(&messages, &params).unwrap();
+        assert!(
+            face.iter()
+                .any(|m| m.content.starts_with(CLEAR_MARKER_PREFIX)),
+            "marker 存根必须在窗口"
+        );
+        assert!(
+            !face.iter().any(|m| {
+                m.role == Role::Assistant && m.tool_calls.iter().any(|tc| tc.call_id == "c0")
+            }),
+            "边界前声明必须隐藏（分块表的指针列不算泄漏——那是合法的回放面）"
+        );
+        assert!(
+            !face.iter().any(|m| {
+                m.role == Role::Assistant && m.tool_calls.iter().any(|tc| tc.call_id == "c3")
+            }),
+            "边界前最后一轮声明必须隐藏"
+        );
+        assert!(
+            !face.iter().any(|m| m.content.contains("任务：实现更正批")),
+            "边界前前言（原 prompt）必须隐藏"
+        );
+        assert!(
+            face.iter().any(|m| {
+                m.role == Role::Assistant && m.tool_calls.iter().any(|tc| tc.call_id == "c4")
+            }),
+            "边界轮起逐字保留"
+        );
+        assert!(
+            face.iter().any(|m| {
+                m.role == Role::Assistant && m.tool_calls.iter().any(|tc| tc.call_id == "c5")
+            }),
+            "边界后轮次逐字保留"
+        );
+        // 钉②（估算口径）：清零面估算 ＜ 无 marker 同会话（坍缩到近静态）；
+        // 且与「face 内容总量」同向（不物化路径与装配路径一致）。
+        let est_cleared = estimate_model_face_tokens(&messages, &params);
+        let open = conversation(6, 8_000);
+        let est_open = estimate_model_face_tokens(&open, &params);
+        assert!(
+            est_cleared * 2 < est_open,
+            "清零后估算必须坍缩（{est_cleared} vs {est_open}）"
+        );
+        // 块表：边界前块渲染「已清零」；读数：清零块不进可压集合。
+        let blocks = blocks_outside_slider(&messages, 12_000, 12_000);
+        assert!(!blocks.is_empty());
+        let table = render_block_table(&blocks, &markers, &params);
+        assert!(table.contains("已清零"), "{table}");
+        let readout = slider_readout(&messages, 12_000, 12_000);
+        assert_eq!(readout.compressible_blocks, 0, "{readout:?}");
+        // 钉③（恢复重建）：同一消息数组原样重放（模拟侧车恢复）⇒ 同一面。
+        let restored = build_model_face(&messages, &params).unwrap();
+        assert_eq!(face.len(), restored.len());
+    }
+
+    #[test]
+    fn second_clear_marker_supersedes_first_boundary() {
+        let mut messages = cleared_conversation();
+        // 第二次清零（边界＝第 6 轮，0 基 5）——最后 marker 优先。
+        let idx = messages
+            .iter()
+            .position(|m| {
+                m.role == Role::Assistant && m.tool_calls.iter().any(|tc| tc.call_id == "c5")
+            })
+            .expect("round 6 declaration");
+        messages.insert(
+            idx,
+            Message {
+                role: Role::User,
+                content: clear_marker(
+                    5,
+                    &[],
+                    1,
+                    Path::new(".gsa/compaction/blocks/tag-clear.md"),
+                    Some("sess-abcd"),
+                    "",
+                    "黑板 notes r6@normal（【交接摘要】）",
+                ),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            },
+        );
+        let markers = face_markers(&messages);
+        assert_eq!(markers.cleared_before_round, Some(6));
+        assert!(markers.is_round_cleared(4), "前一边界轮随新边界一同隐藏");
+        assert!(!markers.is_round_cleared(5), "新边界轮保留");
+    }
+
+    // ===== 0da S2（2026-10-11，设计 §4.5）钉组：D1 修复——清零态下常规
+    // ===== 装配链恢复（回落钉）＋白名单豁免双路径
+
+    /// 构造「8 轮 ＋ 清零 marker 插在第 4 轮声明前」的会话（boundary_round0=3
+    /// ⇒ 清零边界＝第 4 轮＝块边（轮 1–3 恰为首块）——轮 1–3 整块清零、
+    /// 轮 4–8 为后边界区 ≈20K 估算，slider=12K 下形成后边界闭合块）。
+    fn cleared_conversation_with_post_boundary_blocks() -> Vec<Message> {
+        let mut messages = conversation(8, 8_000);
+        let idx = messages
+            .iter()
+            .position(|m| {
+                m.role == Role::Assistant && m.tool_calls.iter().any(|tc| tc.call_id == "c3")
+            })
+            .expect("round 4 declaration");
+        messages.insert(
+            idx,
+            Message {
+                role: Role::User,
+                content: clear_marker(
+                    3,
+                    &[1],
+                    3,
+                    Path::new(".gsa/compaction/blocks/tag-clear.md"),
+                    Some("sess-abcd"),
+                    "- 块#1 轮次 1-3: 完整内容见 .gsa/compaction/blocks/tag-block-0001.md",
+                    "黑板 notes r4@normal（【交接摘要】）",
+                ),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            },
+        );
+        messages
+    }
+
+    /// 0da S2 钉（设计 §4.5-①④，D1 回落钉核心）：清零态下**常规装配链恢复**
+    /// ——后边界闭合块打上压缩 marker ⇒ face 排除该块消息、估算回落、
+    /// 读数可压集合恰清零（修复前：build_cleared_face 短路使压缩/截断 marker
+    /// 不落隐藏，面估算单调上涨）；estimate ≡ build 逐条同口径（token 对拍）。
+    #[test]
+    fn cleared_face_honors_post_boundary_compression_and_estimate_falls() {
+        let messages = cleared_conversation_with_post_boundary_blocks();
+        let params = ModelFaceParams {
+            slider_tokens: 12_000,
+            block_tokens: 12_000,
+            ledger_path: None,
+            archive_tag: None,
+            run_id: "RUN-CZ-D1".to_string(),
+            d4_block: None,
+            static_overhead_tokens: 0,
+        };
+        // 后边界闭合块（first_round ≥ 3，0 基——边界＝块边）。
+        let blocks = blocks_outside_slider(&messages, 12_000, 12_000);
+        let target = blocks
+            .iter()
+            .find(|b| b.closed && b.first_round >= 3)
+            .expect("post-boundary closed block must exist");
+        let est_before = estimate_model_face_tokens(&messages, &params);
+        // 压缩前：后边界 Live 块内容在面内（v8：机械不替模型删——可见）。
+        let face_before = build_model_face(&messages, &params).unwrap();
+        assert!(
+            face_before.iter().any(|m| m.role == Role::Tool
+                && m.tool_call_id.as_deref() == Some(&format!("c{}", target.first_round))),
+            "压缩前后边界块应在面内（Live 不隐藏）"
+        );
+        // 插入压缩 marker（该块）——marker 插在其首轮声明前（生产形态）。
+        let mut marked = messages.clone();
+        let idx = marked
+            .iter()
+            .position(|m| {
+                m.role == Role::Assistant
+                    && m.tool_calls
+                        .iter()
+                        .any(|tc| tc.call_id == format!("c{}", target.first_round))
+            })
+            .expect("block first round declaration");
+        let compressed_marker = format!(
+            "[前文上下文已压缩 v0.4-分块压缩]\n\
+             已处理分块: {}\n\
+             被处理轮次: 轮 {}-{}\n\
+             == 模型面声明 ==\n声明正文\n[/前文上下文已压缩]",
+            target.number,
+            target.first_round + 1,
+            target.last_round + 1,
+        );
+        marked.insert(
+            idx,
+            Message {
+                role: Role::User,
+                content: compressed_marker,
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            },
+        );
+        let markers = face_markers(&marked);
+        let face = build_model_face(&marked, &params).unwrap();
+        // 回落断言①：被压缩块的消息退出面（边界轮 c2 声明与其工具结果）。
+        for r in target.first_round..=target.last_round {
+            assert!(
+                !face.iter().any(|m| m.role == Role::Assistant
+                    && m.tool_calls.iter().any(|tc| tc.call_id == format!("c{r}"))),
+                "被压缩块轮 {r} 的声明必须移出面（D1 修复：常规装配链在清零态生效）"
+            );
+        }
+        // 回落断言②：估算回落。
+        let est_after = estimate_model_face_tokens(&marked, &params);
+        assert!(
+            est_after < est_before,
+            "清零态下压缩必须使面估算回落（{est_after} !< {est_before}）——D1 回落钉"
+        );
+        // 回落断言③：读数可压集合恰清零（清零块被 D1 过滤＋后边界块已压缩；
+        // 滑块内残余不成块）。
+        let readout = slider_readout(&marked, 12_000, 12_000);
+        assert_eq!(
+            readout.compressible_blocks, 0,
+            "清零块不进可压集合＋后边界块已压缩 ⇒ 恰零：{readout:?}"
+        );
+        // 回落断言④：块表双态（边界前块「已清零」＋后边界块「已压缩」）。
+        let table = render_block_table(
+            &blocks_outside_slider(&marked, 12_000, 12_000),
+            &markers,
+            &params,
+        );
+        assert!(table.contains("已清零"), "{table}");
+        assert!(table.contains("已压缩"), "{table}");
+        // 钉（estimate ≡ build）：face 内容逐条估算（尾部表/停行已在 face 内）
+        // ＝ 估算入口（D1：装配/估算/计数三分同源）。
+        let face_sum: u64 = face
+            .iter()
+            .map(crate::controller::estimate_message_tokens)
+            .sum();
+        assert_eq!(
+            face_sum, est_after,
+            "estimate 必须与 build 逐条同口径（D1：装配/估算/计数三分同源）"
+        );
+    }
+
+    /// 0da S2 钉（设计 §4.2/§4.5-②③，白名单豁免）：跨清零保留在**两条装配
+    /// 路径**都成立——有块（常规装配前置段豁免）与无块（build_cleared_face
+    /// 保留臂）；豁免只对白名单，原 prompt 仍随边界隐藏。
+    #[test]
+    fn cleared_face_whitelist_survives_in_both_assembly_paths() {
+        let whitelist = format!("{} 任务背景：甲", crate::prompt::WHITELIST_PREFIX);
+        let params = ModelFaceParams {
+            slider_tokens: 12_000,
+            block_tokens: 12_000,
+            ledger_path: None,
+            archive_tag: None,
+            run_id: "RUN-CZ-WL".to_string(),
+            d4_block: None,
+            static_overhead_tokens: 0,
+        };
+        // 路径一：有块（常规装配）——cleared_conversation（6 轮，边界 5）。
+        let mut with_blocks = cleared_conversation();
+        with_blocks.insert(
+            0,
+            Message {
+                role: Role::User,
+                content: whitelist.clone(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            },
+        );
+        let face = build_model_face(&with_blocks, &params).unwrap();
+        assert!(
+            face.iter().any(|m| m.content == whitelist),
+            "有块清零面必须保留白名单（前置段豁免）"
+        );
+        assert!(
+            !face.iter().any(|m| m.content.contains("任务：实现更正批")),
+            "豁免只对白名单——原 prompt 仍随边界隐藏"
+        );
+        // 路径二：无块（build_cleared_face）——2 轮小会话（≈1K/轮，无块）。
+        let mut small = conversation(2, 2_000);
+        let idx = small
+            .iter()
+            .position(|m| {
+                m.role == Role::Assistant && m.tool_calls.iter().any(|tc| tc.call_id == "c1")
+            })
+            .expect("round 2 declaration");
+        small.insert(
+            idx,
+            Message {
+                role: Role::User,
+                content: clear_marker(
+                    1,
+                    &[],
+                    1,
+                    Path::new(".gsa/compaction/blocks/tag-clear.md"),
+                    Some("sess-abcd"),
+                    "",
+                    "黑板 notes r2@normal（【交接摘要】）",
+                ),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            },
+        );
+        small.insert(
+            0,
+            Message {
+                role: Role::User,
+                content: whitelist.clone(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            },
+        );
+        assert!(blocks_outside_slider(&small, 12_000, 12_000).is_empty());
+        let face_small = build_model_face(&small, &params).unwrap();
+        assert!(
+            face_small.iter().any(|m| m.content == whitelist),
+            "无块清零面必须保留白名单（保留臂）"
+        );
+        assert!(
+            !face_small
+                .iter()
+                .any(|m| m.content.contains("任务：实现更正批")),
+            "无块清零面：原 prompt 随边界隐藏"
+        );
+        assert!(
+            face_small
+                .iter()
+                .any(|m| m.role == Role::Assistant
+                    && m.tool_calls.iter().any(|tc| tc.call_id == "c1")),
+            "无块清零面：边界轮起逐字保留"
+        );
+        // 计数同口径：无块清零面 count ＝ face len。
+        assert_eq!(
+            model_face_message_count(&small, &params),
+            face_small.len(),
+            "count 与 build 同口径（无块清零面）"
+        );
+    }
+
+    // ===== 242 批（2026-10-11，0da S2 审查处置）钉组：跨清零边界块兜底回收
+    // ===== （P2）＋脏 marker 不虚构隐藏（P3）
+
+    /// 构造「8 轮×约3K 估算/轮 ＋ 清零 marker 插在第 4 轮声明前」的会话
+    /// （boundary_round0=3 ⇒ 轮 1–3 清、轮 4 起保留；block_tokens=12K 恰
+    /// 4 轮/块 ⇒ 首块＝轮 1–4＝**跨清零边界块**（首轮已清零、尾轮未清零）
+    /// ——分区不保证在清零边界处对齐的可达形态）。
+    fn cleared_conversation_with_straddling_block() -> Vec<Message> {
+        let mut messages = conversation(8, 6_000);
+        let idx = messages
+            .iter()
+            .position(|m| {
+                m.role == Role::Assistant && m.tool_calls.iter().any(|tc| tc.call_id == "c3")
+            })
+            .expect("round 4 declaration");
+        messages.insert(
+            idx,
+            Message {
+                role: Role::User,
+                content: clear_marker(
+                    3,
+                    &[],
+                    3,
+                    Path::new(".gsa/compaction/blocks/tag-clear.md"),
+                    Some("sess-abcd"),
+                    "",
+                    "黑板 notes r4@normal（【交接摘要】）",
+                ),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            },
+        );
+        messages
+    }
+
+    /// 242 批钉（P2 核心）：**跨清零边界块照常参与兜底回收**——①判据：首轮
+    /// 清零但非整块清零（`is_block_cleared` 收窄）；②回收：进可压集合（修复
+    /// 前被首轮端点判据永久排除，读数 0）；③标态：块表如实「跨清零边界」
+    /// 而非误标「原文」；④压缩生效：marker 落地后块臂隐藏其边界后段（含
+    /// 边界轮），估算回落（修复前块臂跳过 ⇒ marker 声明「已压缩」而正文
+    /// 仍在面）；⑤estimate ≡ build 逐条对拍。
+    #[test]
+    fn straddling_block_stays_reclaimable_and_truthfully_labeled() {
+        let messages = cleared_conversation_with_straddling_block();
+        let params = ModelFaceParams {
+            slider_tokens: 12_000,
+            block_tokens: 12_000,
+            ledger_path: None,
+            archive_tag: None,
+            run_id: "RUN-0DA-P2".to_string(),
+            d4_block: None,
+            static_overhead_tokens: 0,
+        };
+        let blocks = blocks_outside_slider(&messages, 12_000, 12_000);
+        let straddle = blocks
+            .iter()
+            .find(|b| b.closed && b.first_round == 0 && b.last_round >= 3)
+            .expect("跨边界闭合块必须存在（轮 1–4 恰 12K）");
+        let markers = face_markers(&messages);
+        // ①判据：首轮清零 ∧ 非整块清零。
+        assert!(markers.is_round_cleared(straddle.first_round));
+        assert!(
+            !markers.is_block_cleared(straddle.first_round, straddle.last_round),
+            "跨边界块（first=清零侧、last=保留侧）不得判整块清零"
+        );
+        // ②回收：跨边界 Live 块进可压集合（读数恰 1——修复前 0）。
+        let readout = slider_readout(&messages, 12_000, 12_000);
+        assert_eq!(
+            readout.compressible_blocks, 1,
+            "跨边界块必须可压（修复前首轮判据永久排除）：{readout:?}"
+        );
+        // ③标态：块表「跨清零边界（前段已移出）」，不误标「原文」/「已清零」。
+        let table = render_block_table(&blocks, &markers, &params);
+        assert!(
+            table.contains("跨清零边界（前段已移出）"),
+            "跨边界块须如实标态：{table}"
+        );
+        assert!(!table.contains("已清零"), "整块清零标态只归整块：{table}");
+        // ④压缩生效：marker 落地 ⇒ 块臂隐藏边界后段，估算回落。
+        let est_before = estimate_model_face_tokens(&messages, &params);
+        let mut marked = messages.clone();
+        let idx = marked
+            .iter()
+            .position(|m| {
+                m.role == Role::Assistant && m.tool_calls.iter().any(|tc| tc.call_id == "c0")
+            })
+            .expect("block first round declaration");
+        marked.insert(
+            idx,
+            Message {
+                role: Role::User,
+                content: format!(
+                    "[前文上下文已压缩 {}]\n已处理分块: {}",
+                    BLOCK_MARKER_COMPRESSED_VERSION, straddle.number
+                ),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            },
+        );
+        let est_after = estimate_model_face_tokens(&marked, &params);
+        assert!(
+            est_after < est_before,
+            "跨边界块压缩必须使面估算回落（{est_after} !< {est_before}）"
+        );
+        let face = build_model_face(&marked, &params).unwrap();
+        assert!(
+            !face
+                .iter()
+                .any(|m| m.role == Role::Assistant
+                    && m.tool_calls.iter().any(|tc| tc.call_id == "c3")),
+            "边界轮（块尾）须随块臂隐藏（修复前：块臂跳过 ⇒ marker 说已压缩而正文在面）"
+        );
+        assert!(
+            face.iter()
+                .any(|m| m.role == Role::Assistant
+                    && m.tool_calls.iter().any(|tc| tc.call_id == "c4")),
+            "滑块内轮次不受影响"
+        );
+        // ⑤estimate ≡ build 逐条对拍。
+        let face_sum: u64 = face
+            .iter()
+            .map(crate::controller::estimate_message_tokens)
+            .sum();
+        assert_eq!(face_sum, est_after, "estimate ≡ build（三分同源）");
+    }
+
+    /// 242 批钉（P3）：脏 marker（有清零前缀、边界行不可解析）**不虚构
+    /// 隐藏**——面/计数/估算与无 marker 基线恰差 marker 消息自身（前置段
+    /// 与主循环同一 gated 推导；修复前 `hidden_message_ranges` 内部仅按
+    /// 前缀自查 ⇒ 主循环隐藏而前置段不隐藏的两段口径分裂）。
+    #[test]
+    fn dirty_clear_marker_without_boundary_hides_nothing() {
+        let marker = format!(
+            "{}（边界行缺失——脏数据不虚构边界）\n[/前文上下文已清零]",
+            CLEAR_MARKER_PREFIX
+        );
+        let mut messages = conversation(6, 8_000);
+        let marker_msg = Message {
+            role: Role::User,
+            content: marker.clone(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        };
+        messages.insert(3, marker_msg.clone());
+        let baseline = conversation(6, 8_000);
+        let params = ModelFaceParams {
+            slider_tokens: 12_000,
+            block_tokens: 12_000,
+            ledger_path: None,
+            archive_tag: None,
+            run_id: "RUN-0DA-DIRTY".to_string(),
+            d4_block: None,
+            static_overhead_tokens: 0,
+        };
+        assert_eq!(
+            face_markers(&messages).cleared_before_round,
+            None,
+            "脏 marker 不产出边界（parse_clear_boundary 负例）"
+        );
+        let dirty_face = build_model_face(&messages, &params).unwrap();
+        let base_face = build_model_face(&baseline, &params).unwrap();
+        assert_eq!(
+            dirty_face.len(),
+            base_face.len() + 1,
+            "脏 marker 只增自身、隐藏零条目（面口径）"
+        );
+        assert!(
+            dirty_face.iter().any(|m| m.content == marker),
+            "脏 marker 消息本体仍在面（无边界 ⇒ 不隐藏任何内容）"
+        );
+        assert_eq!(
+            model_face_message_count(&messages, &params),
+            model_face_message_count(&baseline, &params) + 1,
+            "计数口径同面"
+        );
+        assert_eq!(
+            estimate_model_face_tokens(&messages, &params),
+            estimate_model_face_tokens(&baseline, &params)
+                + crate::controller::estimate_message_tokens(&marker_msg),
+            "估算口径同面（脏 marker 只加自身估算）"
         );
     }
 }

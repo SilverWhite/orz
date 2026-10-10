@@ -245,6 +245,11 @@ impl ModelNoteSection {
 /// 0ae D0（2026-09-15，设计 §3）：模型写黑板的一条盖章记录——(round,
 /// domain) 写时盖章 + ts 墙钟，同 EditRecord/ExecEntry 纪律；`content`
 /// 单条 ≤8K（工具面 maxLength 机械钳制）。
+///
+/// `op`（0cz S2，2026-10-11，设计 §6）：写入形态标注——`Some("整节重写")`
+/// ＝replace_all 整节替换条目（板内只留此条；旧条目全量在 journal/会话卷），
+/// `Some("交接摘要")`＝清零前置交接条目（防裸清护栏的落点回执），`None`＝
+/// 普通追加。serde(default)＋skip_serializing_if ＝旧板/旧快照零迁移。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoteEntry {
     pub round: u64,
@@ -252,6 +257,8 @@ pub struct NoteEntry {
     pub domain: Option<Domain>,
     pub timestamp: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op: Option<String>,
 }
 
 /// 一条 exec 结果/错误行（B1 会话化基础，2026-09-03，P2-13 / 设计 §9.4
@@ -660,12 +667,19 @@ pub fn render_note_entries(notes: &[NoteEntry]) -> String {
                 .domain
                 .map(|d| d.as_str().to_string())
                 .unwrap_or_else(|| "-".to_string());
+            // 0cz S2：写入形态标注（整节重写／交接摘要）随章渲染。
+            let op_tag = note
+                .op
+                .as_deref()
+                .map(|op| format!("【{op}】"))
+                .unwrap_or_default();
             format!(
-                "[笔记 {}] r{}@{} {}\n{}",
+                "[笔记 {}] r{}@{} {}{}\n{}",
                 index + 1,
                 note.round,
                 domain,
                 note.timestamp,
+                op_tag,
                 note.content
             )
         })
@@ -819,6 +833,60 @@ impl Blackboard {
                 self.revisions.findings = self.revisions.findings.saturating_add(1);
             }
         }
+    }
+
+    /// 0cz S2（2026-10-11，设计 §6.2）：模型写入面**整节替换**（
+    /// `blackboard_write op=replace_all` 落点）——分区模型内容整体替换为
+    /// 单一新条目；分区版本计数同落点 bump（「可见内容整体替换计 1」恢复
+    /// 先例同款）。旧条目不进板但全量在 journal（工具调用 params）与会话卷
+    /// ——机械留痕不变（设计 §6.3：零新事件类型，journal 重放即审计）。
+    pub fn replace_model_note_section(&mut self, section: ModelNoteSection, entry: NoteEntry) {
+        match section {
+            ModelNoteSection::Plan => {
+                self.plan.model_notes = vec![entry];
+                self.revisions.plan = self.revisions.plan.saturating_add(1);
+            }
+            ModelNoteSection::Notes => {
+                self.notes = vec![entry];
+                self.revisions.notes = self.revisions.notes.saturating_add(1);
+            }
+            ModelNoteSection::Findings => {
+                self.findings = vec![entry];
+                self.revisions.findings = self.revisions.findings.saturating_add(1);
+            }
+        }
+    }
+
+    /// 0da S2（2026-10-11，设计 §6.1）：模型写入面分区**板面清空**（
+    /// `blackboard_write op=clear` 落点＋`context_manage mode=clear_all` 共用
+    /// 单源）——分区模型内容清空为**空列表**（非占位条目）；分区版本计数
+    /// bump 恰 1（「可见内容整体替换计 1」先例同款——替换为空也是一次可见
+    /// 变化）；返回移出条目总数。旧条目不进板但全量在 journal 与会话卷
+    /// ——「移出视野而非销毁」黑板同构；护栏不对称（黑板臂无 handover，
+    /// 破坏半径低一量级）。读面空分区「（无）」已有形态。
+    pub fn clear_model_note_sections(&mut self, sections: &[ModelNoteSection]) -> usize {
+        let mut removed = 0usize;
+        for section in sections {
+            let n = match section {
+                ModelNoteSection::Plan => {
+                    let n = std::mem::take(&mut self.plan.model_notes).len();
+                    self.revisions.plan = self.revisions.plan.saturating_add(1);
+                    n
+                }
+                ModelNoteSection::Notes => {
+                    let n = std::mem::take(&mut self.notes).len();
+                    self.revisions.notes = self.revisions.notes.saturating_add(1);
+                    n
+                }
+                ModelNoteSection::Findings => {
+                    let n = std::mem::take(&mut self.findings).len();
+                    self.revisions.findings = self.revisions.findings.saturating_add(1);
+                    n
+                }
+            };
+            removed += n;
+        }
+        removed
     }
 
     /// 0ae D1 补救规则读数：模型写入面累计条数（notes + plan.model_notes）。
@@ -4772,6 +4840,7 @@ mod tests {
             domain: None,
             timestamp: format!("2026-10-07T00:00:0{round}Z"),
             content: content.to_string(),
+            op: None,
         }
     }
 
@@ -4921,5 +4990,59 @@ mod tests {
             bb.live_compact_bytes() > before,
             "findings 必须计入 10MiB 软水位（serde 自动性）"
         );
+    }
+
+    /// 0cz S2（2026-10-11，设计 §6）钉④：`replace_model_note_section`——
+    /// 整节替换为单一新条目＋分区版本计数恰 bump 1＋渲染带【整节重写】章；
+    /// 旧 JSON（无 op 字段）反序列化 op=None（零迁移）。
+    #[test]
+    fn replace_model_note_section_swaps_and_bumps_revision() {
+        let mut bb = Blackboard::new();
+        for i in 0..3 {
+            bb.push_model_note(
+                ModelNoteSection::Notes,
+                NoteEntry {
+                    round: i,
+                    domain: None,
+                    timestamp: format!("2026-10-11T00:00:0{i}Z"),
+                    content: format!("旧条目 {i}"),
+                    op: None,
+                },
+            );
+        }
+        let before = bb.revisions.notes;
+        bb.replace_model_note_section(
+            ModelNoteSection::Notes,
+            NoteEntry {
+                round: 9,
+                domain: None,
+                timestamp: "2026-10-11T00:00:09Z".to_string(),
+                content: "整理后的 notes 全文".to_string(),
+                op: Some("整节重写".to_string()),
+            },
+        );
+        assert_eq!(bb.notes.len(), 1, "整节替换后恰一条");
+        assert_eq!(bb.notes[0].content, "整理后的 notes 全文");
+        assert_eq!(bb.revisions.notes, before + 1, "可见变化计 1");
+        let rendered = render_note_entries(&bb.notes);
+        assert!(rendered.contains("【整节重写】"), "{rendered}");
+        // serde 兼容：旧快照无 op 字段 ⇒ None（零迁移）。
+        let legacy: NoteEntry =
+            serde_json::from_str(r#"{"round":1,"timestamp":"t","content":"c"}"#).unwrap();
+        assert_eq!(legacy.op, None);
+        // findings 分区同构（0cu 逐字同构纪律的延续面）。
+        let before_findings = bb.revisions.findings;
+        bb.replace_model_note_section(
+            ModelNoteSection::Findings,
+            NoteEntry {
+                round: 10,
+                domain: None,
+                timestamp: "t".to_string(),
+                content: "findings 全文".to_string(),
+                op: Some("整节重写".to_string()),
+            },
+        );
+        assert_eq!(bb.findings.len(), 1);
+        assert_eq!(bb.revisions.findings, before_findings + 1);
     }
 }

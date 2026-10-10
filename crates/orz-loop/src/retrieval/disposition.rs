@@ -192,7 +192,12 @@ impl AgentLoopController {
         // Take the activation — the temporary guard drops at the end of the
         // let statement, so no guard ever crosses an await (the state is
         // re-inserted on every path below).
-        let act = self.activations.lock().unwrap_or_else(|e| e.into_inner()).states.remove(&role);
+        let act = self
+            .activations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .states
+            .remove(&role);
         let mut act = match act {
             Some(a) => a,
             None => {
@@ -266,7 +271,11 @@ impl AgentLoopController {
                     }),
                 )
                 .await?;
-            self.activations.lock().unwrap_or_else(|e| e.into_inner()).states.insert(role, act);
+            self.activations
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .states
+                .insert(role, act);
             messages.push(Message {
                 role: Role::Tool,
                 content: output.clone(),
@@ -303,7 +312,11 @@ impl AgentLoopController {
                     }),
                 )
                 .await?;
-            self.activations.lock().unwrap_or_else(|e| e.into_inner()).states.insert(role, act);
+            self.activations
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .states
+                .insert(role, act);
             messages.push(Message {
                 role: Role::Tool,
                 content: msg.clone(),
@@ -432,7 +445,11 @@ impl AgentLoopController {
                     }),
                 )
                 .await?;
-            self.activations.lock().unwrap_or_else(|e| e.into_inner()).states.insert(role, act);
+            self.activations
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .states
+                .insert(role, act);
             messages.push(Message {
                 role: Role::Tool,
                 content: msg.clone(),
@@ -609,7 +626,11 @@ impl AgentLoopController {
 
         // Re-insert the activation on EVERY path (review F7) — before any
         // error leaves, so a failed commit never drops a live activation.
-        self.activations.lock().unwrap_or_else(|e| e.into_inner()).states.insert(role, act);
+        self.activations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .states
+            .insert(role, act);
         commit?;
 
         writer

@@ -44,7 +44,7 @@
 use std::collections::HashSet;
 
 use crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME;
-use orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME;
+use orz_assurance::tool_names::CONTEXT_MANAGE_TOOL_NAME;
 
 /// 提醒块注入前缀（注册进 `prompt::is_injected_block_text`，绝不持久化）。
 pub const REMINDER_INJECTED_PREFIX: &str = "[CONTEXT_SCALE";
@@ -316,8 +316,10 @@ pub fn soft_reminder_block(milestone_tokens: u64, model_face_tokens: u64) -> Str
         "{REMINDER_INJECTED_PREFIX} {k}K] 当前上下文窗口 {reading}。除你**最近工作的\
          连续轮次**（工作现场）以外，更早的内容按**分块**累积在你的窗口里\
          （分块表在窗口**尾部**、逐轮刷新），机械层不会替你删除它们。\
-         压缩交给你自选、可延后：{}",
-        summary_block_guide()
+         压缩交给你自选、可延后：{}\n\
+         {}",
+        summary_block_guide(),
+        context_permission_line()
     )
 }
 
@@ -344,11 +346,13 @@ pub fn hard_reminder_block(
          不足一块的**残段**不参与，留在窗口内。**是否现在压缩、压缩哪些块由你判断**（压缩交给你自选、\
          可延后；{}）——若决定压缩：{}\n\
          {}\n\
-         {declaration}",
+         {declaration}\n\
+         {permission}",
         target_tier_advice(),
         summary_block_guide(),
         crate::model_face::BLOCK_TABLE_POINTER_LINE,
         declaration = crate::model_face::MODEL_FACE_DECLARATION,
+        permission = context_permission_line()
     )
 }
 
@@ -394,10 +398,12 @@ pub fn truncation_notice_block(
          ——按上方指针分页读回即可。{failure}\n\
          {fact}\n\
          {}\n\
-         {declaration}",
+         {declaration}\n\
+         {permission}",
         reading(model_face_tokens),
         crate::model_face::BLOCK_TABLE_POINTER_LINE,
         declaration = crate::model_face::MODEL_FACE_DECLARATION,
+        permission = context_permission_line()
     )
 }
 
@@ -467,9 +473,11 @@ pub fn guard_truncation_notice_block(
          {truncated_blocks} 个**已闭合分块**（≈{freed_tokens}tk token）以把请求压回线上\
          （截断后当前读数 {}）：\n\
          {replay}\n\
-         工作现场与残段逐字未动；需要更早内容时按上表回放。{failure}",
+         工作现场与残段逐字未动；需要更早内容时按上表回放。{failure}\n\
+         {}",
         reading_only(guard_tokens),
         reading(model_face_tokens),
+        context_permission_line()
     )
 }
 
@@ -503,6 +511,22 @@ fn target_tier_advice() -> String {
     )
 }
 
+/// 0cz S2（2026-10-11，设计 §7）：**兜底联动一步权限提醒**——单一来源句，
+/// 全部压缩/截断提醒块共用（用户裁决④「跟着现有上下文压缩提醒走＝改叙述、
+/// 不加新注入点」；钉子＝本函数被六块引用、句面单源一次）。
+/// 0da S2（设计 §6.4）：句面扩**四选择**（压缩／清零续台账／一键清理／
+/// 清黑板）——清理操作多样化（用户裁决②）的提醒面落地。
+pub fn context_permission_line() -> String {
+    format!(
+        "你拥有上下文管理权限：可随时调用 {CONTEXT_MANAGE_TOOL_NAME} 主动压缩\
+         （mode=compress）；或在把必要结论固化到黑板（{BLACKBOARD_WRITE_TOOL_NAME}）后\
+         直接清零当前窗口仅凭台账继续工作（mode=clear，需先写交接摘要 handover）；\
+         也可一键清理上下文＋黑板（mode=clear_all，handover 成为清空后板面唯一条目）；\
+         黑板分区本身可随时清空（{BLACKBOARD_WRITE_TOOL_NAME} op=clear，历史全量在 \
+         journal 可回查）。"
+    )
+}
+
 /// H1 的压缩窗口任务块（打断式提醒注入——FR-3：不锁工具面；量尺＝模型面阶梯）。
 pub fn compression_window_block(milestone_tokens: u64) -> String {
     let k = milestone_tokens / 1000;
@@ -512,11 +536,13 @@ pub fn compression_window_block(milestone_tokens: u64) -> String {
          {}。\n\
          2. 若有关键结论需要跨压缩长期留存，一并固化到黑板\
          （{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes；黑板不受上下文窗口影响）。\n\
-         （读数与再发起可随时调用 {CONTEXT_COMPRESS_TOOL_NAME}：窗口在程中时它只返回当前\
+         （读数与再发起可随时调用 {CONTEXT_MANAGE_TOOL_NAME}（mode=compress）：窗口在程中时它只返回当前\
          读数，不会重复开窗。）\n\
          窗口结束仍未产出摘要块 ⇒ 如实落账 `model_participated=false`\
-         （机械层不替你压缩；到必定压缩线时机械层将强制再次开窗）。",
-        target_tier_advice()
+         （机械层不替你压缩；到必定压缩线时机械层将强制再次开窗）。\n\
+         {}",
+        target_tier_advice(),
+        context_permission_line()
     )
 }
 
@@ -566,11 +592,13 @@ pub fn mandatory_compression_window_block(
          2. 若有关键结论需要跨压缩长期留存，一并固化到黑板\
          （{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes；黑板不受上下文窗口影响）。\n\
          {after}\n\
-         （读数与再发起可随时调用 {CONTEXT_COMPRESS_TOOL_NAME}：窗口在程中时它只返回当前读数。）\n\
-         {pointer}\n{declaration}",
+         （读数与再发起可随时调用 {CONTEXT_MANAGE_TOOL_NAME}（mode=compress）：窗口在程中时它只返回当前读数。）\n\
+         {pointer}\n{declaration}\n\
+         {permission}",
         guide = summary_block_guide(),
         pointer = crate::model_face::BLOCK_TABLE_POINTER_LINE,
         declaration = crate::model_face::MODEL_FACE_DECLARATION,
+        permission = context_permission_line()
     )
 }
 
@@ -1019,5 +1047,38 @@ mod tests {
             parse_block_selection("目标: x\n已完成: y"),
             BlockSelection::NotSpecified
         );
+    }
+
+    /// 0cz S2（2026-10-11，设计 §7）钉⑤：兜底联动一步权限提醒——单源句
+    /// 被**全部**压缩/截断提醒块携带（改叙述、不加注入点；句面单源一次）。
+    /// 0da S2（设计 §6.4）：句面四选择断言（压缩/清零/一键清理/清黑板）。
+    #[test]
+    fn context_permission_line_is_single_sourced_across_reminder_blocks() {
+        let line = context_permission_line();
+        assert!(
+            line.contains("context_manage")
+                && line.contains("mode=compress")
+                && line.contains("mode=clear")
+                && line.contains("mode=clear_all")
+                && line.contains("op=clear")
+                && line.contains("handover")
+                && line.contains("blackboard_write"),
+            "权限句必须点名四选择与交接前置：{line}"
+        );
+        let blocks = [
+            soft_reminder_block(192_000, 200_000),
+            hard_reminder_block(320_000, 500_000, 330_000),
+            compression_window_block(320_000),
+            mandatory_compression_window_block(500_000, 1, 510_000),
+            mandatory_compression_window_block(500_000, 2, 510_000),
+            truncation_notice_block(3, 40_000, 200_000, "- 回放行", false, ""),
+            guard_truncation_notice_block(2, 30_000, 100_000, 700_000, "- 回放行", false),
+        ];
+        for (i, block) in blocks.iter().enumerate() {
+            assert!(
+                block.contains(line.as_str()),
+                "提醒块 #{i} 必须携带单源权限句：{block}"
+            );
+        }
     }
 }

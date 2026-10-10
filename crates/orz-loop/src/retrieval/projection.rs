@@ -654,8 +654,10 @@ mod tests {
                 "bash",             // non-work tool — untouched
                 "blackboard_read",  // storage chain complete
                 "blackboard_write", // 0ae D0: model notes write (ReadOnly class)
-                "context_compress", // 0ap: compression window request (ReadOnly class)
-                "read_file",        // read chain complete
+                // 0cz S2（2026-10-11，方案 A）：context_compress 声明面退役
+                // ⇒ 面名单随批改指 context_manage（第十一主工具）。
+                "context_manage", // 0cz: context manage (ReadOnly class)
+                "read_file",      // read chain complete
             ],
             "R1 single-face list projection (todo_write / compaction_whitelist_add \
              sealed): {declared:?}"

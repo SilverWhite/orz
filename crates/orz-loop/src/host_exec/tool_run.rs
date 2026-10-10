@@ -20,7 +20,7 @@ use crate::host::{
 };
 use crate::tool::ToolDispatcher;
 use orz_assurance::EventType;
-use orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME;
+use orz_assurance::tool_names::CONTEXT_MANAGE_TOOL_NAME;
 use serde_json::Value;
 use std::sync::Mutex;
 
@@ -1247,14 +1247,99 @@ impl AgentLoopController {
                 None,
             ));
         }
-        // 0ap（2026-09-18，设计 §1）：`context_compress`——知情发起 D3 模型
-        // 参与压缩窗口＋响应自带滑块读数表。纯内存压缩状态操作（无宿主
-        // 派发，同 `compaction_whitelist_add` 形态；权限桥已在上方按
-        // ReadOnly 放行——九点位 #2/#3 同批登记）。防抖三态：窗口在程中 ⇒
-        // no-op（in_progress）＋当前读数；主滑块外无可压缩分块 ⇒ 中性说明
-        // 返回、不开窗；否则置请求位（agent_loop 在下一个 loop-top 安全
-        // 边界开窗，见 agent_loop 消费点）。advisory——不联动任何硬门。
-        if tc.name == CONTEXT_COMPRESS_TOOL_NAME {
+        // 0cz S2（2026-10-11，方案 A；设计 §4）：`context_manage`——上下文
+        // 管理第十一主工具。**单工具带 mode**：mode=clear 走执行核（下方）；
+        // mode=compress 承继 0ap 管线（知情发起 D3 模型参与压缩窗口＋响应
+        // 自带滑块读数表＋0am FR4 whitelist；原逻辑逐字保留）。纯内存投影
+        // 状态操作＋黑板合法写路径（权限桥已按 ReadOnly 放行——九点位
+        // #2/#3 同批登记）。不在并行读批白名单（PARALLEL_READ_TOOLS）⇒
+        // 恒串行、messages 即真会话。advisory——不联动任何硬门。
+        if tc.name == CONTEXT_MANAGE_TOOL_NAME {
+            let mode = tc
+                .arguments
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("compress");
+            // 0da S2（设计 §6.1/§6.3）：mode ∈ {clear, clear_all} 共走清零核
+            // ——clear_all＝一键清理（先清黑板三分区后写 handover，见执行核）；
+            // 防裸清 handover 两 mode 同必填（护栏不对称：黑板臂才豁免）。
+            if mode == "clear" || mode == "clear_all" {
+                let clear_board = mode == "clear_all";
+                let handover = tc.arguments.get("handover").and_then(|v| v.as_str());
+                let keep = tc
+                    .arguments
+                    .get("keep_recent_rounds")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+                    .min(16) as u32;
+                let (exit_code, output, cleared) = match self.apply_context_clear(
+                    messages,
+                    host,
+                    writer.run_id(),
+                    handover,
+                    keep,
+                    clear_board,
+                ) {
+                    Ok(outcome) => {
+                        let payload = serde_json::json!({
+                            "mode": outcome.mode_label,
+                            "boundary_round": outcome.boundary_round1,
+                            "trigger_tokens": outcome.before_tokens,
+                            "target_tokens": outcome.after_tokens,
+                            "rounds_dropped": outcome.rounds_cleared,
+                            "messages_dropped": outcome.messages_hidden,
+                            "blocks_cleared": outcome.blocks_cleared,
+                            "freed_tokens": outcome.freed_tokens,
+                            "archive_write_failed": outcome.archive_write_failed,
+                            "handover": outcome.handover_note,
+                            "board_entries_removed": outcome.board_entries_removed,
+                        });
+                        (0i64, outcome.envelope, Some(payload))
+                    }
+                    Err((code, rejection)) => (code, rejection, None),
+                };
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": exit_code,
+                    "mode": mode,
+                });
+                if let Some(payload) = cleared {
+                    // 清零事件（ContextCompressed 族、mode=clear）——触发/
+                    // 目标读数与被清轮块事实全量入账（journal 重放即审计）。
+                    writer.record(EventType::ContextCompressed, payload).await?;
+                }
+                if exit_code != 0 {
+                    completed["error"] = serde_json::Value::String(output.clone());
+                }
+                // F3 (2026-08-16 审查收口): direct 盖章对称。
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: output.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                return Ok((
+                    ToolResult {
+                        output,
+                        exit_code: Some(exit_code as i32),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    },
+                    None,
+                ));
+            }
+            // mode=compress（缺省）——0ap 管线承继（原 context_compress 逻辑）。
             let readout = crate::model_face::slider_readout(
                 readout_conversation(messages, conversation),
                 self.context_compact.slider_window_tokens,
@@ -1379,6 +1464,173 @@ impl AgentLoopController {
         if tc.name == BLACKBOARD_WRITE_TOOL_NAME {
             let section_raw = tc.arguments.get("section").and_then(|v| v.as_str());
             let content = tc.arguments.get("content").and_then(|v| v.as_str());
+            // 0da S2（2026-10-11，设计 §6.1；O1 定案＝clear 族命名）：op 先于
+            // content 校验解析——`op=clear`（清理黑板）无需 content；section
+            // 扩 `"all"`（**仅与 op=clear 组合合法**，all 不是通配写目标）。
+            // 护栏不对称（裁决④）：黑板臂无 handover——journal/会话卷全量
+            // 留档＋0ct 读全开放可回查，破坏半径低一量级。
+            let op = tc
+                .arguments
+                .get("op")
+                .and_then(|v| v.as_str())
+                .unwrap_or("append");
+            if op == "clear" {
+                let cleared_sections: Vec<crate::blackboard::ModelNoteSection> = match section_raw {
+                    Some("all") => vec![
+                        crate::blackboard::ModelNoteSection::Plan,
+                        crate::blackboard::ModelNoteSection::Notes,
+                        crate::blackboard::ModelNoteSection::Findings,
+                    ],
+                    other => other
+                        .and_then(crate::blackboard::ModelNoteSection::parse)
+                        .into_iter()
+                        .collect(),
+                };
+                if cleared_sections.is_empty() {
+                    let error: String = format!(
+                        "invalid {BLACKBOARD_WRITE_TOOL_NAME} section: {section_raw:?} — op=clear \
+                         可清分区限 plan|notes|findings|all（机械单写者分区不开放；历史全量在 \
+                         journal 可回查）"
+                    );
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 1,
+                        "section": section_raw.unwrap_or("<invalid>"),
+                        "error": error,
+                    });
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
+                    let result = ToolResult {
+                        output: error,
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    };
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: result.output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    return Ok((result, None));
+                }
+                let removed = self
+                    .blackboard
+                    .write()
+                    .clear_model_note_sections(&cleared_sections);
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                // journal：复用 plan_write 事件族，顶层 `op="clear"`／`section`
+                // （可为 "all"）／`content_chars=0`——判官/Python 镜像对字段值
+                // 零约束（0da S1 实证）；goal 槽＝清空预览。
+                let label = section_raw.unwrap_or("?");
+                writer
+                    .record(
+                        EventType::PlanWrite,
+                        serde_json::json!({
+                            "plan_id": BLACKBOARD_WRITE_TOOL_NAME,
+                            "goal": format!("（清空 {label}）"),
+                            "step_count": 0,
+                            "outcome": "accepted",
+                            "attempt": 1,
+                            "validation": {
+                                "valid": true,
+                                "errors": [],
+                                "ignored_fields": [],
+                            },
+                            "degrade_reason": serde_json::Value::Null,
+                            "section": label,
+                            "content_chars": 0,
+                            "op": "clear",
+                        }),
+                    )
+                    .await?;
+                let watermark = self.blackboard_watermark_label();
+                let output = format!(
+                    "已清空黑板 {label}（移出 {removed} 条；旧条目全量留档于 journal 与会话卷，\
+                     可回查）；live 水位{watermark}。清空后该分区读面为（无）。"
+                );
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 0,
+                    "section": label,
+                    "op": "clear",
+                    "entries_removed": removed,
+                });
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                let result = ToolResult {
+                    output: output.clone(),
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                };
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: output,
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                return Ok((result, None));
+            }
+            if section_raw == Some("all") {
+                // 0da S2（设计 §6.1）：`all` 仅与 op=clear 组合合法。
+                let error: String = format!(
+                    "invalid {BLACKBOARD_WRITE_TOOL_NAME} section=all：all 仅与 op=clear 组合合法\
+                     （all 不是通配写目标；写入请指定 plan|notes|findings）"
+                );
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 1,
+                    "section": "all",
+                    "error": error,
+                });
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                let result = ToolResult {
+                    output: error,
+                    exit_code: Some(1),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                };
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: result.output.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                return Ok((result, None));
+            }
             let section = section_raw.and_then(crate::blackboard::ModelNoteSection::parse);
             let section_label = section.map(|sec| sec.as_str()).unwrap_or("<invalid>");
             let Some(section) = section else {
@@ -1536,21 +1788,74 @@ impl AgentLoopController {
                     return Ok((result, None));
                 }
             }
-            // 写入（(round, domain) 写时盖章 + ts 墙钟；分区版本计数同源）。
+            // 0cz S2（设计 §6.2）＋0da S2（§6.1）：写入形态——op=append（默认，
+            // 缺省等价）｜op=replace_all（整节替换）｜op=clear（上方分支已处理
+            // 并返回）；此处兜底拒绝其余非法值。journal 事件顶层携带 op
+            // （判官/Python 镜像对附加字段零约束，判别规则零改动）。
+            if op != "append" && op != "replace_all" {
+                let error: String = format!(
+                    "{BLACKBOARD_WRITE_TOOL_NAME} op 非法（{op}）：只接受 append | replace_all | clear"
+                );
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 1,
+                    "section": section_label,
+                    "error": error,
+                });
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                let result = ToolResult {
+                    output: error,
+                    exit_code: Some(1),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                };
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: result.output.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                return Ok((result, None));
+            }
+            let replace_all = op == "replace_all";
+            // 写入（(round, domain) 写时盖章 + ts 墙钟；分区版本计数同源；
+            // replace_all＝整节替换为单一新条目，旧条目全量在 journal/会话卷
+            // ——机械留痕不变）。
             let (round, domain) = self.effective_blackboard_stamp();
             let entry = crate::blackboard::NoteEntry {
                 round,
                 domain: Some(domain),
                 timestamp: chrono_utc_now(),
                 content: content.to_string(),
+                op: if replace_all {
+                    Some("整节重写".to_string())
+                } else {
+                    None
+                },
             };
-            self.blackboard.write().push_model_note(section, entry);
+            if replace_all {
+                self.blackboard
+                    .write()
+                    .replace_model_note_section(section, entry);
+            } else {
+                self.blackboard.write().push_model_note(section, entry);
+            }
             self.push_tool_action_stamped(
                 ToolDispatcher::action_category(&tc.name).to_string(),
                 tc.name.clone(),
                 chrono_utc_now(),
             );
-            // journal：复用 plan_write 事件族 + section/content_chars 扩展
+            // journal：复用 plan_write 事件族 + section/content_chars/op 扩展
             // （schema v0.2 增量字段；outcome=accepted 在法官规则下无附加
             // 约束；goal 槽 = 内容首行预览 ≤120 字符）。
             let preview: String = content
@@ -1571,7 +1876,7 @@ impl AgentLoopController {
                         "attempt": 1,
                         // validation 子对象须满足 schema v0.2 $defs.validation
                         // （required=[valid,errors,ignored_fields] 且
-                        // additionalProperties:false）；section/content_chars
+                        // additionalProperties:false）；section/content_chars/op
                         // 只在顶层携带。
                         "validation": {
                             "valid": true,
@@ -1581,18 +1886,30 @@ impl AgentLoopController {
                         "degrade_reason": serde_json::Value::Null,
                         "section": section.as_str(),
                         "content_chars": content_chars,
+                        "op": op,
                     }),
                 )
                 .await?;
             let watermark = self.blackboard_watermark_label();
-            let output = format!(
-                "已写入黑板 {}（{} 字符）；live 水位{}。用 blackboard_read \
-                 section={} 回读。",
-                section.as_str(),
-                content_chars,
-                watermark,
-                section.as_str()
-            );
+            let output = if replace_all {
+                format!(
+                    "已整节重写黑板 {}（{} 字符；原条目已移出板、全量留档于 journal 与会话卷）；\
+                     live 水位{}。用 blackboard_read section={} 回读。",
+                    section.as_str(),
+                    content_chars,
+                    watermark,
+                    section.as_str()
+                )
+            } else {
+                format!(
+                    "已写入黑板 {}（{} 字符）；live 水位{}。用 blackboard_read \
+                     section={} 回读。",
+                    section.as_str(),
+                    content_chars,
+                    watermark,
+                    section.as_str()
+                )
+            };
             let mut completed = serde_json::json!({
                 "tool": tc.name,
                 "call_id": tc.call_id,
@@ -5803,7 +6120,9 @@ mod tests {
                 "bash",
                 "blackboard_read",
                 "blackboard_write",
-                "context_compress",
+                // 0cz S2（2026-10-11，方案 A）：context_compress 声明面退役
+                // ⇒ 面名单随批改指 context_manage（第十一主工具）。
+                "context_manage",
                 "grep",
                 "read_file",
                 "search_replace",
@@ -5853,7 +6172,9 @@ mod tests {
                 "bash",
                 "blackboard_read",
                 "blackboard_write",
-                "context_compress",
+                // 0cz S2（2026-10-11，方案 A）：context_compress 声明面退役
+                // ⇒ 面名单随批改指 context_manage（第十一主工具）。
+                "context_manage",
                 "grep",
                 "read_file",
             ],

@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 
 use crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME;
 use crate::host::ToolPolicy;
-use orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME;
+use orz_assurance::tool_names::{CONTEXT_COMPRESS_TOOL_NAME, CONTEXT_MANAGE_TOOL_NAME};
 
 /// Every main-agent work tool in canonical (stable) projection order.
 /// Single source of truth for membership, the probe snapshot partition and
@@ -42,7 +42,7 @@ use orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME;
 /// (ADR-0010 §14.58/§14.59) the journaled availability accounting covers
 /// the declared surface only — a subset of this list; the raw probe
 /// (`probe_work_tools`) still partitions the full set.
-pub const WORK_TOOLS: [&str; 25] = [
+pub const WORK_TOOLS: [&str; 26] = [
     // Locally deterministic tools (former Face B).
     "read_file",
     "list_dir",
@@ -61,8 +61,14 @@ pub const WORK_TOOLS: [&str; 25] = [
     BLACKBOARD_WRITE_TOOL_NAME,
     // 0ap（2026-09-18）：24 → 25——`context_compress` 入面（压缩交互
     // 第九工具，纯内存压缩状态操作）。其机械链同族（纯内存会话状态、
-    // 无宿主依赖），判据共用 `probe_storage`。
+    // 无宿主依赖），判据共用 `probe_storage`。0cz S2（方案 A）声明面退役、
+    // 表位保留（历史 journal 探针回放仍需）。
     CONTEXT_COMPRESS_TOOL_NAME,
+    // 0cz S2（2026-10-11）：`context_manage` 入面（上下文管理第十一主工具，
+    // 单工具带 mode＝compress 承继 0ap 管线＋clear 主动清零；纯内存投影
+    // 状态操作＋黑板合法写路径）——三处同批先例照抄，判据共用
+    // `probe_storage`。
+    CONTEXT_MANAGE_TOOL_NAME,
     "todo_write",
     "update_goal",
     "enter_plan_mode",
@@ -400,6 +406,7 @@ pub fn probe_tool(name: &str, ctx: &ProbeContext) -> ToolProbeResult {
         "blackboard_read"
         | BLACKBOARD_WRITE_TOOL_NAME
         | CONTEXT_COMPRESS_TOOL_NAME
+        | CONTEXT_MANAGE_TOOL_NAME
         | "compaction_whitelist_add" => probe_storage(ctx),
         "todo_write" | "update_goal" => probe_goal_write(ctx),
         "enter_plan_mode" | "exit_plan_mode" => probe_plan_mode(ctx),
@@ -549,9 +556,11 @@ mod tests {
     fn work_tool_membership_is_exact() {
         // 0aj（2026-09-16）：23 → 24——`blackboard_write` 入面（0ae D0 的
         // 模型写入面此前只在请求面声明、探针面无声明）。0ap（2026-09-18）：
-        // 24 → 25——`context_compress` 入面（压缩交互第九工具）。单一探针面
-        // 的口径是「声明面 ∩ 机械链可判」；此数与请求面同批维护。
-        assert_eq!(WORK_TOOLS.len(), 25, "single probe face = 25 tools");
+        // 24 → 25——`context_compress` 入面（压缩交互第九工具）。0cz S2
+        // （2026-10-11，方案 A）：25 → 26——`context_manage` 入面（第十一
+        // 主工具；context_compress 表位保留供历史回放）。单一探针面的口径是
+        // 「声明面 ∩ 机械链可判」；此数与请求面同批维护。
+        assert_eq!(WORK_TOOLS.len(), 26, "single probe face = 26 tools");
         for tool in WORK_TOOLS {
             assert!(is_main_agent_work_tool(tool), "{tool} must be a work tool");
         }
@@ -1021,6 +1030,8 @@ mod tests {
                 "blackboard_write".to_string(),
                 // 0ap（2026-09-18）：同族纯内存状态判据（probe_storage）。
                 "context_compress".to_string(),
+                // 0cz S2（2026-10-11）：同族判据（probe_storage；第十一主工具）。
+                "context_manage".to_string(),
                 "compaction_whitelist_add".to_string(),
             ]
         );

@@ -41,7 +41,9 @@ pub(crate) fn str_of(value: Option<&Value>) -> Option<&str> {
 
 /// Tool-family constants mirroring the Python module tables.
 pub(crate) mod toolsets {
-    use crate::tool_names::{BLACKBOARD_WRITE_TOOL_NAME, CONTEXT_COMPRESS_TOOL_NAME};
+    use crate::tool_names::{
+        BLACKBOARD_WRITE_TOOL_NAME, CONTEXT_COMPRESS_TOOL_NAME, CONTEXT_MANAGE_TOOL_NAME,
+    };
     pub const WORK_TOOLS: &[&str] = &[
         "read_file",
         "list_dir",
@@ -59,7 +61,16 @@ pub(crate) mod toolsets {
         // 0ap（2026-09-18）：`context_compress` 入工作工具表（压缩交互
         // 第九工具）——三处同批先例（探针/判官/Python 镜像），Python 侧
         // `_WORK_TOOLS` 同批 +1（表格数据同步；判别规则零改动）。
+        // 0cz S2（2026-10-11，方案 A）：**声明面退役、表位保留**——
+        // `context_manage` 入列后 `context_compress` 不再被 controller
+        // 声明；历史会话 journal 回放仍需本表位（历史族不删，同
+        // `compaction_whitelist_add` 封存形态）。
         CONTEXT_COMPRESS_TOOL_NAME,
+        // 0cz S2（2026-10-11）：`context_manage` 入工作工具表（上下文管理
+        // 第十一主工具；单工具带 mode＝compress 承继 0ap 管线＋clear 主动
+        // 清零）——三处同批先例照抄（探针/判官/Python 镜像；判别规则零
+        // 改动，表格数据同步）。
+        CONTEXT_MANAGE_TOOL_NAME,
         "todo_write",
         "update_goal",
         "enter_plan_mode",

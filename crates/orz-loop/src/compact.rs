@@ -256,6 +256,305 @@ impl AgentLoopController {
             );
         }
     }
+
+    /// 0cz S2（2026-10-11，设计 §5/§9）：`context_manage mode=clear` 的执行核
+    /// （上下文管理第十一主工具的清零面）。顺序＝边界计算 → 防裸清校验 →
+    /// 交接写入黑板（fail-closed 前置）→ 回放落盘（块级＋现场整段，best-effort
+    /// 如实标注）→ 边界 marker 插入（保留窗起点；本地面**只插入不覆盖**，
+    /// 不变量 I3；I1 显式例外＝模型主动＋交接前置＋边界可回放）→ 软水位键
+    /// 重置。`Err`＝中性说明/拒绝（模型面文案，调用方原样回传、exit 0/1）。
+    ///
+    /// 0da S2（设计 §5/§6.3）：
+    /// - **D2 归一**：marker 插入点＝保留窗第一轮起点 `ranges[cur-keep].0`、
+    ///   边界参数 `cur-keep`（marker 文本 r ＝ boundary_round1）——物理隐藏
+    ///   `[0, marker_idx)` ＝ 事件/信封边界 ＝ marker 文本 ＝ clear.md 覆盖
+    ///   四方一致（239 批审查 D2：旧插入点恒当前轮起点使 keep>0 三方分裂）。
+    /// - **D5 单调守卫**：既有清零边界 ≥ 新边界 ⇒ 中性 exit 0（新 marker 落
+    ///   已隐藏区会被静默埋掉而信封谎报成功）；dump 资格补「旧边界已覆盖 ⇒
+    ///   跳过」（档案零重写）。
+    /// - **`clear_board`（mode=clear_all，设计 §6.3）**：先清黑板三分区
+    ///   （journal 留痕）**后**写 handover（成为板面唯一条目——锚点保序），
+    ///   再执行清零核。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_context_clear(
+        &self,
+        messages: &mut Vec<Message>,
+        host: &dyn LoopHost,
+        run_id: &str,
+        handover: Option<&str>,
+        keep_recent_rounds: u32,
+        clear_board: bool,
+    ) -> Result<ContextClearOutcome, (i64, String)> {
+        use crate::model_face::BlockState;
+        let ranges = crate::action_ledger::round_ranges(messages);
+        // 边界＝当前轮（最后一个声明区间；本次清零调用就在其中，0 基 C）。
+        if ranges.is_empty() {
+            return Err((
+                0,
+                "无可清零内容：当前会话还没有已完成的工具轮次。".to_string(),
+            ));
+        }
+        let cur = ranges.len() - 1; // 0 基当前轮号
+        // 保留当前轮 ＋ keep 个前置完整轮 ⇒ 隐藏 0..=(cur-1-keep)。
+        let Some(&(_, hidden_end)) = cur
+            .checked_sub(1 + keep_recent_rounds as usize)
+            .and_then(|i| ranges.get(i))
+        else {
+            return Err((
+                0,
+                format!(
+                    "无可清零内容：保留轮数（keep_recent_rounds={keep_recent_rounds}）已覆盖全部历史。"
+                ),
+            ));
+        };
+        if hidden_end == 0 {
+            return Err((
+                0,
+                "无可清零内容：当前轮之前没有需要移出的历史。".to_string(),
+            ));
+        }
+        // 1 基边界轮号（marker 的「清零边界」行同值；＝保留窗第一轮）。
+        let boundary_round1 = cur + 1 - keep_recent_rounds as usize;
+        // D5 单调守卫（0da S2 设计 §5.2）：既有清零边界 ≥ 新边界 ⇒ 本轮无可清
+        // （新 marker 会落已隐藏区被埋掉）。中性 exit 0，非护栏拒绝。
+        // 242 批处置（P3）：守卫先于 handover 校验——「无可清」比「缺交接」
+        // 更基本：二次清零重试即便漏带 handover 也应得到中性说明而非护栏拒绝。
+        let markers_before = crate::model_face::face_markers(messages);
+        if markers_before
+            .cleared_before_round
+            .is_some_and(|existing| (boundary_round1 as u64) <= existing as u64)
+        {
+            return Err((
+                0,
+                format!(
+                    "无可清零内容：现有清零边界（第 {} 轮）已覆盖目标区间（第 {boundary_round1} 轮）。",
+                    markers_before.cleared_before_round.unwrap()
+                ),
+            ));
+        }
+        // 防裸清护栏（用户裁决⑥；设计 §9）：handover 必填非空 ≤8K。
+        let Some(handover) = handover.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Err((
+                1,
+                "清零被拒绝（防裸清护栏）：mode=clear 需要 `handover` 交接摘要（纯文本 ≤8K；\
+                 目标／已完成／关键决策／未决问题／下一步）。请把工作现场固化到 handover 与黑板后再清零。"
+                    .to_string(),
+            ));
+        };
+        let handover_chars = handover.chars().count();
+        if handover_chars > crate::blackboard::MODEL_NOTE_MAX_CHARS {
+            return Err((
+                1,
+                format!(
+                    "清零被拒绝：handover 超出单次上限（{handover_chars} > {} 字符）。请精炼后重试。",
+                    crate::blackboard::MODEL_NOTE_MAX_CHARS
+                ),
+            ));
+        }
+        // 信封读数的近真参数（D4/静态开销不含——读数为内容近似；阶梯量尺
+        // 在 loop 侧按真实 face_params 计，不受影响）。
+        let envelope_params = crate::model_face::ModelFaceParams {
+            slider_tokens: self.context_compact.slider_window_tokens,
+            block_tokens: self.context_compact.model_face_block_tokens,
+            ledger_path: Some(crate::action_ledger::ledger_file_path(&host.session_cwd())),
+            archive_tag: Some(crate::model_face::archive_tag(
+                self.session_id.as_deref(),
+                run_id,
+            )),
+            run_id: run_id.to_string(),
+            d4_block: None,
+            static_overhead_tokens: 0,
+        };
+        let before = crate::model_face::estimate_model_face_tokens(messages, &envelope_params);
+        // ⓪（mode=clear_all，设计 §6.3）：黑板三分区清空（journal 留痕面在
+        // ContextCompressed 载荷；此处先清板、后写 handover ⇒ 板面最终恰一条
+        // 【交接摘要】——锚点保序）。
+        let board_entries_removed = if clear_board {
+            self.blackboard.write().clear_model_note_sections(&[
+                crate::blackboard::ModelNoteSection::Plan,
+                crate::blackboard::ModelNoteSection::Notes,
+                crate::blackboard::ModelNoteSection::Findings,
+            ])
+        } else {
+            0
+        };
+        // ① 交接写入黑板（notes 分区【交接摘要】条目；(round, domain) 盖章）。
+        let (round, domain) = self.effective_blackboard_stamp();
+        self.blackboard.write().push_model_note(
+            crate::blackboard::ModelNoteSection::Notes,
+            crate::blackboard::NoteEntry {
+                round,
+                domain: Some(domain),
+                timestamp: chrono_utc_now(),
+                content: handover.to_string(),
+                op: Some("交接摘要".to_string()),
+            },
+        );
+        let handover_note = format!(
+            "黑板 notes r{}@{}（【交接摘要】，{} 字符）",
+            round,
+            domain.as_str(),
+            handover_chars
+        );
+        // ② 回放落盘（best-effort；失败如实标注，不阻塞清零——同 T1 截断口径）。
+        let tag = crate::model_face::archive_tag(self.session_id.as_deref(), run_id);
+        let session = self.session_id.as_deref();
+        let blocks = crate::model_face::blocks_outside_slider(
+            messages,
+            self.context_compact.slider_window_tokens,
+            self.context_compact.model_face_block_tokens,
+        );
+        let mut numbers: Vec<u32> = Vec::new();
+        let mut replay: Vec<String> = Vec::new();
+        for b in &blocks {
+            // 只补dump「已闭合 ∧ Live ∧ 整块在边界前 ∧ 旧边界未覆盖」的块——
+            // 已压缩/已截断块的按块档案在原动作时已落盘、由原 marker 指引；
+            // 旧清零边界已覆盖的块已随上一清零落盘（D5：档案零重写）。
+            if b.closed
+                && markers_before.state(b.number) == BlockState::Live
+                && (b.last_round as u64) + 1 < boundary_round1 as u64
+                && !markers_before.is_round_cleared(b.first_round)
+            {
+                let path =
+                    crate::model_face::block_archive_path(&host.session_cwd(), &tag, b.number);
+                let markdown =
+                    crate::model_face::block_archive_markdown(b, messages, run_id, session);
+                let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+                if !crate::summary::write_archive_retry(dir.as_path(), &path, &markdown) {
+                    tracing::warn!(path = %path.display(), "context clear: block archive write failed (best-effort)");
+                }
+                numbers.push(b.number);
+                replay.push(crate::model_face::replay_line(
+                    b,
+                    &crate::model_face::relative_block_archive(&tag, b.number),
+                ));
+            }
+        }
+        // 现场整段留档（边界前 `[0, hidden_end)` 逐字——含主滑块面，块级
+        // 档案不覆盖的部分）。0da S2（D2 归一）：档头轮次标签同步改传
+        // `cur-keep`（＝boundary_round1-1，覆盖止于保留窗前——0cz 传 `cur`
+        // 在 keep>0 时档头虚大；keep=0 恰好重合故未暴露）。
+        let clear_path = crate::model_face::clear_archive_path(&host.session_cwd(), &tag);
+        let clear_markdown = crate::model_face::clear_transcript_markdown(
+            messages,
+            hidden_end,
+            cur - keep_recent_rounds as usize,
+            run_id,
+            session,
+        );
+        let clear_dir = clear_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default();
+        let archive_write_failed =
+            !crate::summary::write_archive_retry(clear_dir.as_path(), &clear_path, &clear_markdown);
+        // ③ 软水位键重置（设计 §5.3：软档＋first_block 复位；硬档沿越线
+        // 重武装不重置。生效时点＝下一 run——ContextScaleState 每 run 自
+        // controller 键集重建，当前 run 内已驻留 fired 集不受影响，如实登记）。
+        self.reset_context_scale_soft_keys();
+        // ④ 边界 marker 插入（**保留窗第一轮起点** `ranges[cur-keep].0`＝
+        // hidden_end——0da S2 D2 归一：marker 下标即物理隐藏终点，marker
+        // 文本边界＝事件/信封边界；**只插入**——I3 本地面零覆盖）。
+        let rounds_cleared = hidden_end_size(&ranges, hidden_end);
+        let insert_at = ranges
+            .get(cur - keep_recent_rounds as usize)
+            .map(|&(s, _)| s)
+            .unwrap_or(hidden_end);
+        let marker = crate::model_face::clear_marker(
+            cur - keep_recent_rounds as usize,
+            &numbers,
+            rounds_cleared,
+            &clear_path,
+            session,
+            &replay.join("\n"),
+            &handover_note,
+        );
+        messages.insert(
+            insert_at,
+            Message {
+                role: Role::User,
+                content: marker,
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            },
+        );
+        let after = crate::model_face::estimate_model_face_tokens(messages, &envelope_params);
+        let freed = before.saturating_sub(after);
+        let messages_hidden = messages[..hidden_end]
+            .iter()
+            .filter(|m| !m.content.starts_with(crate::prompt::WHITELIST_PREFIX))
+            .count();
+        let failure_note = if archive_write_failed {
+            "\n⚠ 回放档案写入失败（.gsa/compaction/blocks/ 落盘未成功）——被清内容的逐字原文\
+             仍在本会话档案（sidecar）与 run journal 中，可按 journal 回读。"
+        } else {
+            ""
+        };
+        let board_note = if clear_board {
+            format!(
+                "黑板已一键清空（plan/notes/findings 共移出 {board_entries_removed} 条，\
+                 全量留档于 journal）。"
+            )
+        } else {
+            String::new()
+        };
+        let numbers_text = if numbers.is_empty() {
+            "（无分块）".to_string()
+        } else {
+            crate::model_face::render_block_numbers(&numbers)
+        };
+        let envelope = format!(
+            "清零已生效：边界＝第 {boundary_round1} 轮；已移出 {numbers_text}\
+             （共 {rounds_cleared} 轮 ≈{freed}tk token，模型面估算）。\
+             {board_note}\
+             交接摘要已写入黑板（notes）。\
+             清零存档：{}（边界前全部轮次逐字留档；read_file offset/limit 分页）。\
+             用 blackboard_read 回读工作计划与结论。\
+             清零后当前读数 ≈{after}（内容估算，未含常驻框架段与静态开销）。{failure_note}",
+            crate::model_face::relative_clear_archive(&tag),
+        );
+        Ok(ContextClearOutcome {
+            envelope,
+            mode_label: if clear_board { "clear_all" } else { "clear" }.to_string(),
+            boundary_round1,
+            blocks_cleared: numbers,
+            rounds_cleared,
+            freed_tokens: freed,
+            archive_write_failed,
+            handover_note,
+            messages_hidden,
+            board_entries_removed,
+            before_tokens: before,
+            after_tokens: after,
+        })
+    }
+}
+
+/// 0cz S2：边界前轮数（隐藏区间覆盖的完整轮数；按区间端点计数）。
+fn hidden_end_size(ranges: &[(usize, usize)], hidden_end: usize) -> usize {
+    ranges.iter().take_while(|&&(_, e)| e <= hidden_end).count()
+}
+
+/// 0cz S2（设计 §5/§9）：`apply_context_clear` 的成功回执（信封文案＋事件
+/// 载荷事实；调用方落 journal 与工具响应）。
+pub(crate) struct ContextClearOutcome {
+    pub envelope: String,
+    /// 事件 `mode` 标签（"clear"｜"clear_all"；0da S2）。
+    pub mode_label: String,
+    /// 1 基边界轮号（marker 的「清零边界」行同值）。
+    pub boundary_round1: usize,
+    pub blocks_cleared: Vec<u32>,
+    pub rounds_cleared: usize,
+    pub freed_tokens: u64,
+    pub archive_write_failed: bool,
+    pub handover_note: String,
+    pub messages_hidden: usize,
+    /// mode=clear_all：黑板三分区移出条目总数（非 clear_all 恒 0；0da S2）。
+    pub board_entries_removed: usize,
+    pub before_tokens: u64,
+    pub after_tokens: u64,
 }
 
 /// 滑块上下文 v8（2026-09-16 勘误批，设计 §2 §8）：**主滑块 x** 默认 160K
@@ -498,7 +797,10 @@ mod tests {
             "sealed tool must never reach ToolStarted"
         );
         // 白名单恒空、无存档文件。
-        let w = controller.whitelist.lock().unwrap_or_else(|e| e.into_inner());
+        let w = controller
+            .whitelist
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
         drop(w);
         let archive = dir.join("whitelist.jsonl");
@@ -585,7 +887,10 @@ mod tests {
             "both writes sealed-journaled: {failed_tool_completed:?}"
         );
         // 白名单恒空。
-        let w = controller.whitelist.lock().unwrap_or_else(|e| e.into_inner());
+        let w = controller
+            .whitelist
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
         drop(w);
 
@@ -686,7 +991,10 @@ mod tests {
             })
             .collect();
         assert_eq!(failed.len(), 1, "sealed refusal journaled");
-        let w = controller.whitelist.lock().unwrap_or_else(|e| e.into_inner());
+        let w = controller
+            .whitelist
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
         drop(w);
 
@@ -698,6 +1006,8 @@ mod tests {
     /// `{journal_dir}/whitelist.jsonl` best-effort 存档 + 常驻前言区
     /// `[压缩白名单` 消息（跨压缩保留、机械压缩跳过）；空条目/超累计上限
     /// 条目跳过并在响应中如实说明；全链 fail-soft（exit 0 信封、三态不变）。
+    /// 0cz S2（2026-10-11，方案 A）：`context_manage` 吸收压缩通道——本测
+    /// 随批改走 `context_manage`（mode=compress），管线/白名单机制零改动。
     #[tokio::test]
     async fn context_compress_whitelist_entries_land_and_respect_cap() {
         let dir = test_dir();
@@ -708,8 +1018,9 @@ mod tests {
         };
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "context_compress".to_string(),
+                name: "context_manage".to_string(),
                 arguments: serde_json::json!({
+                    "mode": "compress",
                     "whitelist": ["任务背景：甲", "关键路径：src/x.rs", "   "],
                 }),
                 call_id: "call-cc-w1".to_string(),
@@ -729,13 +1040,17 @@ mod tests {
         let cc: Vec<_> = events(&dir)
             .into_iter()
             .filter(|e| {
-                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_compress"
+                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_manage"
             })
             .collect();
         assert_eq!(cc.len(), 1, "{cc:?}");
         assert_eq!(cc[0].payload["exit_code"], 0);
         // ② 内存白名单 = 仅首条（空/超限条目未落地）。
-        let w = controller.whitelist.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let w = controller
+            .whitelist
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         assert_eq!(w, vec!["任务背景：甲".to_string()], "{w:?}");
         // ③ 存档：whitelist.jsonl 恰一行（best-effort JSONL append）。
         let archive = dir.join("whitelist.jsonl");
@@ -762,6 +1077,728 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0cz S2（2026-10-11，设计 §5/§9）六钉之①②⑥：`context_manage
+    /// mode=clear` 端到端——
+    /// ① **防裸清负例**：无 handover ⇒ exit 1 拒绝、零 ContextCompressed、
+    ///    零 marker、黑板零写入；
+    /// ② **本地面零 diff（I3）**：清零仅插入 marker——会话消息数组逐字
+    ///    保留全部原消息（不 drain、不覆盖）；
+    /// ⑥ **字节单调（.gsa 落盘在案）**：清零现场存档 ＋ 按块回放档案落盘
+    ///    `​.gsa/compaction/blocks/`，marker 内带回放指针（追加式，无重写）。
+    #[tokio::test]
+    async fn context_manage_clear_requires_handover_and_lands_boundary_marker() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let fat = "F".repeat(3_000);
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: fat.clone(),
+                exit_code: Some(0),
+                ..Default::default()
+            }),
+        };
+        let clear_call = |call_id: &str, args: serde_json::Value| ToolCall {
+            name: "context_manage".to_string(),
+            arguments: args,
+            call_id: call_id.to_string(),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            // 第 1 轮：正常工作（肥胖结果在 slider=1K/block=1K 下形成闭合块）。
+            ScriptedResponse::tool_calls(vec![tool_call_read("call-r1")]),
+            // 第 2 轮：clear 无 handover ⇒ 防裸清拒绝（exit 1）。
+            ScriptedResponse::tool_calls(vec![clear_call(
+                "call-c1",
+                serde_json::json!({ "mode": "clear" }),
+            )]),
+            // 第 3 轮：clear 带 handover ⇒ 生效（边界 marker ＋ 落盘 ＋ 重置）。
+            ScriptedResponse::tool_calls(vec![clear_call(
+                "call-c2",
+                serde_json::json!({
+                    "mode": "clear",
+                    "handover": "目标: 完成接线\n已完成: 台账接线\n关键决策: 分块压缩\n未决问题: 无\n下一步: 从台账继续",
+                }),
+            )]),
+            // 终答候选轮（无工具调用）⇒ 反例门一次性触发 ⇒ 再烧一轮。
+            ScriptedResponse::text("终答"),
+            ScriptedResponse::text("终答确认"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(1_000);
+        let mut conversation: Vec<Message> = Vec::new();
+        controller
+            .run_turn(
+                &host,
+                "0cz 清零端到端",
+                "RUN-CZ-CLEAR",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+
+        let evs = events(&dir);
+        // ① 防裸清负例：恰一次 exit 1 ToolCompleted（mode=clear），文案带
+        // 护栏名；该轮**无** ContextCompressed（唯一一条清零事件来自第 3 轮）。
+        let rejected: Vec<_> = evs
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload["mode"] == "clear"
+                    && e.payload["exit_code"] == 1
+            })
+            .collect();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert!(
+            rejected[0].payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("防裸清护栏")
+        );
+        let cleared: Vec<_> = evs
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ContextCompressed && e.payload["mode"] == "clear"
+            })
+            .collect();
+        assert_eq!(cleared.len(), 1, "{cleared:?}");
+        assert_eq!(cleared[0].payload["boundary_round"], 3);
+        assert_eq!(cleared[0].payload["rounds_dropped"], 2);
+        // 成功轮 ToolCompleted exit 0。
+        assert!(evs.iter().any(|e| e.event_type == EventType::ToolCompleted
+            && e.payload["mode"] == "clear"
+            && e.payload["exit_code"] == 0));
+        // ② I3 零 diff：会话消息数组＝原消息全量逐字 ＋ 恰一枚清零 marker
+        // （插入不覆盖——原消息无一丢失、无一改写）。
+        let marker_msgs: Vec<_> = conversation
+            .iter()
+            .filter(|m| {
+                m.content
+                    .starts_with(crate::model_face::CLEAR_MARKER_PREFIX)
+            })
+            .collect();
+        assert_eq!(marker_msgs.len(), 1, "恰一枚清零 marker");
+        assert!(marker_msgs[0].content.contains("清零边界: 第 3 轮]"));
+        assert!(marker_msgs[0].content.contains("交接摘要"));
+        // 原消息保真：肥胖工具结果与两枚工具声明逐字仍在。
+        assert!(
+            conversation
+                .iter()
+                .any(|m| m.role == crate::gateway::model::Role::Tool && m.content == fat),
+            "被清轮次的本地面原文必须逐字保留（移出视野≠销毁）"
+        );
+        // ⑥ .gsa 落盘在案：清零现场存档 ＋ 按块回放档案（tag 取 run id 尾）。
+        let blocks_dir = dir.join(".gsa").join("compaction").join("blocks");
+        let mut clear_archives = Vec::new();
+        let mut block_archives = Vec::new();
+        for entry in std::fs::read_dir(&blocks_dir).expect("blocks dir") {
+            let name = entry.unwrap().file_name().to_string_lossy().to_string();
+            if name.ends_with("-clear.md") {
+                clear_archives.push(name);
+            } else if name.contains("-block-") {
+                block_archives.push(name);
+            }
+        }
+        assert_eq!(clear_archives.len(), 1, "{clear_archives:?}");
+        assert!(!block_archives.is_empty(), "{block_archives:?}");
+        let text =
+            std::fs::read_to_string(blocks_dir.join(&clear_archives[0])).expect("clear archive");
+        assert!(text.contains(&fat), "现场存档必须逐字含被清内容");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0da S2（2026-10-11，设计 §5.3）D2/D5 钉：`keep_recent_rounds` 归一＋
+    /// 二次清零单调守卫——
+    /// ① keep=2 清零：物理隐藏/事件边界/marker 文本/clear.md 覆盖**四方归一**
+    ///    （保留窗两轮在面逐字；被清轮不在面、恰在 clear.md）；
+    /// ② keep 过大致边界倒退的二次清零 ⇒ **中性 exit 0**（现有清零边界已覆盖；
+    ///    零新 marker、零事件——修复前：新 marker 被静默埋掉而信封谎报成功）；
+    /// ③ 正常二次清零（边界前进）⇒ 生效，且只 dump 新增区间块。
+    #[tokio::test]
+    async fn context_clear_keep_recent_rounds_and_monotonic_second_clear() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let fat = |tag: char| "F".repeat(3_000) + &tag.to_string();
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: fat('a'),
+                exit_code: Some(0),
+                ..Default::default()
+            }),
+        };
+        let clear_call = |call_id: &str, keep: u64| ToolCall {
+            name: "context_manage".to_string(),
+            arguments: serde_json::json!({
+                "mode": "clear",
+                "handover": "目标: 完成接线\n已完成: 台账接线\n下一步: 继续",
+                "keep_recent_rounds": keep,
+            }),
+            call_id: call_id.to_string(),
+        };
+        let read_call = |call_id: &str| ToolCall {
+            name: "read_file".to_string(),
+            arguments: serde_json::json!({ "path": "src/f.rs" }),
+            call_id: call_id.to_string(),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            // 轮 1–3：正常工作（三次读取形成历史轮）。
+            ScriptedResponse::tool_calls(vec![read_call("call-r1")]),
+            ScriptedResponse::tool_calls(vec![read_call("call-r2")]),
+            ScriptedResponse::tool_calls(vec![read_call("call-r3")]),
+            // 轮 4：clear keep=2 ⇒ 边界＝第 2 轮（轮 1 清、轮 2–3 保留）。
+            ScriptedResponse::tool_calls(vec![clear_call("call-c1", 2)]),
+            // 轮 5：clear keep=2 ⇒ cur=4, 边界 5-2=3 > 既有边界 2 ⇒ 正常二次
+            // 清零生效（边界前进到第 3 轮）。
+            ScriptedResponse::tool_calls(vec![clear_call("call-c2", 2)]),
+            // 轮 6：clear keep=3 ⇒ cur=5, 边界 6-3=3 ≤ 既有边界 3 ⇒ 单调守卫
+            // 中性拒绝（修复前：静默埋 marker＋谎报成功）。
+            ScriptedResponse::tool_calls(vec![clear_call("call-c3", 3)]),
+            // 终答候选轮 ×2（反例门一次性触发后再烧一轮）。
+            ScriptedResponse::text("终答"),
+            ScriptedResponse::text("终答确认"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(1_000);
+        let mut conversation: Vec<Message> = Vec::new();
+        controller
+            .run_turn(
+                &host,
+                "0da keep/单调守卫端到端",
+                "RUN-CZ-KEEP",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+
+        let evs = events(&dir);
+        // ① keep=2：事件边界＝2、marker 文本同界、轮 2–3 声明在面、轮 1 结果在
+        // clear.md。
+        let first = &evs
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ContextCompressed
+                    && e.payload["mode"] == "clear"
+                    && e.payload["boundary_round"] == 2
+            })
+            .count();
+        assert_eq!(*first, 1, "第一次清零边界＝2（keep=2）");
+        let marker_msgs: Vec<_> = conversation
+            .iter()
+            .filter(|m| {
+                m.content
+                    .starts_with(crate::model_face::CLEAR_MARKER_PREFIX)
+            })
+            .collect();
+        assert_eq!(
+            marker_msgs.len(),
+            2,
+            "恰两枚清零 marker（keep 清零＋二次清零）"
+        );
+        assert!(
+            marker_msgs[0].content.contains("清零边界: 第 2 轮]"),
+            "marker 文本边界＝事件边界（D2 归一）：{}",
+            &marker_msgs[0].content[..120]
+        );
+        // 物理面（投影装配，非原始数组——I3 原始消息全量保留）。D2 归一的
+        // 机械语义：marker 恰插在**保留窗第一轮声明起点**——marker1＝轮 2
+        // 声明起点（keep=2）、marker2＝轮 3 声明起点（二次清零 keep=2）。
+        let face_params = crate::model_face::ModelFaceParams {
+            slider_tokens: 1_000,
+            block_tokens: 1_000,
+            ledger_path: None,
+            archive_tag: None,
+            run_id: "RUN-CZ-KEEP".to_string(),
+            d4_block: None,
+            static_overhead_tokens: 0,
+        };
+        let face_in = |id: &str, convo: &[Message]| {
+            crate::model_face::build_model_face(convo, &face_params)
+                .unwrap()
+                .iter()
+                .any(|m| {
+                    m.role == Role::Assistant && m.tool_calls.iter().any(|tc| tc.call_id == id)
+                })
+        };
+        let decl_idx = |id: &str| {
+            conversation
+                .iter()
+                .position(|m| {
+                    m.role == Role::Assistant && m.tool_calls.iter().any(|tc| tc.call_id == id)
+                })
+                .expect("declaration present (I3)")
+        };
+        let m1 = conversation
+            .iter()
+            .position(|m| {
+                m.content
+                    .starts_with(crate::model_face::CLEAR_MARKER_PREFIX)
+            })
+            .unwrap();
+        let m2 = conversation
+            .iter()
+            .rposition(|m| {
+                m.content
+                    .starts_with(crate::model_face::CLEAR_MARKER_PREFIX)
+            })
+            .unwrap();
+        assert_eq!(
+            m1 + 1,
+            decl_idx("call-r2"),
+            "marker1 紧邻保留窗第一轮（轮 2）声明之前＝物理隐藏终点 [0, marker)（keep=2 归一）"
+        );
+        assert_eq!(
+            m2 + 1,
+            decl_idx("call-r3"),
+            "marker2 紧邻二次清零保留窗第一轮（轮 3）声明之前"
+        );
+        // clear.md 覆盖＝被清区间（第二次清零覆盖写同档：边界 3 ⇒ 档头「轮 1–2」
+        // ——保留窗轮 3 不得入档，D2 归一）。
+        let blocks_dir = dir.join(".gsa").join("compaction").join("blocks");
+        let mut clear_archives = Vec::new();
+        for entry in std::fs::read_dir(&blocks_dir).expect("blocks dir") {
+            let name = entry.unwrap().file_name().to_string_lossy().to_string();
+            if name.ends_with("-clear.md") {
+                clear_archives.push(name);
+            }
+        }
+        clear_archives.sort();
+        let t1 = std::fs::read_to_string(blocks_dir.join(&clear_archives[0])).unwrap();
+        assert!(
+            t1.contains("清零现场留档（轮 1–2）"),
+            "clear.md 覆盖恰为被清区间轮 1–2（保留窗轮 3 不入档）：{}",
+            &t1[..200]
+        );
+        assert!(t1.contains(&fat('a')), "被清轮内容逐字在档");
+        // ② 二次清零（keep=2，边界 3）：生效且 marker 文本同界；终态面＝
+        // r1/r2 移出、r3 与当前轮在面。
+        assert!(
+            evs.iter().any(|e| {
+                e.event_type == EventType::ContextCompressed
+                    && e.payload["mode"] == "clear"
+                    && e.payload["boundary_round"] == 3
+            }),
+            "正常二次清零生效（边界前进到 3）"
+        );
+        assert!(
+            !face_in("call-r1", &conversation) && !face_in("call-r2", &conversation),
+            "终态面：轮 1–2（边界 3 之前）声明移出面"
+        );
+        assert!(
+            face_in("call-r3", &conversation),
+            "轮 3（新边界轮）保持在面"
+        );
+        assert!(marker_msgs[1].content.contains("清零边界: 第 3 轮]"));
+        // ③ 单调守卫：keep=3 ⇒ 中性拒绝——回执带「已覆盖目标区间」（中性
+        // exit 0 不入事件 error 字段＝0cz 既有口径，断言打在工具回执上）＋
+        // 零第三 marker＋零边界事件（修复前：静默埋 marker＋谎报成功）。
+        let guard_reply = conversation
+            .iter()
+            .find(|m| {
+                m.role == Role::Tool
+                    && m.tool_call_id.as_deref() == Some("call-c3")
+                    && m.content.contains("已覆盖目标区间")
+            })
+            .expect("单调守卫须中性说明一次（工具回执）");
+        assert!(
+            guard_reply.content.contains("现有清零边界（第 3 轮）"),
+            "守卫回执须点名既有边界：{}",
+            guard_reply.content
+        );
+        assert_eq!(
+            marker_msgs.len(),
+            2,
+            "守卫拒绝后不得新增 marker（修复前会被静默埋掉）"
+        );
+        assert!(
+            !evs.iter().any(|e| {
+                e.event_type == EventType::ContextCompressed && e.payload["boundary_round"] == 1
+            }),
+            "守卫拒绝不得产生边界事件"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 242 批处置钉（P3）：D5 单调守卫**先于** handover 校验——已覆盖边界的
+    /// 二次清零即便漏带 handover，也得到中性「已覆盖目标区间」说明（exit 0），
+    /// 而非防裸清护栏拒绝（exit 1）；零新 marker、零新边界事件（零副作用
+    /// 不变量不变，仅语义次序：无可清比缺交接更基本）。
+    #[tokio::test]
+    async fn monotonic_guard_precedes_handover_validation() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "F".repeat(3_000),
+                exit_code: Some(0),
+                ..Default::default()
+            }),
+        };
+        let clear_call = |call_id: &str, args: serde_json::Value| ToolCall {
+            name: "context_manage".to_string(),
+            arguments: args,
+            call_id: call_id.to_string(),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            // 轮 1–2：正常工作。
+            ScriptedResponse::tool_calls(vec![tool_call_read("call-r1")]),
+            ScriptedResponse::tool_calls(vec![tool_call_read("call-r2")]),
+            // 轮 3：clear（带 handover）⇒ 生效，边界＝第 3 轮（keep=0 仅留当前轮）。
+            ScriptedResponse::tool_calls(vec![clear_call(
+                "call-c1",
+                serde_json::json!({ "mode": "clear", "handover": "目标: x\n下一步: y" }),
+            )]),
+            // 轮 4：keep=1 ⇒ 边界 4-1=3 ≤ 既有边界 3 ⇒ 守卫先命中；且本调用
+            // **漏带 handover**（修复前次序：先吃防裸清 exit 1）。
+            ScriptedResponse::tool_calls(vec![clear_call(
+                "call-c2",
+                serde_json::json!({ "mode": "clear", "keep_recent_rounds": 1 }),
+            )]),
+            // 终答候选轮 ×2。
+            ScriptedResponse::text("终答"),
+            ScriptedResponse::text("终答确认"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(1_000);
+        let mut conversation: Vec<Message> = Vec::new();
+        controller
+            .run_turn(
+                &host,
+                "0da 守卫次序端到端",
+                "RUN-0DA-GUARD",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+
+        // 中性说明打在工具回执上：含「已覆盖目标区间」、不含护栏拒绝文案。
+        let reply = conversation
+            .iter()
+            .find(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-c2"))
+            .expect("second clear reply");
+        assert!(
+            reply.content.contains("已覆盖目标区间"),
+            "守卫须先于 handover 校验给出中性说明：{}",
+            reply.content
+        );
+        assert!(
+            !reply.content.contains("防裸清护栏"),
+            "不得以护栏拒绝替代中性说明：{}",
+            reply.content
+        );
+        // 恰一枚清零 marker（第二次被守卫拦下）；全程零护栏拒绝事件。
+        let marker_count = conversation
+            .iter()
+            .filter(|m| {
+                m.content
+                    .starts_with(crate::model_face::CLEAR_MARKER_PREFIX)
+            })
+            .count();
+        assert_eq!(marker_count, 1, "守卫拦截不得落新 marker");
+        let evs = events(&dir);
+        assert!(
+            !evs.iter().any(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload["mode"] == "clear"
+                    && e.payload["exit_code"] == 1
+            }),
+            "全程不得出现清零护栏拒绝事件"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0da S2（2026-10-11，设计 §6.3/§6.5）replace 族钉：`mode=clear_all`
+    /// 一键清理 e2e——黑板三分区清空（journal 留痕在事件载荷）→ handover
+    /// 成为清空后板面**唯一条目**（先清板后写交接，锚点保序）→ 清零核生效
+    /// （marker＋边界事件 mode=clear_all＋board_entries_removed 载荷）。
+    #[tokio::test]
+    async fn context_manage_clear_all_wipes_board_then_writes_handover() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "F".repeat(3_000),
+                exit_code: Some(0),
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            // 轮 1：写黑板两分区（制造板面旧条目）。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_write".to_string(),
+                arguments: serde_json::json!({
+                    "section": "notes",
+                    "content": "旧笔记甲",
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_write".to_string(),
+                arguments: serde_json::json!({
+                    "section": "findings",
+                    "content": "旧结论乙",
+                }),
+                call_id: "call-w2".to_string(),
+            }]),
+            // 轮 2：read（形成历史轮）。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({ "path": "src/f.rs" }),
+                call_id: "call-r1".to_string(),
+            }]),
+            // 轮 3：clear_all（一键清理）。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "context_manage".to_string(),
+                arguments: serde_json::json!({
+                    "mode": "clear_all",
+                    "handover": "目标: 一键清理验证\n已完成: 板面写入\n下一步: 从台账继续",
+                }),
+                call_id: "call-ca1".to_string(),
+            }]),
+            // 终答候选轮 ×2。
+            ScriptedResponse::text("终答"),
+            ScriptedResponse::text("终答确认"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(1_000);
+        let mut conversation: Vec<Message> = Vec::new();
+        controller
+            .run_turn(
+                &host,
+                "0da clear_all 端到端",
+                "RUN-CZ-CA",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+
+        let evs = events(&dir);
+        // 清零事件：mode=clear_all＋板面载荷。
+        let cleared: Vec<_> = evs
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ContextCompressed && e.payload["mode"] == "clear_all"
+            })
+            .collect();
+        assert_eq!(cleared.len(), 1, "{cleared:?}");
+        assert_eq!(
+            cleared[0].payload["board_entries_removed"], 2,
+            "旧板面恰两分区各一条"
+        );
+        assert_eq!(
+            cleared[0].payload["boundary_round"], 4,
+            "清零调用在第 4 轮（两次板写各占一轮）"
+        );
+        // 板面终态：notes 恰一条【交接摘要】、plan/findings 全空（先清板后写
+        // 交接＝锚点保序）。
+        let bb = controller.blackboard.read();
+        assert_eq!(bb.notes.len(), 1, "清空后板面恰一条（handover）");
+        assert!(
+            bb.notes[0].content.contains("一键清理验证")
+                && bb.notes[0].op.as_deref() == Some("交接摘要"),
+            "唯一条目＝交接摘要：{:?}",
+            bb.notes[0]
+        );
+        assert!(bb.plan.model_notes.is_empty() && bb.findings.is_empty());
+        // marker 在场＋信封带一键清空回执。
+        assert!(
+            conversation.iter().any(|m| m
+                .content
+                .starts_with(crate::model_face::CLEAR_MARKER_PREFIX)),
+            "clear_all 须落清零 marker"
+        );
+        assert!(
+            conversation
+                .iter()
+                .any(|m| m.role == Role::Tool && m.content.contains("黑板已一键清空")),
+            "信封须带一键清空回执"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0da S2（2026-10-11，设计 §6.1/§6.5；D3 并入）replace 族钉：
+    /// `blackboard_write op=clear`／section=all 组合约束／非法 op——
+    /// ① op=clear 单分区清空（版本计 1＋journal op=clear＋信封回显条数）；
+    /// ② section=all＋op=clear 三分区全清；
+    /// ③ section=all＋append ⇒ 显式拒绝 exit 1；
+    /// ④ 非法 op（replace）⇒ 拒绝 exit 1（D3）。
+    #[tokio::test]
+    async fn blackboard_write_op_clear_and_all_section_guardrails() {
+        let dir = test_dir();
+        let bb_call = |call_id: &str, args: serde_json::Value| ToolCall {
+            name: "blackboard_write".to_string(),
+            arguments: args,
+            call_id: call_id.to_string(),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            // ① 写两条 notes（供清空计数）。
+            ScriptedResponse::tool_calls(vec![bb_call(
+                "call-b1",
+                serde_json::json!({ "section": "notes", "content": "笔记一" }),
+            )]),
+            ScriptedResponse::tool_calls(vec![bb_call(
+                "call-b2",
+                serde_json::json!({ "section": "notes", "content": "笔记二" }),
+            )]),
+            // ② op=clear 清空 notes。
+            ScriptedResponse::tool_calls(vec![bb_call(
+                "call-b3",
+                serde_json::json!({ "section": "notes", "op": "clear" }),
+            )]),
+            // ④ 非法 op（D3：显式拒绝）。
+            ScriptedResponse::tool_calls(vec![bb_call(
+                "call-b4",
+                serde_json::json!({ "section": "notes", "content": "x", "op": "replace" }),
+            )]),
+            // ③ section=all＋append ⇒ 拒绝。
+            ScriptedResponse::tool_calls(vec![bb_call(
+                "call-b5",
+                serde_json::json!({ "section": "all", "content": "x" }),
+            )]),
+            // ②′ section=all＋op=clear 三分区全清（直接清空计数验证）。
+            ScriptedResponse::tool_calls(vec![bb_call(
+                "call-b6",
+                serde_json::json!({ "section": "all", "op": "clear" }),
+            )]),
+            ScriptedResponse::text("终答"),
+            ScriptedResponse::text("终答确认"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        controller
+            .run_turn(
+                &host,
+                "0da op=clear 守护栏端到端",
+                "RUN-CZ-OPC",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let evs = events(&dir);
+        // ① op=clear：exit 0＋信封回显条数＋journal op=clear。
+        let clear_done: Vec<_> = evs
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload["op"] == "clear"
+                    && e.payload["exit_code"] == 0
+            })
+            .collect();
+        assert_eq!(
+            clear_done.len(),
+            2,
+            "notes 清空＋all 清空恰两次：{clear_done:?}"
+        );
+        assert_eq!(
+            clear_done[0].payload["entries_removed"], 2,
+            "notes 旧条目恰两条"
+        );
+        let plan_writes: Vec<_> = evs
+            .iter()
+            .filter(|e| e.event_type == EventType::PlanWrite && e.payload["op"] == "clear")
+            .collect();
+        assert_eq!(plan_writes.len(), 2, "journal 恰两笔 op=clear");
+        assert_eq!(plan_writes[0].payload["section"], "notes");
+        assert_eq!(plan_writes[0].payload["content_chars"], 0);
+        assert_eq!(plan_writes[1].payload["section"], "all");
+        // ④ 非法 op 拒绝（D3）。
+        let illegal: Vec<_> = evs
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload["exit_code"] == 1
+                    && e.payload["error"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("只接受 append | replace_all | clear")
+            })
+            .collect();
+        assert_eq!(illegal.len(), 1, "非法 op 须显式拒绝：{illegal:?}");
+        // ③ section=all＋append 拒绝。
+        let all_reject: Vec<_> = evs
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload["exit_code"] == 1
+                    && e.payload["error"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("all 仅与 op=clear 组合合法")
+            })
+            .collect();
+        assert_eq!(all_reject.len(), 1, "all+append 须显式拒绝：{all_reject:?}");
+        // ②′ 板面终态全空＋版本计数随清空 bump（notes 经历写×2→清→(all)清）。
+        let bb = controller.blackboard.read();
+        assert!(bb.notes.is_empty() && bb.plan.model_notes.is_empty() && bb.findings.is_empty());
+        assert_eq!(
+            bb.revisions.notes, 4,
+            "notes：写2＋clear＋all-clear＝4 次可见变化"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0cz S2（设计 §5.3）六钉之⑤′：软水位键重置——软档键与 first_block
+    /// 复位、硬档键（320k）保留（沿越线重武装）；生效时点＝下一 run。
+    #[test]
+    fn context_clear_resets_soft_watermark_keys_only() {
+        let fake = Arc::new(FakeProvider::new(vec![ScriptedResponse::text("完成")]));
+        let controller = AgentLoopController::with_gateway(fake);
+        controller.mark_context_scale_notified("192k");
+        controller.mark_context_scale_notified("first_block");
+        controller.mark_context_scale_notified("320k");
+        controller.reset_context_scale_soft_keys();
+        let keys = controller.context_scale_notified_keys();
+        assert_eq!(keys, vec!["320k".to_string()], "{keys:?}");
+    }
+
+    /// 测试局部：read_file 声明（闭块fixture）。
+    fn tool_call_read(call_id: &str) -> ToolCall {
+        ToolCall {
+            name: "read_file".to_string(),
+            arguments: serde_json::json!({ "path": "src/f0.rs" }),
+            call_id: call_id.to_string(),
+        }
     }
 
     /// v8 实现批（2026-09-16，审查 R-3）：**本地面全量零覆盖**——主车道 run
@@ -945,7 +1982,10 @@ mod tests {
             "{:?}",
             wl.payload
         );
-        let w = controller.whitelist.lock().unwrap_or_else(|e| e.into_inner());
+        let w = controller
+            .whitelist
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
         drop(w);
         let _ = std::fs::remove_dir_all(&dir);

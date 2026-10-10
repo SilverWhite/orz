@@ -1942,15 +1942,20 @@ impl AgentLoopController {
              s＝journal 行号；定位符 `r<轮>·b<块>·s<seq>[#sha8]`＝事件指针\
              （分块表/压缩回执里直接复制；section=journal anchor=… 点读 ≤512B）。\
              压缩＝旧上下文换摘要（原文在本地档案、可回放；是否压缩由模型决定，\
-             机械不强制）。域（start/normal/pressure/low_progress/stuck）＝机械给\
-             时间段打的进程标签。
+             机械不强制）。清零＝把边界前上下文整体移出窗口继续工作（未销毁、\
+             可回放；需先写交接摘要）；一键清理＝清零＋黑板三分区一并清空\
+             （handover 成为清空后板面唯一条目）；清空黑板分区＝blackboard_write \
+             op=clear（历史全量在 journal 可回查）。域（start/normal/pressure/\
+             low_progress/stuck）＝机械给时间段打的进程标签。
 \
              【组件关系】模型提议工具 → 机械层校验与门禁 → 执行 → 结果回流黑板与 \
              journal；终答经两阶段交付（请求→确认）＋机械审计。时间与压力由机械层\
              替模型记账（section=temporal / rli 按需查，fires 不注入）。检索由子代理\
              执行（派发返回指针时读 internal_ret/external_ret）。写计划/笔记用 {}\
-             （单条 ≤8K）。",
+             （单条 ≤8K；清空分区 op=clear）；上下文窗口自管理（主动压缩/清零/\
+             一键清理）用 {}。",
             crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME,
+            orz_assurance::tool_names::CONTEXT_MANAGE_TOOL_NAME,
         )
     }
 
@@ -2929,6 +2934,25 @@ impl AgentLoopController {
         self
     }
 
+    /// 0cz S2（2026-10-11，设计 §5.3）：清零后的水位键重置——软档一次性键
+    /// 与 `first_block` 复位（新注意力周期理应重新获得软提醒与固化提醒）。
+    /// 硬档（H1/T1）**不重置**：清零后读数坍缩到线下，「按越线重新武装」
+    /// 闩（`ContextScaleState::due` 的 latched 复位）自行生效。生效时点＝
+    /// 下一个 run（ContextScaleState 每 run 从本键集重建；当前 run 内已驻留
+    /// 的 fired 集不受影响——如实登记的边界）。blackboard 侧车回写通道不变。
+    pub(crate) fn reset_context_scale_soft_keys(&self) {
+        let soft_keys: std::collections::HashSet<String> = self
+            .context_compact
+            .context_scale_ladder
+            .iter()
+            .filter(|s| s.tier == crate::context_scale::LadderTier::Soft)
+            .map(|s| format!("{}k", s.tokens / 1000))
+            .collect();
+        if let Ok(mut slot) = self.context_scale_notified.lock() {
+            slot.retain(|k| !soft_keys.contains(k) && k != crate::context_scale::FLAG_FIRST_BLOCK);
+        }
+    }
+
     pub(crate) fn attach_pull_delta(
         &self,
         section: &str,
@@ -3811,71 +3835,119 @@ impl AgentLoopController {
             });
         }
         // 0ae D0（2026-09-15，设计 §3，用户裁决 DP-6）：`blackboard_write`
-        // ——模型写入面（section ∈ {plan, notes, findings}，单次 ≤8K）。8 工具面
-        // 冻结纪律的**用户主导显式例外 +1**（2026-09-15 口径「明确提示
+        // ——模型写入面（section ∈ {plan, notes, findings, all}，单次 ≤8K）。
+        // 8 工具面冻结纪律的**用户主导显式例外 +1**（2026-09-15 口径「明确提示
         // 可使用黑板」）；只写内存黑板，无外部副作用 → ReadOnly 类（所有
         // 策略自动放行）。无条件声明（不随 plan_first 门）。
+        // 0da S2（2026-10-11，设计 §6.1）：op 扩 `clear`（清理黑板——分区
+        // 板面清空、历史全量在 journal 可回查）；section 扩 `"all"`（**仅与
+        // op=clear 组合合法**＝一键清空三分区；all 不是通配写目标）。护栏
+        // 不对称＝clear 无需 handover（黑板臂 journal 在案）。
         if !tool_defs
             .iter()
             .any(|t| t.name == crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME)
         {
             tool_defs.push(ToolDef {
                 name: crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME.to_string(),
- description: "Write a note to the blackboard — the fold-proof durable memory: blackboard content survives context folding and compaction — at the 500K hard truncation (T1) only the current slider window survives, so plan/notes on the blackboard remain recoverable via blackboard_read. `section` is \"plan\" (task plan + key intermediate conclusions), \"notes\" (free-form working notes), or \"findings\" (the append-only ledger of established results & conclusions from actual work). Single write is capped at 8K chars — split longer content across writes. The live watermark 【x.xM/10M】 rides every blackboard_read response header. Writes are stamped (round, domain) and journaled; mechanical partitions (edits/exec/actions/processes/temporal/session) are NOT writable.".to_string(),
+ description: "Write a note to the blackboard — the fold-proof durable memory: blackboard content survives context folding and compaction — at the 500K hard truncation (T1) only the current slider window survives, so plan/notes on the blackboard remain recoverable via blackboard_read. `section` is \"plan\" (task plan + key intermediate conclusions), \"notes\" (free-form working notes), or \"findings\" (the append-only ledger of established results & conclusions from actual work); with op=clear, section may also be \"all\" (wipe all three). Single write is capped at 8K chars — split longer content across writes. The live watermark 【x.xM/10M】 rides every blackboard_read response header. Writes are stamped (round, domain) and journaled; cleared/replaced entries stay fully archived in the journal; mechanical partitions (edits/exec/actions/processes/temporal/session) are NOT writable.".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "section": {
                             "type": "string",
-                            "enum": ["plan", "notes", "findings"],
-                            "description": "目标分区：plan = 工作计划与关键中间结论；notes = 自由工作笔记；findings = 已探明内容工作台账（已确立/已验证的发现与结论）。",
+                            "enum": ["plan", "notes", "findings", "all"],
+                            "description": "目标分区：plan = 工作计划与关键中间结论；notes = 自由工作\
+                             笔记；findings = 已探明内容工作台账（已确立/已验证的发现与结论）；\
+                             all = 三分区全部（**仅与 op=clear 组合合法**）。",
                         },
                         "content": {
                             "type": "string",
                             "maxLength": 8192,
-                            "description": "写入内容（纯文本；单次 ≤8K 字符，超出请精炼分次）。",
+                            "description": "写入内容（纯文本；单次 ≤8K 字符，超出请精炼分次）。\
+                             op=clear 时无需本字段。",
+                        },
+                        "op": {
+                            "type": "string",
+                            "enum": ["append", "replace_all", "clear"],
+                            "description": "写入形态（可选，默认 append）：append = 追加（现状）；\
+                             replace_all = 整节重写（该分区模型内容整体替换为本次 content）；\
+                             clear = 清空该分区板面（section=all 时三分区全清；历史全量留档于\
+                             journal 与会话卷，可回查）。",
                         },
                     },
-                    "required": ["section", "content"],
+                    "required": ["section"],
                 }),
             });
         }
-        // 0ap（2026-09-18，设计 §4-1 用户裁决）：`context_compress`——压缩
-        // 交互第九工具（8 工具面冻结的用户主导显式例外 +2；工具名 2026-09-18
-        // 用户定名）。知情发起 D3 模型参与压缩窗口＋响应自带滑块读数表；纯
-        // 内存压缩状态操作 → ReadOnly 类（所有策略自动放行）。无条件声明
-        // （沿 blackboard_write 注册形态）；描述**自包含教学**并控常驻长度
-        // （~140 字符，设计 §4-1「≤120 字符目标」的贴近值——多出部分为
-        // [SEMANTIC_SUMMARY] 摘要协议必要教学；常驻成本读数 S3 照收）。
-        // 0am FR4（2026-09-20 用户令「压缩白名单挂在 context_compress 下，
-        // 不做独立工具、保 10 工具面」）：新增**可选 `whitelist` 参数**——
-        // 模型处理压缩时可额外保存白名单条目（机制本体＝A6 §8 C.2 白名单
-        // 块／16K 上限／常驻前言区／best-effort 存档，全部复用；旧的独立
-        // 工具 `compaction_whitelist_add` 维持封存不动）。
+        // 0cz S2（2026-10-11，方案 A 用户裁决；设计 §4）：`context_manage`
+        // ——上下文管理第十一主工具（8 工具面冻结的用户主导显式例外 +3；
+        // 设计稿 [`MODEL_CONTEXT_CONTROL_DESIGN_2026-10-11`]）。**单工具带
+        // mode**（用户裁决⑤）：mode=compress 承继 0ap 管线（知情发起压缩
+        // 窗口＋读数表；0am FR4 whitelist 参数随并）；mode=clear＝主动清零
+        // （投影层边界 marker＋块回放落盘；`handover` 必填 ≤8K＝强制交接
+        // 写入前置，防裸清护栏⑥）。纯内存投影状态操作＋黑板合法写路径 →
+        // ReadOnly 类；无条件声明（沿 blackboard_write 注册形态）。方案 A：
+        // **`context_compress` 声明面同批退役**（管线/白名单/事件由本工具
+        // 承继；WORK_TOOLS 表位保留供历史 journal 回放）。
+        // 0da S2（2026-10-11，设计 §6.1/§6.3）：mode 扩 `clear_all`＝一键清理
+        // （上下文清零＋黑板三分区清空一具完成；先清板后写 handover＝板面
+        // 恰一条【交接摘要】；handover 同必填）。清理操作多样化三落位：
+        // 压缩/清零在此具、清黑板在 blackboard_write op=clear、一键在此具。
         if !tool_defs
             .iter()
-            .any(|t| t.name == orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME)
+            .any(|t| t.name == orz_assurance::tool_names::CONTEXT_MANAGE_TOOL_NAME)
         {
             tool_defs.push(ToolDef {
-                name: orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME.to_string(),
-                description: "Open a compression window (≤3 rounds), then write a \
-                     [SEMANTIC_SUMMARY] block to fold blocks beyond the slider. \
-                     Optional `whitelist` entries are saved (survive compaction). \
-                     Returns the slider readout."
+                name: orz_assurance::tool_names::CONTEXT_MANAGE_TOOL_NAME.to_string(),
+                description: "Manage your own context window. mode=compress: open a \
+                     compression window (≤3 rounds), then write a [SEMANTIC_SUMMARY] \
+                     block to fold older context; optional `whitelist` entries survive \
+                     compaction. mode=clear: move ALL prior context out of the window \
+                     and continue on the ledger — requires `handover` (≤8K), which is \
+                     written to the blackboard first. mode=clear_all: one-shot wipe of \
+                     the context window AND the blackboard (plan/notes/findings), then \
+                     your `handover` becomes the only blackboard entry. Nothing is \
+                     destroyed: cleared content stays in .gsa/journal and can be \
+                     re-read. Returns a readout."
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
+                        "mode": {
+                            "type": "string",
+                            "enum": ["compress", "clear", "clear_all"],
+                            "description": "compress = 开压缩窗口（知情发起，承继 0ap 管线）；\
+                             clear = 主动清零（边界前全部内容移出当前窗口；未销毁、可回放）；\
+                             clear_all = 一键清理（上下文清零＋黑板三分区清空，handover 成为\
+                             清空后板面唯一条目）。",
+                        },
                         "whitelist": {
                             "type": "array",
                             "items": { "type": "string" },
                             "maxItems": 16,
-                            "description": "0am FR4（2026-09-20）：可选——处理压缩\
+                            "description": "0am FR4 承继（mode=compress 可选）——处理压缩\
                              时额外保存的白名单条目（跨压缩保留的任务事实：常驻\
                              前言区、机械压缩跳过、best-effort 存档 .gsa）。累计\
                              上限 16K 字符；超限/空条目跳过并在响应中如实说明。",
                         },
+                        "handover": {
+                            "type": "string",
+                            "maxLength": 8192,
+                            "description": "mode=clear／clear_all **必填**（防裸清护栏）——\
+                             交接摘要（纯文本 ≤8K）：目标／已完成／关键决策／未决／下一步。\
+                             机械层先将其写入黑板（notes 分区【交接摘要】条目；\
+                             clear_all 在清空板面之后写入＝板面唯一条目）再施加边界；\
+                             缺失或为空 ⇒ 清零被拒绝。",
+                        },
+                        "keep_recent_rounds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 16,
+                            "description": "mode=clear／clear_all 可选（默认 0）——保留边界前\
+                             最近 N 个完整轮次在窗口内（0＝仅留当前轮）。",
+                        },
                     },
+                    "required": ["mode"],
                 }),
             });
         }
@@ -5392,11 +5464,11 @@ mod tests {
             "write section param description must mention findings exactly once: \
              {write_section_desc}"
         );
-        // section 枚举三值（read/write 两侧）。
+        // section 枚举四值（0da S2：+all，仅与 op=clear 组合合法；read 侧无 all）。
         let write_enum = write.parameters["properties"]["section"]["enum"].clone();
         assert_eq!(
             write_enum,
-            serde_json::json!(["plan", "notes", "findings"]),
+            serde_json::json!(["plan", "notes", "findings", "all"]),
             "{write_enum}"
         );
         let read_enum = read.parameters["properties"]["section"]["enum"].clone();

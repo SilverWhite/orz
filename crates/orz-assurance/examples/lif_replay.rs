@@ -354,7 +354,15 @@ fn parse_run(path: &Path) -> (String, Vec<Step>) {
                 let outcome = classify_event_outcome(&payload);
                 let wall_ms = wall_ms_of(&payload);
                 // 0am 审查处置（2026-10-03）：补 ToolEvent 176 批新增字段（legacy 语义不变）。
-                steps.push(Step::Tool(ts, ToolEvent { outcome, wall_ms, policy_denied: false, routing: None }));
+                steps.push(Step::Tool(
+                    ts,
+                    ToolEvent {
+                        outcome,
+                        wall_ms,
+                        policy_denied: false,
+                        routing: None,
+                    },
+                ));
             }
             _ => {}
         }
