@@ -136,6 +136,38 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.194 2026-10-11 248 批 提交推送（246–247 累积件）与 0.9.0 发行（**提交推送＋发行批**，零源码、计数不变 59）
+
+- **用户令**：「请先进行提交与推送吧，并发行0.9.0」。沿 244／224／195／183／156 批形态。
+- **推送**：orz 子树 `316107f6..a942d6f3`（2 提交：`af338387` 246 落码＝0cy S2＋摩擦④护栏收口／`a942d6f3` 247 bump 0.8.16→0.9.0）→ `cli/feat/fusion-architecture` exit 0；父仓 246–247 累积落账件 → `origin/main`（提交 `见本批`）。推送前两仓均快进（远端 `feat/fusion-architecture`＝`316107f6`、`main`＝`dce03a03`）。
+- **打包（`rel-248-stage`，沿 244／224／195／183／156／122 形态）**：两侧各 **6 entries**（三件套＋`README.md`＋`SHA256SUMS`＋`carrier-manifest.json`）；包内六件与在役载体 **6/6 MATCH**；manifest `kind=orz-carrier-manifest` `version=0.9.0`；包内 README 由 0.8.16 版改写为 **0.9.0 版**（新增 0.9.0 概要段＋0.9.0 详解节＝0cy `.gsa` 会话卫生 D1–D8，版本信息行改源码 `a942d6f3`）。
+- **资产**：`orz-0.9.0-windows-x86_64.zip` 28,436,427 `f8716854…`／`orz-0.9.0-linux-x86_64.tar.gz` 37,697,953 `8529e090…`／顶层 `SHA256SUMS` 191 B `78ab2e6b…`。
+- **在役载体真值（与 247 批账面逐位一致）**：WIN `orz.exe` 58,353,152 `0c07208d…`／`orz-signer.exe` 6,740,480 `f7bac89a…`／`orz-acaf-provision.exe` 6,640,128 `93cafd3c…`；LIN `orz` 117,188,296 **`1ce40857…`（身份门值）**／`orz-signer` 1,397,512 `7cf5dbe2…`／`orz-acaf-provision` 1,215,928 `2ee04153…`。
+- **版本核证**：包内 `orz.exe --build-info` ＝ `version=0.9.0 os=windows arch=x86_64 profile=release`（rc 0）；双载体字节面＝`0.9.0` 在场（WIN 18／LIN 6）、`0.8.16`／`0.8.15` 各 0 处。
+- **发行**：双平台包＋`SHA256SUMS` 作 **GitHub Release `v0.9.0`**（`--target main`，轻量 tag＝本档所在提交；发布后为 **Latest**）；服务端回读与回下载复核随后续补记（沿 224 → 225／244 → 245 先例）。
+- **台账**：本卷；[`248 批档`](audits/248_SUBMIT_PUSH_AND_RELEASE_V090_2026-10-11.md)；BACKLOG（计数行＋本批指针行）；TODO（计数行）；索引头行 v4.219 → v4.220；README 发布面对齐 0.9.0（Linux 解包文件名＋最新 release 链接）。
+- 关键词：248 批、提交推送、GitHub Release v0.9.0、rel-248-stage、6/6 MATCH、README 发布面对齐、0cy、`.gsa` 会话卫生、计数 59 不变、索引 v4.220。
+
+### 1.193 2026-10-11 247 批 0.9.0 双平台载体重建进体＝0cy S3（**重建批**，零源码语义增量、计数不变 59）
+
+- **用户令**：「请进行重建吧，本次版本号为0.9.0」。沿 243/218/194 批形态。
+- **源冻结**：orz `a942d6f3`（`af338387` 246 落码＝0cy S2＋摩擦④护栏收口＋bump 0.8.16→0.9.0 恰两行、locked exit 0）；未推送。
+- **双平台**：WIN `build_orz.ps1 -Release -Jobs 2` 3m21s、MATCH 3/3、`.0.8.16-bak` 链、`--build-info`＝`0.9.0 os=windows` rc0、ACAF 重 provision（`f7bac89a…`↔signer 逐位一致、keystore 未动、bak-20261011-247）；LIN docker rust:1.97-slim trixie 脚本 exit 0（`MSYS_NO_PATHCONV=1` 预注一次通过；docker 守护进程起批未启动→拉起 t+5s 就绪，如实记）、MATCH 3/3 直写换装位、static-pie×3、alpine/bookworm 双冒烟 `0.9.0 os=linux` rc0；双 manifest 刷新。
+- **字节判据**：0cy 面全命中＝`ORZ_GSA_ARCHIVE_ROOT` 0→2/0→2、`ORZ_GSA_HYGIENE` 0→1/0→1、`session-archive-package-v0.3` 0→1/0→1、`footprint` 0→9/0→46、`gsa hygiene sweep` 0→1/0→1；v0.2 2→1（兼容位，如实记）；243/218 窗保留面逐项持平（`clear_all` 27/28、`context_manage` 3/3、`handover` 38/27 等）；`findings` 92→96＝增长面非回归；负例 `cursor_agent` 0。
+- **冒烟＋0cy 活体首触**：WIN fake-provider ×2 rc0（`RUN-CLI-6acadf82`/`6acadf8f`，scratch `D:/tb-eval/smoke-247`——D:\CLI 工作区级收卷属 S4 判据面不在冒烟半触发）；第二轮 `gsa hygiene sweep: swept ["6acadf82"]; shared→Some("6acadf82")`＝run 源删除＋`archives/6acadf82.json.gz`（v0.3 四键核验齐）＋`ARC-6acadf82-1` 回执豁免保留；`dogfood_launch -DryRun` 读 v0.9.0 `0C07208D…`。
+- **身份门**：`EXPECTED_CARRIER_SHA256` `db95ed15…` → `1ce40857…`（注释同步；adapter 未动；语法＋help rc0）。
+- **台账**：本卷；[`247 批档`](audits/247_CARRIER_REBUILD_V090_0CY_S3_2026-10-11.md)；BACKLOG（计数行＋0cy 批序＋入口）；TODO（计数行＋P1 路由＋P1-0cy 三勾）；索引 v4.218 → v4.219（头行＋§6 GSA-SESSION-HYGIENE 条目）；`_hdr_new.txt` 删除（238 批落账草稿残留、0DA F3 闭合）。
+- 关键词：247 批、0.9.0 重建、源冻结 `a942d6f3`、0cy S3、启动侧扫描活体首触、`1ce40857…`、static-pie×3、双冒烟 0.9.0、保留面零回归、计数 59 不变、索引 v4.219。
+
+### 1.192 2026-10-11 246 批 0cy S1 设计稿＋S2 落码（**狗粮处理轮 RUN-CLI-6acad03d**，零提交、计数不变 59）
+
+- **用户令**：狗粮轮题面「当前需要处理的内容是0cy……直接将这一项做完，S1中如遇需裁决项可直接进行衡量并裁决」（0da 误题更正后的重发轮；载体 0.8.16、约 38 分钟、`reason: completed`）。
+- **S1 设计稿**：[`GSA_SESSION_HYGIENE_DESIGN_2026-10-11.md`](GSA_SESSION_HYGIENE_DESIGN_2026-10-11.md)（146 行）＋自裁 D1–D8（收卷删除单点＝启动侧扫描／非存活∧非当前／足迹逐件进包 ARC 豁免／包 v0.3 先写后删＋合并防丢／零新事件零新字段／`ORZ_GSA_ARCHIVE_ROOT`＋`ORZ_GSA_HYGIENE` 双 env／unarchive 按需恢复＋delete 扩面／ledger 路径不变＋共享件 winner）。
+- **S2 落码**：orz 3 文件 +1,706/−67（`acp_server.rs` 新节九函数＋接线／`orz-bin` run() 起点／`orz-web` env 同口径）；钉 N1–N8 全绿；读数＝host lib 单线程 362/1（唯一败＝**摩擦④ permission 护栏样本欠跟 `context_manage`**——0cz S2 桥臂漏登、基线固有，登记不修避免跨批冲突）＋web 47/0＋bin check 净。
+- **摩擦六条**（档 §5）：rustfmt 版本差误触 14 文件已回退／宿主资源限（OOM/磁盘满，`CARGO_INCREMENTAL=0`＋清 incremental 缓解）／负载敏感族 5 项（在案）／护栏欠跟→**247 进件收口**／两类既有测试教训（修 3 项）／0DA F2 闭合＋F1 前提重立。
+- **台账**：本卷；[`246 批档`](audits/246_0CY_S2_GSA_SESSION_HYGIENE_2026-10-11.md)；BACKLOG/TODO/索引台账行随 247 批补登记（246 当批沿 0da 先例「报告即留痕」未动台账）。
+- 关键词：246 批、0cy S1、0cy S2、狗粮轮、D1–D8 自裁、N1–N8、host 362/1、摩擦④登记、计数 59 不变。
+
 ### 1.191 2026-10-11 245 补记 0.8.16 发行回读核证（**回读核证批**，零源码零改动、计数不变 59）
 
 - **性质**：244 批 §3「服务端回读与完整回下载复核随后续补记」的兑现（沿 224 → 225 补记先例）。
