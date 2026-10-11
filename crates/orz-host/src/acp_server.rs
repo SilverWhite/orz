@@ -712,6 +712,9 @@ struct PendingArchiveTicket {
     /// （`session_archive` 事件带 `incremental: true`），`false` = 会话关闭
     /// 归档（原有口径）。
     incremental: bool,
+    /// 0cy：收尾包是否收集足迹全量快照（close 票＝true；增量票＝false——
+    /// 增量包保持轻量，收卷/关闭侧负责全量）。
+    include_footprint: bool,
 }
 
 /// P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §11.3/§12 R3）：会话关闭/
@@ -727,7 +730,7 @@ struct PendingArchiveTicket {
 /// 归档主实现（`incremental` = 本次是否为里程碑增量归档）。
 ///
 /// 动态上下文滑块 S1（2026-09-15，设计 §3.5）：包内改为**信封**结构——
-/// `{"schema":"session-archive-package-v0.2","conversation":<sidecar 原文>,"archive_keys":{…}}`；
+/// `{"schema":"session-archive-package-v0.3","conversation":<sidecar 原文>,"archive_keys":{…},"footprint":{…}}`；
 /// `conversation` 成员是把磁盘 sidecar 的**原始字节原样嵌为 JSON 成员值**
 /// （不 parse→re-serialize，保证「纯打包零内容变换」不变量仍成立），
 /// `archive_keys` 为三键互标段（机械派生，见 `build_archive_keys`）。
@@ -741,19 +744,29 @@ async fn archive_session_package(
     prompt_count: u64,
     trust_policy: crate::session::TrustPolicy,
     incremental: bool,
+    include_footprint: bool,
     explicit_runs: &[String],
 ) -> Option<PackagedSessionArchive> {
     // 侧车缺失 ⇒ None（无可归档内容，与既有语义一致）；重构路径走
     // `archive_raw_session_package`（0br S3 按需归档）。
     let raw = std::fs::read(conversation_sidecar_path(base_dir, session_id)).ok()?;
+    // 0cy：收尾侧（close/headless）随包收集足迹全量快照（不删源；删改只在
+    // 启动侧扫描——设计稿 §2/D1）。
+    let footprint = if include_footprint {
+        let suffix: String = session_id.chars().take(8).collect();
+        Some(collect_session_footprint(base_dir, &suffix, false).to_json(base_dir))
+    } else {
+        None
+    };
     archive_raw_session_package(
         base_dir,
         session_id,
-        raw,
+        Some(raw),
         prompt_count,
         trust_policy,
         incremental,
         explicit_runs,
+        footprint,
     )
     .await
 }
@@ -764,11 +777,12 @@ async fn archive_session_package(
 async fn archive_raw_session_package(
     base_dir: &Path,
     session_id: &str,
-    raw: Vec<u8>,
+    raw: Option<Vec<u8>>,
     prompt_count: u64,
     trust_policy: crate::session::TrustPolicy,
     incremental: bool,
     explicit_runs: &[String],
+    footprint: Option<serde_json::Value>,
 ) -> Option<PackagedSessionArchive> {
     let base_dir = base_dir.to_path_buf();
     let session_id = session_id.to_string();
@@ -779,9 +793,10 @@ async fn archive_raw_session_package(
         package_archive_raw(
             &package_base_dir,
             &package_session_id,
-            &raw,
+            raw.as_deref(),
             prompt_count,
             &explicit,
+            footprint.as_ref(),
         )
     })
     .await;
@@ -883,11 +898,12 @@ pub async fn archive_session_on_demand(base_dir: &Path, session8: &str) -> Resul
     let Some(pkg) = archive_raw_session_package(
         base_dir,
         session8,
-        raw,
+        Some(raw),
         1,
         crate::session::TrustPolicy::Enforce,
         false,
         &explicit,
+        None,
     )
     .await
     else {
@@ -914,13 +930,1029 @@ pub async fn archive_session_on_demand(base_dir: &Path, session8: &str) -> Resul
 
 /// 归档产物目录（与 `package_archive_raw` 同一构造，禁第二套口径）。
 fn on_demand_archives_dir(base_dir: &Path) -> PathBuf {
+    archives_root(base_dir)
+}
+
+// ---------------------------------------------------------------------------
+// 0cy（2026-10-11）：.gsa 会话卫生——收卷（rollup）与启动侧遗留扫描（sweep）。
+//
+// 设计稿：docs/GSA_SESSION_HYGIENE_DESIGN_2026-10-11.md（D1–D8 裁决在案）。
+// 语义：新会话启动＝**唯一删改路径**——非存活、非当前的会话足迹被收卷进
+// `archives/<s8>.json.gz`（信封 v0.3，`footprint` 全量快照），活区清空；
+// 收尾侧（close/headless/on-demand）只升级包（收集足迹），不删源；共享
+// 滚动件（`ledger/current.md`、`session/terminal/*.log`）归「最近被收卷
+// 会话」（winner），winner 是当前会话（恢复场景）或无候选人时保留。
+// ---------------------------------------------------------------------------
+
+/// 0cy：归档根——`ORZ_GSA_ARCHIVE_ROOT` 覆盖（绝对路径原样；相对路径对
+/// 工作区根解析），缺省 `{base}/.gsa/archives`。净室重跑可由宿主把归档根
+/// 移出工作区（设计稿 §6/D6）。
+pub fn archives_root(base_dir: &Path) -> PathBuf {
+    resolve_archives_root(
+        base_dir,
+        std::env::var("ORZ_GSA_ARCHIVE_ROOT").ok().as_deref(),
+    )
+}
+
+/// 归档根解析（纯函数，env 值注入——钉子免 env 竞态；D6 口径）。
+fn resolve_archives_root(base_dir: &Path, env_value: Option<&str>) -> PathBuf {
+    if let Some(raw) = env_value {
+        let raw = raw.trim();
+        if !raw.is_empty() {
+            let p = PathBuf::from(raw);
+            return if p.is_absolute() { p } else { base_dir.join(p) };
+        }
+    }
     base_dir.join(".gsa").join("archives")
 }
 
+/// 0cy：会话卫生开关——`ORZ_GSA_HYGIENE=0|off|false` 关断启动侧扫描
+/// （逃生舱；缺省开）。测试走注入变体（`*_with`），不触 env。
+fn hygiene_enabled() -> bool {
+    hygiene_enabled_from(std::env::var("ORZ_GSA_HYGIENE").ok().as_deref())
+}
+
+/// 开关解析（纯函数，env 值注入——钉子免 env 竞态）。
+fn hygiene_enabled_from(value: Option<&str>) -> bool {
+    match value {
+        Some(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "off" | "false"
+        ),
+        None => true,
+    }
+}
+
+/// 归档包读取上限（与 web 只读投影同口径：64 MiB 压缩 / 128 MiB 解压）。
+const HYGIENE_ARCHIVE_MAX_COMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
+const HYGIENE_ARCHIVE_MAX_RAW_BYTES: u64 = 128 * 1024 * 1024;
+/// 足迹单件上限（防病态膨胀；超限 ⇒ incomplete ⇒ 不删源）。
+const FOOTPRINT_FILE_CAP_BYTES: u64 = 32 * 1024 * 1024;
+/// 足迹单会话总量上限（同上：超限 ⇒ incomplete ⇒ 不删源）。
+const FOOTPRINT_TOTAL_CAP_BYTES: usize = 128 * 1024 * 1024;
+
+/// 足迹单件（文本面）。
+#[derive(Debug, Clone)]
+struct FootprintFile {
+    path: PathBuf,
+    text: String,
+}
+
+/// run 目录足迹（相对文件名 → 文本）。
+#[derive(Debug, Clone)]
+struct FootprintRun {
+    id: String,
+    dir: PathBuf,
+    files: Vec<(String, String)>,
+}
+
+/// 会话足迹收集结果（`incomplete` ⇒ 禁止删源——宁留不丢）。
+#[derive(Debug, Default, Clone)]
+struct SessionFootprint {
+    ledger: Option<FootprintFile>,
+    orientation: Option<FootprintFile>,
+    activation: Option<FootprintFile>,
+    grill: Vec<FootprintFile>,
+    runs: Vec<FootprintRun>,
+    compaction: Vec<FootprintFile>,
+    blocks: Vec<FootprintFile>,
+    terminal: Vec<FootprintFile>,
+    incomplete: bool,
+}
+
+fn footprint_rel(base_dir: &Path, path: &Path) -> String {
+    path.strip_prefix(base_dir)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn footprint_file_json(base_dir: &Path, f: &FootprintFile) -> serde_json::Value {
+    serde_json::json!({ "path": footprint_rel(base_dir, &f.path), "text": f.text })
+}
+
+fn footprint_bytes(fp: &SessionFootprint) -> usize {
+    let mut bytes = 0usize;
+    for f in fp
+        .grill
+        .iter()
+        .chain(fp.compaction.iter())
+        .chain(fp.blocks.iter())
+        .chain(fp.terminal.iter())
+    {
+        bytes += f.text.len();
+    }
+    for opt in [
+        fp.ledger.as_ref(),
+        fp.orientation.as_ref(),
+        fp.activation.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        bytes += opt.text.len();
+    }
+    for run in &fp.runs {
+        for (_, text) in &run.files {
+            bytes += text.len();
+        }
+    }
+    bytes
+}
+
+impl SessionFootprint {
+    fn is_empty(&self) -> bool {
+        self.ledger.is_none()
+            && self.orientation.is_none()
+            && self.activation.is_none()
+            && self.grill.is_empty()
+            && self.runs.is_empty()
+            && self.compaction.is_empty()
+            && self.blocks.is_empty()
+            && self.terminal.is_empty()
+    }
+
+    fn to_json(&self, base_dir: &Path) -> serde_json::Value {
+        let runs: Vec<serde_json::Value> = self
+            .runs
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "id": r.id,
+                    "path": footprint_rel(base_dir, &r.dir),
+                    "files": r.files.iter()
+                        .map(|(name, text)| serde_json::json!({"name": name, "text": text}))
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "collected_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            "ledger": self.ledger.as_ref().map(|f| footprint_file_json(base_dir, f)),
+            "orientation": self.orientation.as_ref().map(|f| footprint_file_json(base_dir, f)),
+            "activation": self.activation.as_ref().map(|f| footprint_file_json(base_dir, f)),
+            "grill": self.grill.iter().map(|f| footprint_file_json(base_dir, f)).collect::<Vec<_>>(),
+            "runs": runs,
+            "compaction": self.compaction.iter().map(|f| footprint_file_json(base_dir, f)).collect::<Vec<_>>(),
+            "blocks": self.blocks.iter().map(|f| footprint_file_json(base_dir, f)).collect::<Vec<_>>(),
+            "terminal": self.terminal.iter().map(|f| footprint_file_json(base_dir, f)).collect::<Vec<_>>(),
+            "counts": {
+                "runs": self.runs.len(),
+                "compaction": self.compaction.len(),
+                "blocks": self.blocks.len(),
+                "grill": self.grill.len(),
+                "terminal": self.terminal.len(),
+                "bytes": footprint_bytes(self),
+            },
+        })
+    }
+}
+
+/// 足迹读取结果：不存在／不可读（⇒ incomplete，不删源）／文本。
+enum FootprintRead {
+    Absent,
+    Unreadable,
+    Text(String),
+}
+
+fn read_footprint_file(path: &Path) -> FootprintRead {
+    if let Ok(meta) = std::fs::metadata(path)
+        && meta.len() > FOOTPRINT_FILE_CAP_BYTES
+    {
+        tracing::warn!(
+            "footprint file over cap ({} bytes, cap {}): {}",
+            meta.len(),
+            FOOTPRINT_FILE_CAP_BYTES,
+            path.display()
+        );
+        return FootprintRead::Unreadable;
+    }
+    match std::fs::read(path) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(text) => FootprintRead::Text(text),
+            Err(_) => {
+                tracing::warn!("footprint file not UTF-8: {}", path.display());
+                FootprintRead::Unreadable
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => FootprintRead::Absent,
+        Err(e) => {
+            tracing::warn!("footprint file unreadable ({}): {e}", path.display());
+            FootprintRead::Unreadable
+        }
+    }
+}
+
+fn read_to_footprint(path: PathBuf, incomplete: &mut bool) -> Option<FootprintFile> {
+    match read_footprint_file(&path) {
+        FootprintRead::Text(text) => Some(FootprintFile { path, text }),
+        FootprintRead::Unreadable => {
+            *incomplete = true;
+            None
+        }
+        FootprintRead::Absent => None,
+    }
+}
+
+/// run 目录名 → 会话 8 前缀（`RUN-<s8>-*`／`RST-<s8>-*`／`RUN-CLI-<s8>`）。
+/// `ARC-*`（存档回执）、`RUN-PLAN-*`（--plan 车道）与其它一律 None。
+fn run_dir_session(name: &str) -> Option<String> {
+    let rest = name
+        .strip_prefix("RUN-")
+        .or_else(|| name.strip_prefix("RST-"))?;
+    if rest.starts_with("PLAN-") {
+        return None;
+    }
+    let s = if let Some(cli) = rest.strip_prefix("CLI-") {
+        cli.split('-').next()?
+    } else {
+        rest.split('-').next()?
+    };
+    (!s.is_empty()).then(|| s.to_string())
+}
+
+/// 该 run 目录是否归会话 `s8`（与 `reconstruct_conversation_from_journal`／
+/// `delete_session_on_demand` 同一归属口径）。
+fn run_attributable(name: &str, s8: &str) -> bool {
+    name.starts_with(&format!("RUN-{s8}-"))
+        || name.starts_with(&format!("RST-{s8}-"))
+        || name == format!("RUN-CLI-{s8}")
+}
+
+/// `compaction-<run_id>-<seq>.md` → 会话 8 前缀。
+fn compaction_file_session(name: &str) -> Option<String> {
+    let rest = name.strip_prefix("compaction-")?.strip_suffix(".md")?;
+    let (run_id, _seq) = rest.rsplit_once('-')?;
+    run_dir_session(run_id)
+}
+
+/// 回放块档名 → 会话 8 前缀（`<s8>-block-NNNN.md`／`<s8>-clear.md`）。
+fn blocks_file_session(name: &str) -> Option<String> {
+    if let Some(rest) = name.strip_suffix("-clear.md") {
+        return (!rest.is_empty() && !rest.contains("-block-")).then(|| rest.to_string());
+    }
+    let idx = name.find("-block-")?;
+    (!name[..idx].is_empty()).then(|| name[..idx].to_string())
+}
+
+fn collect_run_files(
+    root: &Path,
+    dir: &Path,
+    depth: u32,
+    out: &mut Vec<(String, String)>,
+    incomplete: &mut bool,
+) {
+    if depth > 5 {
+        *incomplete = true;
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        *incomplete = true;
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_run_files(root, &path, depth + 1, out, incomplete);
+            continue;
+        }
+        let Ok(rel) = path.strip_prefix(root) else {
+            continue;
+        };
+        let name = rel.to_string_lossy().replace('\\', "/");
+        match read_footprint_file(&path) {
+            FootprintRead::Text(text) => out.push((name, text)),
+            FootprintRead::Unreadable => *incomplete = true,
+            FootprintRead::Absent => {}
+        }
+    }
+}
+
+fn collect_run_dir(id: &str, dir: &Path, incomplete: &mut bool) -> FootprintRun {
+    let mut files: Vec<(String, String)> = Vec::new();
+    collect_run_files(dir, dir, 0, &mut files, incomplete);
+    FootprintRun {
+        id: id.to_string(),
+        dir: dir.to_path_buf(),
+        files,
+    }
+}
+
+/// 收集会话足迹（设计稿 §3.1 清单）。`include_shared` 仅对 winner 会话为真
+/// （共享滚动件：台账与终端溢出日志）。
+fn collect_session_footprint(
+    base_dir: &Path,
+    session8: &str,
+    include_shared: bool,
+) -> SessionFootprint {
+    let gsa = base_dir.join(".gsa");
+    let mut incomplete = false;
+    let mut fp = SessionFootprint::default();
+    fp.orientation = read_to_footprint(
+        gsa.join("orientation").join(format!("{session8}.json")),
+        &mut incomplete,
+    );
+    fp.activation = read_to_footprint(
+        gsa.join("activations").join(format!("{session8}.json")),
+        &mut incomplete,
+    );
+    // grill：会话前缀的 jsonl（SKILL.md 模板除外）。
+    if let Ok(entries) = std::fs::read_dir(gsa.join("grill")) {
+        let prefix = format!("{session8}-");
+        let mut paths: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.extension().map(|e| e == "jsonl").unwrap_or(false)
+                    && p.file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s == session8 || s.starts_with(&prefix))
+                        .unwrap_or(false)
+            })
+            .collect();
+        paths.sort();
+        for path in paths {
+            if let Some(f) = read_to_footprint(path, &mut incomplete) {
+                fp.grill.push(f);
+            }
+        }
+    }
+    // runs：RUN-/RST-/RUN-CLI-（ARC- 回执豁免——不入足迹、不删）。
+    if let Ok(entries) = std::fs::read_dir(gsa.join("runs")) {
+        let mut dirs: Vec<(String, PathBuf)> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .filter_map(|p| {
+                let name = p.file_name()?.to_str()?.to_string();
+                run_attributable(&name, session8).then_some((name, p))
+            })
+            .collect();
+        dirs.sort_by(|a, b| a.0.cmp(&b.0));
+        for (id, dir) in dirs {
+            fp.runs.push(collect_run_dir(&id, &dir, &mut incomplete));
+        }
+    }
+    // compaction/*.md（按 run 归属）。
+    if let Ok(entries) = std::fs::read_dir(gsa.join("compaction")) {
+        let mut paths: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| compaction_file_session(n).as_deref() == Some(session8))
+                        .unwrap_or(false)
+            })
+            .collect();
+        paths.sort();
+        for path in paths {
+            if let Some(f) = read_to_footprint(path, &mut incomplete) {
+                fp.compaction.push(f);
+            }
+        }
+    }
+    // compaction/blocks/<s8>-*（回放块档）。
+    if let Ok(entries) = std::fs::read_dir(gsa.join("compaction").join("blocks")) {
+        let mut paths: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| blocks_file_session(n).as_deref() == Some(session8))
+                        .unwrap_or(false)
+            })
+            .collect();
+        paths.sort();
+        for path in paths {
+            if let Some(f) = read_to_footprint(path, &mut incomplete) {
+                fp.blocks.push(f);
+            }
+        }
+    }
+    // 共享滚动件（仅 winner）。
+    if include_shared {
+        fp.ledger = read_to_footprint(gsa.join("ledger").join("current.md"), &mut incomplete);
+        if let Ok(entries) = std::fs::read_dir(gsa.join("session").join("terminal")) {
+            let mut paths: Vec<PathBuf> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_file() && p.extension().map(|e| e == "log").unwrap_or(false))
+                .collect();
+            paths.sort();
+            for path in paths {
+                if let Some(f) = read_to_footprint(path, &mut incomplete) {
+                    fp.terminal.push(f);
+                }
+            }
+        }
+    }
+    if footprint_bytes(&fp) > FOOTPRINT_TOTAL_CAP_BYTES {
+        tracing::warn!(
+            "session footprint over total cap ({} > {}): {session8}",
+            footprint_bytes(&fp),
+            FOOTPRINT_TOTAL_CAP_BYTES
+        );
+        incomplete = true;
+    }
+    fp.incomplete = incomplete;
+    fp
+}
+
+/// 列表成员按 key 归并（旧在前、盘面/新值覆盖同 key、新独有追加）。
+fn merge_keyed_list(
+    old: Option<&serde_json::Value>,
+    new: Option<&serde_json::Value>,
+    key: &str,
+) -> serde_json::Value {
+    let list_of = |v: Option<&serde_json::Value>| -> Vec<serde_json::Value> {
+        v.and_then(|v| v.as_array()).cloned().unwrap_or_default()
+    };
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for item in list_of(old).into_iter().chain(list_of(new)) {
+        let k = item
+            .get(key)
+            .and_then(|k| k.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if let Some(&i) = index.get(&k) {
+            out[i] = item;
+        } else {
+            index.insert(k, out.len());
+            out.push(item);
+        }
+    }
+    serde_json::Value::Array(out)
+}
+
+/// 重算 footprint counts（合并后与成员面保持一致）。
+fn footprint_counts(v: &serde_json::Value) -> serde_json::Value {
+    let list_len = |k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0)
+    };
+    let mut bytes = 0usize;
+    for key in ["grill", "compaction", "blocks", "terminal"] {
+        for item in v.get(key).and_then(|x| x.as_array()).into_iter().flatten() {
+            bytes += item
+                .get("text")
+                .and_then(|t| t.as_str())
+                .map(str::len)
+                .unwrap_or(0);
+        }
+    }
+    for key in ["ledger", "orientation", "activation"] {
+        if let Some(t) = v
+            .get(key)
+            .and_then(|x| x.get("text"))
+            .and_then(|t| t.as_str())
+        {
+            bytes += t.len();
+        }
+    }
+    if let Some(runs) = v.get("runs").and_then(|x| x.as_array()) {
+        for run in runs {
+            for f in run
+                .get("files")
+                .and_then(|x| x.as_array())
+                .into_iter()
+                .flatten()
+            {
+                bytes += f
+                    .get("text")
+                    .and_then(|t| t.as_str())
+                    .map(str::len)
+                    .unwrap_or(0);
+            }
+        }
+    }
+    serde_json::json!({
+        "runs": list_len("runs"),
+        "compaction": list_len("compaction"),
+        "blocks": list_len("blocks"),
+        "grill": list_len("grill"),
+        "terminal": list_len("terminal"),
+        "bytes": bytes,
+    })
+}
+
+/// 合并旧包 footprint 与新收集结果：按 key 归并、盘面覆盖——旧成员不因
+/// 重包而丢（设计稿 §4.2；覆盖「删源中途崩溃重试」「close 后恢复再收卷」）。
+fn merge_footprint(old: &serde_json::Value, new: serde_json::Value) -> serde_json::Value {
+    let Some(new_obj) = new.as_object() else {
+        return new;
+    };
+    let mut out = new_obj.clone();
+    for key in ["ledger", "orientation", "activation"] {
+        let keep_new = out.get(key).map(|v| !v.is_null()).unwrap_or(false);
+        if !keep_new
+            && let Some(v) = old.get(key)
+            && !v.is_null()
+        {
+            out.insert(key.to_string(), v.clone());
+        }
+    }
+    for key in ["grill", "compaction", "blocks", "terminal"] {
+        let merged = merge_keyed_list(old.get(key), new_obj.get(key), "path");
+        out.insert(key.to_string(), merged);
+    }
+    let runs = merge_keyed_list(old.get("runs"), new_obj.get("runs"), "id");
+    out.insert("runs".to_string(), runs);
+    let counts = footprint_counts(&serde_json::Value::Object(out.clone()));
+    out.insert("counts".to_string(), counts);
+    serde_json::Value::Object(out)
+}
+
+/// 读取归档包全文（gzip → JSON），带压缩/解压双上限；不存在/损坏 ⇒ None。
+fn read_archive_document(base_dir: &Path, session8: &str) -> Option<serde_json::Value> {
+    use std::io::Read;
+    let path = archives_root(base_dir).join(format!("{session8}.json.gz"));
+    let meta = std::fs::metadata(&path).ok()?;
+    if meta.len() > HYGIENE_ARCHIVE_MAX_COMPRESSED_BYTES {
+        tracing::warn!("archive package over compressed cap: {}", path.display());
+        return None;
+    }
+    let file = std::fs::File::open(&path).ok()?;
+    let mut decoder = flate2::read::GzDecoder::new(file);
+    let mut raw = Vec::new();
+    if std::io::Read::by_ref(&mut decoder)
+        .take(HYGIENE_ARCHIVE_MAX_RAW_BYTES + 1)
+        .read_to_end(&mut raw)
+        .is_err()
+    {
+        tracing::warn!("archive package gunzip failed: {}", path.display());
+        return None;
+    }
+    if raw.len() as u64 > HYGIENE_ARCHIVE_MAX_RAW_BYTES {
+        tracing::warn!("archive package over raw cap: {}", path.display());
+        return None;
+    }
+    serde_json::from_slice(&raw).ok()
+}
+
+/// 单会话收集与扫描结果（best-effort 报告面）。
+#[derive(Debug, Default, Clone)]
+struct RollupOutcome {
+    packaged: bool,
+    archive_path: Option<PathBuf>,
+    deleted: usize,
+    notes: Vec<String>,
+}
+
+/// 删除足迹源（包写成功后才调用）。返回删除成功条目数；失败逐件 warn。
+fn delete_session_sources(
+    base_dir: &Path,
+    session8: &str,
+    fp: &SessionFootprint,
+    include_shared: bool,
+) -> usize {
+    fn remove_file_counted(path: &Path) -> usize {
+        match std::fs::remove_file(path) {
+            Ok(_) => 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(e) => {
+                tracing::warn!("session hygiene delete failed ({}): {e}", path.display());
+                0
+            }
+        }
+    }
+    fn remove_dir_counted(path: &Path) -> usize {
+        match std::fs::remove_dir_all(path) {
+            Ok(_) => 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(e) => {
+                tracing::warn!("session hygiene delete failed ({}): {e}", path.display());
+                0
+            }
+        }
+    }
+    let mut deleted = 0usize;
+    if let Some(f) = &fp.orientation {
+        deleted += remove_file_counted(&f.path);
+    }
+    if let Some(f) = &fp.activation {
+        deleted += remove_file_counted(&f.path);
+    }
+    for f in fp
+        .grill
+        .iter()
+        .chain(fp.compaction.iter())
+        .chain(fp.blocks.iter())
+    {
+        deleted += remove_file_counted(&f.path);
+    }
+    if include_shared {
+        if let Some(f) = &fp.ledger {
+            deleted += remove_file_counted(&f.path);
+        }
+        for f in &fp.terminal {
+            deleted += remove_file_counted(&f.path);
+        }
+    }
+    for run in &fp.runs {
+        deleted += remove_dir_counted(&run.dir);
+    }
+    deleted += remove_file_counted(&conversation_sidecar_path(base_dir, session8));
+    deleted += remove_file_counted(&archive_milestone_path(base_dir, session8));
+    deleted
+}
+
+/// 收卷单会话：收集足迹 → 合并旧包 → 原子写 → 成功后删源（先写后删）。
+async fn rollup_session(
+    base_dir: &Path,
+    session8: &str,
+    trust_policy: crate::session::TrustPolicy,
+    include_shared: bool,
+) -> RollupOutcome {
+    let mut outcome = RollupOutcome::default();
+    let mut fp = collect_session_footprint(base_dir, session8, include_shared);
+    // 对话原文：磁盘侧车 → journal 重构 → 旧包 conversation 回填。
+    let old_doc = read_archive_document(base_dir, session8);
+    let mut explicit: Vec<String> = Vec::new();
+    let sidecar_path = conversation_sidecar_path(base_dir, session8);
+    let mut raw: Option<Vec<u8>> = match std::fs::read(&sidecar_path) {
+        Ok(bytes) => {
+            // 侧车损坏（半写/截断）⇒ 视为缺席：走 journal 重构回退；重构也
+            // 不成且足迹为空才早退（不删源）。解析通过才算「可打包原文」。
+            if serde_json::from_slice::<StoredConversation>(&bytes).is_ok() {
+                Some(bytes)
+            } else {
+                outcome.notes.push("侧车损坏——改走 journal 重构".into());
+                None
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            tracing::warn!(
+                "conversation sidecar unreadable ({}): {e}",
+                sidecar_path.display()
+            );
+            fp.incomplete = true;
+            None
+        }
+    };
+    if raw.is_none()
+        && let Some((conv, runs)) = reconstruct_conversation_from_journal(base_dir, session8)
+    {
+        if let Ok(mut value) = serde_json::to_value(&conv) {
+            value["reconstructed_from_journal"] = serde_json::Value::Bool(true);
+            if let Ok(bytes) = serde_json::to_vec(&value) {
+                raw = Some(bytes);
+            }
+        }
+        explicit = runs;
+    }
+    if raw.is_none()
+        && let Some(conv) = old_doc
+            .as_ref()
+            .and_then(|d| d.get("conversation"))
+            .filter(|c| !c.is_null())
+        && let Ok(bytes) = serde_json::to_vec(conv)
+    {
+        raw = Some(bytes);
+        outcome.notes.push("conversation 由旧包回填".into());
+    }
+    if raw.is_none() && fp.is_empty() {
+        outcome.notes.push("无可收卷内容".into());
+        return outcome;
+    }
+    // footprint：旧包成员与新收集结果归并（防重包丢旧）。
+    let new_fp = fp.to_json(base_dir);
+    let footprint_json = match old_doc
+        .as_ref()
+        .and_then(|d| d.get("footprint"))
+        .filter(|f| !f.is_null())
+    {
+        Some(old_fp) => merge_footprint(old_fp, new_fp),
+        None => new_fp,
+    };
+    let prompt_count = fp.runs.len() as u64;
+    let pkg = archive_raw_session_package(
+        base_dir,
+        session8,
+        raw,
+        prompt_count,
+        trust_policy,
+        false,
+        &explicit,
+        Some(footprint_json),
+    )
+    .await;
+    let Some(pkg) = pkg else {
+        outcome.notes.push("打包失败（无成品）——源保留".into());
+        return outcome;
+    };
+    outcome.archive_path = Some(pkg.path.clone());
+    if pkg.status != "completed" {
+        outcome.notes.push("包写盘失败（含重试）——源保留".into());
+        return outcome;
+    }
+    outcome.packaged = true;
+    if fp.incomplete {
+        outcome.notes.push("足迹收集不完整——禁止删源".into());
+        return outcome;
+    }
+    outcome.deleted = delete_session_sources(base_dir, session8, &fp, include_shared);
+    outcome
+}
+
+/// 启动侧遗留扫描报告（best-effort 面）。
+#[derive(Debug, Default, Clone)]
+pub struct SweepReport {
+    pub disabled: bool,
+    pub swept: Vec<String>,
+    pub shared_moved_to: Option<String>,
+    pub shared_kept: bool,
+    pub notes: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+/// 0cy：启动侧遗留扫描（生产入口——env 开关与惯例信任策略）。
+pub async fn sweep_session_leftovers(
+    base_dir: &Path,
+    keep_session: Option<&str>,
+    live_sessions: &[String],
+) -> SweepReport {
+    sweep_session_leftovers_with(
+        base_dir,
+        keep_session,
+        live_sessions,
+        hygiene_enabled(),
+        crate::session::TrustPolicy::Enforce,
+    )
+    .await
+}
+
+/// 0cy：启动侧遗留扫描（注入变体；钉子用，不触 env）。
+pub(crate) async fn sweep_session_leftovers_with(
+    base_dir: &Path,
+    keep_session: Option<&str>,
+    live_sessions: &[String],
+    enabled: bool,
+    trust_policy: crate::session::TrustPolicy,
+) -> SweepReport {
+    let mut report = SweepReport::default();
+    if !enabled {
+        report.disabled = true;
+        return report;
+    }
+    let candidates = scan_session_footprints(base_dir);
+    // keep / live 归一为 8 字符会话语（磁盘命名口径——调用方可能给全长 id，
+    // 例如 ACP 的 `sess-<uuid>`；不归一会在「同会话重启」时误扫自己）。
+    let keep8: Option<String> = keep_session.map(|k| k.chars().take(8).collect());
+    let live8: Vec<String> = live_sessions
+        .iter()
+        .map(|l| l.chars().take(8).collect())
+        .collect();
+    let swept: Vec<String> = candidates
+        .keys()
+        .filter(|s| keep8.as_deref() != Some(s.as_str()) && !live8.iter().any(|l| l == *s))
+        .cloned()
+        .collect();
+    // 共享滚动件归属：被扫集合 ∪（当前会话，若其已有足迹）中 mtime 最新者；
+    // 存在其他存活会话时一律保留（不夺活会话的台账/日志）。
+    let keep_is_candidate = keep8
+        .as_deref()
+        .map(|k| candidates.contains_key(k))
+        .unwrap_or(false);
+    let other_live = live8.iter().any(|l| Some(l.as_str()) != keep8.as_deref());
+    let mut winner: Option<(String, std::time::SystemTime)> = None;
+    if !other_live {
+        for (s8, mtime) in candidates.iter() {
+            let eligible =
+                swept.contains(s8) || (keep_is_candidate && keep8.as_deref() == Some(s8.as_str()));
+            // 平手取后者（候选按 id 升序迭代 ⇒ 确定性；mtime 同刻仅见于
+            // 同一文件系统时钟粒度内写入）。
+            if eligible && winner.as_ref().map(|(_, t)| mtime >= t).unwrap_or(true) {
+                winner = Some((s8.clone(), *mtime));
+            }
+        }
+    }
+    let winner_id = winner.map(|(s, _)| s);
+    report.shared_kept = winner_id.is_none();
+    for s8 in &swept {
+        let include_shared = winner_id.as_deref() == Some(s8.as_str());
+        let outcome = rollup_session(base_dir, s8, trust_policy, include_shared).await;
+        if outcome.packaged {
+            report.swept.push(s8.clone());
+            if include_shared {
+                report.shared_moved_to = Some(s8.clone());
+            }
+        } else {
+            report
+                .errors
+                .push(format!("{s8}: {}", outcome.notes.join("；")));
+        }
+    }
+    report
+}
+
+/// 扫描活区中的会话 8 前缀全集（含 mtime 最新值）——来源：侧车族文件名、
+/// run 目录名、压缩摘要与回放块档文件名（设计稿 §3.1）。
+fn scan_session_footprints(
+    base_dir: &Path,
+) -> std::collections::BTreeMap<String, std::time::SystemTime> {
+    fn note(
+        map: &mut std::collections::BTreeMap<String, std::time::SystemTime>,
+        s8: &str,
+        time: std::time::SystemTime,
+    ) {
+        map.entry(s8.to_string())
+            .and_modify(|t| {
+                if time > *t {
+                    *t = time;
+                }
+            })
+            .or_insert(time);
+    }
+    fn file_time(path: &Path) -> Option<std::time::SystemTime> {
+        path.metadata().ok().and_then(|m| m.modified().ok())
+    }
+    let gsa = base_dir.join(".gsa");
+    let mut map: std::collections::BTreeMap<String, std::time::SystemTime> =
+        std::collections::BTreeMap::new();
+    for dir_name in ["conversations", "orientation", "activations", "grill"] {
+        let Ok(entries) = std::fs::read_dir(gsa.join(dir_name)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if dir_name == "grill" && !path.extension().map(|e| e == "jsonl").unwrap_or(false) {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if let Some(mtime) = file_time(&path) {
+                note(&mut map, stem, mtime);
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(gsa.join("runs")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Some(s8) = run_dir_session(name) else {
+                continue;
+            };
+            if let Some(mtime) = file_time(&path) {
+                note(&mut map, &s8, mtime);
+            }
+        }
+    }
+    let compaction = gsa.join("compaction");
+    if let Ok(entries) = std::fs::read_dir(&compaction) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Some(s8) = compaction_file_session(name) else {
+                continue;
+            };
+            if let Some(mtime) = file_time(&path) {
+                note(&mut map, &s8, mtime);
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(compaction.join("blocks")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Some(s8) = blocks_file_session(name) else {
+                continue;
+            };
+            if let Some(mtime) = file_time(&path) {
+                note(&mut map, &s8, mtime);
+            }
+        }
+    }
+    map
+}
+
+/// 0cy：按需把归档包内足迹恢复回活区（回档语义；**只补缺件，绝不覆盖**）。
+/// 返回（恢复件数，备注）。路径以包内成员自带 `path`（工作区相对面）为准。
+fn restore_session_from_archive(
+    base_dir: &Path,
+    session8: &str,
+    doc: &serde_json::Value,
+) -> (usize, Vec<String>) {
+    fn write_if_absent(base_dir: &Path, rel: &str, text: &str) -> bool {
+        let path = base_dir.join(rel);
+        if path.exists() {
+            return false;
+        }
+        if let Some(parent) = path.parent()
+            && std::fs::create_dir_all(parent).is_err()
+        {
+            return false;
+        }
+        std::fs::write(&path, text).is_ok()
+    }
+    let mut restored = 0usize;
+    let mut notes: Vec<String> = Vec::new();
+    if let Some(conv) = doc.get("conversation").filter(|c| !c.is_null())
+        && let Ok(text) = serde_json::to_string_pretty(conv)
+        && write_if_absent(
+            base_dir,
+            &format!(".gsa/conversations/{session8}.json"),
+            &text,
+        )
+    {
+        restored += 1;
+    }
+    let Some(fp) = doc.get("footprint").filter(|f| !f.is_null()) else {
+        return (restored, notes);
+    };
+    for key in ["ledger", "orientation", "activation"] {
+        let Some(member) = fp.get(key).filter(|m| !m.is_null()) else {
+            continue;
+        };
+        let (Some(rel), Some(text)) = (
+            member.get("path").and_then(|p| p.as_str()),
+            member.get("text").and_then(|t| t.as_str()),
+        ) else {
+            continue;
+        };
+        if write_if_absent(base_dir, rel, text) {
+            restored += 1;
+        }
+    }
+    for key in ["grill", "compaction", "blocks", "terminal"] {
+        for item in fp.get(key).and_then(|x| x.as_array()).into_iter().flatten() {
+            let (Some(rel), Some(text)) = (
+                item.get("path").and_then(|p| p.as_str()),
+                item.get("text").and_then(|t| t.as_str()),
+            ) else {
+                continue;
+            };
+            if write_if_absent(base_dir, rel, text) {
+                restored += 1;
+            }
+        }
+    }
+    for run in fp
+        .get("runs")
+        .and_then(|x| x.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let Some(rel_dir) = run.get("path").and_then(|p| p.as_str()) else {
+            continue;
+        };
+        for file in run
+            .get("files")
+            .and_then(|x| x.as_array())
+            .into_iter()
+            .flatten()
+        {
+            let (Some(name), Some(text)) = (
+                file.get("name").and_then(|n| n.as_str()),
+                file.get("text").and_then(|t| t.as_str()),
+            ) else {
+                continue;
+            };
+            let rel = format!("{}/{}", rel_dir.trim_end_matches('/'), name);
+            if write_if_absent(base_dir, &rel, text) {
+                restored += 1;
+            }
+        }
+    }
+    if restored == 0 {
+        notes.push("活区无缺件（或包内无足迹段）".into());
+    }
+    (restored, notes)
+}
+
 /// 0br S3 批六（2026-09-25 第七用户令：Web 工作台「回档」）：移除会话的
-/// 归档包（`{s8}.json.gz`＋里程碑水位），会话随即按分组规则回到活跃组——
-/// 运行 journal 与对话侧车一律不动（回档 ≠ 删除）。包缺失 ⇒ Err（与桥
-/// 404 同口径）。
+/// 归档包（`{s8}.json.gz`＋里程碑水位），会话随即按分组规则回到活跃组。
+/// 0cy 升级（设计稿 §7/D7）：**删包前按需恢复**——收卷后的会话其活区
+/// 足迹已随包移出，回档＝把包内缺件（对话/台账/定向/激活/runs/压缩档/
+/// 回放块/grill/终端日志）补回活区，**只补缺件、绝不覆盖**；包不可读 ⇒
+/// Err 拒绝移除（防丢；宁拒不删）。包缺失 ⇒ Err（与桥 404 同口径）。
 pub async fn unarchive_session_on_demand(
     base_dir: &Path,
     session8: &str,
@@ -931,6 +1963,12 @@ pub async fn unarchive_session_on_demand(
     if !pkg.is_file() {
         return Err(format!("会话 {session8} 的归档包不存在（或已清扫）"));
     }
+    let Some(doc) = read_archive_document(base_dir, session8) else {
+        return Err(format!(
+            "会话 {session8} 的归档包无法解析——拒绝移除以免数据丢失"
+        ));
+    };
+    let (restored, notes) = restore_session_from_archive(base_dir, session8, &doc);
     std::fs::remove_file(&pkg).map_err(|e| format!("移除归档包失败: {e}"))?;
     let mut removed = 1u32;
     let milestones = archives_dir.join(format!("{session8}.milestones.json"));
@@ -938,13 +1976,22 @@ pub async fn unarchive_session_on_demand(
         let _ = std::fs::remove_file(&milestones);
         removed += 1;
     }
-    Ok(format!("已移除归档包 {session8}.json.gz（{removed} 件）——会话回活跃组，数据保留"))
+    let note_text = if notes.is_empty() {
+        String::new()
+    } else {
+        format!("；{}", notes.join("；"))
+    };
+    Ok(format!(
+        "已移除归档包 {session8}.json.gz（{removed} 件）——会话回活跃组，数据保留；按需恢复 {restored} 件{note_text}"
+    ))
 }
 
 /// 0br S3 批六（2026-09-25 第七用户令：Web 工作台「删除」）：彻底移除
 /// 一个会话在本工作区 `.gsa` 下的全部数据——归档包＋里程碑水位＋对话
-/// 侧车＋会话名下的全部 run journal（`RUN-{s8}-*` ∪ `ARC-{s8}-*` ∪
-/// `RUN-CLI-{s8}`，与重构归档同一口径再并 ARC 面）。不可恢复——调用方
+/// 侧车＋会话名下的全部 run journal（`RUN-{s8}-*` ∪ `RST-{s8}-*` ∪
+/// `ARC-{s8}-*` ∪ `RUN-CLI-{s8}`，与重构归档同一口径再并 ARC 面）。
+/// 0cy 扩面（设计稿 §7/D7）：＋定向/激活/grill/压缩摘要档/回放块档；
+/// 共享滚动件（台账/终端日志）不属单会话，本操作不动。不可恢复——调用方
 /// （桥/UI）必须先取得用户确认。任何一件都不存在 ⇒ Err（无数据可删）。
 pub async fn delete_session_on_demand(base_dir: &Path, session8: &str) -> Result<String, String> {
     require_session8(session8)?;
@@ -969,6 +2016,7 @@ pub async fn delete_session_on_demand(base_dir: &Path, session8: &str) -> Result
             .filter_map(|e| e.file_name().into_string().ok())
             .filter(|name| {
                 name.starts_with(&format!("RUN-{session8}-"))
+                    || name.starts_with(&format!("RST-{session8}-"))
                     || name.starts_with(&format!("ARC-{session8}-"))
                     // RUN-CLI 面无尾分隔符（RUN-CLI-{s8}）——必须精确匹配，
                     // 前缀匹配会误吞近似会话（钉子实证 RUN-CLI-6ab7de011）。
@@ -977,8 +2025,65 @@ pub async fn delete_session_on_demand(base_dir: &Path, session8: &str) -> Result
             .collect();
         run_ids.sort();
         paths.extend(
-            run_ids.iter().map(|id| base_dir.join(".gsa").join("runs").join(id)),
+            run_ids
+                .iter()
+                .map(|id| base_dir.join(".gsa").join("runs").join(id)),
         );
+    }
+    // 0cy 扩面：定向/激活/grill/压缩摘要档/回放块档一并在「彻底删除」
+    // 口径内（共享台账/终端日志不属单会话，不动）。
+    let gsa = base_dir.join(".gsa");
+    let orientation = gsa.join("orientation").join(format!("{session8}.json"));
+    if orientation.is_file() {
+        paths.push(orientation);
+    }
+    let activation = gsa.join("activations").join(format!("{session8}.json"));
+    if activation.is_file() {
+        paths.push(activation);
+    }
+    if let Ok(entries) = std::fs::read_dir(gsa.join("grill")) {
+        let prefix = format!("{session8}-");
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file()
+                && path.extension().map(|e| e == "jsonl").unwrap_or(false)
+                && path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s == session8 || s.starts_with(&prefix))
+                    .unwrap_or(false)
+            {
+                paths.push(path);
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(gsa.join("compaction")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| compaction_file_session(n).as_deref() == Some(session8))
+                    .unwrap_or(false)
+            {
+                paths.push(path);
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(gsa.join("compaction").join("blocks")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| blocks_file_session(n).as_deref() == Some(session8))
+                    .unwrap_or(false)
+            {
+                paths.push(path);
+            }
+        }
     }
     if paths.is_empty() {
         return Err(format!("会话 {session8} 在本工作区无数据可删除"));
@@ -1148,23 +2253,28 @@ fn reconstruct_conversation_from_journal(
 fn package_archive_raw(
     base_dir: &Path,
     session_id: &str,
-    raw_sidecar: &[u8],
+    raw_sidecar: Option<&[u8]>,
     prompt_count: u64,
     explicit_runs: &[String],
+    footprint: Option<&serde_json::Value>,
 ) -> Option<PackagedSessionArchive> {
-    // 纯打包 = 对既有内容原样压缩；空内容 → 无可存档。
-    let parsed = match serde_json::from_slice::<StoredConversation>(raw_sidecar) {
-        Ok(parsed) => parsed,
-        Err(_) => {
-            tracing::warn!(
-                "session archive skipped: corrupt sidecar {}",
-                conversation_sidecar_path(base_dir, session_id).display()
-            );
-            return None;
-        }
+    // 纯打包 = 对既有内容原样压缩；空内容 → 无可存档。0cy：收卷路径允许
+    // 「无对话但有足迹」——conversation 置 null，footprint 承载全部内容。
+    let parsed = match raw_sidecar {
+        Some(bytes) => match serde_json::from_slice::<StoredConversation>(bytes) {
+            Ok(parsed) => Some(parsed),
+            Err(_) => {
+                tracing::warn!(
+                    "session archive skipped: corrupt sidecar {}",
+                    conversation_sidecar_path(base_dir, session_id).display()
+                );
+                return None;
+            }
+        },
+        None => None,
     };
     let suffix: String = session_id.chars().take(8).collect();
-    let archive_dir = base_dir.join(".gsa").join("archives");
+    let archive_dir = archives_root(base_dir);
     let final_path = archive_dir.join(format!("{suffix}.json.gz"));
     let archive_id = format!(
         "{session_id}-{}",
@@ -1174,9 +2284,13 @@ fn package_archive_raw(
     // `conversation` 成员＝磁盘 sidecar 的原始字节（零内容变换），
     // `archive_keys`＝三键互标段（LIF 会话轮跨度／台账 `[seq]` 跨度／
     // journal run+sequence，外加窗口轮跨度临时键与 A 类压缩存档清单）。
-    let archive_keys = build_archive_keys(base_dir, session_id, &parsed, explicit_runs);
-    let conversation_tokens = estimate_conversation_tokens(&parsed);
-    let Some(package_bytes) = build_archive_envelope(raw_sidecar, &archive_keys) else {
+    // 0cy：v0.3 追加 `footprint` 全量快照段（无对话时 `conversation:null`）。
+    let archive_keys = build_archive_keys(base_dir, session_id, parsed.as_ref(), explicit_runs);
+    let conversation_tokens = parsed
+        .as_ref()
+        .map(estimate_conversation_tokens)
+        .unwrap_or(0);
+    let Some(package_bytes) = build_archive_envelope(raw_sidecar, &archive_keys, footprint) else {
         tracing::warn!(
             "session archive skipped: sidecar is not valid UTF-8 ({})",
             conversation_sidecar_path(base_dir, session_id).display()
@@ -1185,8 +2299,8 @@ fn package_archive_raw(
     };
     // 终点疲劳水位（百分比，0–100）：黑板 live 紧凑 JSON 字节 / W。
     let fatigue_pct = parsed
-        .blackboard
         .as_ref()
+        .and_then(|p| p.blackboard.as_ref())
         .map(|bb| {
             let bytes = serde_json::to_vec(bb).map(|v| v.len()).unwrap_or(0);
             orz_loop::fatigue::fatigue_percent(bytes, orz_loop::fatigue::live_budget_bytes())
@@ -1258,18 +2372,33 @@ fn package_archive_raw(
 /// 兼容读取）。`raw_sidecar` 非 UTF-8 ⇒ `None`（调用方 warn 后跳过，与
 /// 损坏 sidecar 同语义）。`archive_keys` 序列化失败同样回落 `None`（结构由
 /// 本模块机械构造，正常不可达；fail-closed 优于写半个包）。
-fn build_archive_envelope(raw_sidecar: &[u8], archive_keys: &serde_json::Value) -> Option<Vec<u8>> {
-    let conversation = std::str::from_utf8(raw_sidecar).ok()?;
+fn build_archive_envelope(
+    raw_sidecar: Option<&[u8]>,
+    archive_keys: &serde_json::Value,
+    footprint: Option<&serde_json::Value>,
+) -> Option<Vec<u8>> {
+    let conversation = match raw_sidecar {
+        Some(bytes) => std::str::from_utf8(bytes).ok()?,
+        None => "null",
+    };
     let keys = serde_json::to_string(archive_keys).ok()?;
+    // 0cy：`footprint` 全量快照段（close/headless/收卷三条收集路径；其余写
+    // `null`——旧读者对新增成员透明，见设计稿 §4.1）。
+    let footprint = match footprint {
+        Some(value) => serde_json::to_string(value).ok()?,
+        None => "null".to_string(),
+    };
     Some(format!(
-        "{{\"schema\":\"{ARCHIVE_PACKAGE_SCHEMA}\",\"conversation\":{conversation},\"archive_keys\":{keys}}}"
+        "{{\"schema\":\"{ARCHIVE_PACKAGE_SCHEMA}\",\"conversation\":{conversation},\"archive_keys\":{keys},\"footprint\":{footprint}}}"
     )
     .into_bytes())
 }
 
 /// 归档包信封的 schema 标识（S1 起；`decode_archive_package` 用它区分
-/// 新信封与旧裸包）。
-const ARCHIVE_PACKAGE_SCHEMA: &str = "session-archive-package-v0.2";
+/// 新信封与旧裸包）。0cy（2026-10-11）：v0.2 → v0.3——新增 `footprint`
+/// 全量快照段（conversation/archive_keys 语义不变；读取侧 tolerant 兼容
+/// v0.2 与旧裸包）。
+const ARCHIVE_PACKAGE_SCHEMA: &str = "session-archive-package-v0.3";
 
 /// 动态上下文滑块 S1（2026-09-15，设计 §3.5）：归档包 tolerant 解码——
 /// 新信封（`conversation` ＋ `archive_keys`）与**旧裸包**（gzip 内容直接是
@@ -1309,16 +2438,19 @@ fn decode_archive_package(bytes: &[u8]) -> Option<(StoredConversation, Option<se
 fn build_archive_keys(
     base_dir: &Path,
     session_id: &str,
-    parsed: &StoredConversation,
+    parsed: Option<&StoredConversation>,
     explicit_runs: &[String],
 ) -> serde_json::Value {
     let suffix: String = session_id.chars().take(8).collect();
-    let lif = parsed.lif.as_ref();
+    let lif = parsed.and_then(|p| p.lif.as_ref());
     let tool_rounds = parsed
-        .messages
-        .iter()
-        .filter(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
-        .count() as u64;
+        .map(|p| {
+            p.messages
+                .iter()
+                .filter(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+                .count() as u64
+        })
+        .unwrap_or(0);
     let ledger = ledger_key_facts(&base_dir.join(".gsa").join("ledger").join("current.md"));
     let journal = journal_key_facts(&base_dir.join(".gsa").join("runs"), &suffix, explicit_runs);
     let compaction = compaction_archive_facts(&base_dir.join(".gsa").join("compaction"));
@@ -1330,7 +2462,7 @@ fn build_archive_keys(
             "round_start": lif.map(|l| l.entry_round),
             "round_end": lif.map(|l| l.round),
             "domain": lif.map(|l| l.current_domain.as_str()),
-            "session_started_at": parsed.session_started_at,
+            "session_started_at": parsed.and_then(|p| p.session_started_at),
         },
         "window_rounds": {
             "axis": "window",
@@ -1495,10 +2627,7 @@ fn estimate_conversation_tokens(conversation: &StoredConversation) -> u64 {
 /// 「上次归档读数」文件（会话级；单调水位）。
 fn archive_milestone_path(base_dir: &Path, session_id: &str) -> PathBuf {
     let suffix: String = session_id.chars().take(8).collect();
-    base_dir
-        .join(".gsa")
-        .join("archives")
-        .join(format!("{suffix}.milestones.json"))
+    archives_root(base_dir).join(format!("{suffix}.milestones.json"))
 }
 
 /// 读「上次归档读数」（缺失/损坏 ⇒ None ⇒ 视为尚无归档）。
@@ -1620,6 +2749,7 @@ pub async fn headless_session_archive(
         1, // 一次性 run = 单 prompt（ARC 审计 run id 的计数段）
         trust_policy,
         true,
+        true, // 0cy：收尾包带足迹全量快照（不删源）
         &explicit,
     )
     .await
@@ -1941,6 +3071,34 @@ impl AcpServer {
         // itself only records where, under what trust policy, and under what
         // permission policy runs live.
         let base = base_dir.unwrap_or_else(|| PathBuf::from("."));
+        // 0cy（docs/GSA_SESSION_HYGIENE_DESIGN_2026-10-11.md）：新会话起点＝
+        // 空台账＋无前档足迹——非存活、非当前的会话足迹先收卷进
+        // `archives/`（先写包后删源；唯一删改路径），再装载本会话侧车。
+        {
+            let live: Vec<String> = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .keys()
+                .cloned()
+                .collect();
+            let sweep = sweep_session_leftovers_with(
+                &base,
+                Some(session_id),
+                &live,
+                hygiene_enabled(),
+                trust_policy,
+            )
+            .await;
+            if !sweep.disabled && (!sweep.swept.is_empty() || !sweep.errors.is_empty()) {
+                tracing::info!(
+                    swept = ?sweep.swept,
+                    shared_moved_to = ?sweep.shared_moved_to,
+                    errors = ?sweep.errors,
+                    "gsa session hygiene sweep"
+                );
+            }
+        }
         // GAP-INQUIRY-SPLIT: resume the orientation counter from the sidecar
         // when a previous process left one (ADR-0010 §4.2 — recovery resumes
         // counting; only an actual fire resets). A brand-new session starts
@@ -2449,6 +3607,7 @@ impl AcpServer {
                 prompt_count: session.prompt_count,
                 trust_policy: session.trust_policy,
                 incremental: true,
+                include_footprint: false,
             });
         }
         // P1-1（2026-09-09, S2-R P2）：浏览器生命周期跨 prompt 复用——run
@@ -2846,6 +4005,7 @@ impl AcpServer {
                 ticket.prompt_count,
                 ticket.trust_policy,
                 ticket.incremental,
+                ticket.include_footprint,
                 // ACP 车道 run id 自带 `RUN-{session8}-` 会话段，前缀扫描
                 // 足够；显式注入是无头车道（0ak）专用。
                 &[],
@@ -2903,6 +4063,7 @@ impl AcpServer {
                 prompt_count: session.prompt_count,
                 trust_policy: session.trust_policy,
                 incremental: false,
+                include_footprint: true,
             };
             if run_in_flight {
                 self.pending_archives
@@ -3711,6 +4872,7 @@ mod tests {
             3,
             crate::session::TrustPolicy::Skip,
             false,
+            false,
             &[],
         )
         .await;
@@ -3867,7 +5029,7 @@ mod tests {
         std::fs::create_dir_all(&compaction_dir).unwrap();
         std::fs::write(compaction_dir.join("compaction-RUN-x-0001.md"), "# 摘要").unwrap();
 
-        let keys = build_archive_keys(&base, session_id, &small, &[]);
+        let keys = build_archive_keys(&base, session_id, Some(&small), &[]);
         assert_eq!(keys["ledger"]["exists"], true);
         assert_eq!(keys["ledger"]["first_seq"], 1);
         assert_eq!(keys["ledger"]["last_seq"], 2);
@@ -4144,7 +5306,19 @@ mod tests {
         // 布景：包＋水位＋侧车＋三种会话名 run＋一个近似前缀的邻居会话。
         let archives = base.join(".gsa").join("archives");
         std::fs::create_dir_all(&archives).unwrap();
-        std::fs::write(archives.join(format!("{s8}.json.gz")), b"pkg").unwrap();
+        // 0cy：回档前会读包做按需恢复——fixture 用真实 gzip 信封（v0.2 旧
+        // 格式，读取侧兼容）；「不可读包拒绝移除」的钉子见 hygiene 面。
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(
+            &mut enc,
+            br#"{"schema":"session-archive-package-v0.2","conversation":null,"archive_keys":{}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            archives.join(format!("{s8}.json.gz")),
+            enc.finish().unwrap(),
+        )
+        .unwrap();
         std::fs::write(archives.join(format!("{s8}.milestones.json")), b"{}").unwrap();
         let sidecars = base.join(".gsa").join("conversations");
         std::fs::create_dir_all(&sidecars).unwrap();
@@ -4164,7 +5338,9 @@ mod tests {
         }
 
         // 回档：包＋水位移除，侧车/运行全保留。
-        let msg = unarchive_session_on_demand(&base, s8).await.expect("unarchive");
+        let msg = unarchive_session_on_demand(&base, s8)
+            .await
+            .expect("unarchive");
         assert!(msg.contains("回活跃组"), "{msg}");
         assert!(!archives.join(format!("{s8}.json.gz")).exists());
         assert!(!archives.join(format!("{s8}.milestones.json")).exists());
@@ -4182,7 +5358,10 @@ mod tests {
         assert!(!runs.join(format!("RUN-{s8}-1")).exists());
         assert!(!runs.join(format!("ARC-{s8}-1")).exists());
         assert!(!runs.join(format!("RUN-CLI-{s8}")).exists());
-        assert!(runs.join("RUN-6ab7de011-9").is_dir(), "近似前缀邻居不得被误删");
+        assert!(
+            runs.join("RUN-6ab7de011-9").is_dir(),
+            "近似前缀邻居不得被误删"
+        );
         assert!(runs.join("ARC-6ab7de011-1").is_dir());
         assert!(runs.join("RUN-CLI-6ab7de011").is_dir());
 
@@ -4191,8 +5370,18 @@ mod tests {
         assert!(err.contains("无数据可删除"), "{err}");
 
         // 会话段门：严格 8 位小写十六进制，其余形态拒绝且不触文件系统。
-        for bad in ["6ab7de0", "6ab7de011", "6AB7DE01", "6ab7dem0", "../evil", ""] {
-            assert!(unarchive_session_on_demand(&base, bad).await.is_err(), "{bad}");
+        for bad in [
+            "6ab7de0",
+            "6ab7de011",
+            "6AB7DE01",
+            "6ab7dem0",
+            "../evil",
+            "",
+        ] {
+            assert!(
+                unarchive_session_on_demand(&base, bad).await.is_err(),
+                "{bad}"
+            );
             assert!(delete_session_on_demand(&base, bad).await.is_err(), "{bad}");
         }
 
@@ -4270,7 +5459,7 @@ mod tests {
         let mut decoded = Vec::new();
         std::io::Read::read_to_end(&mut decoder, &mut decoded).unwrap();
         let envelope: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
-        assert_eq!(envelope["schema"], "session-archive-package-v0.2");
+        assert_eq!(envelope["schema"], "session-archive-package-v0.3");
         let conversation = envelope["conversation"].as_object().unwrap();
         assert_eq!(
             conversation
@@ -6328,5 +7517,427 @@ mod tests {
                 let _ = std::fs::remove_dir_all(&base);
             })
             .await;
+    }
+
+    // ------------------------------------------------------------------
+    // 0cy（2026-10-11）会话卫生钉子：收卷/扫描/归并/回档/删除扩面。
+    // ------------------------------------------------------------------
+
+    /// 0cy 钉子公装：写一条会话侧车（单条用户消息）。
+    fn hygiene_seed_sidecar(base: &Path, session_id: &str, text: &str) {
+        let full = StoredConversation::full(
+            session_id,
+            vec![Message {
+                role: Role::User,
+                content: text.to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            }],
+            &TemporalSessionSnapshot {
+                round: 1,
+                has_success: true,
+                current_domain: orz_assurance::lif::Domain::Normal,
+                entry_round: 1,
+                spikes: Vec::new(),
+                rli_shadow: None,
+            },
+            Some(1_700_000_000.0),
+            &Blackboard::default(),
+        );
+        persist_conversation_sidecar(base, &full);
+    }
+
+    /// 0cy N1：收卷＝「先写包后删源」——无会话表（进程外遗留）时，扫描把
+    /// 足迹逐件对账进 v0.3 包，活区清空；共享台账随唯一候选人走。
+    #[tokio::test]
+    async fn hygiene_sweep_rolls_up_and_clears_active_area() {
+        let base = test_dir();
+        let a = "a1b2c3d4";
+        let ledger_text = "[1] 轮次 1: read_file\n[2] 轮次 2: grep\n";
+        std::fs::create_dir_all(base.join(".gsa").join("ledger")).unwrap();
+        std::fs::write(
+            base.join(".gsa").join("ledger").join("current.md"),
+            ledger_text,
+        )
+        .unwrap();
+        hygiene_seed_sidecar(&base, a, "上一会话的任务");
+        let run_dir = base.join(".gsa").join("runs").join(format!("RUN-{a}-0"));
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("events.jsonl"),
+            "{\"event_type\":\"run_preflight\"}\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(base.join(".gsa").join("orientation")).unwrap();
+        std::fs::write(
+            base.join(".gsa")
+                .join("orientation")
+                .join(format!("{a}.json")),
+            "{\"orientation\":1}",
+        )
+        .unwrap();
+        std::fs::create_dir_all(base.join(".gsa").join("compaction").join("blocks")).unwrap();
+        let block = base
+            .join(".gsa")
+            .join("compaction")
+            .join("blocks")
+            .join(format!("{a}-block-0001.md"));
+        std::fs::write(&block, "块#1 原文").unwrap();
+
+        let report = sweep_session_leftovers_with(
+            &base,
+            Some("beef0000"),
+            &[],
+            true,
+            crate::session::TrustPolicy::Skip,
+        )
+        .await;
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(report.swept, vec![a.to_string()]);
+        assert_eq!(report.shared_moved_to.as_deref(), Some(a));
+
+        // 活区清空（新会话起点：空台账、无前档足迹）。
+        assert!(!base.join(".gsa").join("ledger").join("current.md").exists());
+        assert!(
+            !base
+                .join(".gsa")
+                .join("conversations")
+                .join(format!("{a}.json"))
+                .exists()
+        );
+        assert!(
+            !base
+                .join(".gsa")
+                .join("orientation")
+                .join(format!("{a}.json"))
+                .exists()
+        );
+        assert!(!run_dir.exists());
+        assert!(!block.exists());
+
+        // 档案在案：v0.3 包 + footprint 逐字对账。
+        let doc = read_archive_document(&base, a).expect("回卷包存在");
+        assert_eq!(doc["schema"], "session-archive-package-v0.3");
+        assert_eq!(doc["footprint"]["ledger"]["text"], ledger_text);
+        assert_eq!(
+            doc["footprint"]["orientation"]["text"],
+            "{\"orientation\":1}"
+        );
+        assert_eq!(doc["footprint"]["blocks"][0]["text"], "块#1 原文");
+        assert_eq!(doc["footprint"]["runs"][0]["id"], format!("RUN-{a}-0"));
+        assert_eq!(
+            doc["footprint"]["runs"][0]["files"][0]["text"],
+            "{\"event_type\":\"run_preflight\"}\n"
+        );
+        assert_eq!(
+            doc["conversation"]["messages"][0]["content"],
+            "上一会话的任务"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0cy N2：存活与当前会话不被扫；close 后再次开新会话 ⇒ 前会话被收卷。
+    #[tokio::test]
+    async fn hygiene_sweep_keeps_live_and_then_sweeps_closed() {
+        let base = test_dir();
+        let server = shadow_server();
+        server
+            .handle_session_new(
+                "aaaa1111",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        hygiene_seed_sidecar(&base, "aaaa1111", "A 的对话");
+        // 新会话 B 注册：A 存活 ⇒ 不扫（文件原样）。
+        server
+            .handle_session_new(
+                "bbbb2222",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        assert!(
+            base.join(".gsa")
+                .join("conversations")
+                .join("aaaa1111.json")
+                .is_file()
+        );
+        assert!(
+            !base
+                .join(".gsa")
+                .join("archives")
+                .join("aaaa1111.json.gz")
+                .is_file()
+        );
+        // 关闭 A ⇒ 后台归档票；等其落包，避免与随后扫描写包互撞。
+        assert!(server.close_session("aaaa1111"));
+        let gz = base.join(".gsa").join("archives").join("aaaa1111.json.gz");
+        for _ in 0..200 {
+            if gz.is_file() {
+                break;
+            }
+            tokio::task::yield_now().await;
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // 再开 C：A 已非存活 ⇒ 被收卷（活区清空，档案仍为 v0.3 包）。
+        server
+            .handle_session_new(
+                "cccc3333",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !base
+                .join(".gsa")
+                .join("conversations")
+                .join("aaaa1111.json")
+                .is_file()
+        );
+        let doc = read_archive_document(&base, "aaaa1111").expect("A 回卷包");
+        assert_eq!(doc["schema"], "session-archive-package-v0.3");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0cy N3：两个候选同扫——共享件（台账＋终端日志）归 mtime 最新者；
+    /// 二次扫描幂等（候选清空、零错误、不再重包）。
+    #[tokio::test]
+    async fn hygiene_sweep_shared_winner_and_idempotence() {
+        let base = test_dir();
+        hygiene_seed_sidecar(&base, "aaaabbbb", "A 对话");
+        hygiene_seed_sidecar(&base, "bbbbcccc", "B 对话");
+        let terminal = base.join(".gsa").join("session").join("terminal");
+        std::fs::create_dir_all(&terminal).unwrap();
+        std::fs::write(terminal.join("call_00_x.log"), "终端日志").unwrap();
+        std::fs::create_dir_all(base.join(".gsa").join("ledger")).unwrap();
+        std::fs::write(
+            base.join(".gsa").join("ledger").join("current.md"),
+            "[1] row\n",
+        )
+        .unwrap();
+        let report =
+            sweep_session_leftovers_with(&base, None, &[], true, crate::session::TrustPolicy::Skip)
+                .await;
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(
+            report.swept,
+            vec!["aaaabbbb".to_string(), "bbbbcccc".to_string()]
+        );
+        assert_eq!(report.shared_moved_to.as_deref(), Some("bbbbcccc"));
+        let doc_b = read_archive_document(&base, "bbbbcccc").unwrap();
+        assert_eq!(doc_b["footprint"]["ledger"]["text"], "[1] row\n");
+        assert_eq!(doc_b["footprint"]["terminal"][0]["text"], "终端日志");
+        let doc_a = read_archive_document(&base, "aaaabbbb").unwrap();
+        assert!(doc_a["footprint"]["ledger"].is_null());
+        // 幂等：候选已清，二次扫描零动作。
+        let again =
+            sweep_session_leftovers_with(&base, None, &[], true, crate::session::TrustPolicy::Skip)
+                .await;
+        assert!(again.swept.is_empty(), "{again:?}");
+        assert!(again.errors.is_empty(), "{again:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0cy N4：开关解析与归档根解析（纯函数——不触 env，免竞态）。
+    #[test]
+    fn hygiene_env_resolution_is_pure_and_total() {
+        assert!(hygiene_enabled_from(None));
+        assert!(hygiene_enabled_from(Some("1")));
+        assert!(!hygiene_enabled_from(Some("0")));
+        assert!(!hygiene_enabled_from(Some(" OFF ")));
+        assert!(!hygiene_enabled_from(Some("false")));
+        let base = Path::new("C:/ws");
+        assert_eq!(
+            resolve_archives_root(base, None),
+            base.join(".gsa").join("archives")
+        );
+        assert_eq!(
+            resolve_archives_root(base, Some("  ")),
+            base.join(".gsa").join("archives")
+        );
+        assert_eq!(
+            resolve_archives_root(base, Some("rel/arch")),
+            base.join("rel/arch")
+        );
+        assert_eq!(
+            resolve_archives_root(base, Some("C:/elsewhere/arch")),
+            PathBuf::from("C:/elsewhere/arch")
+        );
+    }
+
+    /// 0cy N5：开关关断 ⇒ 扫描为空操作、活区原样。
+    #[tokio::test]
+    async fn hygiene_sweep_disabled_leaves_everything() {
+        let base = test_dir();
+        std::fs::create_dir_all(base.join(".gsa").join("ledger")).unwrap();
+        std::fs::write(base.join(".gsa").join("ledger").join("current.md"), "x").unwrap();
+        let report = sweep_session_leftovers_with(
+            &base,
+            None,
+            &[],
+            false,
+            crate::session::TrustPolicy::Skip,
+        )
+        .await;
+        assert!(report.disabled);
+        assert!(report.swept.is_empty());
+        assert!(
+            base.join(".gsa")
+                .join("ledger")
+                .join("current.md")
+                .is_file()
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0cy N6：footprint 归并——旧成员不丢、同 key 盘面覆盖、计数重算。
+    #[test]
+    fn footprint_merge_keeps_old_members_and_prefers_disk() {
+        let old = serde_json::json!({
+            "grill": [
+                {"path": ".gsa/grill/old.jsonl", "text": "旧"},
+                {"path": ".gsa/grill/dup.jsonl", "text": "旧版"}
+            ],
+            "runs": [
+                {"id": "RUN-x-0", "path": ".gsa/runs/RUN-x-0",
+                 "files": [{"name": "events.jsonl", "text": "旧事件"}]}
+            ],
+            "ledger": {"path": ".gsa/ledger/current.md", "text": "旧台账"},
+        });
+        let new = serde_json::json!({
+            "grill": [{"path": ".gsa/grill/dup.jsonl", "text": "新版"}],
+            "runs": [{"id": "RUN-x-1", "path": ".gsa/runs/RUN-x-1", "files": []}],
+            "ledger": serde_json::Value::Null,
+        });
+        let merged = merge_footprint(&old, new);
+        let grill = merged["grill"].as_array().unwrap();
+        assert_eq!(grill.len(), 2);
+        assert_eq!(grill[0]["text"], "旧");
+        assert_eq!(grill[1]["text"], "新版");
+        let runs = merged["runs"].as_array().unwrap();
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0]["files"][0]["text"], "旧事件");
+        assert_eq!(merged["ledger"]["text"], "旧台账");
+        assert_eq!(merged["counts"]["runs"], 2);
+        assert_eq!(merged["counts"]["grill"], 2);
+    }
+
+    /// 0cy N7：回档＝删包＋按需恢复缺件（绝不覆盖）；包不可读 ⇒ 拒绝移除。
+    #[tokio::test]
+    async fn unarchive_restores_missing_pieces_and_refuses_unreadable() {
+        let base = test_dir();
+        let a = "abc12345";
+        hygiene_seed_sidecar(&base, a, "会话原文");
+        std::fs::create_dir_all(base.join(".gsa").join("orientation")).unwrap();
+        std::fs::write(
+            base.join(".gsa")
+                .join("orientation")
+                .join(format!("{a}.json")),
+            "{\"orientation\":7}",
+        )
+        .unwrap();
+        let report =
+            sweep_session_leftovers_with(&base, None, &[], true, crate::session::TrustPolicy::Skip)
+                .await;
+        assert_eq!(report.swept, vec![a.to_string()]);
+        assert!(
+            !base
+                .join(".gsa")
+                .join("conversations")
+                .join(format!("{a}.json"))
+                .exists()
+        );
+        // 回档：按需恢复缺件 + 删包。
+        let msg = unarchive_session_on_demand(&base, a)
+            .await
+            .expect("回档成功");
+        assert!(msg.contains("按需恢复"), "{msg}");
+        let restored = std::fs::read_to_string(
+            base.join(".gsa")
+                .join("conversations")
+                .join(format!("{a}.json")),
+        )
+        .unwrap();
+        assert!(restored.contains("会话原文"), "{restored}");
+        let orientation = std::fs::read_to_string(
+            base.join(".gsa")
+                .join("orientation")
+                .join(format!("{a}.json")),
+        )
+        .unwrap();
+        assert_eq!(orientation, "{\"orientation\":7}");
+        assert!(
+            !base
+                .join(".gsa")
+                .join("archives")
+                .join(format!("{a}.json.gz"))
+                .exists()
+        );
+        // 包损坏 ⇒ 拒绝移除（宁拒不删）。
+        std::fs::create_dir_all(base.join(".gsa").join("archives")).unwrap();
+        std::fs::write(
+            base.join(".gsa")
+                .join("archives")
+                .join(format!("{a}.json.gz")),
+            b"not gzip",
+        )
+        .unwrap();
+        let err = unarchive_session_on_demand(&base, a).await.unwrap_err();
+        assert!(err.contains("无法解析"), "{err}");
+        assert!(
+            base.join(".gsa")
+                .join("archives")
+                .join(format!("{a}.json.gz"))
+                .exists(),
+            "拒绝移除"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0cy N8：「彻底删除」扩面——定向/回放块档随删（共享件不动）。
+    #[tokio::test]
+    async fn delete_on_demand_removes_hygiene_faces() {
+        let base = test_dir();
+        let a = "d00d0001";
+        hygiene_seed_sidecar(&base, a, "删除目标");
+        std::fs::create_dir_all(base.join(".gsa").join("orientation")).unwrap();
+        std::fs::write(
+            base.join(".gsa")
+                .join("orientation")
+                .join(format!("{a}.json")),
+            "{}",
+        )
+        .unwrap();
+        std::fs::create_dir_all(base.join(".gsa").join("compaction").join("blocks")).unwrap();
+        let clear = base
+            .join(".gsa")
+            .join("compaction")
+            .join("blocks")
+            .join(format!("{a}-clear.md"));
+        std::fs::write(&clear, "clear").unwrap();
+        let msg = delete_session_on_demand(&base, a).await.expect("删除成功");
+        assert!(msg.contains("彻底删除"), "{msg}");
+        assert!(
+            !base
+                .join(".gsa")
+                .join("conversations")
+                .join(format!("{a}.json"))
+                .exists()
+        );
+        assert!(
+            !base
+                .join(".gsa")
+                .join("orientation")
+                .join(format!("{a}.json"))
+                .exists()
+        );
+        assert!(!clear.exists());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -25,7 +25,9 @@ use std::time::Duration;
 
 use agent_client_protocol as acp;
 use agent_client_protocol::{ToolCallId, ToolCallUpdate, ToolCallUpdateFields};
-use orz_assurance::tool_names::{BLACKBOARD_WRITE_TOOL_NAME, CONTEXT_COMPRESS_TOOL_NAME};
+use orz_assurance::tool_names::{
+    BLACKBOARD_WRITE_TOOL_NAME, CONTEXT_COMPRESS_TOOL_NAME, CONTEXT_MANAGE_TOOL_NAME,
+};
 use orz_loop::host::{PermitDecision, PermitError, PermitSource, RiskClass};
 use orz_workspace::permission::{
     AccessKind, ClientType, Decision, PermissionHandle, PermissionHookTransport,
@@ -582,6 +584,15 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
         // 保留期覆盖），**不新增任何访问类型**：本 arm 的 ReadOnly 判定与
         // 两表登记纪律不变。
         || tool == CONTEXT_COMPRESS_TOOL_NAME
+        // 0cz S2（2026-10-11，设计 §4）：`context_manage`＝上下文管理第十一
+        // 主工具——纯内存投影状态操作＋黑板合法写路径（mode=compress 承继
+        // 0ap 管线；mode=clear 施加投影边界 marker＋块回放落盘，落盘面属
+        // `.gsa` 客观承载，与既有压缩落盘同性质），无文件/网络/工作区外部
+        // 副作用，与 `context_compress` 同族。本 arm＝0cy 收口批补登记：
+        // 0cz S2 只落了 controller 侧（READ_ONLY_EXEMPT_TOOLS＋action
+        // fold），桥臂漏登，宿主护栏覆盖断言（本文件测试）按设计拦下
+        // （246 批 §5.4）。
+        || tool == CONTEXT_MANAGE_TOOL_NAME
     {
         // Controller-owned in-memory tools (A3 blackboard_read / A6 §8 C.2
         // compaction_whitelist_add): NO external side effect — no file, no
@@ -868,6 +879,12 @@ mod tests {
             ),
             // 0ap：压缩窗口请求无参数；空对象即代表调用形态。
             (CONTEXT_COMPRESS_TOOL_NAME, serde_json::json!({})),
+            // 0cz S2（收口补，2026-10-11）：清零带强制交接摘要——代表调用取
+            // 最完整的合法形态（mode=clear＋handover）。
+            (
+                CONTEXT_MANAGE_TOOL_NAME,
+                serde_json::json!({"mode": "clear", "handover": "x"}),
+            ),
             (
                 "compaction_whitelist_add",
                 serde_json::json!({"content": "x"}),

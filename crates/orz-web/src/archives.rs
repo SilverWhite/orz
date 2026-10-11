@@ -72,7 +72,18 @@ impl ArchiveReadError {
     }
 }
 
+/// 0cy：归档根——`ORZ_GSA_ARCHIVE_ROOT` 覆盖（绝对路径原样；相对路径对
+/// 工作区根解析），缺省 `.gsa/archives`；与 orz-host `archives_root` 同一
+/// 环境变量口径（跨 crate 小重复，设计稿 §6/D6：净室重跑可把归档根移出
+/// 工作区）。
 fn archives_dir(cwd: &Path) -> PathBuf {
+    if let Ok(raw) = std::env::var("ORZ_GSA_ARCHIVE_ROOT") {
+        let raw = raw.trim();
+        if !raw.is_empty() {
+            let p = PathBuf::from(raw);
+            return if p.is_absolute() { p } else { cwd.join(p) };
+        }
+    }
     cwd.join(".gsa").join("archives")
 }
 

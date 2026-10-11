@@ -1596,6 +1596,23 @@ async fn run(
         .unwrap_or(0.0);
     let cwd = std::env::current_dir()?;
 
+    // 0cy（docs/GSA_SESSION_HYGIENE_DESIGN_2026-10-11.md）：CLI 车道的「新会话
+    // 起点」——上一条 run/会话的遗留足迹先收卷进 `archives/` 再起跑（先写包
+    // 后删源；唯一删改路径）。best-effort：扫描失败只警告，不影响 run。
+    let sweep = orz_host::acp_server::sweep_session_leftovers(&cwd, None, &[]).await;
+    if !sweep.disabled && (!sweep.swept.is_empty() || !sweep.errors.is_empty()) {
+        eprintln!(
+            "gsa hygiene sweep: swept {:?}; shared→{:?}{}",
+            sweep.swept,
+            sweep.shared_moved_to,
+            if sweep.errors.is_empty() {
+                String::new()
+            } else {
+                format!("; errors: {:?}", sweep.errors)
+            }
+        );
+    }
+
     // Journals land in `{cwd}/.gsa/runs/{run_id}/`. Workspace trust is
     // enforced (fail-closed): the current directory must carry repo-local
     // trust config or be recorded in the trust store.
