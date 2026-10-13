@@ -136,6 +136,15 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.204 2026-10-13 258 批 0db S1 冻结——manifest＋批序＋五元组＋runner 规格（**冻结批**，零 API 零源码、计数不变 61）
+
+- **用户令**：「orz先行吧」「请开始吧」（排期 ①落账→②S1→③S2→④S3→⑤S4 之 ②；①落账＝fd736176 扫 250–257）。
+- **冻结三件**：①v1.0.1 克隆落位 `D:	b-eval	au2-bench`（HEAD＝fc0055dc4e0a… 逐位命中）；②375 题逐题 canonical sha256 manifest＝`D:	b-eval	au2-0db\manifest1.0.1_tasks.json`（53,074 B，sha256 `950409f18979d879e71fde1fa3f068e3ce7dda057bfde60048914209b8cd6cde`；内含各源文件逐文件 sha256 双层 pin；telecom 经 base 清单 2,285→114 过滤）；③批次划分＝域序 airline(200)→retail(456)→telecom(456)→banking(388)、仿真单元 (domain,task,trial) 共 1,500、任务级断点＋50-sim chunk 记账。
+- **五元组钉死**：k=4／user sim＝DeepSeek V4.1 自任（temp 0）／judge＝同款内部化／pin＝v1.0.1＋manifest／scaffold＝orz 臂主线＋官方 CLI airline 对照臂。runner 规格五条（题级调用／逐 sim journal／限流退避／chunk 记账／对照臂复用）。
+- **S2 前置核证四件**：LiteLLM 模型串／judge CLI 覆盖旗标实证／banking `alltools` embedder 覆盖机制（硬编码 text-embedding-3-large→text-embedding-v4 注入法）／srt 容器依赖面。
+- **台账**：本卷 §1.204；[`258 批档`](audits/258_0DB_S1_FREEZE_2026-10-13.md)；索引头行 v4.230 → v4.231；TODO 计数行/P1 路由/P1-0db 节；BACKLOG 计数行/P1 行/0db 节。计数不变 61。
+- 关键词：258 批、0db S1、冻结、manifest 950409f1、fc0055dc、批次划分、五元组、runner 规格、S2 前置四件、索引 v4.231。
+
 ### 1.203 2026-10-13 257 批 SCB 净室轮停滞点 10/36＋主力切 τ²-bench（**真机轮读数＋裁决批**，零源码、计数不变 61）〔§1.202 留给 256 批（0db S0 勘定，另线已落档、记账待其线裁决）〕
 
 - **用户令**：「sc bench 这边明显能看到主要为逐题方差和题目波动，本轮低谷期完成后暂时停滞，换一下先去跑隔壁的tau2测试」／「那边已经在核对了，这边单纯暂停即可」／「请将这一决策同步进index等相关台账」。
