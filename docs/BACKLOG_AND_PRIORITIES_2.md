@@ -136,6 +136,19 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.210 2026-10-13 264 批 TB 4.0 S0 勘定——数据集落盘 66 题＋榜单规则＋挑题包提案（**S0 勘定批**，零 API、零 orz 源码、计数不变 61）
+
+- **用户令**：「先走一轮调研吧，我考虑tb 4.0如果上榜严苛的话可以挑题跑」。
+- **数据集落盘**：`harbor dataset download terminal-bench/terminal-bench@4.0.0` **成功**（0w 2026-09-10 的 statement timeout 服务端故障已消失→digest 钉恢复可行）；66 题逐题核对与 0w 计数逐类一致（Software 18／Science 14／ML 11／Operations 9／Hardware 5／Security 5／Media 4）；清单 `_inventory.json` 落 `D:\tb-eval\tb40-dataset`。
+- **本地可跑 62 题**：GPU 3（fp8-rmsnorm-gemm／jax-speedrun-gpu／math-eval-grader）＋16 核 1（live-database-cutover）排除；compose 多容器 11 题可跑；官方 flat 8h agent timeout。
+- **榜单规则核证**：`-k 5` trials/题（/run 页示例＋blog 饱和定义 5/5 同口径）；`harbor upload` → Harbor Hub 默认私有；榜单按 TB 4.0 分辨率排序（Model／Agent／rate／Cost／Tokens 列）；全题覆盖要求未见于公开文档（TB 2.1 惯例推断全题）；4.1 计划 tamper-resistant verifiers。**严格度判定＝榜单有意义形态须全题×5；挑题跑＝摩擦读数专用（0cj 先例同形）**。
+- **成本三档**：挑题包 ≈¥10–30（8–10 题，1–2 低谷窗）；k=1 全扫 ≈¥60–200（唯一 token 实锚 ctr-optimization 43.56M 系最重尾，首 3 题实测收敛）；榜单 k=5 ≈¥400–900（超现余额需充值）。
+- **挑题包提案**：轻快反馈组（session-window-debug／mvcc-lsm-compaction／wal-recovery-ordering／embedding-drift-monitor／risk-scorer-replay）＋compose 编排组（heat-pump-warranty／legacy-utility-triage／payments-pipeline-fix／medical-claims-processing）＋重压力组（mp-checkpoint-consolidation〔0w 指定备选〕／ctr-optimization 复跑＝0.4.0→0.9.0 载体升级对比锚点）。
+- **基建现状**：harbor CLI 子命令面核证；0w 执行器六处修订（鉴权预检门／准备超时 ×4／失败签名）可移植 r4 形态批量 runner；载体 0.9.0 在役。
+- **建议批序**：挑题包先行→k=1 全扫→榜单形态待充值裁决；立项计数待挑题包放行时入账。
+- **台账**：本卷 §1.210；[`264 批档`](audits/264_TB40_S0_SURVEY_2026-10-13.md)；索引头行 v4.236 → v4.237；TODO 计数行；BACKLOG 计数行/本批指针。计数不变 61。
+- 关键词：264 批、TB 4.0、S0 勘定、数据集落盘、digest 钉恢复、62 可跑、-k 5、挑题包、mp-checkpoint-consolidation、索引 v4.237。
+
 ### 1.209 2026-10-13 263 批 0db S4 中止＋harness 考较线回摆——banking 轮峰窗点干净收束（**中止批**，零 orz 源码、计数不变 61）
 
 - **用户裁决**：「那就没必要跑banking了」——260–262 批轨迹分析判明 τ² 考较重心偏向模型本身（对话层），harness 读数边际衰减＋全量成本外推 ≈¥500–630，预算挪向 harness 考较线。
