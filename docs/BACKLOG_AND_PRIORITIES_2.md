@@ -136,10 +136,19 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.205 2026-10-13 259 批 0db S2 适配核证——四件核证全过＋runner 三件套＋透传核对 12/12（**核证＋落码批**，零 orz 源码、API 仅 3 次微型核证、计数不变 61）
+
+- **用户令**：「请开始进行S2」（排期 ①落账→②S1→③S2→④S3→⑤S4 之 ③）。
+- **四件核证全过**：①模型串 `deepseek/deepseek-flash`（litellm 内置映射 1M ctx；endpoint 默认 api.deepseek.com/beta；key＝垫片注入 DEEPSEEK_API_KEY）经 tau2 generate 全链路活体 pong——**推理先行模型实锤**（reasoning_content 在场、一词 49 completion tokens；生产无 max_tokens 截断风险）；②judge CLI 覆盖旗标**不存在**（258 存疑落定；from-import 绑定）＋垫片覆写 evaluator 模块属性法真判通过（mock 轨迹 met=false 判分正确＝judge 内部化零源码成立）；③`--retrieval-config-kwargs` 注入 embedder 被 `resolve_variant` 的 `**_extra` **静默吞掉**＋垫片原地改写 `RETRIEVAL_VARIANTS["alltools"]` 法生效（resolve 前改写／不回污注册表／徽章自述串随改走＝modified_prompts=false 可保）；④srt 容器冒烟 7/7 PASS（win32 构造即 raise 实锤；写拒绝＝srt 真强制 Read-only fs）——**docker 定版旗标 `--cap-add SYS_ADMIN --cap-add NET_ADMIN --security-opt seccomp=unconfined` 为本轮新发现**（默认 seccomp 挡 bwrap namespace、缺 NET_ADMIN 卡 loopback）。
+- **runner 三件套**（`D:\tb-eval\tau2-0db\`，不入仓）：`tau2_shim.py`（judge/embedder/orz 注册三覆写，debug 实证全中）／`run_round.py`（258 §5 五条全落：manifest 域序 50/114/114/97、题级台账断点、逐 sim 提取、限流退避、50-sim chunk 记账、双臂；自测 4/4）／`orz_agent.py`（τ² 工具面→orz ACP 适配器：每仿真一进程一会话、get_init_state 起 stop 收、tool_calls 交 tau2 环境执行＝评测路径与 CLI 臂同条）。**透传核对 12/12**（mock ACP 零二进制零 API）：系统面前缀逐字节等价／工具面恰等／渲染与回复映射全对／注册装配通。**数据面纪律**＝TAU2_DATA_DIR＋junction（不设会写穿冻结树 data/）。
+- **S3 前置三项**：百炼 key 落 .env＋活体 embed 一次／orz 线缆活体校准（agent_message_chunk 形状假设）／banking 容器旗标＋依赖预装。
+- **台账**：本卷 §1.205；[`259 批档`](audits/259_0DB_S2_ADAPT_VERIFY_2026-10-13.md)；索引头行 v4.231 → v4.232；TODO 计数行/P1 路由/P1-0db 节 S2 勾选；BACKLOG 计数行/本批指针/P1 行/0db 节。计数不变 61。
+- 关键词：259 批、0db S2、适配核证、deepseek/deepseek-flash、推理先行、垫片覆写、resolve_variant 吞参数、RETRIEVAL_VARIANTS 改写、srt 容器旗标、runner 三件套、透传核对、索引 v4.232。
+
 ### 1.204 2026-10-13 258 批 0db S1 冻结——manifest＋批序＋五元组＋runner 规格（**冻结批**，零 API 零源码、计数不变 61）
 
 - **用户令**：「orz先行吧」「请开始吧」（排期 ①落账→②S1→③S2→④S3→⑤S4 之 ②；①落账＝fd736176 扫 250–257）。
-- **冻结三件**：①v1.0.1 克隆落位 `D:	b-eval	au2-bench`（HEAD＝fc0055dc4e0a… 逐位命中）；②375 题逐题 canonical sha256 manifest＝`D:	b-eval	au2-0db\manifest1.0.1_tasks.json`（53,074 B，sha256 `950409f18979d879e71fde1fa3f068e3ce7dda057bfde60048914209b8cd6cde`；内含各源文件逐文件 sha256 双层 pin；telecom 经 base 清单 2,285→114 过滤）；③批次划分＝域序 airline(200)→retail(456)→telecom(456)→banking(388)、仿真单元 (domain,task,trial) 共 1,500、任务级断点＋50-sim chunk 记账。
+- **冻结三件**：①v1.0.1 克隆落位 `D:\tb-eval\tau2-bench`（HEAD＝fc0055dc4e0a… 逐位命中）；②375 题逐题 canonical sha256 manifest＝`D:\tb-eval\tau2-0db\manifest\v1.0.1_tasks.json`（53,074 B，sha256 `950409f18979d879e71fde1fa3f068e3ce7dda057bfde60048914209b8cd6cde`；内含各源文件逐文件 sha256 双层 pin；telecom 经 base 清单 2,285→114 过滤）；③批次划分＝域序 airline(200)→retail(456)→telecom(456)→banking(388)、仿真单元 (domain,task,trial) 共 1,500、任务级断点＋50-sim chunk 记账。
 - **五元组钉死**：k=4／user sim＝DeepSeek V4.1 自任（temp 0）／judge＝同款内部化／pin＝v1.0.1＋manifest／scaffold＝orz 臂主线＋官方 CLI airline 对照臂。runner 规格五条（题级调用／逐 sim journal／限流退避／chunk 记账／对照臂复用）。
 - **S2 前置核证四件**：LiteLLM 模型串／judge CLI 覆盖旗标实证／banking `alltools` embedder 覆盖机制（硬编码 text-embedding-3-large→text-embedding-v4 注入法）／srt 容器依赖面。
 - **台账**：本卷 §1.204；[`258 批档`](audits/258_0DB_S1_FREEZE_2026-10-13.md)；索引头行 v4.230 → v4.231；TODO 计数行/P1 路由/P1-0db 节；BACKLOG 计数行/P1 行/0db 节。计数不变 61。
@@ -685,7 +694,7 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - 关键词：账面勘误、ALL_FAMILIES 47→48、信封枚举 66→67、§8 桶行滞后、RS-19、门禁测试轨、112 批、计数 56。
 ### 1.65 2026-09-28 0.8.3 载体重建（113 批；0bz S1 进体；计数 56 不变；未推送未发行）
 
-- **本批登记（2026-09-28，用户令「暂不推送，请进行重建吧」，主会话执行）**：0bz S1 指纹件（orz `7a6fe91e`）随载体进体＝**0.8.3** 双平台重建（源冻结 orz `778fad39`＝版本 bump 两行，`cargo metadata --locked` exit 0；Windows `build_orz.ps1 -Release -Jobs 2` exit 0 4m36s／Linux musl `rust:1.97-slim` cargo 8m04s、预检 `APT_OK` 零代理切换）＋换装（两侧 `.0.8.2-bak` 链预置，MATCH 3/3＋3/3）＋Windows 在役 ACAF 重 provision（manifest 绑新签名器 `71371a32…`，keystore 两件逐位未动）＋打包（`rel-113-stage`，两侧各 5 entries；zip `83df998a…` 28,008,113 B／tar `1890335a…` 37,177,883 B；包内 6/6 MATCH；容器核证 zip 4/4・tar 4/4・顶层 2/2；清单活体两态：解压态 0 finding／README+1B 恰 1 条）。进体判据＝`face_fingerprint` 字面量 win **0 → 2**／linux **0 → 3**＋`--build-info` 双平台 `version=0.8.3`。**未推送未发行**（父仓 110–113 四批与 orz 两提交均在本地；发行随推送批一并）。摩擦如实记：D 盘批首余 694 MB→清 `orz/target/debug/incremental`（2.4 GB，111 批同先例）；PowerShell 裸 `tar` 解析到 MSYS tar（`D:` 被当远程主机）→显式 `C:\Windows\System32	ar.exe`；清单活体首跑因容器 PATH 与验证树污染作废重跑。门禁 `valid: true`；详见 [`113 批档`](audits/113_CARRIER_REBUILD_V083_0BZ_S1_2026-09-28.md)。
+- **本批登记（2026-09-28，用户令「暂不推送，请进行重建吧」，主会话执行）**：0bz S1 指纹件（orz `7a6fe91e`）随载体进体＝**0.8.3** 双平台重建（源冻结 orz `778fad39`＝版本 bump 两行，`cargo metadata --locked` exit 0；Windows `build_orz.ps1 -Release -Jobs 2` exit 0 4m36s／Linux musl `rust:1.97-slim` cargo 8m04s、预检 `APT_OK` 零代理切换）＋换装（两侧 `.0.8.2-bak` 链预置，MATCH 3/3＋3/3）＋Windows 在役 ACAF 重 provision（manifest 绑新签名器 `71371a32…`，keystore 两件逐位未动）＋打包（`rel-113-stage`，两侧各 5 entries；zip `83df998a…` 28,008,113 B／tar `1890335a…` 37,177,883 B；包内 6/6 MATCH；容器核证 zip 4/4・tar 4/4・顶层 2/2；清单活体两态：解压态 0 finding／README+1B 恰 1 条）。进体判据＝`face_fingerprint` 字面量 win **0 → 2**／linux **0 → 3**＋`--build-info` 双平台 `version=0.8.3`。**未推送未发行**（父仓 110–113 四批与 orz 两提交均在本地；发行随推送批一并）。摩擦如实记：D 盘批首余 694 MB→清 `orz/target/debug/incremental`（2.4 GB，111 批同先例）；PowerShell 裸 `tar` 解析到 MSYS tar（`D:` 被当远程主机）→显式 `C:\Windows\System32\tar.exe`；清单活体首跑因容器 PATH 与验证树污染作废重跑。门禁 `valid: true`；详见 [`113 批档`](audits/113_CARRIER_REBUILD_V083_0BZ_S1_2026-09-28.md)。
 - 关键词：载体重建、0.8.3、0bz S1 进体、face_fingerprint 字面量、ACAF 重 provision、static-pie、清单活体两态、MSYS tar、未推送未发行、113 批、计数 56。
 ### 1.66 2026-09-28 ADR-0010 分卷拆分立项（114 批；0ca；计数 56 → 57）
 
