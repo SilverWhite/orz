@@ -136,6 +136,19 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.206 2026-10-13 260 批 0db S3 冒烟——双臂 2 题 8 sims 真机全过＋parse_reply 缺陷修复（**真机冒烟批**，净耗 ≈¥3.47、零 orz 源码、计数不变 61）
+
+- **用户令**：「请开始进行S3冒烟吧」（排期之 ④）。
+- **双臂冒烟全过**：冒烟 A（airline 题 0，CLI 臂）4/4 reward 1.0、$0.0164（≈¥0.03/sim）；冒烟 B（retail 题 2，orz 臂主线）4/4 reward 1.0。**读数收取面核证**＝reward 实际在 `sim.reward_info.reward`（259 提取器按顶层 `reward` 误记实现，冒烟暴露即修：reward_info.reward／termination_reason／顶层 agent_cost/user_cost）；llm_debug 逐调用审计面通（`--verbose-logs`）。
+- **judge 内部化真机实锤**：retail NL 判卷 4 次调用 wire model 全＝`deepseek/deepseek-flash`（垫片覆写真机成立）；nl met=true、breakdown DB+NL_ASSERTION 双 1.0。
+- **适配器活体校准（259 §7-2 收口）**：`session/update→agent_message_chunk` 形状假设恰合、`stopReason=end_turn`、零 permission 请求、整会话 15 prompts；每仿真一进程一会话实证。**D2 收口**＝orz 载体 `base_url: api.deepseek.com, model: "deepseek-flash"`＝与 CLI 臂传输级同源。
+- **缺陷发现即修**：orz 终文偶发单轮连发多个 JSON 对象→`parse_reply` first-last 切片抛「Extra data」（tau2 内部重试救 2 sims；workdir 残部 5→7）；修＝`raw_decode` 扫描全部顶层对象取末个带 action 者；修后自测 6/6（含多对象形状）＋透传回归 12/12。
+- **隔离复证（259 §7-3 收口）**：hostile `OPENAI_BASE_URL` 下 chat 臂照常＝`deepseek/` 前缀显式路由结构隔离成立。**banking 冒烟阻塞**＝百炼 key 未落 `.env`（两 key 清单第二把待用户；余三域不阻塞）。
+- **成本读数（S4 预算裁决项提交用户）**：orz 臂 ≈¥0.3–0.8/sim（推理先行×orz 多轮 scaffold；tau2 台账不记 orz 侧）＝CLI 臂 ≈10×；orz 主线全量 1,500 sims 量级 ≈¥450–1,200，超 256 原估（¥8–33＝CLI 臂口径）。
+- **runner 小补强**：shim 双 key 注入（ORZ_DEEPSEEK_API_KEY 孙代继承）；root Path 化；`--extra-args`/`--task-ids`。代际门＝orz.exe `0c07208d…` 0.9.0 逐位命中。
+- **台账**：本卷 §1.206；[`260 批档`](audits/260_0DB_S3_SMOKE_2026-10-13.md)；索引头行 v4.232 → v4.233；TODO 计数行/P1 路由/P1-0db 节 S3 勾选；BACKLOG 计数行/本批指针/P1 行/0db 节。计数不变 61。
+- 关键词：260 批、0db S3、双臂冒烟、reward_info.reward、judge 内部化实锤、agent_message_chunk 校准、parse_reply 多对象、raw_decode、成本 10 倍、百炼 key 阻塞、索引 v4.233。
+
 ### 1.205 2026-10-13 259 批 0db S2 适配核证——四件核证全过＋runner 三件套＋透传核对 12/12（**核证＋落码批**，零 orz 源码、API 仅 3 次微型核证、计数不变 61）
 
 - **用户令**：「请开始进行S2」（排期 ①落账→②S1→③S2→④S3→⑤S4 之 ③）。
