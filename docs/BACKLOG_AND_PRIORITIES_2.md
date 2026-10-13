@@ -136,6 +136,17 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.207 2026-10-13 261 批 0db S4 banking 轮起跑——r1-banking 容器轮在役＋启跑故障三件处置（**真机起跑批**，零 orz 源码、计数不变 61）
+
+- **用户三裁决**：①对照臂退役（「对照臂不影响上榜吧？」——官方文档单域可提交、verified 看轨迹完整性；归因等 orz 臂分值再议）；②先只跑 banking（其余三域成本再裁）；③百炼 key 明文提供落 `.env`（ORZ_BAILIAN_API_KEY，零落盘其余面）＋embedder 调用名更正 `qwen3.7-text-embedding-flash`（取代 256/258 的 text-embedding-v4 计划；活体 1024 维）。
+- **官方要求逐项核对全绿**（leaderboard-submission.md）：单域可交／一致模型配置（results info 实录）／全题无过滤／4+ trials／base split／banking retrieval_config 徽章（alltools 官方默认形态）／custom 申报（methodology＋references、modified_prompts=false）。
+- **容器轮架构**：uv 镜像＋双 cap＋seccomp 旗标重建；挂载四处（tau2-bench:ro／tau2-0db／.env:ro／orz-linux:ro）；`-e '.[knowledge]'` editable；orz-linux 代际门 1ce40857 逐位命中；data-c 独立数据路径（junction 容器内死链→TAU2_DATA_DIR 认定＋runner sim_root 改认 env）；embeddings cache 宿主共享。
+- **启跑故障三件（零源码）**：①batch.py warm_kb_cache 函数内硬编码表（alltools→text-embedding-3-large）预热必 404→垫片置空（函数级 from-import 重绑定性），语料嵌入走惰性路径（698 docs 一次落盘共享）；②rank_bm25 缺＝官方 knowledge extra 未装（非 pin 树缺陷）；③Linux 载体 run 起点默认强制 ACAF signer（原生工具未授能也强制）→`ORZ_ACAF_FAIL_CLOSED=0`（tau2 chat-only 无物可执；探针 init→session→prompt→end_turn 实证；TAU2_0DB_ORZ_ACAF=1 可恢复）。**垫片补强**＝OpenAIEmbedder.embed 保序分批（dashscope embeddings 批上限 20 实证，批 10 可调）。
+- **首题读数**：task_001 4/4 reward 1.0、2189.5s（≈36.5 min/题）、tau2 侧 $0.0077（user sim；banking 无 judge）。全轮 ≈59h、detached、任务级断点＋¥100 余额地板护栏（TAU2_0DB_BALANCE_FLOOR）；50-sim chunk 首次收口预计第 13 题前后。
+- **监控交接面**：宿主 `D:\tb-eval\tau2-0db\rounds\r1-banking`（round.log／task_ledger.jsonl／sims.jsonl／chunks.jsonl／logs）；恢复＝docker start＋重挂 runner（台账断点续跑）；停止权＝容器内 pkill 括号防自匹配。
+- **台账**：本卷 §1.207；[`261 批档`](audits/261_0DB_S4_BANKING_ROUND_LAUNCH_2026-10-13.md)；索引头行 v4.233 → v4.234；TODO 计数行/P1 路由/P1-0db S4 起跑注记；BACKLOG 计数行/本批指针/P1 行/0db 节。计数不变 61。
+- 关键词：261 批、0db S4、banking 轮、r1-banking、对照臂退役、qwen3.7-text-embedding-flash、warm_kb_cache 硬编码表、knowledge extra、ACAF fail-closed、保序分批、索引 v4.234。
+
 ### 1.206 2026-10-13 260 批 0db S3 冒烟——双臂 2 题 8 sims 真机全过＋parse_reply 缺陷修复（**真机冒烟批**，净耗 ≈¥3.47、零 orz 源码、计数不变 61）
 
 - **用户令**：「请开始进行S3冒烟吧」（排期之 ④）。
