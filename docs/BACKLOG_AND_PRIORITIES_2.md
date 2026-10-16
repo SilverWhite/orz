@@ -332,6 +332,16 @@
 - **台账**：本卷 §1.217；[`280 批档`](audits/280_CARRIER_REBUILD_V091_0DD_0DE_S3_2026-10-16.md)；索引头行 v4.252 → v4.253；TODO 计数行/P1 路由/P1-0dd＋P1-0de S3 勾；BACKLOG 计数行/本批指针/P1 行两格；orz 子树 `1ecad57c→0be4a364`＋`orz_source_manifest.sha256` 重生成（恰 2 行变更＝bump 两文件 `Cargo.lock`＋`crates/orz-bin/Cargo.toml` 版本行，与 bump 触碰面一一对应）。计数不变 61。
 - 关键词：280 批、0.9.1 重建、源冻结 0be4a364、0dd S3＋0de S3 合并进体、f50b1f17… 身份门、ACAF 重 provision dd55ded5…、static-pie×3、alpine/bookworm 双冒烟 0.9.1、reminder_only_no_compressible 0→7、保留面零回归、RUN-CLI-6ad2152c/6ad2153a、未推送未发行、计数 61 不变、索引 v4.253。
 
+### 1.218 2026-10-16 281 批 提交推送（275–280 累积件）＋装机位全面换装 0.9.1＋0.9.1 双平台发行（**提交推送＋换装＋发行批**，零源码语义增量、计数不变 61）
+
+- **用户令**：「请先进行提交并推送吧，我考虑接下来进一轮我个人的真机使用，等结束后再看真机运行情况来进行验收」→（推送完成后）「请全面换装0.9.1，远端也发布0.9.1吧」。
+- **推送**（推送前两仓工作树干净、均纯快进）：orz 子树 `0ba00262..0be4a364` → `cli/feat/fusion-architecture` exit 0（四提交＝`4749f6b1` 276 0dd S2／`644f6b01` 278 0de S2／`1ecad57c` 279 处置／`0be4a364` 280 bump）；父仓 `490d327f..5d545357` → `origin/main` exit 0（275–280 六份批档＋两份设计稿＋索引 v4.253＋BACKLOG 两卷＋TODO＋`orz_source_manifest.sha256` 重生成）；推送后 `ls-remote` 两 ref 与本地**逐位一致**。
+- **装机位全面换装 0.9.1**：`C:\Users\1\AppData\Local\orz\bin`（`Get-Command orz` 解析所得即该位）三件套 0.9.0 → **0.9.1**；换装前件 `0c07208d…`／`f7bac89a…`／`93cafd3c…` 与 247／248 批 0.9.0 在役账面**逐位吻合**；旧件就地留 `.0.9.0-bak` 链、9-25 老件 `orz.exe.bak-0925` 保留；换装后 `--build-info`＝`version=0.9.1 os=windows arch=x86_64 profile=release` rc0；装机位 `acaf\` 仅存 `installation-key.tmp`（无 `signer-manifest.json`）故**不重 provision**（沿 266 批口径只换三件套）；本批**未**以装机位载体发起任何会话/run（只读核证一次）。
+- **0.9.1 发行包**（`rel-281-stage`）：两侧各 6 entries（三件套＋`README.md`＋`SHA256SUMS`＋`carrier-manifest.json`）＋与在役载体 **6/6 MATCH**；包内 README 0.9.1 版 74,554 B `543c5800…`（新增 0.9.1 概要段与详解节＝0dd D1–D8／N1–N2＋0de F1–F4／不立两项；**Linux 解包名 `0.8.15`→`0.9.1` 勘正**＝248 版遗留陈旧行；版本信息行改 `0be4a364`／2026-10-16）；zip 28,441,423 `9bc5c7d4…`／tar.gz 37,707,315 `07f67e30…`／顶层 `SHA256SUMS` 191 `a8833001…`；包内 WIN `--build-info`＝0.9.1 rc0；LIN 于 `alpine:3.20` `sha256sum -c` **4/4 OK**＋`static-pie linked`＋alpine／bookworm 双镜像 `--build-info` 0.9.1 rc0（248 批因 docker 未启动未跑容器冒烟，本批补齐）。
+- **发行**：`gh release create v0.9.1 --target main`＋三资产；tag `v0.9.1`＝本批提交（轻量 tag，沿 122／156／183／195／224／244／248 形态）；发布后为 **Latest**；服务端回读与回下载核证随后续补记（沿 249／245／225）。
+- **账面勘正（如实记）**：280 批及其前批所记「未推送未发行」于本批兑现——BACKLOG 指针行／计数行与索引头行内 280 片段就地勘正为「推送与发行随后续批（281）」；**发布面不再停 v0.9.0**。
+- **台账**：本卷 §1.218；[`281 批档`](audits/281_SUBMIT_PUSH_SWAP_AND_RELEASE_V091_2026-10-16.md)；索引头行 v4.253 → v4.254；BACKLOG 计数行/本批指针行；TODO 计数行；README 发布面对齐 0.9.1（解包名＋最新 release 链接）。计数不变 61。
+- 关键词：281 批、提交推送、装机位全面换装 0.9.1、`.0.9.0-bak` 链、GitHub Release v0.9.1、`rel-281-stage`、6/6 MATCH、包内 README 0.9.1 版、Linux 解包名勘正、alpine 3.20／bookworm 双核证、`f50b1f17…` 身份门、`9bc5c7d4…`／`07f67e30…`／`a8833001…`、计数 61 不变、索引 v4.254。
 ### 1.214 2026-10-16 277 批 0de S1 勘定——治理摩擦综合四件设计定案（**勘定批**，零源码、计数不变 61）
 
 - **用户令**：「请先继续做0de吧」（0dd S2 后续批排程）。
