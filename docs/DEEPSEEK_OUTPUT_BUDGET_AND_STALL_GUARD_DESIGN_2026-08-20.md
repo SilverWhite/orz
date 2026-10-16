@@ -1,4 +1,4 @@
-# DeepSeek 输出预算恢复与空流止损设计（2026-08-20 设计定稿；S1-S4 已闭合，修订：默认 high + 三级降级梯已实施闭环；2026-08-28：reasoning-stall 预算兜底已物理删除）
+# DeepSeek 输出预算恢复与空流止损设计（2026-08-20 设计定稿；S1-S4 已闭合，修订：默认 high + 三级降级梯已实施闭环；2026-08-28：reasoning-stall 预算兜底已物理删除；2026-10-14：叙述勘旧＋首例实机击发处置与可接受波动裁决，详 §8，零实现变更）
 
 > 状态：`S1-S4 全部闭合（max 基线）`；**2026-08-20 修订定稿（用户裁决：
 > 方案 B + 中间档）——默认 thinking 档 max → high（官方默认），降级梯
@@ -240,8 +240,8 @@ STREAM-RETRY-RHYTHM 未实施的 50s 定值）。
 | 信号 | 触发条件 | 触发后行为 |
 |------|----------|-----------|
 | content_repetition（现有） | 滑动窗口滚动哈希任意偏移：800 字符窗口内出现与记录区相同 400 字符 L-gram（起点距离 ∈ [400,800]；哈希命中后字符级比对），命中候选须过二级「标点块内部重复确认」（按标点+空白切块、内部重复块覆盖占比 ≥0.50 或无可切分点）才计命中，**流内累计确认命中 ≥3 次才触发（1–2 次仅审计留痕）** * / 1K token 窗口 3-gram 重复率 >70%（保留兜底，**每次 feed 超阈值计 1 次流内命中、累计 ≥3 才触发、1–2 次仅审计留痕**、不经二级） | 中断、不重试（已见输出）、会话计数+1 |
-| reasoning_repetition（新增，**灵敏层**） | 同一算法作用于 reasoning delta（仅 content/tool_calls 全空时启用）；滚动哈希任意偏移（同 content 规则：L=400/W=800、二级确认、流内累计 ≥3 次确认命中）+ 1K token 窗口 3-gram 重复率 >70%（同 content：流内累计命中 ≥3 才触发、1–2 次仅审计留痕）——空转若为思考循环可在数 K 内识别，不依赖大预算阈值 | 中断、直接降级（无可见输出、重试安全但不原样）、会话计数+1 |
-| reasoning_stall（新增，**预算兜底层**） | 自首 chunk 起 600s（初值，S4 校准 300–900s）无 content/tool_calls 且 reasoning 在流动；或 reasoning 估算累计 ≥64K tokens（初值，S4 校准 32–128K）仍无 content/tool_calls——OR 触发 | 中断、直接降级、会话计数+1 |
+| reasoning_repetition（新增，**灵敏层**） | 同一算法作用于 reasoning delta（仅 content/tool_calls 全空时启用）；滚动哈希任意偏移（同 content 规则：L=400/W=800、二级确认、流内累计 ≥3 次确认命中）+ 1K token 窗口 3-gram 重复率 >70%（同 content：流内累计命中 ≥3 才触发、1–2 次仅审计留痕）——空转若为思考循环可在数 K 内识别，不依赖大预算阈值 | 中断、直接降级（无可见输出、重试安全但不原样）、会话计数+1 **（2026-10-14 勘旧，用户裁决：现行实现＝中断后不自动重试、轮终局——哨兵错误不入任何重试预算，未达会话上限走 run_failed 同路径、达 DEGENERATION_LIMIT 记 run_invalidated；「重试安全但不原样」为初版旧语义已不成立，理由与首例实机见 §8）** |
+| reasoning_stall（新增，**预算兜底层**） | 自首 chunk 起 600s（初值，S4 校准 300–900s）无 content/tool_calls 且 reasoning 在流动；或 reasoning 估算累计 ≥64K tokens（初值，S4 校准 32–128K）仍无 content/tool_calls——OR 触发 | 中断、直接降级、会话计数+1 **（该族已于 2026-08-28 随 reasoning-stall 预算兜底物理删除而退役，行保留作历史）** |
 
 > *2026-08-21 修订：路径①（连续相同 delta N=5）由滚动哈希任意偏移检测
 > 取代，详下。
@@ -1137,3 +1137,44 @@ sweep-s4-g5，k=1、官方方式（无 max_wallclock）、n-concurrent=1；**S3/
   （adapter/serialize/translate/sse/index.ts）与 `packages/llm/llm-retry`
   README（2026-08 master）。
 - 登记：ADR-0010 §14.35（v1.35）/ BACKLOG 0d / TODO P0-0d / CLI_PROJECT_INDEX。
+
+## 8. 2026-10-14 修订：首例实机击发处置、叙述修正与可接受波动裁决
+
+> 性质：设计稿叙述/语义勘旧＋用户裁决落档；零实现变更（守卫逻辑不动）。
+> 源码叙述修正随下一代载体生效，在役 0.9.0 评测二进制不动（代际门纪律）。
+
+### 8.1 首例实机击发（r4 eve_industry/checkpoint_5，2026-10-13 20:27）
+
+本守卫自 2026-08-20 在役以来**首次实机 trip**：模型 reasoning 流对一段
+`load_plan_config` 代码 400 字符循环复读约 9 分钟（单轮内、仅一次 prompt），
+滚动哈希 20/20 命中 `degeneration_detected:reasoning_repetition` → 中断 →
+ACP Internal error → driver rc=1 → 该档 rounds=0／core 0.0；下一档全新会话
+131 轮 core 1.0（瞬时事件）。证据封存
+`jobs-r4/r4-p11-eve_industry/eve_industry__FdrdYjv/steps/checkpoint_5/agent/`。
+
+### 8.2 用户裁决（2026-10-14）
+
+1. **实现无误，维持现状**：中断后不自动重试是既定设计——复读退化无法保证
+   重试能确定性跳出循环，自动重试只会空转空烧；恢复路径＝人工介入整体性判断。
+   「不自动重试」的等价表述（详见 §3.3 勘旧注）：哨兵错误不入任何重试预算。
+2. **叙述修正（仅文案/注释，零行为）**：中断是轮终局的既定设计，此前
+   「audit-only」字样系误导——`agent_loop.rs` WARN 改
+   「(round-terminal; no auto-retry by design — recovery is human
+   adjudication)」；`transport.rs` trip 文案「(audit context)」改
+   「(trigger context for post-hoc review)」；命中面（1–19 次
+   「audit only, not tripping」）叙述正确、不动。
+3. **可接受波动定调**：模型偶发复读/降智这类波动**应被接受为环境事实**——
+   无论源头是否模型侧问题（灰度轮换/采样偶发/长上下文漂移皆可能），
+   守卫职责＝识别＋截停＋留痕＋供人工整体判断，不承担「治愈」模型波动。
+
+### 8.3 成因调查结论（如实，guess 级）
+
+用户提出的「deepseek flash 1013 灰度/偶发降智」假说：机制上相容
+（deepseek-flash 为官方滚动别名，灰度在别名下无感轮换；社区有以思维链特征
+侦测灰度与偶发降智的报告先例；「长上下文无限复读不触发 EOS」是 DeepSeek 系
+已归档缺陷类 DeepSeek-V3 #1550），但**不可证明**——官方更新日志 2026-10 无
+条目、用户未订阅 DeepSeek 通知无故障邮件可查，**仅作猜测记录**。本地量化：
+repetition 命中为跨三天全程背景噪声（十余档，p06/ckpt5 曾 88 命中未击发），
+trip 全轮仅此一例，紧邻后续档命中＝基线，无 10-13 晚间聚集峰。判别实验
+（留待深挖）：ckpt5 原 prompt 多时段重放测非确定性＋命中密度时间序列对齐
+灰度报告窗口。详见 268 批档 §7。
