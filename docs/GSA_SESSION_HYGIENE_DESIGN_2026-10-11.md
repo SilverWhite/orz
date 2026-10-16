@@ -33,6 +33,8 @@
 
 - **理由**：删除路径**单一**（启动侧）＝可审计、可重试、不与「close 后同会话恢复」「评测证据（journal 拷贝在收尾前完成）」「本地分析期内文件仍在」相冲突；收尾侧保持既有时序（包含 PendingArchiveTicket 的推迟语义），只把包升级为含足迹。
 
+- **勘注（0dd，2026-10-16；ADR-0010 §14.84）**：上行「500K 增量」自 276 批落码起**仅指无头车道（0ak，§14.68）**——交互（ACP）车道 run 尾 500K 里程碑增量归档已随会话生命周期用户主权裁决退役（`handle_session_prompt` spawn 块删除）；本表其余各行语义不动（收卷口径经 0dd S1 裁决**保留现状、不改提示制**）。设计：[`SESSION_LIFECYCLE_USER_SOVEREIGNTY_DESIGN_2026-10-16`](SESSION_LIFECYCLE_USER_SOVEREIGNTY_DESIGN_2026-10-16.md)。
+
 ## §3 扫描与归属（裁决 D2/D3/D8）
 
 ### §3.1 足迹清单（按名归属）

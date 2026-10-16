@@ -74,7 +74,7 @@ orz 为**本地优先**、**保障优先**、**直接进入真机而非沙箱环
 
 ### 黑板
 
-黑板是主 Agent 与机械层共用的单会话状态面板：分区保存计划、执行动作、实体（文件/进程/环境）、会话与门禁记录。主 Agent 通过 `blackboard_read` 按需读取（PULL），不常驻提示词；模型可经 `blackboard_write` 向计划/笔记区写入（单条 ≤8K），盖章、发放与归档仍由机械层完成；黑板为单会话作用域，写时按 `(domain, round)` 盖章；`blackboard_read` 按需进行域与轮数的折叠渲染（render fold），响应头携带黑板水位（【x.xM/10M】）与「滑块外可压缩 N 块」读数；交互会话结束时由 `session_archive` 打包为单 gzip 归档文件，无头 run 按里程碑增量归档。
+黑板是主 Agent 与机械层共用的单会话状态面板：分区保存计划、执行动作、实体（文件/进程/环境）、会话与门禁记录。主 Agent 通过 `blackboard_read` 按需读取（PULL），不常驻提示词；模型可经 `blackboard_write` 向计划/笔记区写入（单条 ≤8K），盖章、发放与归档仍由机械层完成；黑板为单会话作用域，写时按 `(domain, round)` 盖章；`blackboard_read` 按需进行域与轮数的折叠渲染（render fold），响应头携带黑板水位（【x.xM/10M】）与「滑块外可压缩 N 块」读数；会话归档包（`.gsa/archives/<session8>.json.gz`）由用户显式动作（web 归档键／`orz archive`）、会话关闭或新会话起点的卫生收卷发起，无头 run 按里程碑增量归档（0dd：交互车道 run 结束不自动归档）。
 
 ### 时间与动作域判断组件
 

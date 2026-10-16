@@ -4954,3 +4954,31 @@ RLI 影子默认关、生产 1D 不动）。选型出处按用户裁决**脱敏�
    修订（非新增 PULL 面），不违反 §14.81 复裁前「冻结 LIF 新增面」纪律；无阻尼常数
    （recli 实测 spike 进入 13 次／5,166s 已足稀疏，禁拟合；S4 真机读数现突发聚集再
    以数据议最小间隔）。
+
+#### §14.84 会话生命周期用户主权——交互车道 run 尾自动归档退役（0dd）（2026-10-16，v1.87）
+
+**来源**：web 真人测试轮实证（0.9.0 载体、会话 2b1f85d2：run_finished 后 80ms 自动
+`session_archive{incremental:true}`、续聊被迫手动回档）＋用户裁决「存档这一类控制
+对话的行为本身就应该交给用户进行手动处理，不用自动归档……自动归档太影响日常使用」
+〔266 批立项；S1 设计 275 批〕。设计权威：[`SESSION_LIFECYCLE_USER_SOVEREIGNTY_DESIGN_2026-10-16`](../docs/SESSION_LIFECYCLE_USER_SOVEREIGNTY_DESIGN_2026-10-16.md)（D1–D8）。
+
+1. **裁决（D2）**：交互（ACP）车道 **run 结束零归档动作**——`handle_session_prompt`
+   run 尾 500K 里程碑增量归档 spawn 块退役（本节取代 DP-11④／滑块设计稿 §3.5.1 v7
+   「增量归档时点」的 **ACP 半边**；无头半边不动）。对话生命周期控制（存档／新开／
+   回档／删除）主权归用户手动面；归档仅由用户显式动作（web 归档键／`orz archive`）、
+   会话关闭（close 道含 B3 P2-3 推迟票，语义不动）、新会话起点 0cy 收卷（口径不动，
+   D5）与无头里程碑（§14.68，D4）发起。
+2. **归档原语单一源不破**：`incremental_archive_due`／里程碑水位
+   （`<s8>.milestones.json` 单调幂等）／`archive_session_package(incremental)` 全部
+   保留——唯一消费者＝无头车道（0ak）；`PendingArchiveTicket.incremental` 旗标随
+   退役撤除（ACP 票恒 close 道）。
+3. **数据安全（D8）**：零丢失面——对话侧车每个成功 prompt 恒落、journal 逐事件恒在，
+   归档包为派生打包物；「长单对话不结束就没有存档」缺口在交互车道**重新打开**＝用户
+   主权显式接受项（0cy 收卷在下一会话起点对上一轮兜底）。
+4. **契约面零变更**：`session_archive` 事件族／schema／web 投影（`isArchived` mtime
+   判定，D6）／TUI 渲染零改动——交互车道只是不再自发产生该事件。
+5. **落码与钉子（S2，276 批）**：orz `4749f6b1`——spawn 块删除＋票字段退役＋
+   `ARCHIVE_INCREMENT_TOKENS`/`incremental_archive_due` 注释改注无头唯一消费者；
+   钉 N1（跨里程碑成功 run ⇒ 零 `session_archive`/零 ARC journal/水位不动，前提
+   自证估算 ≥500K）＋N2（close 推迟票 run 尾消费落含足迹包）；读数＝host lib 单线程
+   365/0＋web 47/0＋clippy 触碰面零新增。S3 载体重建与 S4 真机复验待续。

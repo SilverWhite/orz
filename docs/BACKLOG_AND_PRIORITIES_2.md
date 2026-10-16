@@ -136,6 +136,24 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.223 2026-10-16 276 批 0dd S2 落码＋钉子——交互车道 run 尾自动归档退役（**落码批**，orz `4749f6b1`，零跑批、计数不变 61）
+
+- **用户令**：「请开始进S2吧」（275 批设计稿 D1–D8 定案后的落码放行）。
+
+- **落码面**（orz 单文件 `orz-host/src/acp_server.rs`，131+/35−；**不推送**）：① `handle_session_prompt` run 尾 `incremental_archive_due` 判定＋spawn 块整块删除（DP-11④ ACP 半边退役；原位留 0dd 注记＝**不得 reintroduce**）；② `PendingArchiveTicket.incremental` 旗标退役（spawn 恒非增量、close 构造点收缩）；③ `incremental_archive_due`/`ARCHIVE_INCREMENT_TOKENS`/水位注释改注「唯一消费者＝无头车道（0ak）」——原语单一源不破；close 推迟票（B3 P2-3）不动。
+
+- **钉子**：N1 `run_tail_performs_no_archive_even_across_milestone`＝1.5M 字符互异词元长答（分块 200K 防流式碎 chunk）成功 run ⇒ 零归档包/零里程碑水位/零 ARC journal/侧车照常，**前提自证**＝回读侧车估算 ≥500K（旧判据彼刻必真，钉具回归强度）；N2 `deferred_close_ticket_still_archives_at_run_tail`＝推迟票 run 尾消费落含足迹包。**实施勘误（如实记）**：两钉初版 `});` 漏 `.await` 被 clippy「unused Future」抓出空跑假绿（0.00s）；补 await 后又暴露 N1 会话 8 前缀误计（`sess-n2de`→`sess-n2d`/`sess-n1ru`→`sess-n1r`），断言随勘——N1 终形为文件面＋ARC 计数面＋前提自证三重断言。
+
+- **验证读数**：host lib 单线程 **365/0**（6 ignored；+2 钉）＋web **47/0**＋`cargo check -p orz-bin` 净＋clippy 触碰面零新增（文件内余 3 条预存）＋fmt 触碰区净。**fmt 纪律事件**：`cargo fmt -p orz-host` 曾把 crate 内 12 文件预存折行漂移一并改写——逐文件 `git checkout --` 还原、未收编入批（orz-sampling-types 预存漂移同样未动）。
+
+- **dated 档转录（父仓随批）**：ADR-0010 卷 14 **§14.84**（v1.87，五条：来源／裁决／原语单一源／数据安全／契约零变更＋落码钉子）；滑块设计稿 §3.5.1 勘误（里程碑半边 ACP 退役、无头保留）；0cy 设计稿 §2 勘注（「500K 增量」仅指无头道；收卷口径保留现状）；README 归档句收紧（用户显式动作／会话关闭／新会话起点收卷／无头里程碑）。
+
+- **边界**：零跑批、零重建（S3 待放行）；web 前端零改动；计数不变 61；orz 推送另行放行。
+
+- **台账**：本卷 §1.223；[`276 批档`](audits/276_0DD_S2_RUN_TAIL_ARCHIVE_RETIREMENT_2026-10-16.md)；索引头行 v4.248 → v4.249＋§6 `GSA-SESSION-LIFECYCLE-USER-SOVEREIGNTY` 条目 S2 注记；TODO 计数行/P1 路由行/`P1-0dd` S2 勾选；BACKLOG 计数行/本批指针/P1 总览行/`0dd` 专节批序行；orz 子模块指针 `0ba00262` → `4749f6b1`。计数不变 61。
+
+- 关键词：276 批、0dd S2、run 尾自动归档退役、handle_session_prompt、PendingArchiveTicket.incremental 退役、incremental_archive_due 无头唯一消费者、N1 零归档钉、N2 close 推迟票回归、clippy 抓空跑假绿、会话 8 前缀勘误、ADR §14.84 v1.87、滑块 §3.5.1 勘误、0cy §2 勘注、host 365/0、orz 4749f6b1、计数 61、索引 v4.249。
+
 ### 1.222 2026-10-16 275 批 0dd S1 设计稿——会话生命周期用户主权（**设计稿批**，零源码、零跑批、计数不变 61）
 
 - **用户令**：「请进行0dd S1吧」。
