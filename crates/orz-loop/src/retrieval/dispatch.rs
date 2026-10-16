@@ -3983,7 +3983,27 @@ mod tests {
             )
             .await
         });
-        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        // 279 处置：轮询等待激活开启（ToolStarted{target:"internal_retrieval"}
+        // 落 journal）后再取消，消除「取消先于激活开启 ⇒ 0 close」的调度竞窗
+        // （0aq 家族证据，2026-10-16 基线差分实锤——原固定 30ms sleep 在机器
+        // 热态下隔离复跑 3/3 连败）。信号成立性：本文件 tokio::test 为
+        // current_thread 运行时，run_retrieval_subagent 落 ToolStarted 后到
+        // 激活创建之间无 await 点 ⇒ 轮询者读到该行时 run 任务必然已停于
+        // 激活创建之后的挂起点（子代理流内）。10ms 间隔、5s 超时；超时照旧
+        // 直接 cancel 不 fail（len==1 断言仍是唯一判据）。
+        for _ in 0..500 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            if dir.join("events.jsonl").exists() {
+                let started = events(&dir).iter().any(|e| {
+                    e.event_type == EventType::ToolStarted
+                        && e.payload.get("target").and_then(|v| v.as_str())
+                            == Some("internal_retrieval")
+                });
+                if started {
+                    break;
+                }
+            }
+        }
         token.cancel();
         let result = run.await.unwrap();
         assert!(matches!(result, Err(AgentLoopError::Cancelled)));

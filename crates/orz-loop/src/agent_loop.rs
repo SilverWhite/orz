@@ -7838,7 +7838,7 @@ mod tests {
             ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // v8：H1 打断档钉在 1K（模型面估算），T1 抬到不可达。
+        // v8：H1 打断档钉在 2K（模型面估算），T1 抬到不可达。
         // 0de D1：开窗前置＝可压集合非空 ⇒ slider/block 收小成块（空集合时
         // H1 不再开窗，专项钉另测）。
         let controller = AgentLoopController::with_gateway(gateway)
@@ -9465,6 +9465,15 @@ mod tests {
             .collect();
         assert_eq!(landed.len(), 1, "未落地审计须照落: {landed:?}");
         let requests = fake.received_requests();
+        // 279 处置 N3 锐化：脚本 3 响应（工具轮→摘要+STOP→反例门逼轮→终答）
+        // ⇒ 请求数确定＝3（STOP 声明不作收束用——extract_model_stop 仅在
+        // 摘要识别点消费），显式钉死；豁免若失效即多出一次逼轮请求。
+        assert_eq!(
+            requests.len(),
+            3,
+            "脚本 3 响应 ⇒ 恰 3 次请求（实测 {}）",
+            requests.len()
+        );
         assert!(
             requests
                 .iter()

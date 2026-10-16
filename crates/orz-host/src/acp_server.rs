@@ -5488,8 +5488,9 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                // ~1.5M 字符互异词元长答 ⇒ 侧车估算 chars/2 ≈ 750K ≥ 500K
-                //（互异词元避开输出重复守卫；大分块避免流式碎 chunk 拖慢）。
+                // ≈1.09M 字符互异词元长答 ⇒ 侧车估算 chars/2 ≈ 544K ≥ 500K
+                //（余量 ~9%，字符数定长故前提确定性成立；互异词元避开输出
+                // 重复守卫，大分块避免流式碎 chunk 拖慢）。
                 let long_answer = (0..150_000).map(|i| format!("w{i} ")).collect::<String>();
                 let fake = Arc::new(
                     FakeProvider::new(vec![ScriptedResponse::text(long_answer)])
@@ -5585,6 +5586,42 @@ mod tests {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 let pkg = base.join(".gsa").join("archives").join("sess-n2d.json.gz");
                 assert!(pkg.exists(), "推迟票必须在 run 尾消费并落包（{pkg:?}）");
+                // 279 处置批 N2 补强：批档声称 close 道恒落「含足迹包」，
+                // 原钉只验包存在——解包（照既有钉的 gzip→envelope 模式）
+                // 验 footprint 段在且非空（本测 run 目录 RUN-sess-n2d-* 在
+                // 先，足迹 runs 段确定性非空 ⇒ counts.bytes > 0）。
+                let mut decoder = flate2::read::GzDecoder::new(std::fs::File::open(&pkg).unwrap());
+                let mut decoded = Vec::new();
+                std::io::Read::read_to_end(&mut decoder, &mut decoded).unwrap();
+                let envelope: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+                assert_eq!(envelope["schema"], "session-archive-package-v0.3");
+                let footprint = envelope
+                    .get("footprint")
+                    .and_then(|v| v.as_object())
+                    .expect("close 道包必须含 footprint 段");
+                assert!(
+                    footprint["counts"]["bytes"].as_u64().unwrap_or(0) > 0,
+                    "footprint 必须非空（counts.bytes > 0）：{footprint:?}"
+                );
+                // close 道恒非增量：本次 run 的 session_archive journal 事件
+                // payload 不得含 `incremental` 键（该键仅 incremental=true
+                // 时写入，见 archive_raw_session_package）。
+                let arc_journal = base
+                    .join(".gsa")
+                    .join("runs")
+                    .join("ARC-sess-n2d-1")
+                    .join("events.jsonl");
+                let arc_events = std::fs::read_to_string(&arc_journal)
+                    .expect("ARC journal 必须随包落盘（票 prompt_count=1 ⇒ ARC-sess-n2d-1）");
+                let archive_event = arc_events
+                    .lines()
+                    .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                    .find(|ev| ev["event_type"] == "session_archive")
+                    .expect("session_archive 事件必须在 ARC journal");
+                assert!(
+                    archive_event["payload"].get("incremental").is_none(),
+                    "close 道恒非增量——payload 不得含 incremental 键：{archive_event}"
+                );
                 let _ = std::fs::remove_dir_all(&base);
             })
             .await;

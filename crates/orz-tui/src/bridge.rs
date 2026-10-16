@@ -409,10 +409,18 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             ticket_kind: get_str(p, "ticket_kind"),
             reject_code: get_str(p, "reject_code"),
         },
+        // 0de D6 同族（web 644f6b01 已修）；279 处置批补 TUI 侧——clear 形
+        // payload 只带 `target_tokens`（无 `estimated_tokens_after`），get_u64
+        // 缺省 0 曾把实际值渲成「估 ~0K」。回退条件镜像 web projection.js：
+        // estimated_tokens_after 缺位或 0 时回退 target_tokens；两者皆缺保持 0
+        // （两字段语义同＝压缩后模型面估算）。
         EventType::ContextCompressed => TuiEvent::ContextCompressed {
             trigger_tokens: get_u64(p, "trigger_tokens"),
             rounds_dropped: get_u64(p, "rounds_dropped"),
-            estimated_tokens_after: get_u64(p, "estimated_tokens_after"),
+            estimated_tokens_after: match p.get("estimated_tokens_after").and_then(Value::as_u64) {
+                Some(v) if v > 0 => v,
+                _ => get_u64(p, "target_tokens"),
+            },
         },
         EventType::ContextRecoveryTruncated => TuiEvent::ContextRecoveryTruncated {
             before_estimate_tokens: get_u64(p, "before_estimate_tokens"),
@@ -706,6 +714,51 @@ mod tests {
             let kind = tui.kind();
             assert_ne!(kind, "unknown", "event_type must not degrade: {kind}");
         }
+    }
+
+    #[test]
+    fn context_compressed_clear_form_falls_back_to_target_tokens() {
+        // 0de D6 同族收口（web 644f6b01 已修；279 处置批补 TUI 侧）：clear 形
+        // payload 只有 trigger_tokens/target_tokens（无 estimated_tokens_after）
+        // ——曾把实际值渲成「估 ~0K」；现缺位回退 target_tokens。
+        let ev = make_event(
+            EventType::ContextCompressed,
+            json!({
+                "trigger_tokens": 171000,
+                "target_tokens": 100000,
+                "rounds_dropped": 4,
+            }),
+        );
+        let mapped = run_event_to_tui(&ev);
+        let TuiEvent::ContextCompressed {
+            trigger_tokens,
+            rounds_dropped,
+            estimated_tokens_after,
+        } = mapped
+        else {
+            panic!("expected ContextCompressed");
+        };
+        assert_eq!(trigger_tokens, 171000);
+        assert_eq!(rounds_dropped, 4);
+        assert_eq!(
+            estimated_tokens_after, 100_000,
+            "clear 形（estimated_tokens_after 缺位）必须回退 target_tokens"
+        );
+        // 渲出面：系统消息渲出 target_tokens 真值（「估 ~0K」即回归信号）。
+        let mut app = crate::app::TuiApp::new();
+        crate::projection::apply_event(&mut app, run_event_to_tui(&ev));
+        let rendered = app.content.items.iter().find_map(|item| match item {
+            crate::view_model::ContentItem::Message(m) if m.role == "系统" => {
+                Some(m.content.clone())
+            }
+            _ => None,
+        });
+        let rendered = rendered.expect("压缩事件必须渲出系统消息");
+        assert!(
+            rendered.contains("估 ~100K"),
+            "必须渲出 target_tokens 真值：{rendered}"
+        );
+        assert!(!rendered.contains("估 ~0K"), "不得渲「估 ~0K」：{rendered}");
     }
 
     #[test]
