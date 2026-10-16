@@ -28,8 +28,18 @@
 
 ## 3. 四件根因（S1/S2 落点）
 
-- **F1（P1）收束后机械窗口空转＝触发面与模型治理状态缺联动**：机械 `context_scale_window` 的武装/触发不感知「窗口已被模型 clear 治理、run 已进入收束段」，终报长文使面回涨即再开窗。锚点＝`orz/crates/orz-loop/src/agent_loop.rs`（窗口触发面）；修复方向（S1 定案）＝治理状态感知（clear/model_selected 后窗口重武装延迟／收束段豁免）。
-- **F2（P1）压缩块区间行解析零宽容**：`[SEMANTIC_SUMMARY]` 的 `压缩块: N-M` 行只要带全角括号行内说明即解析失败，触发 `summary_not_landed` 补交。锚点＝0ap/0ah 压缩交互链摘要区间行解析；修复方向＝解析宽容化＋格式契约同步。
+> **勘注（2026-10-16，277 批 S1 勘定）**：本节 F1/F2 机理描述经 `RUN-2b1f85d2-1` journal
+> seq 级重建后两处勘误（原文保留于下，勘正表述见
+> [`设计档 §1/§3`](../CONTEXT_GOVERNANCE_FRICTION_COMPOSITE_DESIGN_2026-10-16.md)）——
+> **F1**＝事发尾段并无「窗口重开」（H1 窗 19:02:27 已按设计收口 `model_participated=true
+> rounds_used=1`，seq 536），逼轮实为**窗口收口后自愿迟交摘要消费路径的告知注入**
+> （seq 556→558）；修复方向更正为「消费路径收束豁免（D3）＋H1 开窗可压集合前置（D1）」。
+> **F2**＝「只认裸 N-M 形」不准确（0bk S1 宽容化已在事发载体 0.9.0 在役），真实根因＝
+> **注解内全角逗号被分隔符切分误切**（事发行注解「…覆盖，本摘要为迟交落账）」切出的
+> 第二段无数字核心 ⇒ 整条 Unrecognized）；修复＝分隔符切分前剥除平衡括号注解段（D5）。
+
+- **F1（P1）收束后机械窗口空转＝触发面与模型治理状态缺联动**：机械 `context_scale_window` 的武装/触发不感知「窗口已被模型 clear 治理、run 已进入收束段」，终报长文使面回涨即再开窗。锚点＝`orz/crates/orz-loop/src/agent_loop.rs`（窗口触发面）；修复方向（S1 定案）＝治理状态感知（clear/model_selected 后窗口重武装延迟／收束段豁免）。〔机理已由 277 批勘误，见上勘注〕
+- **F2（P1）压缩块区间行解析零宽容**：`[SEMANTIC_SUMMARY]` 的 `压缩块: N-M` 行只要带全角括号行内说明即解析失败，触发 `summary_not_landed` 补交。锚点＝0ap/0ah 压缩交互链摘要区间行解析；修复方向＝解析宽容化＋格式契约同步。〔根因已由 277 批勘误，见上勘注〕
 - **F3（P2）web 投影「估 ~0K」字段漂移**：`clear` 模式事件 payload 用 `target_tokens`（本例 171,261），`orz/crates/orz-web/assets/app/projection.js:198` 模板固定读 `estimated_tokens_after`（model_summary 事件字段）→ `num()` 取 0 渲染「估 ~0K」。修复＝payload 字段单源或模板双字段兼容。
 - **F4（P2，用户点名）`rounds_since_last_compaction` 恒 0 根因实锤**：v8 分块压缩写点 `orz/crates/orz-loop/src/agent_loop.rs:1625` **硬编码 0**，未接 `rounds_since` 计数器；机械模板轨老写点 `agent_loop.rs:1123` 有维护。本 run 7 事件全为 `mode=model_summary`（全走 :1625）→ 7/7 恒 0 与 journal 完全一致。修复＝计数器贯通两写点＋「分块压缩事件计数器非零」可复现钉。
 

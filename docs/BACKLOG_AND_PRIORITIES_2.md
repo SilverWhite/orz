@@ -301,6 +301,15 @@
 - **台账**：本卷 §1.214；[`268 批档`](audits/268_R4_DISKFULL_ENGINE_DEATH_AND_INFRA_GUARDS_2026-10-14.md)；索引头行 v4.240 → v4.241＋§6 新增 `EVAL-SLOPCODE-R4-CLEAN-ROOM`＋§8 pending 桶；TODO 计数行/P1 路由/P1-0dc S3 勾选；BACKLOG 计数行/本批指针/P1 行/行龄归档指针；orz 子树 `0ba00262`＋`orz_source_manifest.sha256` 重生成 1,486 条。**提交推送随本批**。
 - 关键词：268 批、r4 收官、净室官方口径、36/36、双口径 0.8846／0.8631、对 0cw +0.0611、磁盘满→引擎自杀、基建三守卫、监督器、DeepSeek 赔偿 credit、输出哨兵叙述修正、索引 v4.241。
 
+### 1.214 2026-10-16 277 批 0de S1 勘定——治理摩擦综合四件设计定案（**勘定批**，零源码、计数不变 61）
+
+- **用户令**：「请先继续做0de吧」（0dd S2 后续批排程）。
+- **journal seq 级重建（`RUN-2b1f85d2-1`，只读）勘误 267 批 F1/F2 机理描述两处（就地勘注随批）**：F1＝事发尾段无「窗口重开」——H1 窗 seq 523 开启（33 块有据）后模型窗内 clear＋handover 写 ⇒ seq 536 按设计收口 `model_participated=true rounds_used=1`；逼轮实为**窗口收口后自愿迟交摘要消费路径的告知注入**（seq 556 `block_selection_unrecognized` compressible_blocks=0 ⇒ 注入告知块 ⇒ seq 558 模型被迫多一轮确认 ⇒ seq 559 run_finished）。F2＝0bk S1 宽容化已在事发载体 0.9.0 在役；真实根因＝**注解内全角逗号被分隔符切分误切**（事发行注解「…覆盖，本摘要为迟交落账）」切出第二段无数字核心 ⇒ 整条 Unrecognized；0bk 钉用例注解用全角分号故未暴露）。
+- **D1–D7 定案（[设计档](../docs/CONTEXT_GOVERNANCE_FRICTION_COMPOSITE_DESIGN_2026-10-16.md)）**：D1 H1 开窗前置＝可压集合非空（单源复用 `t1_compressible`；空集注入 `hard_reminder_block` 本体不开窗 `form=reminder_only_no_compressible`）；D2 窗内早收口**不立**（clear/clear_all 机械强制 handover 写、摘要产出翻 participated ⇒ 治理必收口，无空集逼窗可达路径）；D3 迟交摘要收束同消息豁免（识别点测 `extract_model_stop`，带 STOP 声明 ⇒ 消费点三路只审计不注入；**事发主修**——仅修 F2 时迟交摘要仍会经「区间无命中」注入逼轮）；D4 收束段独立豁免**不立**（`RUN_END` 是模型自述非可信门）；D5 `parse_block_selection` 切分前剥除平衡括号注解段（非法段仍拒、0bk 契约文案零改）；D6 投影模板双字段兼容（`estimated_tokens_after` 回退 `target_tokens`；否决 payload 加字段）；D7 `compress_blocks_now` 增 `rounds_since` 参数贯通既有计数器（两消费点传 `rounds_since_compact`；老写点不动）。
+- **S2 钉子 N1–N5 定案**：N1 事发行原样 ⇒ `Specified([33])`（0bk/0bm 用例不翻）；N2 H1 空集不开窗（对照臂＝有块照常开窗）；N3 收束同消息豁免（对照臂＝无 STOP 照常注入）；N4 分块压缩事件计数器非零；N5 投影 clear 形 payload 渲染非 0。
+- **台账**：本卷 §1.214；[`277 批档`](audits/277_0DE_S1_CONTEXT_GOVERNANCE_FRICTION_DESIGN_2026-10-16.md)；设计档；267 批档就地勘注；索引头行 v4.249 → v4.250＋canonical 条目勘正；TODO 计数行/P1 路由/P1-0de 节；BACKLOG 计数行/本批指针/P1 行/0de 节 F1/F2 勘误指针。计数不变 61。
+- 关键词：277 批、0de S1、治理摩擦综合勘定、journal seq 级重建、迟交摘要逼轮、注解内全角逗号、收束同消息豁免、括号注解段剥除、rounds_since 贯通、索引 v4.250。
+
 ### 1.213 2026-10-13 267 批 0de 上下文治理摩擦综合立项——收束后窗口空转＋解析＋投影＋遥测四件（**立项批**，零源码、计数 62 → 63）
 
 - **用户令**：「请将真问题都立项为一个综合摩擦项吧」；遥测项点名「7 个压缩事件的 rounds_since_last_compaction 全部恒为 0，疑似遥测字段未维护——这点要查一下并且对此进行处理」；量尺间距裁决「模型在 693K 这一没有提醒的地方将上下文拉回而不是到 900K 硬拉，我考虑就已经足够了，不必做额外处理」。
