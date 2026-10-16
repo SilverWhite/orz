@@ -136,6 +136,24 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.221 2026-10-16 274 批 SCBench 收官报告发帖上游——`SprocketLab/slop-code-bench#45`（**外发交付批**，零源码、零跑批、计数不变 61）
+
+- **用户令**：「我考虑可以去sc bench仓库提交最终版本的issue了，我们之前已经提交过#40和#44」→（两轮审阅后）「还是补上事实句+短询问吧」。
+
+- **发送前只读核（2026-10-16 实测）**：#40 OPEN／仅我方两条评论、**无维护者回复**；#44 OPEN／0 评论；榜单 scbench.ai 当日 **24 runs／16 条可见**，harness 列只有 Codex／Claude Code／Cursor CLI／Kimi CLI／OpenCode，**无 orz、无 DeepSeek**；#42／#43 已由维护者关闭，回帖称「runs are prohibitively expensive，we are trying to somewhat refresh the leaderboard」（低回复频率＝资源问题，非针对我方）。
+
+- **交付物**：[`docs/en/SCB_FINAL_ISSUE_DRAFT_2026-10-16.md`](en/SCB_FINAL_ISSUE_DRAFT_2026-10-16.md)——中文审阅版＋英文逐字稿＋附件清单＋发送前核对清单＋发送回读核验＋手改稿并入记录；**正文六节**＝四轮弧线表（含 orz 存档机制披露与「不作专门清档版本」的决定）／#44 封堵结果与逐档断言／#40 §② 两条仍悬复核请求（file_backup ck2–ck3 参考解 Core 0.0、mvvault ck5 差一测试）＋test_translator 在 `38d627e` 仍复现／入榜路径实验（R2／R4 均公开 Harbor run）＋事实句与短询问／一条**明示不作结论**的论文口径观察／两条小发现（dag_execution 未文档化 `sleep()`、test_translator ck7–ck8 结构缺失）。
+
+- **发送**：`gh issue create -R SprocketLab/slop-code-bench --title "…" --body-file .tmp-273-issue-body.md` → **issue #45**（https://github.com/SprocketLab/slop-code-bench/issues/45）；**机械预检**＝正文从草稿 §English 段抽出后与临时正文件逐字节比对 `EXACT MATCH`（6,652 字符，含尾换行报 6,653 字符）；**回读核验**＝OPEN／无标签／作者 SilverWhite／创建 2026-10-16T07:06:05Z；临时正文件已删。
+
+- **用户手改并入**（中文版与英文逐字稿同步）：§1 新增 orz 存档机制披露＋不作专门清档版本的决定；§4 依用户裁决补回事实句＋短询问（逐字采用用户给定措辞）；§5 末句增补「LLM 进步极快／可能本就不存在于 DeepSeek V4.1 Flash 身上」；末段增补「Harness 部分需要被额外测评和考虑」；材料位置三条改可点击链接。用字修正两处（`不存在与`→`不存在于`、`真心实意的觉得`→`真心实意地觉得`）、表头折行还原（内容未改）。
+
+- **口径与边界**：仅发英文（英文开发者仓库，沿 213／223 批口径，中文留档）；**形态＝新开 issue**（未采纳 #40 追评，#44 亦未单独追评）；附件形态＝仓内链接（无需打包，#40 的 52 文件包未复用）；正文所有数字取自 V4 四方报告与参考解缺陷档，**不新增推断**；论文口径观察已明示「不作结论」。后续＝等待上游回复；若长期无回复，可选 #40／#45 相关回贴或 Discord 人工通道（随裁决，**不占计数**）。
+
+- **台账**：本卷 §1.221；[`274 批档`](audits/274_SCB_FINAL_REPORT_ISSUE_45_2026-10-16.md)；索引头行 v4.246 → v4.247＋§6 `EVAL-SLOPCODE-R4-CLEAN-ROOM` 条目 274 注记；TODO 计数行；BACKLOG 计数行/本批指针。计数不变 61。
+
+- 关键词：274 批、SCBench 收官报告、issue #45、slop-code-bench、SprocketLab、SCB_FINAL_ISSUE_DRAFT、中文审阅版、EXACT MATCH 6652、gh issue create、R4 净室 36/36、file_backup／mvvault 复核请求、入榜路径、仅发英文、计数 61、索引 v4.247。
+
 ### 1.220 2026-10-16 273 批 SCB V4 四方报告英文版落盘（**翻译交付批**，零源码、零跑批、计数不变 61）
 
 - **用户令**：「请将SCB V4报告翻译一份英文版吧」。
