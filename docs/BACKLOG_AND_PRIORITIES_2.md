@@ -301,6 +301,16 @@
 - **台账**：本卷 §1.214；[`268 批档`](audits/268_R4_DISKFULL_ENGINE_DEATH_AND_INFRA_GUARDS_2026-10-14.md)；索引头行 v4.240 → v4.241＋§6 新增 `EVAL-SLOPCODE-R4-CLEAN-ROOM`＋§8 pending 桶；TODO 计数行/P1 路由/P1-0dc S3 勾选；BACKLOG 计数行/本批指针/P1 行/行龄归档指针；orz 子树 `0ba00262`＋`orz_source_manifest.sha256` 重生成 1,486 条。**提交推送随本批**。
 - 关键词：268 批、r4 收官、净室官方口径、36/36、双口径 0.8846／0.8631、对 0cw +0.0611、磁盘满→引擎自杀、基建三守卫、监督器、DeepSeek 赔偿 credit、输出哨兵叙述修正、索引 v4.241。
 
+### 1.215 2026-10-16 278 批 0de S2 落码＋钉子——治理摩擦综合四件进体（**落码批**，零跑批、计数不变 61）
+
+- **用户令**：「请进行S2吧」（277 批设计 D1–D7 定案后的落码放行）。
+- **落码面（orz `644f6b01`，四文件 582+/88−）**：D1 H1 开窗前置＝可压集合非空（`t1_compressible == 0` ⇒ 只注入 `hard_reminder_block` 本体不附窗口块不开窗；`open_window(HardReminder)=t1_compressible>0` 单源复用 T1 判定；审计 `form=reminder_only_no_compressible`）＋D3 `pending_semantic` 二元组→三元组（识别点 `extract_model_stop` 一次性判定；loop-top/run 尾两消费点传入；`compress_blocks_now` 三告知路径按旗标只落审计不注入）＋D5 `strip_paren_annotations` 切分前剥除平衡括号注解段（未闭合剥至段尾；`Unrecognized` 仍携原文）＋D6 `projection.js` 双字段兼容（`estimated_tokens_after` 回退 `target_tokens`）＋D7 `compress_blocks_now` 增 `rounds_since` 参数写真值（替换硬编码 0）。
+- **钉 N1–N5 全绿**：N1 事发行原样 ⇒ `Specified([33])`（0bk/0bm 用例不翻、非法段仍拒、纯注解行仍拒）＋N2 H1 空集不开窗（提醒本体在/窗口块全无/无收口事件）＋N3 收束豁免（对照臂＝无 STOP 照常注入 0bs ⑥ 不翻）＋N4 计数器 `==4` 非零＋N5 冒烟 clear 形 payload 渲「估 ~171K」非 0K。
+- **实施勘误与迁移（如实记）**：① 四个既有窗口钉迁移＝小结果轮在前、肥胖结果轮在后两轮成块（`SeqOutputsHost` 按序吐结果）＋H1 抬 1K→2K——滑块按**整轮粒度**切（`slider_start`＝最近 slider 估算连续完整轮起点），单肥胖轮自锚 ⇒ 零分块、H1 首火即被 D1 抑制并消费闩位（首版迁移踩坑、残留 journal 实证后定形）；② N3/N4 首版驱动缺反例门实质（`answer_gate_has_substance` 需执行事实）⇒ 补前置工具轮；③ `user_cancel` 预存 flaky（干净 HEAD 同败、全量复跑过）＝如实登记未收编。
+- **读数**：loop 877/0（+4 钉）＋web 47/0＋前端冒烟全过（+N5）＋host lib 单线程 365/0＋bin check 净＋clippy 96=96（stash 前后对比）＋fmt 触碰区净。
+- **台账**：本卷 §1.215；[`278 批档`](audits/278_0DE_S2_IMPL_AND_NAILS_2026-10-16.md)；索引头行 v4.250 → v4.251＋canonical 条目；TODO 计数行/P1 路由/P1-0de 节；BACKLOG 计数行/本批指针/P1 行/0de 节批序。计数不变 61。
+- 关键词：278 批、0de S2、治理摩擦综合落码、H1 开窗可压集合前置、reminder_only_no_compressible、stop_declared 旗标、括号注解段剥除、rounds_since 贯通、投影双字段兼容、滑块整轮粒度、SeqOutputsHost、索引 v4.251。
+
 ### 1.214 2026-10-16 277 批 0de S1 勘定——治理摩擦综合四件设计定案（**勘定批**，零源码、计数不变 61）
 
 - **用户令**：「请先继续做0de吧」（0dd S2 后续批排程）。

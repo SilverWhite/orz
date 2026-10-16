@@ -1106,7 +1106,7 @@ cf317beb373f369ea47e677f6497170adf34821a3c3246cdc17eb22bf5588137  crates/orz-loo
 5e0ab5715308ab649d33c3ec6c45f5a145efe0e71f8dff1c4f594fc381198c8f  crates/orz-loop/src/acaf.rs
 be287bf1aae640c5825cd0ea38fbc4d3b2fdc5b8aa57591937e1b22a5466b19e  crates/orz-loop/src/acaf_flow.rs
 e8edb2b315df6544c5091edb8b98fbbb801d61e9d7a0b819572cefa05f92c4ec  crates/orz-loop/src/action_ledger.rs
-cae00fccd2fc4934308c47b91fb82ededac3c761f1fd685927ec18823bbddf69  crates/orz-loop/src/agent_loop.rs
+6f8f7b0404c723eaf76ae3b3a5f1a9ff621c7f4842b217014d3553c54ef9b2d1  crates/orz-loop/src/agent_loop.rs
 6ede834f3c0a770396ac3a478e9288eef455329739c1c4243d241188b96cdf0f  crates/orz-loop/src/agents/main.rs
 48909de972714ddad9370cd5bc794ef3c26d10a24f1d8a562265900d4234dd34  crates/orz-loop/src/agents/mod.rs
 59f39f773fc6d8e2e0451dea964c1b8ab0cfaef92afd16d6a166bab5bcb0d7f9  crates/orz-loop/src/agents/retrieval.rs
@@ -1117,7 +1117,7 @@ c0b90307d4f55f58418c926d37c0846d2338bb2fdcde949d7c8cc1b1bb17072c  crates/orz-loo
 b78951683a971a46bbb8c829bca67dabba8ffa23840bef167ff0f31ca1cd8721  crates/orz-loop/src/console.rs
 21dda95be11b22a8c733658cfe10248f3a59c2a4aa5de6aedb50db957d252d73  crates/orz-loop/src/console_exec.rs
 ffdb51e513938b3202eb544999ceed889d0b60f43b92c1c28029ded3013a57cd  crates/orz-loop/src/console_mode.rs
-7125268c83fd415f02f05cef59b800c04185e22da085c0d48b88f43829535e65  crates/orz-loop/src/context_scale.rs
+aff829d9b82ee5da2efb496a3906c415d47c4fed2aee6f5f66804b61560f0d7f  crates/orz-loop/src/context_scale.rs
 c0cc3f4f44ed17b42f4db0dde6b83d1ef42315f53b7ba42a154b0c8b3b23e300  crates/orz-loop/src/controller.rs
 1218cc071ed8cb877c02eb872f8553c5d184a7eb27a6461bbeaa0d9f7bf539ae  crates/orz-loop/src/controller_test_support.rs
 90eb1d162428a728d78ba7e22a90107d1a9d827a33f010a04d8003ae4439a753  crates/orz-loop/src/delivery.rs
@@ -1199,7 +1199,7 @@ a1bcf295acba1c1c439e5e0d36b3f83e9a199f65ad217e7ed5f261a8cc9963f5  crates/orz-web
 862ff3f379813c54f48f34661daa8cb185a6ce4dbacf87017b5607a476933971  crates/orz-web/assets/app/keymap.js
 05880581d5563df1b74021f65686ae2efe1b443713247701f18972c1202ec58c  crates/orz-web/assets/app/main.js
 f8a86a782fa63da3e47b2a80b17cf364b6896e7422ce7c6f47a487f80cefd1ed  crates/orz-web/assets/app/md.js
-be8f5061db1f7d2d1cfe0ecd30b3bbcc7828bcb77b4cc8b519d5b3e423656757  crates/orz-web/assets/app/projection.js
+7c25097d4e7e9d2ea746926b0f554960541079c9e3d15bab967abfb585a2b0db  crates/orz-web/assets/app/projection.js
 d9e2a6cae795e17bdeedaa11d15337b4a5829c3cb6bb34e8eb5797aba009787b  crates/orz-web/assets/app/state.js
 f4f5d4c9dad08226b6e5ef3e505a8743d98e3ed1680a2a3ddcfb5ac262c1cf57  crates/orz-web/assets/app/widgets.js
 2d0426b88cf6380e6a6b3cd1f9d795f8a90543934f936b0fd3b704f804bfd0de  crates/orz-web/assets/index.html
@@ -1220,7 +1220,7 @@ a2b30a50202cf56338f26b18ecfeee468f192fb9a577bedd6d3050bd050d6115  crates/orz-web
 fb354a14e8d01bd58fba90385736828a051c1a3d4d646a9f3e31894057283c07  crates/orz-web/src/security.rs
 cdf8349ce9808a5a2ed3557db7363bb5d24862640866447486d71c0c187eaed2  crates/orz-web/src/server.rs
 3e2cf3f1d97cb3aab93adb2a77f9d66b549028ec7070d7105488e88d91952201  crates/orz-web/src/trust.rs
-ba5e0bc6ce073d9cacdbc7aad8c6052c763cc908198ce04fc2f8986ca7d1b1a4  crates/orz-web/tests/frontend_smoke.mjs
+893321ef2f6700ab3bb50d3404ef7ed9804a199c1018847bfd7cf4b4db3478bb  crates/orz-web/tests/frontend_smoke.mjs
 9dd0bb28b67db54d84283d60c86ecf195bb2656aabcbd40e392d44d0e878e4b3  prod/mc/cli-chat-proxy-types/Cargo.toml
 84fb11c9f5f683f7261b2cdd10a1ba77da31b97a7c05422183514f21a3c43032  prod/mc/cli-chat-proxy-types/src/client_metrics_types.rs
 12a2dab4395fb0445ecab4d35e3eb7e47c209a4f9b8114f877c2c15c45a4b6e5  prod/mc/cli-chat-proxy-types/src/deployment_config_types.rs
