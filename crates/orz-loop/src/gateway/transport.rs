@@ -1795,7 +1795,7 @@ impl DeepSeekTransport {
                     tracing::warn!(
                         detail = %detail,
                         trigger_context = %ctx,
-                        "output-health guard trip (audit context)"
+                        "output-health guard trip (trigger context for post-hoc review)"
                     );
                 } else {
                     tracing::warn!(detail = %detail, "output-health guard trip");

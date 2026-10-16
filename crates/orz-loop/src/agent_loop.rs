@@ -3378,6 +3378,10 @@ pub(crate) async fn run_agent_loop(
                 // 记 run_invalidated）；未达上限 → run_failed 同路径。审计
                 // 留痕（tracing）携带触发族与 detail，不改终止语义
                 // （设计 §3.3 journal/审计）。
+                // 中断后不自动重试（2026-10-14 用户裁决叙述修正：中断是
+                // 轮终局的既定设计，非「audit-only」）：复读退化无法保证
+                // 重试能确定性跳出循环，自动重试只会空转空烧；恢复路径＝
+                // 人工介入整体性判断（首例 r4 p11/checkpoint_5）。
                 if let GatewayError::StreamInterrupted { detail, .. } = &other
                     && (crate::gateway::transport::is_degeneration_detail(detail)
                         || crate::gateway::transport::is_reasoning_guard_detail(detail))
@@ -3385,7 +3389,8 @@ pub(crate) async fn run_agent_loop(
                     tracing::warn!(
                         guard_family = crate::gateway::transport::guard_family_label(detail),
                         detail = %detail,
-                        "output-health guard interrupted the model round (audit-only)"
+                        "output-health guard interrupted the model round (round-terminal; \
+                         no auto-retry by design — recovery is human adjudication)"
                     );
                     if detail.starts_with(crate::gateway::transport::DEGENERATION_LIMIT_PREFIX) {
                         // STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010
