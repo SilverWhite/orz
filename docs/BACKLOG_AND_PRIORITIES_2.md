@@ -332,6 +332,15 @@
 - **台账**：本卷 §1.217；[`280 批档`](audits/280_CARRIER_REBUILD_V091_0DD_0DE_S3_2026-10-16.md)；索引头行 v4.252 → v4.253；TODO 计数行/P1 路由/P1-0dd＋P1-0de S3 勾；BACKLOG 计数行/本批指针/P1 行两格；orz 子树 `1ecad57c→0be4a364`＋`orz_source_manifest.sha256` 重生成（恰 2 行变更＝bump 两文件 `Cargo.lock`＋`crates/orz-bin/Cargo.toml` 版本行，与 bump 触碰面一一对应）。计数不变 61。
 - 关键词：280 批、0.9.1 重建、源冻结 0be4a364、0dd S3＋0de S3 合并进体、f50b1f17… 身份门、ACAF 重 provision dd55ded5…、static-pie×3、alpine/bookworm 双冒烟 0.9.1、reminder_only_no_compressible 0→7、保留面零回归、RUN-CLI-6ad2152c/6ad2153a、未推送未发行、计数 61 不变、索引 v4.253。
 
+### 1.219 2026-10-16 282 补记 0.9.1 发行回读核证（**回读核证批**，零源码零跑批零改动、计数不变 61）
+
+- **服务端回读**（`gh release view --json`）：三资产 digest 与本地**逐位一致**——zip `sha256:9bc5c7d4…`（28,441,423）／tar.gz `sha256:07f67e30…`（37,707,315）／`SHA256SUMS` `sha256:a8833001…`（191）。
+- **发布态**：`isDraft=false`／`isPrerelease=false`；`gh release list --limit 4` ⇒ **Latest**；`publishedAt`＝2026-10-16T12:58:57Z（＝HKT 20:58）；`targetCommitish=main`；发行正文回读长度 1,969 字符。
+- **tag 形态**：`gh api repos/SilverWhite/orz/git/ref/tags/v0.9.1` ⇒ `object.type=commit`、`object.sha=584f49dd…`＝**轻量 tag** 落在 281 批提交（沿 122／156／183／195／224／244／248 形态）；`git ls-remote --tags origin v0.9.1` 同值复核。
+- **完整回下载**（落点 `D:\tb-eval\rel-281-verify`）：zip／tar.gz／`SHA256SUMS` 三件与本地 **identical 3/3**（逐字节相等）⇒ 远端资产＝本地产物，无上传截断／替换（195／225／245／249 同判据）；通道如实记＝父仓目录内加 `-R SilverWhite/orz` 一次跑完（未复现 225 批大文件停摆与 249 批非仓库目录 fatal）。
+- **边界（如实记）**：双平台版本面核证已在 281 批完成（WIN `--build-info`＝0.9.1 rc0；LIN alpine 3.20 `sha256sum -c` 4/4 OK＋`static-pie`＋alpine／bookworm 双镜像 0.9.1 rc0），本批不重跑容器；装机位不触碰、不发起任何会话/run；**0dd／0de S4 真机复验仍待用户真机轮**。
+- **台账**：本卷 §1.219；[`282 补记`](audits/282_RELEASE_V091_READBACK_VERIFICATION_2026-10-16.md)；索引头行 v4.254 → v4.255；BACKLOG 计数行/本批指针行；TODO 计数行。计数不变 61。
+- 关键词：282 补记、0.9.1 发行核证、服务端 digest 逐位一致、回下载 identical 3/3、Latest、轻量 tag 584f49dd、rel-281-verify、计数 61 不变、索引 v4.255。
 ### 1.218 2026-10-16 281 批 提交推送（275–280 累积件）＋装机位全面换装 0.9.1＋0.9.1 双平台发行（**提交推送＋换装＋发行批**，零源码语义增量、计数不变 61）
 
 - **用户令**：「请先进行提交并推送吧，我考虑接下来进一轮我个人的真机使用，等结束后再看真机运行情况来进行验收」→（推送完成后）「请全面换装0.9.1，远端也发布0.9.1吧」。
