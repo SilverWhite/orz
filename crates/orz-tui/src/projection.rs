@@ -309,6 +309,10 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             position,
             model_response,
         } => {
+            // 285 批 F2（2026-10-16 用户令）：门前的模型输出是待自查草稿而非
+            // 正式输出——门到即静默折叠本运行此前内容与机器行；流式指针一并
+            // 复位，使门后的正式输出自成新卡（与 orz-web projection.js 同形）。
+            app.content.fold_superseded_before_gate(app.turn_counter);
             let suffix = model_response
                 .filter(|r| !r.is_empty())
                 .map(|r| format!("：{r}"))
@@ -1043,24 +1047,89 @@ mod tests {
     }
 
     #[test]
-    fn terminal_finished_collapses() {
+    fn terminal_finished_folds_machine_rows_only() {
         let mut a = app();
         a.accept_event(TuiEvent::PromptSubmitted {
             prompt: "q".into(),
             character_count: 1,
+        });
+        a.accept_event(TuiEvent::ToolStarted {
+            tool: "read_file".into(),
+            call_id: "call-1".into(),
+            target: Some("lib.rs".into()),
         });
         a.accept_event(TuiEvent::ModelOutput {
             text: "答".into(),
             tool_calls: vec![],
             finish_reason: "stop".into(),
         });
-        assert!(!a.content.items[1].collapsed());
+        assert!(!a.content.items[0].collapsed());
         a.accept_event(TuiEvent::RunFinished {
             status: "completed".into(),
         });
         assert!(!a.running);
-        assert!(a.content.items[0].collapsed());
-        assert!(a.content.items[1].collapsed());
+        // 285 批 F1（2026-10-16 用户令）：收尾只折机器行——对话卡（用户/模型）
+        // 保持展开可读（真机走查实证：全折起后要逐张手动打开）。
+        let tool_item = a
+            .content
+            .items
+            .iter()
+            .find(|i| matches!(i, ContentItem::ToolTrace(_)))
+            .expect("tool trace line present");
+        assert!(tool_item.collapsed(), "machine rows fold at run end");
+        let cards: Vec<bool> = a
+            .content
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                ContentItem::Message(m) => Some(m.collapsed),
+                _ => None,
+            })
+            .collect();
+        assert!(!cards.is_empty());
+        assert!(
+            cards.iter().all(|c| !*c),
+            "conversation cards stay open: {cards:?}"
+        );
+    }
+
+    #[test]
+    fn counterexample_gate_folds_pre_gate_draft() {
+        let mut a = app();
+        a.accept_event(TuiEvent::PromptSubmitted {
+            prompt: "q".into(),
+            character_count: 1,
+        });
+        a.accept_event(TuiEvent::ModelOutput {
+            text: "门前草稿".into(),
+            tool_calls: vec![],
+            finish_reason: "stop".into(),
+        });
+        a.accept_event(TuiEvent::CounterexampleGate {
+            position: "final_answer".into(),
+            model_response: None,
+        });
+        a.accept_event(TuiEvent::ModelOutput {
+            text: "正式输出".into(),
+            tool_calls: vec![],
+            finish_reason: "stop".into(),
+        });
+        let drafts: Vec<(&str, bool)> = a
+            .content
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                ContentItem::Message(m) if m.role == "模型" => {
+                    Some((m.content.as_str(), m.collapsed))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            drafts,
+            vec![("门前草稿", true), ("正式输出", false)],
+            "门前的草稿静默折起、门后的正式输出保持展开"
+        );
     }
 
     #[test]

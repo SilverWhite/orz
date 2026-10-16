@@ -535,5 +535,72 @@ const summaryCard = state.content.items.filter((it) => it.kind === 'message').po
 assert.match(summaryCard.content, /估 ~240K/, 'model_summary 事件取值不变');
 console.log('ok  0de N5 压缩事件投影双字段兼容（clear 回退 target_tokens）');
 
+/* ── 11. 285 批（2026-10-16 真机走查处置）：机械审查嵌套载荷＋反例门静默
+ *     折叠＋收尾只折机器行（画图轮 journal 复现的三条渲染事实） ── */
+
+// F3：本事件 payload 是 `{kind, payload:{key,round,summary,anomaly}}`——比其余
+// 事件多一层。按平铺读会渲出「[机械审查] （轮 0）」幽灵行（真机走查实证：
+// 一串无键无轮号的机械审查行）。
+state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
+state.marker = [];
+state.turnCounter = 0;
+applyJournalEvent({
+  event_type: 'mechanical_audit_update',
+  payload: {
+    kind: 'tool_result',
+    payload: { key: 'cmd:call-1', round: 7, summary: 'exit 1', anomaly: 'exit 1' },
+  },
+});
+const auditLine = state.content.items.filter((it) => it.kind === 'message').pop();
+assert.match(auditLine.content, /\[机械审查\] cmd:call-1（轮 7）：exit 1/, '嵌套载荷须读到真键与真轮号');
+assert.doesNotMatch(auditLine.content, /（轮 0）/, '不得再渲「（轮 0）」幽灵行');
+// 无异常形（键＋轮号即可，摘要照旧随行）。
+applyJournalEvent({
+  event_type: 'mechanical_audit_update',
+  payload: { kind: 'tool_result', payload: { key: 'file:out.txt', round: 2, summary: '120 行', anomaly: null } },
+});
+const auditLine2 = state.content.items.filter((it) => it.kind === 'message').pop();
+assert.match(auditLine2.content, /\[机械审查\] file:out\.txt（轮 2）120 行/, '无异常形带摘要');
+console.log('ok  285 F3 机械审查嵌套载荷（真键真轮号，幽灵行根除）');
+
+// F2：反例门静默折叠——门前的草稿折起、门后正式输出保持展开；用户卡与
+// 上一轮输出不动。F1：收尾（run_finished）不再折对话卡，只折机器行。
+state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
+state.marker = [];
+state.turnCounter = 0;
+const findMsg = (text) => state.content.items.find((it) => it.kind === 'message' && it.content === text);
+
+applyJournalEvent({ event_type: 'prompt_submitted', payload: { prompt: '上一轮问题' } });
+applyJournalEvent({ event_type: 'model_output', payload: { text: '上一轮答案' } });
+applyJournalEvent({ event_type: 'run_finished', payload: { status: 'completed' } });
+assert.equal(findMsg('上一轮答案').collapsed, false, 'F1：收尾不得折对话卡（模型卡保持可读）');
+assert.equal(findMsg('上一轮问题').collapsed, false, 'F1：收尾不得折用户卡');
+
+applyJournalEvent({ event_type: 'prompt_submitted', payload: { prompt: '本轮问题' } });
+applyJournalEvent({ event_type: 'tool_started', payload: { tool: 'run_terminal_cmd', call_id: 'c1' } });
+const gateTool = state.content.items.find((it) => it.kind === 'tool');
+gateTool.expanded = true;
+applyJournalEvent({ event_type: 'model_output', payload: { text: '门前草稿' } });
+applyJournalEvent({ event_type: 'counterexample_gate', payload: { position: 'final_answer', once_only: true } });
+assert.equal(findMsg('门前草稿').collapsed, true, 'F2：门到即静默折叠门前草稿');
+assert.equal(gateTool.expanded, false, 'F2：门到即折机器行');
+assert.equal(findMsg('本轮问题').collapsed, false, 'F2：用户卡不折（提问要看得见）');
+assert.equal(findMsg('上一轮答案').collapsed, false, 'F2：前几轮输出不受本轮门影响');
+assert.equal(state.content.currentModelIndex, null, 'F2：流式指针复位，门后正式输出自成新卡');
+
+applyJournalEvent({ event_type: 'model_output', payload: { text: '正式输出' } });
+applyJournalEvent({ event_type: 'run_finished', payload: { status: 'completed' } });
+assert.equal(findMsg('正式输出').collapsed, false, 'F1：正式输出收尾后保持展开');
+assert.equal(findMsg('门前草稿').collapsed, true, 'F2：门前草稿保持折起');
+assert.equal(gateTool.expanded, false, 'F1：收尾折机器行');
+const modelAnchors3 = state.marker.filter((m) => m.kind === 'model');
+assert.equal(modelAnchors3.length, 2, '两轮各一个最终输出锚');
+assert.equal(
+  state.content.items[modelAnchors3[1].itemIndex].content,
+  '正式输出',
+  '本轮锚指向门后正式输出',
+);
+console.log('ok  285 F1/F2 反例门静默折叠＋收尾只折机器行（对话卡保持可读）');
+
 console.log('\nfrontend smoke: 全部通过');
 process.exit(0);

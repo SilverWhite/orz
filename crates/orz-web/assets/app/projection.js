@@ -178,15 +178,23 @@ export function applyJournalEvent(ev) {
 
     case 'counterexample_gate': {
       const resp = optStr(p, 'model_response');
+      // 285 批 F2（2026-10-16 用户令）：门前的草稿不是正式输出——门到即静默
+      // 折叠本运行此前内容，只留门后正式输出（真机走查：门前整篇照常在渲染）。
+      vm.foldSupersededBeforeGate();
       vm.addSystemMessage(`[反例询问] ${str(p, 'position')}${resp ? `：${resp}` : ''}`, false);
       break;
     }
 
     case 'mechanical_audit_update': {
-      const key = str(p, 'key');
-      const round = num(p, 'round');
-      const anomaly = optStr(p, 'anomaly');
-      const summary = optStr(p, 'summary');
+      // 285 批 F3：本事件 payload 是 `{kind, payload:{key,round,summary,anomaly}}`
+      // ——比其余事件多一层嵌套（变体 kind 决定内层形状）。此前按平铺读 ⇒ 键
+      // 空串、轮号缺省 0，整片渲成「[机械审查] （轮 0）」幽灵行（2026-10-16
+      // 真机走查实证）。内层与 orz-tui `/payload/key` 指针同源。
+      const q = p?.payload ?? {};
+      const key = str(q, 'key');
+      const round = num(q, 'round');
+      const anomaly = optStr(q, 'anomaly');
+      const summary = optStr(q, 'summary');
       const line = anomaly
         ? `[机械审查] ${key}（轮 ${round}）：${anomaly}`
         : summary

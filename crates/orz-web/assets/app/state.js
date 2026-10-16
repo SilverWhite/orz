@@ -210,10 +210,28 @@ export const vm = {
     if (line && line.entries.length) line.entries[line.entries.length - 1].detail = sanitizeText(detail);
   },
 
+  // 运行终态折叠（CONTENT_PANE「折叠策略」：只折机器行）——2026-10-16 用户令
+  // 修正（285 批 F1）：此前连对话卡一并折起，真机走查实证「一整段会话被折起、
+  // 要逐张手动展开」。对话卡（用户/模型）不再折；只有机器行（工具清单）
+  // 收尾折叠，阻塞/告警面本就不折。
   collapseNonWarnings() {
     for (const it of state.content.items) {
       if (it.kind === 'tool') it.expanded = false;
-      else if (it.role !== '系统' || !it.warning) it.collapsed = true;
+    }
+    state.content.currentModelIndex = null;
+  },
+
+  // 反例门静默折叠（2026-10-16 用户令，285 批 F2）：反例问询前的模型输出是
+  // 待自查草稿、不是正式输出——门到即把本运行（本 turn）此前的模型卡与全部
+  // 机器行静默折叠（无提示行、不留痕），只留门后的正式输出；用户输入卡不折
+  // （提问要看得见）。真机走查实证：门前的整篇草稿此前照常展开渲染。
+  foldSupersededBeforeGate() {
+    const turn = state.turnCounter;
+    for (const it of state.content.items) {
+      if (it.kind === 'tool') it.expanded = false;
+      else if (it.kind === 'message' && it.role === '模型' && !it.warning && it.turn === turn) {
+        it.collapsed = true;
+      }
     }
     state.content.currentModelIndex = null;
   },

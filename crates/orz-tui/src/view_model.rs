@@ -189,14 +189,34 @@ impl ContentPane {
         }
     }
 
-    /// Collapse all collapsible non-warning cards and all tool traces —
-    /// called on run end (CONTENT_PANE spec). Blocking errors / unapproved
-    /// actions / verifier failures (warnings) never collapse.
+    /// Collapse the machine rows (tool traces) — called on run end
+    /// (CONTENT_PANE「折叠策略」: 结束后工具调用默认折叠).
+    ///
+    /// 285 批 F1 (2026-10-16 用户令): conversation cards are **not** folded
+    /// at run end. The earlier behaviour folded every collapsible card too,
+    /// which on the web surface buried the whole exchange (真机走查实证
+    /// 「会话自动折叠、要逐张手动展开」); the spec's fold rule names tool
+    /// rows only. Blocking errors / unapproved actions / verifier failures
+    /// (warnings) never collapse.
     pub fn collapse_non_warnings(&mut self) {
+        for item in &mut self.items {
+            if let ContentItem::ToolTrace(trace) = item {
+                trace.expanded = false;
+            }
+        }
+    }
+
+    /// Silently fold everything this run produced **before the counterexample
+    /// gate** (285 批 F2, 2026-10-16 用户令): the model output preceding the
+    /// inquiry is a draft awaiting self-check, not the formal output — only
+    /// the post-gate output is meant to stay open. Tool traces always fold;
+    /// only the current turn's non-warning model cards fold, so earlier
+    /// turns' outputs are untouched. User cards are never folded.
+    pub fn fold_superseded_before_gate(&mut self, turn: u32) {
         for item in &mut self.items {
             match item {
                 ContentItem::Message(msg) => {
-                    if msg.collapsible && !msg.warning {
+                    if msg.role == "模型" && !msg.warning && msg.turn == turn {
                         msg.collapsed = true;
                     }
                 }
@@ -646,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    fn collapse_non_warnings_keeps_warnings() {
+    fn collapse_non_warnings_folds_only_tool_traces() {
         let mut pane = ContentPane::default();
         pane.add_user_message("q");
         pane.add_model_message("a", 1, false);
@@ -660,10 +680,47 @@ mod tests {
                 ContentItem::Message(warn),
                 ContentItem::ToolTrace(trace),
             ] => {
-                assert!(user.collapsed);
-                assert!(model.collapsed);
+                // 285 批 F1：收尾只折机器行——对话卡保持可读（不再需要手动展开）。
+                assert!(
+                    !user.collapsed,
+                    "conversation cards stay readable on run end"
+                );
+                assert!(!model.collapsed, "final output stays open on run end");
                 assert!(!warn.collapsed, "warning card must never collapse");
                 assert!(!trace.expanded);
+            }
+            _ => panic!("unexpected items: {:?}", pane.items),
+        }
+    }
+
+    #[test]
+    fn gate_fold_folds_current_turn_models_and_tool_traces_only() {
+        let mut pane = ContentPane::default();
+        pane.add_user_message("上一轮问"); // turn 0
+        pane.add_model_message("上一轮答", 1, false);
+        pane.add_user_message("本轮问"); // turn 0
+        pane.add_model_message("门前草稿", 2, false);
+        pane.add_model_message("[门控] 告警", 2, true);
+        pane.add_or_update_tool_trace("bash", "x", "运行中");
+        pane.fold_superseded_before_gate(2);
+        match &pane.items[..] {
+            [
+                ContentItem::Message(prev_user),
+                ContentItem::Message(prev_model),
+                ContentItem::Message(user),
+                ContentItem::Message(draft),
+                ContentItem::Message(warn),
+                ContentItem::ToolTrace(trace),
+            ] => {
+                assert!(!prev_user.collapsed, "user cards never fold");
+                assert!(
+                    !prev_model.collapsed,
+                    "earlier turns' outputs are untouched"
+                );
+                assert!(!user.collapsed, "current user card stays open");
+                assert!(draft.collapsed, "the pre-gate draft silently folds");
+                assert!(!warn.collapsed, "warning card must never collapse");
+                assert!(!trace.expanded, "machine rows fold at the gate");
             }
             _ => panic!("unexpected items: {:?}", pane.items),
         }
