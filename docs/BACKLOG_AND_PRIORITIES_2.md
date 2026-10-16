@@ -136,6 +136,22 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.220 2026-10-16 273 批 SCB V4 四方报告英文版落盘（**翻译交付批**，零源码、零跑批、计数不变 61）
+
+- **用户令**：「请将SCB V4报告翻译一份英文版吧」。
+
+- **交付物**：[`docs/en/SCB_V4_FOUR_WAY_CLEAN_ROOM_FULL_ROUND_REPORT_EN.md`](en/SCB_V4_FOUR_WAY_CLEAN_ROOM_FULL_ROUND_REPORT_EN.md)——中文 authority [`SCB_V4_FOUR_WAY_CLEAN_ROOM_FULL_ROUND_REPORT_2026-10-16.md`](SCB_V4_FOUR_WAY_CLEAN_ROOM_FULL_ROUND_REPORT_2026-10-16.md) 的英文版：12 节全结构（§1 四方同表、§2 口径与装置、§3 收官总账、§4.1–4.6 五层聚合含论文图 2 矢量读数表、§5 36 行逐题四分类归因表、§6 11 条命题同向／反向终判表、§7 r3 泄漏登记、§8 口径统一更正、§9 摩擦面四方对照、§10 边界、§11 复现入口、§12 线收官）；表格数字逐格照抄，仅译表头与说明文字。
+
+- **数字机械校验（本批主要质量证据）**：把两档全部数字按 `\d+(?:\.\d+)?%?` 抽成 token 序列，先用多重集比对再用序列比对（`difflib.SequenceMatcher`）——**token 多重集与中文原档精确等集**（各 1735 枚、零增减）；序列仅 6 处局部换位（`271`／`0.0503`／`1.35`／`0`／`0.5`／`4`），逐处复核均为语序调整（如「对次优 0cr 0.8343 **+0.0503**」英译把差值提前），无数值改动。校验中发现并修正一处漏译＝§2 模型行 `deepseek-v4-flash` 的「同底模」依据漏掉 `0cv` 引用（208 批接口名核证）。
+
+- **术语**：沿 [`TRANSLATION_GLOSSARY`](en/TRANSLATION_GLOSSARY.md)——§2 新增 18 词条（clean room／four-way／phase／collapse／later rebound／trajectory morphology／leak form／sentinel／write-control block／reroute／self-heal／end-to-end full solve／all-checkpoint core perfect／broad · strict definition／checkpoint-level · problem-level／four-class attribution／framework fault／reference-solution defect）；§3 文档映射 +1 行（本英文档 ↔ 中文 authority）。固定声明行在件：`LLM-assisted translation; the Chinese originals are authoritative. Corrections welcome.`
+
+- **边界**：LLM 辅助译文，**中文原档为唯一权威**（术语表 §4 维护纪律＝中文修订即触发英文重出）；中文原档本批**零改动**（dated 档不回改纪律）；论文命题 7–9 未测、榜单聚合未发生、参考解缺陷 6 题未动工等既有边界原样承袭，无新增承诺。
+
+- **台账**：本卷 §1.220；[`273 批档`](audits/273_SCB_V4_REPORT_EN_TRANSLATION_2026-10-16.md)；索引头行 v4.245 → v4.246＋§6 `EVAL-SLOPCODE-R4-CLEAN-ROOM` 条目 273 注记；TODO 计数行；BACKLOG 计数行/本批指针。计数不变 61。
+
+- 关键词：273 批、SCB V4 英文版、SCB_V4_FOUR_WAY_CLEAN_ROOM_FULL_ROUND_REPORT_EN、翻译交付批、数字 token 精确等集 1735、6 处局部换位、0cv 漏译修正、术语表 +18 词条、文档映射 +1、dated 档不回改、计数 61、索引 v4.246。
+
 ### 1.219 2026-10-16 272 批 论文源件与采录件迁入仓外工件区＋读数对齐（**迁移＋对齐批**，零重跑、计数不变 61）
 
 - **用户令**：「请做目录迁移吧」（承接 271 批末提议「把这套采录脚本与中间产物从临时目录归档到 `D:/tb-eval/scbench/`」）。

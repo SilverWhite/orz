@@ -1,6 +1,6 @@
 # orz English Translation Glossary (D1)
 
-> **Status**: `v1.0` (2026-10-02, 0cm closure) — seed table landed from the charter appendix
+> **Status**: `v1.1` (2026-10-02 seed, 0cm closure; amended 2026-10-16, batch 273) — seed table landed from the charter appendix
 > ([charter §Appendix A](../EN_TRANSLATION_PROJECT_CHARTER_2026-10-02.md)), refined through the
 > first translation round and the later independent review passes, then frozen on the user's
 > **English-README sign-off (2026-10-02)** with no term changes requested. This file is the
@@ -8,6 +8,11 @@
 > table first, then regenerate the affected documents).
 >
 > LLM-assisted translation; the Chinese originals are authoritative. Corrections welcome.
+
+> **Amendment (v1.1, 2026-10-16, batch 273)**: the SCBench-evaluation term set was added
+> (§2 rows below `trust anchor`) while translating the SCBench V4 four-way report into
+> `docs/en/SCB_V4_FOUR_WAY_CLEAN_ROOM_FULL_ROUND_REPORT_EN.md`, and §3 gained the matching
+> document-mapping row. No existing term was changed.
 
 ## 1. Purpose
 
@@ -73,6 +78,24 @@
 | 根本性树根 | fundamental tree roots | Rule 1's recursive-delete targets (Windows four roots / Linux twelve trees) |
 | 宿主态祖先链臂 | host-state ancestor-chain arm | Rule 5's sweep-verb arm (`ANCESTOR_SWEEP_VERBS`, closed subset of 15) |
 | 信任锚 | trust anchor | ACAF keystore + signer manifest as a pair |
+| 净室（形态） | clean room (form) | Fresh process + fresh session per checkpoint; no cross-checkpoint instruction channel |
+| 四方（对照） | four-way | The r4／r3／0cw／0cr comparison frame |
+| 相位 | phase | The paper's five-phase mapping: Start／Early／Mid／Late／Final |
+| 坍缩 | collapse | Paper sense: the queue-mean decline across phases (not a per-problem curve) |
+| 后回升 | later rebound | A trajectory dips below its earlier maximum and later rises back above the dipped point |
+| 轨迹形态学 | trajectory morphology | Per-problem shape classification (monotone non-rising／later rebound／late drop) |
+| 泄漏形态 | leak form | A round whose cross-checkpoint instruction channel was not sealed (`/tmp` or `.gsa`) |
+| 端到端全解 | end-to-end full solve | Problem-level: every checkpoint strictly perfect (the paper's "fully solves") |
+| 全档 core 满 | all-checkpoint core perfect | Broad (V1／V2) problem-level reading; a different quantity from end-to-end full solve |
+| 档级／题级 | checkpoint-level / problem-level | Fixed 196-checkpoint denominator (missing = unsolved) vs 36-problem denominator |
+| 四分类归因 | four-class attribution | F framework fault／U model untested／T model test drift／D problem defect |
+| 框架故障 | framework fault | Measurement loss caused by the setup or the mechanical layer |
+| 模型未测 | model untested | No workspace output for that checkpoint, so the score carries no capability signal |
+| 模型测试偏移 | model test drift | Substantive work done, but direction or semantics diverge |
+| 题目缺陷 | problem defect | Oracle／reference-solution defect, undocumented requirement, or evaluation-vs-statement mismatch |
+| 参考解缺陷 | reference-solution defect | The ◆-footnoted problems in KNOWN_ISSUES |
+| 写控 block／改道／自愈 | write-control block / reroute / self-heal | Friction taxonomy: blocks reroute within one round and cost zero problems |
+| 哨兵／起跑器／监督器 | sentinel / launcher / supervisor | Output-repetition guard that halts a checkpoint; run-side infra and its watchdog |
 
 ## 3. Document mapping (EN ↔ CN authority, version-pinned)
 
@@ -84,6 +107,7 @@
 | `WRITE_CONTROL_CURRENT_EN.md` | [`docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md`](../WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md) (**v4.0**, current rule surface) + [`docs/WRITE_CONTROL_MECHANICAL_DESIGN_2026-09-26.md`](../WRITE_CONTROL_MECHANICAL_DESIGN_2026-09-26.md) (**v1.0**, surviving architecture) | 0ch S3 landed in carrier 0.8.8; S4 three-task re-verification landed via 145/150 batches, 0ch closed 2026-10-02 |
 | `ACAF_CURRENT_EN.md` | [`docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md`](../AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md) (design authority) + in-carrier changes through **v0.8.10** (0.8.2 signing assembly fix, 0.8.7 keystore-root/signer-manifest faces) | v0.8.10 in service |
 | ~~`CURRENT_DESIGN_EN.md`~~ | **retired same day** — content merged into the expanded `README.en.md` (user adjudication) | superseded 2026-10-02 |
+| `SCB_V4_FOUR_WAY_CLEAN_ROOM_FULL_ROUND_REPORT_EN.md` | [`docs/SCB_V4_FOUR_WAY_CLEAN_ROOM_FULL_ROUND_REPORT_2026-10-16.md`](../SCB_V4_FOUR_WAY_CLEAN_ROOM_FULL_ROUND_REPORT_2026-10-16.md) | SCBench V4 four-way clean-room full-round report (batches 269/270/271/272 accounts); produced in batch 273 |
 
 ## 4. Maintenance
 
