@@ -136,6 +136,22 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.222 2026-10-16 275 批 0dd S1 设计稿——会话生命周期用户主权（**设计稿批**，零源码、零跑批、计数不变 61）
+
+- **用户令**：「请进行0dd S1吧」。
+
+- **触发面勘定（D1，266 遗留「何者待勘」闭合）**：`session_archive` 生产汇点唯一（`archive_raw_session_package`），触发入口四道——① run 尾里程碑增量（`handle_session_prompt` spawn 块 `acp_server.rs:3593`；判据 `incremental_archive_due`＝实际上下文 ≥500K ∧ ≥ 水位＋500K；`incremental=true`、不删源）② close 归档（生产调用点＝`codex_app.rs:622`＋`orz-signer`；web 桥不调用——ACP 无 session/close，web「新开对话」＝`acpSessionId` 置空后 `session/new`、旧会话就地闲置）③ 0ak 无头里程碑（ADR §14.68）④ 0cy 启动侧收卷（`session/new`＋orz-bin `run()` 起点；保留集排除存活∧当前）。**肇事链**＝① 打包（run_finished 后 80ms）→ web `isArchived`（`widgets.js:250`：有包 ∧ 包 mtime ≥ 最新真实 run；ARC journal 排除在活动水位外）→ 会话入「归档会话」组 → 用户被迫手动回档；④ 旁证（e6508b76）属 0cy 既定语义非肇事。
+
+- **主裁决（D2–D8）**：①退役（删 spawn 块；`PendingArchiveTicket.incremental` 字段连带退役；`incremental_archive_due`／水位／`archive_session_package(incremental)` 原语保留给无头道——单一源不破）；close 道与 B3 P2-3 推迟票不动；0ak 不动（§14.68 边界原样）；**0cy 收卷口径保留现状不改提示制**（触发点挂用户显式动作链＝主权相容；提示制违背 0cy 立项初衷；肇事面不在 sweep；差量勘注随 S2 回写 0cy 设计稿 §2 表）；web 投影不动（自动包消失后 mtime 判定如实）；**`ORZ_GSA_HYGIENE=0` 实测只注入 sweep 两生产调用点＝只关收卷删源闸、不关打包闸**（266 遗留「run 末归档是否受其管辖」答案＝否）；数据安全＝零丢失面（侧车每成功 prompt 恒落、journal 恒在），「长单对话不结束就没存档」缺口交互车道重开＝用户主权显式接受。
+
+- **交付物**：[`SESSION_LIFECYCLE_USER_SOVEREIGNTY_DESIGN_2026-10-16.md`](SESSION_LIFECYCLE_USER_SOVEREIGNTY_DESIGN_2026-10-16.md)（§0–§9，D1–D8 浓缩表在案）；S2 钉子 N1–N5 定案（N1 run 尾零归档／N2 close 推迟票回归／N3 手动面恰等／N4 无头幂等不翻／N5 纯判定不翻）；既有测试勘定＝run 尾 spawn 块无集成测试、零翻转。三处 dated 档转录义务登记随 S2＝滑块设计稿 §3.5.1 勘误＋0cy 设计稿 §2 勘注＋ADR-0010 §14 新节。S3 判据改口径＝行为面（N1 触发例 journal 断言；①退役无常量文案可作字节判据）。
+
+- **边界**：零源码、零 API、零跑批；orz 子模块不动（HEAD `0ba00262`）；web 前端零改动；计数不变 61；S2 待放行。
+
+- **台账**：本卷 §1.222；[`275 批档`](audits/275_0DD_S1_SESSION_LIFECYCLE_DESIGN_2026-10-16.md)；索引头行 v4.247 → v4.248＋§6 `GSA-SESSION-LIFECYCLE-USER-SOVEREIGNTY` 条目 S1 注记；TODO 计数行/P1 路由行/`P1-0dd` S1 勾选；BACKLOG 计数行/本批指针/P1 总览行/`0dd` 专节批序行。计数不变 61。
+
+- 关键词：275 批、0dd S1、会话生命周期用户主权、SESSION_LIFECYCLE_USER_SOVEREIGNTY_DESIGN、run 尾里程碑增量归档、handle_session_prompt、incremental_archive_due、DP-11④ ACP 半边退役、isArchived mtime、widgets.js:250、close 推迟票 B3 P2-3、0ak 不动、0cy 保留现状、ORZ_GSA_HYGIENE 只关收卷闸、D1–D8、N1–N5、计数 61、索引 v4.248。
+
 ### 1.221 2026-10-16 274 批 SCBench 收官报告发帖上游——`SprocketLab/slop-code-bench#45`（**外发交付批**，零源码、零跑批、计数不变 61）
 
 - **用户令**：「我考虑可以去sc bench仓库提交最终版本的issue了，我们之前已经提交过#40和#44」→（两轮审阅后）「还是补上事实句+短询问吧」。
