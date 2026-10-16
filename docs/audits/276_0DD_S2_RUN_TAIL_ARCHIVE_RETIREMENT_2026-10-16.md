@@ -20,10 +20,12 @@
 
 ## §2 钉子（N1/N2 新增；N3–N5 既有全绿）
 
+> **勘误（2026-10-16，279 批）**：本节 N1 前提读数失真（原文保留于下）——「1.5M 字符长答」系当时估算；实测长答 **1,088,890 字符**（字符数定长）⇒ 侧车估算 ≈544,448、≥500K 余量 ~8.9%（**前提确定性成立**，钉子回归强度不变）；orz 测试注释已随 orz `1ecad57c` 同步勘正；提交信息（orz `4749f6b1`）同源失真按不改写历史纪律留档。
+
 - **N1 `run_tail_performs_no_archive_even_across_milestone`**：1.5M 字符互异词元长答
   （大分块 200K 防流式碎 chunk）驱动成功 run ⇒ 断言零归档包／零里程碑水位／零 ARC
   journal／侧车照常落盘；**前提自证**＝回读侧车 `estimate_conversation_tokens ≥ 500K`
-  （旧判据在彼刻必真——无水位 ⇒ due——钉子具回归强度）。
+  （旧判据在彼刻必真——无水位 ⇒ due——钉子具回归强度）。〔前提读数已由 279 批勘误，见上勘注〕
 - **N2 `deferred_close_ticket_still_archives_at_run_tail`**：向 `pending_archives` 注入
   close 推迟票 → 成功 run 尾消费 → 含足迹包落盘（B3 P2-3 语义不翻；close_session
   入队半边不改）。

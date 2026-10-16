@@ -94,6 +94,12 @@
 - 与 F2 的配套关系：仅修 F2 时，迟交摘要会改判 `Specified([33])` → 可压集合空 ⇒
   「指定区间在可压集合中无命中」**仍注入、仍逼轮**。D3 是事发形态的**主修**；
   F2 是中途格式失败的一般防。
+- **边界勘注（2026-10-16，279 批）**：「模型在**带工具轮**消息声明 `[RUN_END]` 而 run
+  继续下一轮」分支设计时未讨论，就此登记——该形态下旗标同样随 `pending_semantic`
+  生效、下一轮消费点照常豁免注入；**后果有界**：告知块本不持久化（无损论证不变）、
+  模型可在下一轮重发摘要、审计事件照落零损失；豁免只省一次「不可行动」的告知注入，
+  不压制任何治理实质（与 D4「RUN_END 非可信门、不作前置门」不冲突——此处 STOP
+  只作消费点豁免旗标、不作开窗依据）。279 批勘定。
 
 ### D4：收束段独立豁免（不立）
 
@@ -123,6 +129,11 @@
   恒等值，取值不变）。
 - 否决「payload 单源」（clear 事件补 `estimated_tokens_after` 字段）：事件 schema 面
   膨胀＋历史 journal 不回填，双兼容为最小修。web 前端单文件、零契约变更。
+- **TUI 侧勾注（2026-10-16，279 批）**：orz-tui `bridge.rs` 渲染链同族「估 ~0K」
+  （D6 落码批只修 web，TUI 侧未修未登记＝审查查出的漏修面）——279 批补齐（orz
+  `1ecad57c`）：解析层 `estimated_tokens_after` 缺位**或 0** 回退 `target_tokens`
+  （与 web `644f6b01` 条件镜像）；回退落解析层 ⇒ `projection.rs` 渲染面零改动裁决；
+  +1 bridge clear 形单测贯通 bridge→projection 渲染链、断言「估 ~100K」非「估 ~0K」。
 
 ## §5 F4 裁决（D7）——计数器贯通两写点
 
@@ -141,7 +152,7 @@
 | D1 | `orz-loop/src/agent_loop.rs` | 阶梯块 H1 臂（`:2578` 附近）：`open_window` 加 `t1_compressible > 0`；空集块＝`hard_reminder_block` 本体；审计 `form=reminder_only_no_compressible` |
 | D3 | `orz-loop/src/agent_loop.rs` | `pending_semantic` 元组加豁免旗标（识别点 `:3463` 附近测 `extract_model_stop`）；两消费点（`:2779`/`:5531`）传入；`compress_blocks_now` 三告知路径按旗标跳过注入 |
 | D5 | `orz-loop/src/context_scale.rs` | `parse_block_selection`（`:699`）前置括号剥除；模块注释同步 |
-| D6 | `orz-web/assets/app/projection.js` | `context_compressed` 模板（`:201`）`estimated_tokens_after` 回退 `target_tokens` |
+| D6 | `orz-web/assets/app/projection.js` | `context_compressed` 模板（`:201`）`estimated_tokens_after` 回退 `target_tokens`；TUI 侧同族回退 279 批补齐（orz-tui `bridge.rs`，orz `1ecad57c`）〔279 勾注〕 |
 | D7 | `orz-loop/src/agent_loop.rs` | `compress_blocks_now` 签名＋`:1625` 事件字段；两消费点传 `rounds_since_compact` |
 
 ## §7 判据与钉子（S2 定案）

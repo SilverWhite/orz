@@ -14,7 +14,9 @@
 
 ## §1 触发面勘定（裁决 D1）——归档动作四道清单
 
-源码勘定（orz `0ba00262`，2026-10-16 逐点核对）——`session_archive` 事件的生产汇点唯一（`archive_raw_session_package`），触发入口共四道：
+> **勘注（2026-10-16，279 批）**：本节「触发入口共四道」漏列**第五道＝on-demand 归档**（原文逐字保留于下）——`archive_session_on_demand`（orz `acp_server.rs:867`），经 orz-bin `main.rs` CLI `archive` 子命令与 orz-web `POST /api/archives/{s8}` 到达，同产 `session_archive`/ARC；属**用户显式动作**、合本项主权语义（§2 目标形态原样），非肇事面、非自动道。279 批勘定。
+
+源码勘定（orz `0ba00262`，2026-10-16 逐点核对）——`session_archive` 事件的生产汇点唯一（`archive_raw_session_package`），触发入口共四道：〔道数已由 279 批勘定为五道，见上勘注〕
 
 | # | 触发道 | 入口 | 时机 | 存活会话可被打包？ | 判定 |
 |---|---|---|---|---|---|
@@ -61,6 +63,7 @@
 
 - **钉子（S2 测试）**：N1 **run 尾零归档钉**——会话续作（continuation）≥500K 刻度成功 run 后：journal 零 `session_archive`、`archives/` 零新包、水位文件不动；N2 close 推迟票回归钉（run 中关闭 → run 尾补归档，B3 语义不翻）；N3 手动面恰等回归（archive/unarchive/delete 既有测试全绿，回档删包语义不动）；N4 无头里程碑幂等（既有 `headless_run_archive_is_idempotent_per_milestone` 不翻）；N5 纯判定函数不动（既有 `archive_keys_and_incremental_milestones_follow_the_design` 不翻）。
 - **S3 载体重建进体**：判据＝行为面（①的退役无常量文案可作字节判据；触发例 journal 断言随 N1 离线可复验）＋测试套全绿；版本号随批。
+- **S3 漂移窗口风险注记（279 批，2026-10-16）**：S3 载体重建放行前，0.9.0 在役载体仍含 run 尾自动归档行为（① 的退役未进在役二进制），真机用户仍会踩 266 同款摩擦（run_finished 后自动打包 → web 分组挪档 → 被迫手动回档）；窗口期以本句为登记，随 S3 进体消灭。
 - **S4 真机复验**（266 批草案维持）：web 同会话跨 prompt／跨日续用不归档（探索器恒在「活跃会话」组）＋手动存档/回档/删除面回归＋新开对话收上一轮照旧（0cy 语义）＋0.9.0 载体对照 journal（增量 ARC 事件不再出现）。
 
 ## §8 边界

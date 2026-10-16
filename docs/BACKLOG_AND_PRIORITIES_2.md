@@ -311,6 +311,16 @@
 - **台账**：本卷 §1.215；[`278 批档`](audits/278_0DE_S2_IMPL_AND_NAILS_2026-10-16.md)；索引头行 v4.250 → v4.251＋canonical 条目；TODO 计数行/P1 路由/P1-0de 节；BACKLOG 计数行/本批指针/P1 行/0de 节批序。计数不变 61。
 - 关键词：278 批、0de S2、治理摩擦综合落码、H1 开窗可压集合前置、reminder_only_no_compressible、stop_declared 旗标、括号注解段剥除、rounds_since 贯通、投影双字段兼容、滑块整轮粒度、SeqOutputsHost、索引 v4.251。
 
+### 1.216 2026-10-16 279 批 0dd/0de 审查处置落账——文档面勘注勘误＋账面登记（**落账批**，零跑批、计数不变 61）
+
+- **对象与性质**：未推送 275/276（0dd 线）＋277/278（0de 线）四批的全面审查（已完结）查出 P2×6＋观察项；本批＝文档面处置与账面登记（orz 代码处置先行落码＝orz `1ecad57c`，父提交 `644f6b01`，五文件 +131/−5：`CONTRIBUTING.md`＋`acp_server.rs`＋`agent_loop.rs`＋`dispatch.rs`＋`bridge.rs`）。
+- **orz `1ecad57c` 逐项**：N1 前提注记勘误（「1.5M 字符」系估算失真——实测 1,088,890 字符 ⇒ 侧车估算 ≈544,448、≥500K 余量 ~8.9%，字符数定长故前提确定性成立；零行为变更）＋N2 断言补强（推迟票含足迹包解包验 `counts.bytes>0`＋ARC `session_archive` payload 无 `incremental` 键——276 批「含足迹包」声称自此有测试实质）＋N3 抑制臂断言锐化（两臂 `requests.len()==3` 显式）＋orz-tui bridge `ContextCompressed` 双字段兼容（0de D6 同族「估 ~0K」漏修面收口；`estimated_tokens_after` 缺位/0 回退 `target_tokens`，与 web `644f6b01` 条件镜像；`projection.rs` 渲染面零改动裁决；+1 clear 形单测渲「估 ~100K」）＋钉陈旧注释 1K→2K（仅注释）＋`user_cancel` 激活开启等待加固（30ms 调度竞窗改轮询 `ToolStarted{target:"internal_retrieval"}`；基线差分 worktree @`4749f6b1` 三跑同败实锤**预存**、278 免责；可作 0aq「负载敏感测试」RS 家族证据引用，不新开项、计数不动）＋CONTRIBUTING 新增极小 `## Local builds` 节（裸 shell 需 `PROTOC=D:\CLI\orz\bin\protoc.exe`）。
+- **父仓文档面**：0dd 设计档 §1 dated 勘注（「触发入口共四道」漏列**第五道＝on-demand 归档**——`archive_session_on_demand`〔orz `acp_server.rs:867`〕经 orz-bin CLI `archive` 与 orz-web `POST /api/archives/{s8}` 到达、同产 session_archive/ARC；用户显式动作合主权语义；原文保留）＋§7 S3 漂移窗口显式风险句（S3 放行前 0.9.0 在役载体仍含 run 尾自动归档、真机仍会踩 266 同款摩擦，窗口期以本句为登记）＋276 批档 §2 N1 就地勘误（原文保留 dated）＋TODO P1-0dd S2 行就地勘误〔279 批勘误〕；0de 设计档 D3 dated 勘注（「带工具轮消息声明 RUN_END 而 run 继续下一轮」分支未讨论就此登记＋有界性论证：告知块不持久化、模型可下轮重发摘要、审计零损失）＋D6 TUI 侧补齐 dated 勾注（§4/§6）；0cy 设计稿 §2 勘注指代措辞修正（「上行」→「上表『500K 增量』行」，语义零变）。
+- **不取项（如实登记）**：① N1/N2 的 200ms sleep 落地窗——审查判风险可接受，维持；② N4 自定义 SeqHost 与 SeqOutputsHost 近同构——测试基建复用收益低、触碰面风险不值，维持；③ 267 批档 F3 行 `projection.js:198` 旧行号——沿既有行号漂移惯例，不随批再勘。
+- **读数**：host lib 单线程 365/0（+0 钉）＋orz-loop lib 877/0（3 ignored；`user_cancel` 隔离 5/5 过）＋orz-tui 170 过/9 败（9 败与基线逐一相同＝acp_client×6＋runner×3 ACAF 预存；+1 新过＝bridge 单测）＋clippy loop 96=96／host 114=114／tui 106=106（后两项改前基线实采）零新增＋fmt 触碰件净。
+- **台账**：本卷 §1.216；[`279 批档`](audits/279_REVIEW_DISPOSITION_0DD_0DE_2026-10-16.md)；索引头行 v4.251 → v4.252；TODO 计数行/P1 路由/P1-0dd＋P1-0de 处置行/0dd S2 勘误；BACKLOG 计数行/本批指针/P1 行两格；orz 子树 `644f6b01→1ecad57c`＋`orz_source_manifest.sha256` 重生成（恰 4 行变更）。计数不变 61。
+- 关键词：279 批、审查处置落账、0dd、0de、on-demand 第五道、S3 漂移窗口、1,088,890 字符勘误、侧车估算 ≈544K、D3 边界有界性、D6 TUI 补齐、user_cancel 加固、0aq RS 家族、orz 1ecad57c、索引 v4.252。
+
 ### 1.214 2026-10-16 277 批 0de S1 勘定——治理摩擦综合四件设计定案（**勘定批**，零源码、计数不变 61）
 
 - **用户令**：「请先继续做0de吧」（0dd S2 后续批排程）。
