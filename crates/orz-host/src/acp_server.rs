@@ -697,23 +697,21 @@ struct PackagedSessionArchive {
 }
 
 /// 动态上下文滑块 S1（2026-09-15，设计 §3.5 / DP-11④）：增量归档里程碑
-/// 步长——实际上下文每跨 500K，附加一次增量归档（会话关闭仍照旧打包一次）。
+/// 步长——实际上下文每跨 500K 一次。0dd（2026-10-16，设计 §2/D2）后唯一
+/// 消费者＝无头车道（`headless_session_archive`，0ak）：交互车道 run 尾
+/// 半边已随用户主权裁决退役（close 归档不受此判据管辖）。
 const ARCHIVE_INCREMENT_TOKENS: u64 = 500_000;
 
 /// 归档票：会话关闭时若仍有 run 在进行，先把归档挂起，待该 run 收尾
 /// （sidecar 更新落盘后）再补触发——保证存档包含会话最后一段内容
-/// （B3 复审 P2-3）。
+/// （B3 复审 P2-3）。0dd（2026-10-16）后 ACP 票全为 close 道——原
+/// `incremental` 里程碑旗标随 run 尾增量归档退役一并撤除。
 struct PendingArchiveTicket {
     session_id: String,
     base_dir: PathBuf,
     prompt_count: u64,
     trust_policy: crate::session::TrustPolicy,
-    /// 动态上下文滑块 S1（设计 §3.5 DP-11④）：`true` = 里程碑增量归档
-    /// （`session_archive` 事件带 `incremental: true`），`false` = 会话关闭
-    /// 归档（原有口径）。
-    incremental: bool,
-    /// 0cy：收尾包是否收集足迹全量快照（close 票＝true；增量票＝false——
-    /// 增量包保持轻量，收卷/关闭侧负责全量）。
+    /// 0cy：收尾包是否收集足迹全量快照（close 票恒 `true`＝当刻全量）。
     include_footprint: bool,
 }
 
@@ -822,8 +820,9 @@ async fn archive_raw_session_package(
         payload["incremental"] = serde_json::Value::Bool(true);
     }
     // 动态上下文滑块 S1（设计 §3.5 DP-11④）：包落盘成功即更新「上次归档
-    // 读数」（单调水位）——增量归档的幂等锚点；失败不动水位（下次 run 尾
-    // 重判）。best-effort：写失败只 warn。
+    // 读数」（单调水位）——增量归档的幂等锚点；失败不动水位（无头道下次
+    // 收尾重判；0dd 后交互车道 run 尾不再消费此判据）。best-effort：写失败
+    // 只 warn。
     if pkg.status == "completed" {
         record_archived_tokens(&base_dir, &session_id, pkg.conversation_tokens);
     }
@@ -2663,6 +2662,7 @@ fn record_archived_tokens(base_dir: &Path, session_id: &str, tokens: u64) {
 /// 动态上下文滑块 S1（设计 §3.5 DP-11④）：增量归档**是否到期**——
 /// 实际上下文估算 ≥500K 且（尚无归档 或 ≥ 上次归档读数 ＋500K）。纯机械、
 /// 单调（水位只在包写成功后推进）⇒ 同一里程碑不会重复打包。
+/// 0dd（2026-10-16）后消费者＝无头车道（0ak）——交互车道 run 尾半边退役。
 fn incremental_archive_due(
     base_dir: &Path,
     session_id: &str,
@@ -3588,28 +3588,12 @@ impl AcpServer {
         // 收尾、成功路径的 sidecar 已同步落盘；失败/取消路径不更新
         // sidecar，存档最近一次成功内容）。会话未被 close（无票）= 无操作。
         self.take_deferred_archive(session_id);
-        // 动态上下文滑块 S1（2026-09-15，设计 §3.5 DP-11④）：**增量归档
-        // 时点**＝会话关闭一次（上方既有路径）＋ **实际上下文跨 500K 里程碑
-        // 追加一次**——长单对话「不结束就没有存档」的缺口由此闭合。判据机械
-        // （全量会话估算 chars/2，非视图刻度）、单调水位幂等；best-effort：
-        // 水位只在包写成功后推进，失败留给下次 run 尾重判。
-        if let Some(session) = self
-            .sessions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(session_id)
-            && let Some(continuation) = session.continuation.as_ref()
-            && incremental_archive_due(&session.base_dir, session_id, continuation)
-        {
-            Self::spawn_archive_task(PendingArchiveTicket {
-                session_id: session_id.to_string(),
-                base_dir: session.base_dir.clone(),
-                prompt_count: session.prompt_count,
-                trust_policy: session.trust_policy,
-                incremental: true,
-                include_footprint: false,
-            });
-        }
+        // 0dd（2026-10-16 用户裁决，设计 docs/SESSION_LIFECYCLE_USER_SOVEREIGNTY_DESIGN_2026-10-16.md
+        // §2/D2）：交互车道 run 尾自动归档退役（旧 DP-11④ 里程碑增量半边）——
+        // run 结束零归档动作，对话生命周期控制（存档/回档/删除/新开）主权归
+        // 用户手动面；归档仅由 close 道（含推迟票）、无头里程碑（0ak）、
+        // 0cy 启动侧收卷与 on-demand 显式动作发起。此处**不得** reintroduce
+        // run 尾归档；`incremental_archive_due` 保留给无头车道。
         // P1-1（2026-09-09, S2-R P2）：浏览器生命周期跨 prompt 复用——run
         // 内懒启动换入的真实句柄在 host drop 前回写会话（host 每次 prompt
         // 新建；run 前不再预存默认 unavailable 句柄，见审查处理 §2 P1-1）。
@@ -3996,7 +3980,8 @@ impl AcpServer {
     }
 
     /// Spawn the archive task for a ticket（后台 best-effort，失败只 warn、
-    /// 不阻塞调用方）。
+    /// 不阻塞调用方）。0dd（2026-10-16）后票面恒为 close 道——归档非增量
+    /// （`incremental=false`）；里程碑旗标只存于无头车道直调参数。
     fn spawn_archive_task(ticket: PendingArchiveTicket) {
         tokio::spawn(async move {
             archive_session_package(
@@ -4004,7 +3989,7 @@ impl AcpServer {
                 &ticket.session_id,
                 ticket.prompt_count,
                 ticket.trust_policy,
-                ticket.incremental,
+                false,
                 ticket.include_footprint,
                 // ACP 车道 run id 自带 `RUN-{session8}-` 会话段，前缀扫描
                 // 足够；显式注入是无头车道（0ak）专用。
@@ -4062,7 +4047,6 @@ impl AcpServer {
                 base_dir: session.base_dir.clone(),
                 prompt_count: session.prompt_count,
                 trust_policy: session.trust_policy,
-                incremental: false,
                 include_footprint: true,
             };
             if run_in_flight {
@@ -5492,6 +5476,118 @@ mod tests {
         assert!(err.contains("无可重构"), "{err}");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0dd N1 钉（2026-10-16，设计 docs/SESSION_LIFECYCLE_USER_SOVEREIGNTY_DESIGN_2026-10-16.md
+    /// §7）：交互车道 run 尾零归档——续作跨 500K 里程碑（旧 DP-11④ 判据
+    /// 必真：无水位 ⇒ due）的成功 run 后，零 `session_archive` 产物、
+    /// 零 ARC 审计 journal、里程碑水位不动；侧车照常落盘（零数据丢失面）。
+    /// 回归即失败＝run 尾归档被重新引入。
+    #[tokio::test]
+    async fn run_tail_performs_no_archive_even_across_milestone() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                // ~1.5M 字符互异词元长答 ⇒ 侧车估算 chars/2 ≈ 750K ≥ 500K
+                //（互异词元避开输出重复守卫；大分块避免流式碎 chunk 拖慢）。
+                let long_answer = (0..150_000).map(|i| format!("w{i} ")).collect::<String>();
+                let fake = Arc::new(
+                    FakeProvider::new(vec![ScriptedResponse::text(long_answer)])
+                        .with_chunk_size(200_000),
+                );
+                let server = shadow_server_with_gateway(fake);
+                server
+                    .handle_session_new(
+                        "sess-n1run",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                let r = server
+                    .handle_session_prompt("sess-n1run", "写一份长文")
+                    .await
+                    .unwrap();
+                assert_eq!(r["status"], "completed");
+                // 后台归档任务（若被重新引入）的落地窗。
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+                let archives = base.join(".gsa").join("archives");
+                let pkg = archives.join("sess-n1r.json.gz");
+                assert!(!pkg.exists(), "run 尾不得自动归档（0dd）：发现 {pkg:?}");
+                assert!(
+                    !archives.join("sess-n1r.milestones.json").exists(),
+                    "里程碑水位不得被交互车道推进"
+                );
+                let arc_runs = std::fs::read_dir(base.join(".gsa").join("runs"))
+                    .map(|entries| {
+                        entries
+                            .flatten()
+                            .filter(|e| e.file_name().to_string_lossy().starts_with("ARC-"))
+                            .count()
+                    })
+                    .unwrap_or(0);
+                assert_eq!(arc_runs, 0, "run 尾不得写 ARC 审计 journal");
+                assert!(
+                    conv_sidecar_path(&base, "sess-n1run").exists(),
+                    "侧车照常落盘（零数据丢失面的载体面）"
+                );
+                // 钉子前提自证：侧车估算 ≥ 里程碑步长——旧 run 尾判据在彼刻
+                // 必真（无水位 ⇒ due），本钉的「零产物」才具回归强度。
+                let stored = load_conversation_sidecar(&base, "sess-n1run").expect("侧车可读");
+                assert!(
+                    estimate_conversation_tokens(&stored) >= ARCHIVE_INCREMENT_TOKENS,
+                    "长答必须真实跨里程碑（估算 {} < {}）",
+                    estimate_conversation_tokens(&stored),
+                    ARCHIVE_INCREMENT_TOKENS
+                );
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
+    }
+
+    /// 0dd N2 钉（2026-10-16，设计 §7）：close 推迟票回归——run 中关闭的
+    /// 票在 run 尾消费（B3 P2-3 语义不翻；close_session 入队半边不改），
+    /// 成功 run 后归档落盘（close 道＝含足迹、非增量）。
+    #[tokio::test]
+    async fn deferred_close_ticket_still_archives_at_run_tail() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let fake = Arc::new(FakeProvider::new(vec![ScriptedResponse::text("答案")]));
+                let server = shadow_server_with_gateway(fake);
+                server
+                    .handle_session_new(
+                        "sess-n2def",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                {
+                    let ticket = PendingArchiveTicket {
+                        session_id: "sess-n2def".to_string(),
+                        base_dir: base.clone(),
+                        prompt_count: 1,
+                        trust_policy: crate::session::TrustPolicy::Skip,
+                        include_footprint: true,
+                    };
+                    server
+                        .pending_archives
+                        .lock()
+                        .unwrap()
+                        .insert("sess-n2def".to_string(), ticket);
+                }
+                server
+                    .handle_session_prompt("sess-n2def", "唯一一问")
+                    .await
+                    .unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                let pkg = base.join(".gsa").join("archives").join("sess-n2d.json.gz");
+                assert!(pkg.exists(), "推迟票必须在 run 尾消费并落包（{pkg:?}）");
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
     }
 
     /// 0ak 钉子：幂等——同一会话同一里程碑内第二次收尾不重复打包
