@@ -507,5 +507,33 @@ assert.equal(state.sessionId, null, '桥不可达时不得残留旧会话绑定'
 assert.equal(state.running, false, '新建会话不改运行态');
 console.log('ok  新建会话复位导航/内容区并解绑旧会话');
 
+/* ── 10. 0de N5（2026-10-16，277 批设计 §4/§7，D6）：压缩事件投影双字段兼容 ── */
+
+// clear 形 payload 只带 `target_tokens`（无 `estimated_tokens_after`）——
+// 模板固定读后者曾把实际 171K 渲成「估 ~0K」（0de 事发 F3）。
+state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
+applyJournalEvent({
+  event_type: 'context_compressed',
+  payload: { trigger_tokens: 382271, target_tokens: 171261, rounds_dropped: 87, mode: 'clear' },
+});
+const clearCard = state.content.items.filter((it) => it.kind === 'message').pop();
+assert.match(clearCard.content, /估 ~171K/, 'clear 事件须回退 target_tokens 渲染实际读数');
+assert.doesNotMatch(clearCard.content, /估 ~0K/, '不得再渲染「估 ~0K」字段漂移');
+
+// model_summary 形两字段并存（恒等值）⇒ 取值不变。
+applyJournalEvent({
+  event_type: 'context_compressed',
+  payload: {
+    trigger_tokens: 537319,
+    target_tokens: 239724,
+    estimated_tokens_after: 239724,
+    rounds_dropped: 32,
+    mode: 'model_summary',
+  },
+});
+const summaryCard = state.content.items.filter((it) => it.kind === 'message').pop();
+assert.match(summaryCard.content, /估 ~240K/, 'model_summary 事件取值不变');
+console.log('ok  0de N5 压缩事件投影双字段兼容（clear 回退 target_tokens）');
+
 console.log('\nfrontend smoke: 全部通过');
 process.exit(0);

@@ -197,8 +197,12 @@ export function applyJournalEvent(ev) {
     }
 
     case 'context_compressed':
+      // 0de D6（2026-10-16，设计 §4）：双字段兼容——clear 事件 payload 只带
+      // `target_tokens`（无 `estimated_tokens_after`），模板固定读后者曾把
+      // 实际 171K 渲成「估 ~0K」。两字段语义同＝压缩后模型面估算
+      // （model_summary 事件两字段恒等值，取值不变）。
       vm.addSystemMessage(
-        `[上下文压缩] 触发于 ${Math.round(num(p, 'trigger_tokens') / 1000)}K tokens，压掉 ${num(p, 'rounds_dropped')} 轮（估 ~${Math.round(num(p, 'estimated_tokens_after') / 1000)}K）`,
+        `[上下文压缩] 触发于 ${Math.round(num(p, 'trigger_tokens') / 1000)}K tokens，压掉 ${num(p, 'rounds_dropped')} 轮（估 ~${Math.round((num(p, 'estimated_tokens_after') || num(p, 'target_tokens')) / 1000)}K）`,
         true,
       );
       break;

@@ -1249,14 +1249,20 @@ fn estimate_static_overhead(system: &str, tool_defs: &[ToolDef]) -> u64 {
 ///    回放口，零新工具）；
 /// ③ 压缩存档（`.gsa/compaction/<id>.md`，摘要＋机械行＋四项定位指针，不复制
 ///    逐字正文）＋ `context_compressed` 事件（`mode=model_summary|mechanical`，
-///    `reason=model_selected|context_scale_window`）；
+///    `reason=model_selected|context_scale_window`；`rounds_since_last_compaction`
+///    ＝调用方贯通的 `rounds_since_compact` 真值，0de D7）；
 /// ④ 往会话**追加**压缩 marker（`[前文上下文已压缩 v0.4-分块压缩]`，restore-
 ///    retained）——**本地面一条不删**（不变量 I3；块状态按块号幂等、恢复后由
 ///    marker 重建）。
 ///
 /// 返回 `None` ＝ NoOp（无可压闭合块 / 区间无命中 / 台账写失败 / 区间未识别
-/// ——最后者会注入「区间未识别」告知块并落账，**不静默**），不虚构事件、
+/// ——未识别会注入「区间未识别」告知块并落账，**不静默**），不虚构事件、
 /// 不改模型面（压缩未执行时）。
+///
+/// 0de D3（2026-10-16，设计 §2）：`suppress_notices`＝源消息携带 STOP 声明
+/// （`[RUN_END]`，模型已离场）——三条告知路径（区间未识别／未落地／台账写
+/// 失败）改**只落审计、不注入告知块**（注入必造逼轮；注入块本就不持久化，
+/// run 后无信息损失；审计与 journal 可观测性零变化）。
 #[allow(clippy::too_many_arguments)]
 async fn compress_blocks_now(
     svc: &SharedLoopServices<'_>,
@@ -1272,6 +1278,8 @@ async fn compress_blocks_now(
     locators: &crate::summary::LocatorPointers,
     audit: &mut crate::mechanical_audit::MechanicalAuditState,
     tool_rounds: u32,
+    rounds_since: u32,
+    suppress_notices: bool,
 ) -> Result<Option<BlockCompaction>, AgentLoopError> {
     let blocks = crate::model_face::blocks_outside_slider(
         messages,
@@ -1326,14 +1334,17 @@ async fn compress_blocks_now(
                     }),
                 )
                 .await?;
-            messages.push(Message {
-                role: Role::User,
-                content: format!("{notice}\n{watermark}"),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-                reasoning_content: None,
-                round: None,
-            });
+            // 0de D3：STOP 同消息（模型已离场）⇒ 只落审计，不注入告知块。
+            if !suppress_notices {
+                messages.push(Message {
+                    role: Role::User,
+                    content: format!("{notice}\n{watermark}"),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+            }
             return Ok(None);
         }
         crate::context_scale::BlockSelection::NotSpecified => {
@@ -1389,14 +1400,17 @@ async fn compress_blocks_now(
                 }),
             )
             .await?;
-        messages.push(Message {
-            role: Role::User,
-            content: format!("{notice}\n{watermark}"),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-            reasoning_content: None,
-            round: None,
-        });
+        // 0de D3：STOP 同消息（模型已离场）⇒ 只落审计，不注入告知块。
+        if !suppress_notices {
+            messages.push(Message {
+                role: Role::User,
+                content: format!("{notice}\n{watermark}"),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+        }
         return Ok(None);
     }
     let ranges = crate::action_ledger::round_ranges(messages);
@@ -1443,14 +1457,18 @@ async fn compress_blocks_now(
                         }),
                     )
                     .await?;
-                messages.push(Message {
-                    role: Role::User,
-                    content: format!("{notice}\n{watermark}"),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                    round: None,
-                });
+                // 0de D3：STOP 同消息（模型已离场）⇒ 只落审计，不注入告知块
+                // （台账写失败仍随事件面 `archive_write_failed` 如实落账）。
+                if !suppress_notices {
+                    messages.push(Message {
+                        role: Role::User,
+                        content: format!("{notice}\n{watermark}"),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                }
                 return Ok(None);
             }
         },
@@ -1622,7 +1640,9 @@ async fn compress_blocks_now(
             serde_json::json!({
                 "trigger_tokens": before,
                 "target_tokens": after,
-                "rounds_since_last_compaction": 0,
+                // 0de D7（2026-10-16，设计 §5）：计数器贯通——写真值（此前
+                // 本写点硬编码 0＝遥测失真；老写点机械模板轨一直经参数收真值）。
+                "rounds_since_last_compaction": rounds_since,
                 "rounds_dropped": rounds,
                 "messages_dropped": messages_hidden,
                 "messages_kept": face_messages,
@@ -2325,7 +2345,7 @@ pub(crate) async fn run_agent_loop(
     // 落地时只用记录值，不再回看「本 epoch 开过哪个窗口」的旗标：旗标残留会
     // 让 H1 窗口产出的压缩被记成 `model_selected`（工具窗口未产出摘要即收口
     // 的场景），落地前恰有 H1 开窗也会抢走已产出摘要的归因。
-    let mut pending_semantic: Option<(String, Option<CompressionWindowKind>)> = None;
+    let mut pending_semantic: Option<(String, Option<CompressionWindowKind>, bool)> = None;
     // 在程压缩窗口的种类（`None` ＝ 无窗口在程）。开窗时置位、窗口不在程时
     // 清空；识别语义摘要那一刻的值随摘要进 `pending_semantic`（归因固定点）。
     let mut window_kind: Option<CompressionWindowKind> = None;
@@ -2577,17 +2597,29 @@ pub(crate) async fn run_agent_loop(
                         }
                         crate::context_scale::LadderTier::HardReminder => {
                             // 0bs ④：不再内嵌整表（单源＝窗口尾部分块表）。
-                            Some(format!(
-                                "{}\n{}",
-                                crate::context_scale::hard_reminder_block(
+                            // 0de D1（2026-10-16，设计 §2）：可压集合空 ⇒ 只注入
+                            // 硬提醒本体（信息面保留：读数＋T1 预告＋清理权限句）——
+                            // 不附窗口块、不开窗（空集合开窗必然空转；T1 同判据
+                            // 走 `t1_cut` 已有先例）。
+                            if t1_compressible == 0 {
+                                Some(crate::context_scale::hard_reminder_block(
                                     fire.milestone_tokens,
                                     truncate_tokens,
                                     model_face_tokens,
-                                ),
-                                crate::context_scale::compression_window_block(
-                                    fire.milestone_tokens
-                                ),
-                            ))
+                                ))
+                            } else {
+                                Some(format!(
+                                    "{}\n{}",
+                                    crate::context_scale::hard_reminder_block(
+                                        fire.milestone_tokens,
+                                        truncate_tokens,
+                                        model_face_tokens,
+                                    ),
+                                    crate::context_scale::compression_window_block(
+                                        fire.milestone_tokens
+                                    ),
+                                ))
+                            }
                         }
                         // T1：窗口路径注入**必定压缩窗口块**（两级询问按升级计
                         // 数取档）；截断路径（无可压分块／第三次）的告知块在截断
@@ -2616,7 +2648,10 @@ pub(crate) async fn run_agent_loop(
                             round: None,
                         });
                         let open_window = match fire.tier {
-                            crate::context_scale::LadderTier::HardReminder => true,
+                            // 0de D1（2026-10-16，设计 §2）：可压集合空 ⇒ 不开窗
+                            // （提醒本体已注入、水位照记——打断窗对无物可压的面
+                            // 只会产生「未落地」空转）。
+                            crate::context_scale::LadderTier::HardReminder => t1_compressible > 0,
                             crate::context_scale::LadderTier::HardTruncate => !t1_cut,
                             crate::context_scale::LadderTier::Soft => false,
                         };
@@ -2643,7 +2678,14 @@ pub(crate) async fn run_agent_loop(
                 // 会话级水位：fire 即回写（随侧车持久化；新会话独立、恢复不重发）。
                 controller.mark_context_scale_notified(&fire.key);
                 let form = if pushed_block {
-                    "standalone_block"
+                    if matches!(fire.tier, crate::context_scale::LadderTier::HardReminder)
+                        && t1_compressible == 0
+                    {
+                        // 0de D1：空集合开窗被抑制，本轮只交付提醒本体。
+                        "reminder_only_no_compressible"
+                    } else {
+                        "standalone_block"
+                    }
                 } else if has_truncate {
                     // 0bm 复审更正（2026-09-24）：T1 **窗口路径**（!t1_cut）下
                     // 低档是被「必定压缩窗口块」取代——截断只是窗口未产出的
@@ -2776,7 +2818,7 @@ pub(crate) async fn run_agent_loop(
         // 机械层把「机械摘要行（结构化轨）＋语义摘要（模型产出）」写到 marker
         // 里，模型面随之下移；**本地面一条不删**（不变量 I3）。reason：窗口
         // 收口＝`context_scale_window`，模型自选＝`model_selected`。
-        if let Some((summary, summary_window)) = pending_semantic.take() {
+        if let Some((summary, summary_window, stop_declared)) = pending_semantic.take() {
             // 0ap 复核批（P2）：归因取**摘要产出时**记录的窗口种类——工具
             // 知情发起 ⇒ `model_selected`（设计 §1）；H1 阶梯窗口／T1 必定
             // 压缩强制窗 ⇒ `context_scale_window`；无窗口（模型自选）⇒
@@ -2809,6 +2851,8 @@ pub(crate) async fn run_agent_loop(
                 &locators,
                 &mut mechanical_audit,
                 tool_rounds,
+                rounds_since_compact,
+                stop_declared,
             )
             .await?;
             if let Some(outcome) = compaction {
@@ -3469,7 +3513,15 @@ pub(crate) async fn run_agent_loop(
         {
             // 0ap 复核批（P2）：归因随摘要**在产出时固定**——此刻在程窗口的
             // 种类即促成者；无窗口在程（模型自选摘要块）记 `None`。
-            pending_semantic = Some((summary, window_kind));
+            // 0de D3（2026-10-16，设计 §2）：源消息是否携带 STOP 声明随摘要
+            // **在识别时固定**——收束/暂停同消息的摘要，消费路径只落审计不
+            // 注入告知块（模型已离场，注入必造逼轮；事发 seq 556→558 形态）。
+            let stop_declared = response
+                .text
+                .as_deref()
+                .and_then(crate::model_stop::extract_model_stop)
+                .is_some();
+            pending_semantic = Some((summary, window_kind, stop_declared));
         }
         if !response.tool_calls.is_empty() {
             controller
@@ -5528,9 +5580,10 @@ pub(crate) async fn run_agent_loop(
     // （本地面逐字保留）；压不动（无可压闭合块 / 块区间非法）⇒ 如实 NoOp，
     // 不虚构事件。
     // 边界：`?` 错误传播路径仍会丢弃该状态（与 0AC-A6 Err 留痕同类，挂账）。
-    if let Some((summary, summary_window)) = pending_semantic.take() {
+    if let Some((summary, summary_window, stop_declared)) = pending_semantic.take() {
         // 0ap：归因口径与 loop-top 主消费点一致——取摘要产出时记录的窗口种类
-        // （复核批 P2：不再回看旗标）。
+        // （复核批 P2：不再回看旗标）。0de D3：STOP 旗标同贯（run 尾本就无
+        // 后续轮，注入恒为 inert；统一传旗标保持单源语义）。
         let semantic_reason = semantic_compression_reason(summary_window);
         // run 尾重建投影入参（loop 内的 `face_params` 已出作用域；D4 机械段
         // 允许按 epoch 重渲——此处已无后续请求，代价为零）。
@@ -5569,6 +5622,8 @@ pub(crate) async fn run_agent_loop(
             &locators,
             &mut mechanical_audit,
             tool_rounds,
+            rounds_since_compact,
+            stop_declared,
         )
         .await?
         {
@@ -7492,6 +7547,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 0de D1 迁移辅助（2026-10-16，设计 §2/§7）：按序吐出工具结果的测试
+    /// host——窗口钉迁移为「小结果轮＋肥胖结果轮」两轮成块。滑块按**整轮
+    /// 粒度**切（`slider_start`＝最近 slider 估算的连续完整轮）：单个肥胖轮
+    /// 会把滑块起点锚在自己身上 ⇒ 零分块、H1 首火即被
+    /// `reminder_only_no_compressible` 抑制并消费闩位；小轮在前、肥胖轮在后
+    /// ⇒ 肥胖轮锚滑块、小轮闭合成块，H1 首火即有可压集合。
+    struct SeqOutputsHost {
+        journal: JournalRecorder,
+        outputs: std::sync::Mutex<Vec<ToolResult>>,
+    }
+    #[async_trait::async_trait]
+    impl LoopHost for SeqOutputsHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &EmptyRegistry
+        }
+        fn session_cwd(&self) -> std::path::PathBuf {
+            self.journal.journal_dir().to_path_buf()
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _arguments: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            let mut outputs = self.outputs.lock().unwrap_or_else(|e| e.into_inner());
+            if outputs.is_empty() {
+                return Ok(ok_result());
+            }
+            Ok(outputs.remove(0))
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _arguments: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::AllowOnce)
+        }
+    }
+    /// 小结果轮（估算 ≈1K：低于迁移钉的 H1=2K ⇒ 首轮 loop-top 不越线）。
+    fn small_tool_result() -> ToolResult {
+        ToolResult {
+            output: "s".repeat(2_000),
+            ..ok_result()
+        }
+    }
+
     /// 参与路径：窗口轮声明 blackboard_write → 落穿正常派发执行 → 下一
     /// loop-top 延迟收口（model_participated=true，无异常事实）。
     #[tokio::test]
@@ -7499,21 +7604,27 @@ mod tests {
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
                 .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+                .with_prompt_tokens(100),
             ScriptedResponse::tool_calls(vec![window_write_call("call-w1")])
                 .with_prompt_tokens(100),
             ScriptedResponse::text("已固化；可弃范围：第 1 轮读数"),
             ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // 分块关掉（x 巨大）＋阶梯缝隙：本钉只管**窗口语义**——H1 钉在
-        // 1K（模型面估算）即刻打断并开窗；T1 抬到不可达（另钉覆盖截断）。
+        // 阶梯缝隙：本钉只管**窗口语义**——H1 钉在 2K（模型面估算），第 2 轮
+        // 肥胖结果后首次越线即有闭合块（小轮在前成块、肥胖轮锚滑块——见
+        // `SeqOutputsHost` 注）；T1 抬到不可达（另钉覆盖截断）。0de D1
+        // （2026-10-16）：开窗前置＝可压集合非空；空集合时 H1 只注入提醒
+        // 本体、不开窗（专项钉另测）。
         let controller = AgentLoopController::with_gateway(gateway)
-            .with_slider_window_tokens(100_000_000)
-            .with_context_scale_ladder(v8_test_ladder(1_000, 1_000_000_000));
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(200)
+            .with_context_scale_ladder(v8_test_ladder(2_000, 1_000_000_000));
         let dir = test_dir();
-        let host = TestHost {
+        let host = SeqOutputsHost {
             journal: JournalRecorder::new(dir.clone()),
-            tool_result: Some(s1_fat_result()),
+            outputs: std::sync::Mutex::new(vec![small_tool_result(), s1_fat_result()]),
         };
         let (answer, _, _) = controller
             .run_turn(
@@ -7533,7 +7644,7 @@ mod tests {
         // 窗口轮请求面：**常规面**（FR-3，0bc 长杂轮：硬提醒不锁工具面——
         // 与上一常规轮工具面一致），任务块注入且携带水位（0AE-C6）。
         let requests = fake.received_requests();
-        let window_round = &requests[1];
+        let window_round = &requests[2];
         assert_eq!(
             window_round
                 .tools
@@ -7583,7 +7694,7 @@ mod tests {
         assert!(summary.contains("window_start_writes=0"), "{summary}");
         assert!(summary.contains("writes_now=1"), "{summary}");
         assert!(payload["anomaly"].is_null());
-        assert_eq!(payload["round"], 2, "close recorded at the deferred round");
+        assert_eq!(payload["round"], 3, "close recorded at the deferred round");
 
         // 阶梯事件形状：key=context_scale:<刻度>（C2 形状 {key, round, summary,
         // anomaly}，summary 必含**模型面读数**——v8 量尺＝投影层估算）。
@@ -7594,11 +7705,11 @@ mod tests {
             .collect();
         let fire_h1 = scale
             .iter()
-            .find(|e| e.payload["payload"]["key"] == "context_scale:1k")
+            .find(|e| e.payload["payload"]["key"] == "context_scale:2k")
             .unwrap_or_else(|| panic!("H1 硬提醒事件缺失: {scale:?}"));
         let summary_h1 = fire_h1.payload["payload"]["summary"].as_str().unwrap();
         assert!(
-            summary_h1.contains("milestone_tokens=1000")
+            summary_h1.contains("milestone_tokens=2000")
                 && summary_h1.contains("model_face_estimate_tokens=")
                 && summary_h1.contains("tier=hard_reminder")
                 && summary_h1.contains("watermark=【"),
@@ -7628,8 +7739,10 @@ mod tests {
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
                 .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+                .with_prompt_tokens(100),
             ScriptedResponse::tool_calls(vec![
-                tool_call("read_file", "call-r2-window"),
+                tool_call("read_file", "call-r3-window"),
                 window_write_call("call-w1"),
             ])
             .with_prompt_tokens(100),
@@ -7637,20 +7750,22 @@ mod tests {
             ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // v8：H1 打断档钉在 1K（模型面估算），T1 抬到不可达。
+        // v8：H1 打断档钉在 2K（模型面估算），T1 抬到不可达。0de D1：小轮在
+        // 前成块、肥胖轮锚滑块（SeqOutputsHost 注）⇒ H1 首火即有可压集合。
         // FR-3 勘定（2026-09-21）：窗口轮的 fat read 照常派发后，其大结果
         // 会计入轮内注入预算（默认 50K，ADR-0010 §3.6）；默认预算下同轮
         // **后续**调用会被该既有门拒绝（实测 write 被拒 ⇒ 参与判定位失真）
         // ——与本测试命题（FR-3 不过滤/不丢弃/无提示）正交，此处抬高预算
         // 隔离该门；注入门自身行为由 host_exec 侧测试覆盖。
         let controller = AgentLoopController::with_gateway(gateway)
-            .with_slider_window_tokens(100_000_000)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(200)
             .with_max_inject_tokens_per_round(1_000_000)
-            .with_context_scale_ladder(v8_test_ladder(1_000, 1_000_000_000));
+            .with_context_scale_ladder(v8_test_ladder(2_000, 1_000_000_000));
         let dir = test_dir();
-        let host = TestHost {
+        let host = SeqOutputsHost {
             journal: JournalRecorder::new(dir.clone()),
-            tool_result: Some(s1_fat_result()),
+            outputs: std::sync::Mutex::new(vec![small_tool_result(), s1_fat_result()]),
         };
         let (answer, _, _) = controller
             .run_turn(
@@ -7669,7 +7784,7 @@ mod tests {
 
         // 无丢弃提示：窗口轮不再注入「窗口内仅 … 可执行」话术（FR-3）。
         let requests = fake.received_requests();
-        let round_after_window = &requests[2].messages;
+        let round_after_window = &requests[3].messages;
         assert!(
             !round_after_window
                 .iter()
@@ -7677,8 +7792,8 @@ mod tests {
             "no drop notice: {round_after_window:?}"
         );
 
-        // 窗口轮声明的 read_file（call-r2-window）照常派发：全程执行两次
-        // （第 1 轮 ＋ 窗口轮）。
+        // 窗口轮声明的 read_file（call-r3-window）照常派发：全程执行三次
+        // （第 1/2 轮 ＋ 窗口轮）。
         let read_file_completions = events(&dir)
             .into_iter()
             .filter(|e| {
@@ -7686,7 +7801,7 @@ mod tests {
             })
             .count();
         assert_eq!(
-            read_file_completions, 2,
+            read_file_completions, 3,
             "window-round call must dispatch (FR-3)"
         );
         // blackboard_write 照常执行；收口事件如实记参与。
@@ -7714,6 +7829,8 @@ mod tests {
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
                 .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+                .with_prompt_tokens(100),
             ScriptedResponse::text("我先标注一下可弃范围").with_prompt_tokens(100),
             ScriptedResponse::text("再确认一遍").with_prompt_tokens(100),
             ScriptedResponse::text("仍未写入黑板").with_prompt_tokens(100),
@@ -7722,13 +7839,16 @@ mod tests {
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         // v8：H1 打断档钉在 1K（模型面估算），T1 抬到不可达。
+        // 0de D1：开窗前置＝可压集合非空 ⇒ slider/block 收小成块（空集合时
+        // H1 不再开窗，专项钉另测）。
         let controller = AgentLoopController::with_gateway(gateway)
-            .with_slider_window_tokens(100_000_000)
-            .with_context_scale_ladder(v8_test_ladder(1_000, 1_000_000_000));
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(200)
+            .with_context_scale_ladder(v8_test_ladder(2_000, 1_000_000_000));
         let dir = test_dir();
-        let host = TestHost {
+        let host = SeqOutputsHost {
             journal: JournalRecorder::new(dir.clone()),
-            tool_result: Some(s1_fat_result()),
+            outputs: std::sync::Mutex::new(vec![small_tool_result(), s1_fat_result()]),
         };
         let (answer, _, _) = controller
             .run_turn(
@@ -7747,7 +7867,7 @@ mod tests {
 
         // 窗口恰耗 3 轮：3 个窗口轮请求工具面＝常规面（FR-3：不锁工具面）。
         let requests = fake.received_requests();
-        for request in &requests[1..4] {
+        for request in &requests[2..5] {
             assert_eq!(
                 request
                     .tools
@@ -7770,7 +7890,7 @@ mod tests {
         }
         // 提醒文案（v7 重写）：窗口剩余轮提示改指**语义摘要块**，仍守
         // 「无成串空格」纪律（0AE-C13）。
-        let second_window_round = &requests[2].messages;
+        let second_window_round = &requests[3].messages;
         assert!(
             second_window_round.iter().any(|m| m
                 .content
@@ -7806,26 +7926,32 @@ mod tests {
     #[tokio::test]
     async fn compression_window_close_survives_budget_exhaustion_break() {
         let fake = Arc::new(FakeProvider::new(vec![
-            // 第 1 轮：普通工具轮（大工具结果把**实际上下文**推过 500K
-            // 刻度）⇒ 第 2 轮 loop-top 越线开窗；
-            // 轮末 tool_rounds(1) ≥ max_tool_rounds(1) ⇒ budget_exhausted。
+            // 第 1 轮：小结果工具轮（估算低于 H1=2K ⇒ 不越线）；第 2 轮：
+            // 肥胖结果工具轮（滑块被其锚定、小轮闭合成块）⇒ 第 3 轮 loop-top
+            // 越线开窗（0de D1：开窗时恰有可压集合）；
+            // 轮末 tool_rounds(2) ≥ max_tool_rounds(2) ⇒ budget_exhausted。
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
                 .with_prompt_tokens(100),
-            // 第 2 轮（窗口轮）：模型声明 blackboard_write → 落穿 →
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+                .with_prompt_tokens(100),
+            // 第 3 轮（窗口轮）：模型声明 blackboard_write → 落穿 →
             // D-8 耗尽收尾 break（不派发）→ break 前收口。
             ScriptedResponse::tool_calls(vec![window_write_call("call-w1")])
                 .with_prompt_tokens(100),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway)
-            .with_slider_window_tokens(100_000_000)
-            // v8：H1 打断档钉在 1K（模型面估算），T1 抬到不可达。
-            .with_context_scale_ladder(v8_test_ladder(1_000, 1_000_000_000))
-            .with_max_tool_rounds(1);
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(200)
+            // v8：H1 打断档钉在 2K（模型面估算），T1 抬到不可达。
+            // 0de D1：开窗前置＝可压集合非空 ⇒ 小轮在前成块、肥胖轮锚滑块
+            // （SeqOutputsHost 注）。
+            .with_context_scale_ladder(v8_test_ladder(2_000, 1_000_000_000))
+            .with_max_tool_rounds(2);
         let dir = test_dir();
-        let host = TestHost {
+        let host = SeqOutputsHost {
             journal: JournalRecorder::new(dir.clone()),
-            tool_result: Some(s1_fat_result()),
+            outputs: std::sync::Mutex::new(vec![small_tool_result(), s1_fat_result()]),
         };
         let _ = controller
             .run_turn(
@@ -7841,11 +7967,11 @@ mod tests {
             .await
             .unwrap();
 
-        // 恰两轮请求：第 2 轮窗口面＝常规面（FR-3：不锁工具面）；无第 3 轮。
+        // 恰三轮请求：第 3 轮窗口面＝常规面（FR-3：不锁工具面）；无第 4 轮。
         let requests = fake.received_requests();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 3);
         assert_eq!(
-            requests[1]
+            requests[2]
                 .tools
                 .iter()
                 .map(|t| t.name.as_str())
@@ -9205,6 +9331,270 @@ mod tests {
             "存档写入失败必须显式上报: {compact:?}"
         );
         assert_eq!(compact[0]["summary_incomplete"], false);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── 0de（2026-10-16，277 批设计 §7）：治理摩擦综合 S2 钉 ─────────────
+
+    /// 0de N2（D1，设计 §2/§7）：**H1 开窗前置＝可压集合非空**——空集合越线
+    /// 只注入硬提醒本体（信息面：读数＋T1 预告＋清理权限句），不附窗口块、
+    /// 不开窗（`form=reminder_only_no_compressible`；空集合开窗必然空转）。
+    /// 对照臂＝有可压块时照常开窗——四个既有窗口钉迁移后即此臂（见
+    /// `compression_window_participates_via_blackboard_write_and_closes_deferred`）。
+    #[tokio::test]
+    async fn h1_window_is_suppressed_when_the_compressible_set_is_empty() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // 初始 prompt 估算 ≈400K（800K 字符）≥ H1 钉 1K；slider 巨大 ⇒ 主滑块
+        // 外零分块（可压集合空）；T1 抬到不可达（只测 H1 抑制）。
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(100_000_000)
+            .with_context_scale_ladder(v8_test_ladder(1_000, 1_000_000_000));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        controller
+            .run_turn(
+                &host,
+                &s1_actual_context_prompt(),
+                "RUN-0DE-N2",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 注入面：硬提醒本体在（读数＋T1 预告），窗口块与剩余轮提示全无。
+        let requests = fake.received_requests();
+        assert!(
+            requests.iter().any(|r| r.messages.iter().any(|m| {
+                m.content.starts_with("[CONTEXT_SCALE") && m.content.contains("硬提醒")
+            })),
+            "硬提醒本体须照常注入（信息面保留）: {requests:?}"
+        );
+        assert!(
+            requests
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .all(|m| !m.content.contains("模型参与压缩")),
+            "窗口块不得注入（开窗被抑制）: {requests:?}"
+        );
+        // 审计：H1 fire 落账 form=reminder_only_no_compressible；窗口从未
+        // 开启 ⇒ 无 model_compression 收口事件。
+        let scale: Vec<_> = audit_events(&dir)
+            .into_iter()
+            .filter(|e| e.payload["kind"] == crate::mechanical_audit::KIND_CONTEXT_SCALE)
+            .collect();
+        let fire = scale
+            .iter()
+            .find(|e| e.payload["payload"]["key"] == "context_scale:1k")
+            .unwrap_or_else(|| panic!("H1 fire 事件缺失: {scale:?}"));
+        let summary = fire.payload["payload"]["summary"].as_str().unwrap();
+        assert!(
+            summary.contains("form=reminder_only_no_compressible")
+                && summary.contains("tier=hard_reminder"),
+            "空集合 H1 须落抑制形态审计: {summary}"
+        );
+        assert!(
+            audit_events(&dir)
+                .into_iter()
+                .all(|e| e.payload["kind"] != crate::mechanical_audit::KIND_MODEL_COMPRESSION),
+            "窗口未开启 ⇒ 不得有收口事件"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0de N3（D3，设计 §2/§7）：**收束同消息豁免**——摘要与 `[RUN_END]` STOP
+    /// 声明同消息 ⇒ 消费路径只落审计、不注入告知块（模型已离场，注入必造
+    /// 逼轮；0de 事发 seq 556→558 形态）；对照臂＝无 STOP 声明 ⇒ 照常注入
+    /// （0bs ⑥ 观测回执语义不翻）。
+    #[tokio::test]
+    async fn stop_declared_summary_lands_audit_without_injecting_notice() {
+        // 区间指向不存在的块 ⇒ 必走「未落地」路径（指定区间在可压集合中无
+        // 命中；与事发行同族形态、不受分块配置影响）。
+        let summary_block = "[SEMANTIC_SUMMARY]\n压缩块: 7\n目标: 收束核验\n已完成: 接线\n\
+                             [/SEMANTIC_SUMMARY]";
+        let run = |with_stop: bool, run_id: &'static str| {
+            let text = if with_stop {
+                format!(
+                    "{summary_block}\n[RUN_END]\nintent: conclude\nreason: completed\n[/RUN_END]"
+                )
+            } else {
+                summary_block.to_string()
+            };
+            async move {
+                // 首轮带工具轮（门实质判定 `answer_gate_has_substance` 需执行
+                // 事实）——次轮文本即终答候选 ⇒ 反例门 fire ⇒ 下一 loop-top
+                // 消费摘要（事发同形）。
+                let fake = Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                        .with_prompt_tokens(100),
+                    ScriptedResponse::text(text),
+                    ScriptedResponse::text("终答"),
+                ]));
+                let gateway: Arc<dyn ModelGateway> = fake.clone();
+                let controller = AgentLoopController::with_gateway(gateway);
+                let dir = test_dir();
+                let host = TestHost {
+                    journal: JournalRecorder::new(dir.clone()),
+                    tool_result: Some(ok_result()),
+                };
+                controller
+                    .run_turn(&host, "收束豁免测试", run_id, MANIFEST, 0, None, None, None)
+                    .await
+                    .unwrap();
+                (fake, dir)
+            }
+        };
+
+        // 抑制臂：RUN_END 同消息 ⇒ 未落地审计照落、无注入、无逼轮。
+        let (fake, dir) = run(true, "RUN-0DE-N3A").await;
+        let landed: Vec<_> = audit_events(&dir)
+            .into_iter()
+            .filter(|e| e.payload["payload"]["anomaly"] == "summary_not_landed")
+            .collect();
+        assert_eq!(landed.len(), 1, "未落地审计须照落: {landed:?}");
+        let requests = fake.received_requests();
+        assert!(
+            requests
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .all(|m| !m.content.contains("压缩回执")),
+            "告知块不得注入（STOP 同消息豁免）: {requests:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // 对照臂：无 STOP 声明 ⇒ 照常注入（0bs ⑥ 不翻）。
+        let (fake, dir) = run(false, "RUN-0DE-N3B").await;
+        let requests = fake.received_requests();
+        assert!(
+            requests
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .any(|m| m.content.contains("压缩回执")),
+            "无 STOP 声明时告知块照常注入（0bs ⑥ 语义保留）: {requests:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0de N4（D7，设计 §5/§7）：**分块压缩事件计数器非零**——
+    /// `rounds_since_last_compaction` 由 `rounds_since_compact` 真值承载
+    /// （此前 v8 写点硬编码 0＝遥测失真；0de 事发 5/5 事件恒 0）。
+    /// 驱动形态 1:1 复刻 `final_answer_semantic_summary_is_consumed_at_the_run_tail`
+    /// （两工具轮成块＋门轮＋终轮摘要走 run 尾消费）。
+    #[tokio::test]
+    async fn block_compaction_event_carries_the_true_rounds_since_counter() {
+        let semantic_block = "[SEMANTIC_SUMMARY]\n目标: 收尾压缩\n已完成: 台账接线\n\
+                             关键决策: 保留滑块\n未决问题: 无\n下一步: 跑 A/B\n关键文件: compact.rs\n\
+                             [/SEMANTIC_SUMMARY]";
+        let old_round = "O".repeat(10_000);
+        let outputs = std::sync::Mutex::new(vec![
+            ToolResult {
+                output: old_round.clone(),
+                ..ok_result()
+            },
+            ToolResult {
+                output: "N".repeat(600),
+                ..ok_result()
+            },
+        ]);
+        struct SeqHost {
+            journal: JournalRecorder,
+            outputs: std::sync::Mutex<Vec<ToolResult>>,
+        }
+        #[async_trait::async_trait]
+        impl LoopHost for SeqHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            fn session_cwd(&self) -> std::path::PathBuf {
+                self.journal.journal_dir().to_path_buf()
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let mut outputs = self.outputs.lock().unwrap_or_else(|e| e.into_inner());
+                if outputs.is_empty() {
+                    return Ok(ok_result());
+                }
+                Ok(outputs.remove(0))
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::text("终答初稿"),
+            ScriptedResponse::text(semantic_block),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
+            .with_session_id(Some("SESSION-0DE-N4".to_string()));
+        let dir = test_dir();
+        let host = SeqHost {
+            journal: JournalRecorder::new(dir.clone()),
+            outputs,
+        };
+        controller
+            .run_turn(
+                &host,
+                "计数器贯通测试",
+                "RUN-0DE-N4",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let compact: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(compact.len(), 1, "终止轮摘要须按块压缩落地: {compact:?}");
+        assert_eq!(compact[0]["mode"], "model_summary");
+        let rounds_since = compact[0]["rounds_since_last_compaction"]
+            .as_u64()
+            .expect("rounds_since_last_compaction field");
+        assert!(
+            rounds_since >= 1,
+            "计数器须贯通真值（≥1），不得恒 0: {rounds_since}"
+        );
+        assert_eq!(
+            rounds_since, 4,
+            "4 个已完成模型轮（两工具轮＋门轮＋终轮）后消费: {rounds_since}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

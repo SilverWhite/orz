@@ -78,7 +78,9 @@ pub const MODEL_SUMMARY_SECTIONS: [&str; 6] = [
 pub const MODEL_SUMMARY_MIN_SECTIONS: usize = 2;
 
 /// 摘要块内**可选**的块区间指令标签（模型按块区间指定压缩对象；缺省时机械层
-/// 按「最旧闭合块优先」，设计 §4）。
+/// 按「最旧闭合块优先」，设计 §4）。行内说明的契约口径（0de D5，2026-10-16，
+/// 设计 §3）：**区间写在括号外、说明写在括号内**——解析在分隔符切分前剥除
+/// 平衡括号注解段，注解内的逗号/分号/疑似区间串（含 en-dash）不参与区间指令。
 pub const MODEL_SUMMARY_BLOCK_LABEL: &str = "压缩块:";
 
 /// 全角冒号变体（0bk S1：模型常写 `压缩块：`，不再使区间行漏识别——漏识别
@@ -690,12 +692,40 @@ pub enum BlockSelection {
     Unrecognized(String),
 }
 
+/// 0de D5（2026-10-16，设计 §3）：**分隔符切分前剥除平衡括号注解段**——模型的
+/// 行内说明常含全角逗号/分号等（0de 事发行 `压缩块: 33（…已由主动清零覆盖，本
+/// 摘要为迟交落账）` 的注解内逗号曾被当区间分隔符，切出的第二段无数字核心 ⇒
+/// 整条 Unrecognized）。剥除按字符扫描：进入任一括号对（全角 `（）`／半角
+/// `()`）即丢弃字符直至配平；未闭合括号剥至段尾（残缺注解按注解容忍，回执
+/// 引用的原行不受影响——`Unrecognized` 仍携带原文）。区间必须写在括号外。
+fn strip_paren_annotations(spec: &str) -> String {
+    let mut out = String::with_capacity(spec.len());
+    let mut depth_full = 0usize;
+    let mut depth_half = 0usize;
+    for ch in spec.chars() {
+        match ch {
+            '（' => depth_full += 1,
+            '(' => depth_half += 1,
+            '）' => depth_full = depth_full.saturating_sub(1),
+            ')' => depth_half = depth_half.saturating_sub(1),
+            c => {
+                if depth_full == 0 && depth_half == 0 {
+                    out.push(c);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// 摘要块内的**块区间指令**（0bk S1 放宽解析）：`压缩块: 1-4, 6` →
-/// `Specified([1,2,3,4,6])`。带注解区间不再使解析失败——每段取**数字核心**
-/// （前导 数字/`-`/空白 连续段），其后内容视为行内注解忽略（`1-62（全部已
-/// 闭合块；工作现场保留）` ⇒ `[1..62]`）；全角冒号 `压缩块：` 同样识别。
-/// 某段连数字核心都没有（`abc`）或区间非法 ⇒ 整条 `Unrecognized`（非法段仍
-/// 拒，携带原文行供回执如实引用）；没有 `压缩块:` 行 ⇒ `NotSpecified`。
+/// `Specified([1,2,3,4,6])`。带注解区间不再使解析失败——**先剥除平衡括号
+/// 注解段**（0de D5，2026-10-16：注解内的全角逗号等不再被误当区间分隔符），
+/// 每段取**数字核心**（前导 数字/`-`/空白 连续段），其后内容视为行内注解忽略
+/// （`1-62（全部已闭合块；工作现场保留）` ⇒ `[1..62]`）；全角冒号 `压缩块：`
+/// 同样识别。某段连数字核心都没有（`abc`）或区间非法 ⇒ 整条 `Unrecognized`
+/// （非法段仍拒，携带原文行供回执如实引用）；没有 `压缩块:` 行 ⇒
+/// `NotSpecified`。
 pub fn parse_block_selection(summary: &str) -> BlockSelection {
     let Some(line) = summary.lines().map(str::trim_start).find(|l| {
         l.starts_with(MODEL_SUMMARY_BLOCK_LABEL)
@@ -707,6 +737,7 @@ pub fn parse_block_selection(summary: &str) -> BlockSelection {
         .strip_prefix(MODEL_SUMMARY_BLOCK_LABEL)
         .or_else(|| line.strip_prefix(MODEL_SUMMARY_BLOCK_LABEL_FULLWIDTH))
         .unwrap_or(line);
+    let spec = strip_paren_annotations(spec);
     let mut out: Vec<u32> = Vec::new();
     // 0bm 复审补口（2026-09-24）：`、` 是模型写多段区间的常见分隔（如
     // `压缩块: 1-4、6`）——不识别会把「6」当注解静默截断，与 0bk ②「如实
@@ -1046,6 +1077,47 @@ mod tests {
         assert_eq!(
             parse_block_selection("目标: x\n已完成: y"),
             BlockSelection::NotSpecified
+        );
+    }
+
+    /// 0de N1（2026-10-16，277 批设计 §7）：**事发行原样解析钉**——注解内含
+    /// 全角逗号与 en-dash（0de 事发根因＝分隔符切分先于注解容忍：注解「…覆盖
+    /// ，本摘要为迟交落账）」被切出无数字核心的第二段 ⇒ 整条 Unrecognized）；
+    /// D5 剥除平衡括号注解段后，区间取括号外本体、注解内疑似区间串（1–34）
+    /// 不参与指令。半角括号与未闭合括号同 tolerated；**非法段仍拒**（剥除不
+    /// 影响非法性判定）。
+    #[test]
+    fn incident_annotation_with_fullwidth_comma_parses_to_its_outside_range() {
+        // 事发原行逐字（journal `RUN-2b1f85d2-1` seq 556）。
+        let incident =
+            "压缩块: 33（窗口期唯一原文块；连同 1–34 区段已由主动清零覆盖，本摘要为迟交落账）";
+        assert_eq!(
+            parse_block_selection(incident),
+            BlockSelection::Specified(vec![33])
+        );
+        // 半角括号注解内的分隔符同样剥除（注解内逗号不切段）。
+        assert_eq!(
+            parse_block_selection("压缩块: 1-4 (closed, superseded)"),
+            BlockSelection::Specified(vec![1, 2, 3, 4])
+        );
+        // 未闭合括号：剥至段尾（残缺注解按注解容忍）。
+        assert_eq!(
+            parse_block_selection("压缩块: 2-3（另含 4"),
+            BlockSelection::Specified(vec![2, 3])
+        );
+        // 非法段仍拒：剥除不改变非法性判定（0bk ②「不静默退化」不翻）。
+        assert_eq!(
+            parse_block_selection("压缩块: 1-4, abc"),
+            BlockSelection::Unrecognized("压缩块: 1-4, abc".to_string())
+        );
+        assert_eq!(
+            parse_block_selection("压缩块: 全部"),
+            BlockSelection::Unrecognized("压缩块: 全部".to_string())
+        );
+        // 剥除后无区间本体（整行都是注解）仍拒。
+        assert_eq!(
+            parse_block_selection("压缩块: （都是说明）"),
+            BlockSelection::Unrecognized("压缩块: （都是说明）".to_string())
         );
     }
 
