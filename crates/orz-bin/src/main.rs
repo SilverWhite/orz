@@ -255,9 +255,12 @@ fn main_inner() {
         #[cfg(target_os = "linux")]
         argv_scrub::scrub_linux("--max-wallclock", "ORZ_MAX_WALLCLOCK");
     }
-    // 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): `--retrieval-enabled` —
-    // 会话级独立检索启用门（默认 false = fail-closed；三值模式退役后唯一
-    // 授权开关）。旧 `--retrieval-mode <off|local_browser|framework_fallback>`
+    // 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1) + 2026-10-17 用户令:
+    // `--retrieval-enabled` — 会话级独立检索启用门。**缺省已开**（用户令
+    // 「正常版本的 orz 检索门默认开即可，检索部分是很重要的信息获取，得常开」），
+    // 故本旗标保留为兼容入口（等价于显式开）；要关用
+    // `ORZ_RETRIEVAL_ENABLED=0` 或 legacy `--retrieval-mode off`。
+    // 旧 `--retrieval-mode <off|local_browser|framework_fallback>`
     // 保留兼容解析（标注废弃）：非 off 旧值仍按 legacy 兼容映射启用（不再
     // 有 lane 语义），并由 `retrieval_enabled_from_env` 打印弃用提示。
     if args.iter().any(|a| a == "--retrieval-enabled") {
@@ -521,35 +524,14 @@ fn run_replay_entry(path: &std::path::Path) {
     }
 }
 
-/// DEPRECATED (0t, ADR-0010 §14.65): read legacy `ORZ_RETRIEVAL_MODE`
-/// (set by deprecated `--retrieval-mode`) — 保留兼容解析。
-fn retrieval_mode_from_env() -> Option<orz_loop::controller::RetrievalMode> {
-    std::env::var("ORZ_RETRIEVAL_MODE")
-        .ok()
-        .and_then(|v| orz_loop::controller::RetrievalMode::from_wire(Some(&v)))
-}
-
-/// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): 会话级检索启用门解析——
-/// 优先级：显式 `ORZ_RETRIEVAL_ENABLED`（1/true/yes/on ⇒ 开；0/false/no/off
-/// ⇒ 关）> legacy `ORZ_RETRIEVAL_MODE` 兼容映射（非 off ⇒ 开，打印弃用
-/// 提示）> 默认关（fail-closed）。
+/// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1) + **2026-10-17 用户令**：
+/// 会话级检索启用门解析——**单源已移入 host**
+/// [`orz_host::retrieval_gate::retrieval_enabled_from_env`]（本函数为薄委托，
+/// 供 CLI 入口与既有钉子共用）。口径：显式 `ORZ_RETRIEVAL_ENABLED`
+/// （1/true/yes/on ⇒ 开，其余显式值 ⇒ 关）> legacy `ORZ_RETRIEVAL_MODE`
+/// （非 off ⇒ 开，打印弃用提示）> **默认开**（此前 fail-closed 默认关）。
 fn retrieval_enabled_from_env() -> bool {
-    if let Ok(v) = std::env::var("ORZ_RETRIEVAL_ENABLED") {
-        return matches!(
-            v.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        );
-    }
-    if let Some(mode) = retrieval_mode_from_env() {
-        eprintln!(
-            "warning: --retrieval-mode / ORZ_RETRIEVAL_MODE is deprecated \
-             (0t γ, ADR-0010 §14.65) — lane selection is automatic; use \
-             --retrieval-enabled / ORZ_RETRIEVAL_ENABLED to control the \
-             enable gate"
-        );
-        return mode.enables_retrieval();
-    }
-    false
+    orz_host::retrieval_gate::retrieval_enabled_from_env()
 }
 
 /// ACAF Slice 1 (ADR-0011 §4.4): spawn the signer-process client when the
@@ -3627,9 +3609,10 @@ mod benchmark_flags_tests {
         list.iter().map(|s| s.to_string()).collect()
     }
 
-    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): CLI 检索启用门解析——
-    /// 显式 ORZ_RETRIEVAL_ENABLED 优先；legacy ORZ_RETRIEVAL_MODE 非 off
-    /// 兼容映射为开；缺省关（fail-closed）。
+    /// 0t (2026-09-09, ADR-0010 §14.65) + 2026-10-17 用户令: CLI 检索启用门
+    /// 解析——显式 ORZ_RETRIEVAL_ENABLED 优先；legacy ORZ_RETRIEVAL_MODE 非
+    /// off 兼容映射为开；**缺省开**（此前 fail-closed 缺省关；用户令
+    /// 「正常版本的检索门默认开即可，得常开」）。
     #[test]
     fn retrieval_enabled_env_decisions() {
         // SAFETY: test-only env mutation; these tests do not run in
@@ -3640,14 +3623,21 @@ mod benchmark_flags_tests {
             std::env::remove_var("ORZ_RETRIEVAL_MODE");
         }
         assert!(
-            !super::retrieval_enabled_from_env(),
-            "default = fail-closed"
+            super::retrieval_enabled_from_env(),
+            "2026-10-17 用户令：default = enabled"
         );
 
         unsafe {
             std::env::set_var("ORZ_RETRIEVAL_ENABLED", "1");
         }
         assert!(super::retrieval_enabled_from_env());
+        unsafe {
+            std::env::set_var("ORZ_RETRIEVAL_ENABLED", "0");
+        }
+        assert!(
+            !super::retrieval_enabled_from_env(),
+            "explicit off wins (default-on 后唯一关法之一)"
+        );
         unsafe {
             std::env::set_var("ORZ_RETRIEVAL_ENABLED", "false");
         }

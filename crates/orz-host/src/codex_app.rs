@@ -459,11 +459,15 @@ impl CodexAppServer {
             None => generate_thread_id(),
         };
         self.acp
-            .handle_session_new_with_policy(
+            // 2026-10-17 用户令：检索启用门缺省开——本面（Codex app-server
+            // 集成）走单源解析值，不再硬编码 fail-closed；显式关仍经
+            // `ORZ_RETRIEVAL_ENABLED=0` 生效。
+            .handle_session_new_with_options(
                 &thread_id,
                 Some(self.cwd.clone()),
                 self.trust_policy,
                 policy,
+                crate::retrieval_gate::retrieval_enabled_from_env(),
             )
             .await
             .map_err(|e| DispatchError::invalid_params(e.to_string()))?;

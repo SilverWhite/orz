@@ -24,6 +24,7 @@ pub mod process_tree;
 pub mod project_doc_index;
 pub mod reclaim;
 pub mod resource_hint;
+pub mod retrieval_gate;
 pub mod rollback_maintenance;
 
 /// Total order over tiers for the change detector (`host_resource_snapshot`

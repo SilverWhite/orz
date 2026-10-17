@@ -297,8 +297,10 @@ struct StoredSession {
 struct StoredActivationSnapshot {
     schema_version: String,
     session_id: String,
-    /// 0t: 独立检索启用门（默认 false = fail-closed）。旧侧车（无此字段）
-    /// 由 [`load_activation_sidecar`] 按 legacy `retrieval_mode` 归一化。
+    /// 0t + 2026-10-17 用户令: 独立检索启用门（**缺省开**；显式关仍可）。
+    /// 旧侧车（无此字段）由 [`load_activation_sidecar`] 按 legacy
+    /// `retrieval_mode` 归一化；会话创建时该字段一律由调用方传入的门值
+    /// 覆盖（即每个会话的最终门值＝本次解析值，侧车只作存档）。
     #[serde(default)]
     retrieval_enabled: bool,
     /// DEPRECATED 兼容字段：只读旧侧车的 `retrieval_mode` 旧值；新侧车
@@ -330,7 +332,8 @@ impl StoredActivationSnapshot {
         StoredActivationSnapshot {
             schema_version: "0.1.0-draft".to_string(),
             session_id: session_id.to_string(),
-            retrieval_enabled: false,
+            // 2026-10-17 用户令：新会话缺省门值＝单源解析（缺省开）。
+            retrieval_enabled: crate::retrieval_gate::retrieval_enabled_from_env(),
             legacy_retrieval_mode: None,
             next_seq: HashMap::new(),
             activations: Vec::new(),
@@ -3053,12 +3056,14 @@ impl AcpServer {
             .await
     }
 
-    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): `retrieval_enabled` 是
-    /// 会话级独立启用门（三值检索模式退役后唯一授权状态；`false` 默认 =
-    /// fail-closed）。orz-bin env/CLI 与 stdio/TUI 入口把旧 `retrieval_mode`
-    /// 兼容解析映射为 bool 后传入（旧值不再有 lane 语义）。The activation
-    /// sidecar (enable gate + per-role activations) resumes across process
-    /// restarts.
+    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1) + **2026-10-17 用户令**：
+    /// `retrieval_enabled` 是会话级独立启用门（三值检索模式退役后唯一授权
+    /// 状态）——用户令「正常版本的 orz 检索门默认开即可，检索部分是很重要的
+    /// 信息获取，得常开」⇒ **缺省开**，显式关仍可。调用方（orz-bin env/CLI、
+    /// stdio/TUI 入口）经 [`crate::retrieval_gate::retrieval_enabled_from_env`]
+    /// 取单源解析值后传入；旧 `retrieval_mode` 值仅作兼容映射（无 lane 语义）。
+    /// The activation sidecar (enable gate + per-role activations) resumes
+    /// across process restarts — 每会话的最终门值以本次传入值为准。
     pub async fn handle_session_new_with_options(
         &self,
         session_id: &str,

@@ -28,8 +28,10 @@ use crate::acp_server::AcpServer;
 pub struct StdioAgentHandler {
     server: Arc<AcpServer>,
     trust_policy: crate::session::TrustPolicy,
-    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): session-level 检索启用门
-    /// ——三值模式退役后唯一授权状态；`false` = fail-closed（无检索工具）。
+    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1) + 2026-10-17 用户令:
+    /// session-level 检索启用门——三值模式退役后唯一授权状态；**缺省开**
+    /// （用户令「正常版本的检索门默认开即可，得常开」），显式关仍可（经
+    /// [`crate::retrieval_gate`] 解析）。`false` = 该会话无检索工具。
     retrieval_enabled: bool,
 }
 
@@ -41,6 +43,10 @@ impl StdioAgentHandler {
 
     /// Handler with an explicit trust policy — the TUI's in-process wiring
     /// and integration tests run against temp workspaces via `Skip`.
+    ///
+    /// 2026-10-17 用户令：检索启用门缺省开——本构造不带显式门值，走单源解析
+    /// [`crate::retrieval_gate::retrieval_enabled_from_env`]（此前硬编码
+    /// `false`，使 TUI 进程内面在缺省下无检索工具）。
     pub fn with_trust_policy(
         server: Arc<AcpServer>,
         trust_policy: crate::session::TrustPolicy,
@@ -48,7 +54,7 @@ impl StdioAgentHandler {
         Self {
             server,
             trust_policy,
-            retrieval_enabled: false,
+            retrieval_enabled: crate::retrieval_gate::retrieval_enabled_from_env(),
         }
     }
 
