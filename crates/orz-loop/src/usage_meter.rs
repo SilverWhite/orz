@@ -26,6 +26,12 @@ pub(crate) struct RunUsageMeter {
     /// 任一折算轮五项 usage 有缺（流中断臂等）⇒ true；非 completed 终态臂
     /// 由 controller 保守置位（终态前在途轮消耗不可知，如实登记不装完整）。
     usage_incomplete: bool,
+    /// 终态计量行已成功落链的幂等旗（288 处置批）：`journal_usage_meter`
+    /// 成功 record 后置位，此后本 run 的任何再入（completed 臂落行后
+    /// `record_terminal` 罕见硬错上抛进 Err 臂）不再补写第二条——「恰
+    /// 一条」由生产侧封死，而不只靠法官族事后报。record 失败不置位，
+    /// Err 臂仍可重试落行。
+    journal_line_written: bool,
 }
 
 impl RunUsageMeter {
@@ -56,6 +62,18 @@ impl RunUsageMeter {
     /// 无 usage 可观测的轮（流中断／取消中断）——只置不完整位。
     pub(crate) fn mark_incomplete(&mut self) {
         self.usage_incomplete = true;
+    }
+
+    /// 终态计量行是否已成功落链（幂等旗读取——`journal_usage_meter`
+    /// 臂间防双写，288 处置批）。
+    pub(crate) fn journal_line_written(&self) -> bool {
+        self.journal_line_written
+    }
+
+    /// 置位幂等旗（仅在计量行成功 record 之后调用——record 失败保持
+    /// 未置位，Err 臂仍可重试落行）。
+    pub(crate) fn mark_journal_line_written(&mut self) {
+        self.journal_line_written = true;
     }
 
     /// `run_usage_metered` 事件 payload（每 run 终态前恰一条）。

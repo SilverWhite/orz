@@ -181,6 +181,10 @@ impl AgentLoopController {
     /// run 终态前落**恰一条** `run_usage_metered`（五终态臂共用；grill 模式
     /// 随 `journal: None` 自动丢弃）。`force_incomplete`＝非 completed 臂
     /// 保守置位——终态前在途轮的消耗不可知，如实登记不装完整。
+    /// 幂等（288 处置批）：计量行成功落链后本 run 再入直接返回——
+    /// completed 臂落行后 `record_terminal` 罕见硬错上抛进 Err 臂时不再
+    /// 补第二条（生产侧封死「恰一条」）；record 失败不置位，Err 臂仍可
+    /// 重试落行。
     pub(crate) async fn journal_usage_meter(
         &self,
         writer: &mut EventWriter<'_>,
@@ -193,6 +197,9 @@ impl AgentLoopController {
                 .usage_meter
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if meter.journal_line_written() {
+                return Ok(());
+            }
             if force_incomplete {
                 meter.mark_incomplete();
             }
@@ -200,7 +207,13 @@ impl AgentLoopController {
         };
         writer
             .record(orz_assurance::EventType::RunUsageMetered, payload)
-            .await
+            .await?;
+        let mut meter = self
+            .usage_meter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        meter.mark_journal_line_written();
+        Ok(())
     }
 
     /// TER 全面审查 P1-1 (2026-09-04)：idle-kill `tool_running` 事件生产者。

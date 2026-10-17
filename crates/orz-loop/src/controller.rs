@@ -5579,6 +5579,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 288 处置钉（2026-10-17）：`journal_usage_meter` 成功落链后幂等——
+    /// 同 run 再入（臂间重入）不落第二条；「got 2」破口（completed 臂落行
+    /// 后 `record_terminal` 罕见硬错上抛进 Err 臂）在生产侧封死，不只靠
+    /// 法官族事后报。置位点在成功 record 之后 ⇒ record 失败不置位，Err 臂
+    /// 仍可重试落行。
+    #[tokio::test]
+    async fn journal_usage_meter_is_idempotent_after_success() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let mut writer = journal_event_writer(&journal, "RUN-METER-IDEM");
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .journal_usage_meter(&mut writer, "fake-model", "unknown", false)
+            .await
+            .unwrap();
+        // 第二次调用（模拟 Err 臂再入）不得追加计量行。
+        controller
+            .journal_usage_meter(&mut writer, "fake-model", "unknown", true)
+            .await
+            .unwrap();
+        let _ = writer;
+        let _ = journal.flush_async().await;
+        let text = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+        let rows: usize = text
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .filter(|e| e["event_type"] == "run_usage_metered")
+            .count();
+        assert_eq!(rows, 1, "idempotent: second call must not land a row");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 0cu 钉 8（文案护栏，2026-10-07；0cl 瘦身纪律）：blackboard_write /
     /// blackboard_read 描述与 guide 各恰含一处 `findings` 字样——第三分区
     /// 的模型面增量收窄为设计定稿的三短句，不回涨瘦身成果。

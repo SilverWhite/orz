@@ -2278,12 +2278,19 @@ pub fn verify_face_fingerprint(events: &[Value]) -> Vec<String> {
 /// - Grandfather anchor: the rule fires only on journals whose `run_started`
 ///   payload declares `usage_metering: "run-v1"`; older journals are not
 ///   retroactively enforced (0q `failure_pipeline: "funnel-v1"` 先例同构).
-///   Any other declared version is an error.
+///   Any other declared version is an error — including a present-but-
+///   non-string anchor (288 处置批：与 Python 冻结镜像对齐，不再静默跳过；
+///   缺键与显式 null 仍容忍).
 /// - On an anchored journal: exactly one `run_usage_metered` event, placed
 ///   before the first terminal event; payload shape-checked (model 非空、六个
 ///   计数器非负整数、effort_tier 闭集、usage_incomplete 布尔)。
 /// - Cross-field: `model_calls == 0` ⇒ 五项 token 和全 0（未折入任何响应的
 ///   run 不可能消耗已计数 token）。
+/// - `got 0` on an anchored journal whose chain ends in
+///   `run_terminated{reason: "journal_degraded"}` carries a distinguishing
+///   note (288 处置批): the degraded writer drops the metered line, so the
+///   empty journal is disk-faithful — the violation stands, only the message
+///   explains the shape (0q 锚定族同行为类).
 pub fn verify_usage_metering(events: &[Value]) -> Vec<String> {
     const EFFORT_TIERS: &[&str] = &["max", "high", "low", "disabled", "unknown"];
     const TOKEN_FIELDS: &[&str] = &[
@@ -2299,13 +2306,20 @@ pub fn verify_usage_metering(events: &[Value]) -> Vec<String> {
         if event.get("event_type").and_then(Value::as_str) != Some("run_started") {
             continue;
         }
-        match str_of(event["payload"].get("usage_metering")) {
+        match event["payload"].get("usage_metering") {
             None => {}
-            Some("run-v1") => anchored = true,
-            Some(other) => errors.push(format!(
-                "event {index}: run_started usage_metering {other:?} is not \
-                 a known usage-metering version (run-v1)"
-            )),
+            Some(Value::Null) => {}
+            Some(anchor) => match anchor.as_str() {
+                Some("run-v1") => anchored = true,
+                Some(other) => errors.push(format!(
+                    "event {index}: run_started usage_metering {other:?} is not \
+                     a known usage-metering version (run-v1)"
+                )),
+                None => errors.push(format!(
+                    "event {index}: run_started usage_metering {anchor} is not \
+                     a known usage-metering version (run-v1)"
+                )),
+            },
         }
     }
     if !anchored {
@@ -2332,8 +2346,28 @@ pub fn verify_usage_metering(events: &[Value]) -> Vec<String> {
         .map(|(index, _)| index)
         .collect();
     if meter_indices.len() != 1 {
+        // 288 处置批：锚已落盘后中途 journal 降级的刊，计量行被降级写入器
+        // 丢弃——`got 0` 属盘面如实，附区分性文案（不豁免执法；0q 锚定族
+        // 同行为类）。
+        let degraded_note = if meter_indices.is_empty()
+            && events.iter().any(|event| {
+                event.get("event_type").and_then(Value::as_str) == Some("run_terminated")
+                    && event
+                        .get("payload")
+                        .and_then(|payload| payload.get("reason"))
+                        .and_then(Value::as_str)
+                        == Some("journal_degraded")
+            }) {
+            "; journal degraded mid-run drops the metered line (disk-faithful: \
+             the degraded writer discards post-degradation records, ADR-0010 \
+             §14.86 D7)"
+                .to_string()
+        } else {
+            String::new()
+        };
         errors.push(format!(
-            "anchored run must carry exactly one run_usage_metered, got {}",
+            "anchored run must carry exactly one run_usage_metered, \
+             got {}{degraded_note}",
             meter_indices.len()
         ));
     }
@@ -6450,6 +6484,30 @@ mod tests {
                     ),
                 ],
             ),
+            (
+                // 288 处置（2026-10-17）：锚键存在但值非字符串（损坏形态）
+                // ——两侧同走「unknown version」错误（Rust 此前经 str_of
+                // 静默跳过，与 Python 冻结镜像相悖）；未锚定 ⇒ 计量行本体
+                // 不执法（早退只留锚型错误）。
+                "usage_metering_non_string_anchor",
+                vec![
+                    ev("run_started", json!({"prompt": "p", "usage_metering": 5})),
+                    ev(
+                        "run_usage_metered",
+                        json!({
+                            "model": "deepseek-chat", "model_calls": 1,
+                            "prompt_tokens": 100, "cache_hit_tokens": 90,
+                            "cache_miss_tokens": 10, "completion_tokens": 30,
+                            "reasoning_tokens": 20, "effort_tier": "max",
+                            "usage_incomplete": false,
+                        }),
+                    ),
+                    ev(
+                        "run_finished",
+                        json!({"status": "completed", "turn_count": 2, "tool_rounds": 1}),
+                    ),
+                ],
+            ),
         ]
     }
 
@@ -6488,9 +6546,12 @@ mod tests {
             "face_fingerprint_progression_and_violations",
             "face_fingerprint",
         );
-        // 0df（2026-10-17）：usage_metering 违例——三行破恰一条＋末行终态
+        // 0df（2026-10-17）：usage_metering 违例场景——三行破恰一条＋末行终态
         // 后＋effort_tier 越闭集＋零轮非零和；ok 场景全族绿（默认行）。
         expect("usage_metering_violations", "usage_metering");
+        // 288 处置（2026-10-17）：锚键非字符串损坏形态——「unknown version」
+        // 型错误（未锚定 ⇒ 只此一条，计量行不执法）。
+        expect("usage_metering_non_string_anchor", "usage_metering");
         expect("control_tickets_unknown", "control_tickets");
         expect("control_tickets_kind_conflict", "control_tickets");
         expect("control_tickets_one_shot", "control_tickets");
@@ -7106,8 +7167,10 @@ json.dump(out, sys.stdout)
         // and_violations (good progression ＋ stable/LCP 相悖 ＋ kind 错标).
         // 259 → 261 (0df, 2026-10-17): +usage_metering_ok / _violations
         // (锚定 run 的恰一行正形 ＋ 三行/终态后/越集/零轮非零和四违例).
+        // 261 → 262 (288 处置, 2026-10-17): +usage_metering_non_string_anchor
+        // (锚键非字符串损坏形态——Rust 对齐 Python 冻结镜像后锁进对拍).
         assert_eq!(
-            scenario_count, 261,
+            scenario_count, 262,
             "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(
@@ -7115,6 +7178,67 @@ json.dump(out, sys.stdout)
             "real fixture journals shrunk below their registered floor ({})",
             fixture_names.len()
         );
+    }
+
+    // ==== 288 处置（2026-10-17）：usage_metering 法官两处收口的直调钉。
+    // 锚型损坏形态已进对拍 corpus（`usage_metering_non_string_anchor`），
+    // 此处钉文案面；降级区分文案是 Rust 侧诊断（对拍只比布尔判定），与
+    // Python 冻结镜像同形落盘。
+
+    /// 锚键存在但值非字符串 ⇒ 「unknown version」型错误（对齐 Python
+    /// 冻结镜像，不再经 `str_of` 静默跳过）；缺键与显式 null 仍容忍
+    /// （grandfather 语义不变），未锚定 ⇒ 恰一条等不执法。
+    #[test]
+    fn usage_metering_non_string_anchor_is_an_error() {
+        let finished = || json!({"status": "completed", "turn_count": 1, "tool_rounds": 0});
+        let anchored_bad = vec![
+            ev("run_started", json!({"prompt": "p", "usage_metering": 5})),
+            ev("run_finished", finished()),
+        ];
+        let errors = verify_usage_metering(&anchored_bad);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("is not a known usage-metering version"),
+            "{errors:?}"
+        );
+        let absent = vec![
+            ev("run_started", json!({"prompt": "p"})),
+            ev("run_finished", finished()),
+        ];
+        assert!(verify_usage_metering(&absent).is_empty());
+        let null = vec![
+            ev(
+                "run_started",
+                json!({"prompt": "p", "usage_metering": null}),
+            ),
+            ev("run_finished", finished()),
+        ];
+        assert!(verify_usage_metering(&null).is_empty());
+    }
+
+    /// 锚定刊 `got 0`：降级卷（`run_terminated{journal_degraded}`）带区分
+    /// 注（盘面如实，执法不豁免）；普通崩溃刊不带注（素形文案）。
+    #[test]
+    fn usage_metering_got_zero_note_only_on_degraded_journal() {
+        let degraded = vec![
+            ev(
+                "run_started",
+                json!({"prompt": "p", "usage_metering": "run-v1"}),
+            ),
+            ev("run_terminated", json!({"reason": "journal_degraded"})),
+        ];
+        let errors = verify_usage_metering(&degraded);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("got 0"), "{errors:?}");
+        assert!(errors[0].contains("journal degraded mid-run"), "{errors:?}");
+        let crashed = vec![ev(
+            "run_started",
+            json!({"prompt": "p", "usage_metering": "run-v1"}),
+        )];
+        let errors = verify_usage_metering(&crashed);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("got 0"), "{errors:?}");
+        assert!(!errors[0].contains("journal degraded"), "{errors:?}");
     }
 
     // ==== 0p S2 复审补测（2026-09-07）：两段门/读沙箱事件面载荷直调
