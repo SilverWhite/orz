@@ -1,0 +1,11 @@
+{
+  "model": "deepseek-chat",
+  "model_calls": 2,
+  "prompt_tokens": 200,
+  "cache_hit_tokens": 150,
+  "cache_miss_tokens": 50,
+  "completion_tokens": 80,
+  "reasoning_tokens": 40,
+  "effort_tier": "ultra",
+  "usage_incomplete": false
+}

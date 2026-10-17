@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/run-usage-metered-event-payload-v0.2.schema.json",
+  "title": "run_usage_metered event payload (Rust track, v0.2)",
+  "description": "0df 任务级计费机械记录点（2026-10-17，ADR-0010 §14.86 / PER_TASK_METERING_DESIGN D1–D8）：每个 run 终态由机械层落恰一条（controller 五终态臂统一写点、record_terminal 之前）；主车道与检索子代理同 journal（子代理轮写主 run journal），一行覆盖全部车道消耗。折算点＝内存 ModelResponse 到达点（journal `model_output` 缺 prompt 口径不可重放），五项 token 逐轮饱和求和。`effort_tier` 是配置侧设计值（gateway trait 单读；空响应链降级是 per-call 局部量不改 config，降级事实由 request_header_change 承载），与观测 `reasoning_tokens` 分列（r4 实证档位恒定 ≠ 推理量恒定：全轮一档下推理占 completion 76%、逐题 28%–90%）。金额不入机械记录：in-band 无自足来源（provider 不报 cost；余额差分并发不安全＋TB 2.1 端点不可用实证）、journal 哈希链不可改写 ⇒ 金额归因＝run 行 token × 金额来源（余额差分/账单导出）在派生台账配对（283 方法学机械化，工具另行立项）；折算（rate card）不入机械记录防冒称实付。载体＝run journal ⇒ 随 0dd 手动存档／0cy 收卷自动同走（footprint 整目录收 run dirs，存档面零新增）；grill 模式随 journal: None 自动丢弃。跨事件执法（恰一条＋终态前＋字段形状＋零轮非零和）由 usage_metering 法官族核证（grandfather 锚＝run_started `usage_metering: \"run-v1\"`，历史刊零回归）：Rust `verify_usage_metering` ↔ Python `_verify_v02_usage_metering` 同形。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "model",
+    "model_calls",
+    "prompt_tokens",
+    "cache_hit_tokens",
+    "cache_miss_tokens",
+    "completion_tokens",
+    "reasoning_tokens",
+    "effort_tier",
+    "usage_incomplete"
+  ],
+  "properties": {
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "description": "配置模型 id（整个 run 单一网关配置；检索子代理共用同网关）。"
+    },
+    "model_calls": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "折算轮数（ModelResponse 到达数；transport 内部 D-6 重试属单轮内部细节不折算，重试面由 transport_retry 承载）。"
+    },
+    "prompt_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "逐轮 prompt_tokens 饱和求和（billing 口径直测总量；cache_hit+cache_miss 的上位口径）。"
+    },
+    "cache_hit_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "逐轮 provider 前缀缓存命中 token 饱和求和。"
+    },
+    "cache_miss_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "逐轮未命中缓存 token 饱和求和。"
+    },
+    "completion_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "逐轮 completion token 饱和求和。"
+    },
+    "reasoning_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "逐轮 reasoning token（观测值；completion 的子集口径）饱和求和——与 effort_tier 设计值分列。"
+    },
+    "effort_tier": {
+      "type": "string",
+      "enum": ["max", "high", "low", "disabled", "unknown"],
+      "description": "配置侧 reasoning effort 档位设计值（gateway 单读；unknown＝无配置暴露的 fake/网关）。"
+    },
+    "usage_incomplete": {
+      "type": "boolean",
+      "description": "任一折算轮五项 usage 有缺（流中断臂等）⇒ true；非 completed 终态臂由控制器保守置 true（终态前在途轮消耗不可知，如实登记不装完整）。"
+    }
+  }
+}

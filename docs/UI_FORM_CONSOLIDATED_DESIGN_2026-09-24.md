@@ -67,6 +67,8 @@
 - **Explorer／Markers／StatusBar 与 orz 对象的映射**：数据源是 orz 的 session/journal／黑板／证据账，需自研投影映射（消费面复用 `orz-tui/projection`）。
 - **审批弹窗与 ACP `session/request_permission` 的对接**：协议语义我方已有（`xai-acp-lib`／`orz-host`），呈现层自研。
 - **R-7（语法高亮／LaTeX／mermaid 后置）**：ContentPane 稿 §3.1 将「语法高亮」列于框内渲染规则，Web v1 后置属对该形态权威条款的**显式豁免**（LaTeX／mermaid 系本稿行文自带、三稿原文未要求，不构成冲突）；S4 后补盘点时评估照搬件（如 highlight.js）。判据本身不能自我授权偏离形态权威，故在此登记。
+- **R-8（反例门静默折叠；285 批 2026-10-16 用户令）**：ContentPane 稿 §7 只规定「结束后：工具调用默认折叠」，未涉运行中的中途收束。本项为**新增语义**：反例问询（`counterexample_gate`，`position=final_answer`）到达时，**静默折叠本运行此前的模型卡与机器行**（用户输入卡不折、前几轮不动），使「只要最后的输出即可」在门前草稿上成立；施行面＝web 与 TUI 双投影同名件 `fold_superseded_before_gate`（`projection.js`／`view_model.rs`）。来源＝用户在真机走查（画图轮）对「反例问询前的最终回复未被静默折叠」的直接要求。
+- **R-9（收尾折叠施行面澄清；285 批 2026-10-16）**：ContentPane 稿 §7「结束后折叠」的施行面＝**工具行**（含 `RUN_FINISHED` 调用时段）；对话卡（用户／模型）收尾**不折**。此前 web 与 TUI 两实现把对话卡一并折起（真机实证：终态后整段会话折起、需逐张手动展开），属实现偏差，已随 285 批回归本条款；阻塞错误／未审批动作／verifier failure 恒不折的口径不变。
 - **形态选择·AddressBar／FindBar 弹窗化（Web v1）**：两栏无常驻区块，以行2 状态摘要＋「命令/位置」「查找」弹窗承载（补充稿 §5 弹窗化口径）；对象 URI 路由仅 `run://`／`workspace://live` 有投影，`conversation://` 给只读说明，`source://`／`claim://`／`adapter://`／`artifact://` 显式答复「v1 无投影面」不静默。S3 真机对照后如判形态不足再立补码批。
 - **形态选择·快照选择器**：`restore_snapshot` 非 ACP 协议面（`AcpServer` 进程内方法），Web v1 为提示性横幅（「恢复未接线」），不建选择器面板；与 §14.78 条 5 一致，接线与否随 S3/S4 裁决。
 

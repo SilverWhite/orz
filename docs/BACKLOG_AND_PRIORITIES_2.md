@@ -136,6 +136,139 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.231 2026-10-17 291 批 提交推送——283–290 累积件（**提交推送批**，零源码语义增量零跑批，不发行，计数不变 62）
+
+- **用户令**：「请进行提交与推送吧」（沿 281 批形态：orz 子树＋父仓双推送，推送前纯快进核证、推送后 ls-remote 逐位一致；**不发行**——不建 `v0.9.2` tag/Release，发布面停 v0.9.1）。
+- **orz 子树**：`cli/feat/fusion-architecture` `0be4a364..c678c21b` 五提交＝`5c51f3c2`（285 真机走查渲染三修）＋`b94f9fb7`（286 检索门缺省开）＋`6e107c77`（287 0df 计量行落码）＋`7966d171`（288 0df 处置）＋`c678c21b`（289 bump 0.9.2）；`merge-base --is-ancestor` 纯快进核证后推送，`ls-remote` ↔ 本地 HEAD（`c678c21b…`）逐位一致。
+- **父仓**：`origin/main` `181285d4..291` 单提交＝283–290 累积＋291：283 成本摊派审计档＋284 0df 立项档＋285–290 批档六件＋设计稿 [`PER_TASK_METERING_DESIGN_2026-10-17`](PER_TASK_METERING_DESIGN_2026-10-17.md)＋ADR §14.85/§14.86（v1.88/v1.89）＋runtime 合约面（envelope enum＋registry＋`run-usage-metered-event-payload-v0.2.schema.json` 新档＋run-started 锚容忍＋fixtures 三件）＋Python 冻结镜像（`_verify_v02_usage_metering`＋288 降级文案同形＋头注计数勘正）＋orz 指针 `0be4a364`→`c678c21b`＋`orz_source_manifest.sha256`（1,488 entries）＋身份门换装 `45ea8b60…`＋检索双车道设计稿/UI 综合稿勘注（285/286 批带）＋登记面四件。
+- **边界**：零源码语义增量（本批只有 git 传送面）；发布面停 v0.9.1（0.9.2 载体已双位在役＝289 载体位＋290 装机位）；计数 62 不变。
+
+### 1.230 2026-10-17 290 批 装机位换装 0.9.2——web 桥装机位三件套 0.9.1→0.9.2（**换装批**，零源码零 orz 改动零跑批，计数不变 62）
+
+- **用户令**：「请进行换装吧」（承接 289 重建批；沿 281 批换装口径——评测载体位 289 已换，本批换装机位）。
+- **换装面**：换装前件＝0.9.1 在役三件 `39f6f3fa…`／`dd55ded5…`／`34563cad…`（与 280 批账面逐位吻合＝281 换装后未变）；`.0.9.1-bak` 链 ×3 预建；三件换装＝`orz.exe 0e8ee3b7…`（58,395,648 B）／`orz-signer.exe fc374dca…`／`orz-acaf-provision.exe 216e80c8…`——与 289 载体位/`target/release` 同源逐位一致（MATCH 3/3）；装机位 build-info＝`0.9.2 os=windows` rc0。装机位无 `acaf` 面（无 signer-manifest）⇒ **不重 provision**（沿 266 口径＝281 先例；signer 二进制已随 289 载体位 provision 核证为同一构建）。`.0.9.0-bak` 链（281 留）与 `orz.exe.bak-0925`（9-25 老件）原样保留。
+- **生效面**：装机位（日常使用＋web 桥）自此 **0.9.2 在役**——0df 计量行（`usage_metering:"run-v1"` 锚＋终态前恰一条九字段 `run_usage_metered`）与 286 检索门缺省开、288 处置三码自此在装机位生效（载体面行为已由 289 冒烟活体实证，装机位与载体位同源逐位一致）。未以装机位发起任何会话/run——活体读数留待下一真机轮（S4）。
+- **台账与边界**：零源码、零 `orz/` 子树改动 ⇒ manifest 不重生成（289 已随 `c678c21b` 同步）；未推送、未发行（发布面停 v0.9.1）；索引头行 v4.262→**v4.263**＋BL 指针/计数行＋TODO 计数行＋本节；门禁 `valid: true`。
+
+### 1.229 2026-10-17 289 批 0.9.2 双平台载体重建进体——0df S3 达成（**重建批**，源冻结 orz `c678c21b`，计数不变 62）
+
+- **用户令**：「已完成清理，请进行重建吧」（未指名版本，沿 218/243/280 批补丁位递增先例取 0.9.1→0.9.2）。进件面＝`c678c21b`（bump 恰两行 locked exit 0）＋`7966d171`（288 处置）＋`b94f9fb7`（286 缺省开）＋`6e107c77`（287 计量行）。
+- **Windows**：`build_orz.ps1 -Release -Jobs 2` exit 0（3m28s 暖缓存；唯一警告＝orz-host unused import 既有面）；换装 MATCH 3/3（`orz.exe 0e8ee3b7…`／`orz-signer.exe fc374dca…`／`orz-acaf-provision.exe 216e80c8…`）、`.0.9.1-bak` 链前件与 280 账面逐位吻合；ACAF 重 provision exit 0（manifest `binary_sha256=fc374dca…`↔换装位逐位一致、keystore `2aa80cb8…` 未动）；build-info `0.9.2 os=windows` rc0。
+- **Linux musl**：docker `rust:1.97-slim`＋trixie 脚本 exit 0（**约 40 分钟冷构建**——`/target` 缓存与镜像随用户磁盘清理被清，如实记）；`MSYS_NO_PATHCONV=1` 一次通过；MATCH 3/3（`orz 45ea8b60…`〔身份门新值〕／`orz-signer 7845a154…`／`orz-acaf-provision 85663300…`）；static-pie×3（static-pie linked＋INTERP=0）；alpine 3.20/bookworm 双冒烟 `0.9.2 os=linux` rc0；Linux 不重 provision（沿同口径）。
+- **进体字节判据**：0df 面 `run_usage_metered` 0→2／`usage_metering` 0→5／`run-v1` 0→5（合并常量 `usage_meteringrun-v1` ×5 双侧同值）／`usage_incomplete` 0→1；`effort_tier`／`model_calls` 以 x64 立即数拆分形在体（`H`＋0xB9 前缀 `model_ca`＋`alls` 等价对双侧各 ×1——连续字节法盲区，journal 九字段全值反证）；286 面 `ORZ_RETRIEVAL_ENABLED` 2→3；版本面 `0.9.2` 进体、`0.9.1` 残留 18→17／26→25（基线含载体版本字面 1 条替换后仅剩依赖子串＝280 批同形非回归）；**280 窗保留面逐项持平零回归**；288 面 `journal_line_written` LIN 0→2（符号未剥离）／WIN 0→0、法官降级文案双侧 0（载体不内嵌执法面，预判成立）。
+- **冒烟活体**：WIN scratch（smoke-289）两轮 `--fake-provider -p` rc=0；journal 逐事件核证＝`run_started` 双锚（`failure_pipeline`＋`usage_metering:"run-v1"`）＋`run_usage_metered` 九字段恰终态前一条（`model_calls:1`＋五项诚实 0＋`effort_tier:"unknown"`＋`usage_incomplete:true`）＋哈希链连续＋seq2 `retrieval_enabled:true` 与 tools 注册含 `web_search`（286 缺省开活体）＋0cy 启动侧收卷（`archives/6ad31716.json.gz` 在案）。
+- **身份门**：`run_r0_heavy_official.py` `EXPECTED_CARRIER_SHA256` `f50b1f17…`→`45ea8b60…`（注释同步重写；py_compile 过＋--help rc0）。清单双侧刷新 0.9.2（各 3 entries）；`orz_source_manifest.sha256` 重生成 1,488 entries。
+- **边界**：未推送未发行（发布面停 v0.9.1）；**装机位（`C:\Users\1\AppData\Local\orz\bin`）未换装**（沿 281 式另批）；S4 真机读数待续（判据＝287 §5＋transport 重试低估校准＋288 降级文案面）。
+
+### 1.228 2026-10-17 288 批 0df 全面审查处置——幂等旗封死恰一条＋非字符串锚对齐＋降级刊区分文案（**审查处置批**，287 基线三面审查全过零 P0/P1，orz `7966d171`，计数不变 62）
+
+- **由来**：用户令「请对当前完成的0df内容进行全面检查，包括设计合理性、实现合理性、设计与实现的符合性」——287 批 `6e107c77` 基线全面审查（双子代理深查 orz 落码与父仓合约／Python 镜像／fixtures＋主代理设计评估＋全套测试复跑核证）**全过、零 P0/P1**；P2 处置六件本批落账。
+- **处置三码**：①恰一条生产侧封死＝`RunUsageMeter.journal_line_written` 幂等旗（`journal_usage_meter` 成功 record 后置位、record 失败不置位 Err 臂仍可重试）——completed 臂落行后 `record_terminal` 罕见硬错上抛进 Err 臂不再补写第二条（「got 2」理论破口关闭；新集成钉 `journal_usage_meter_is_idempotent_after_success`）；②非字符串锚对齐＝`verify_usage_metering` 锚扫描弃 `str_of` 静默跳过，锚键存在但值非字符串同走「unknown version」错误（与 Python 冻结镜像逐形相齐；缺键／显式 null 仍容忍）——corpus +1 场景 `usage_metering_non_string_anchor`（钉值 261→262）；③降级刊区分文案＝anchored run `got 0` 且链含 `run_terminated{reason:journal_degraded}` 附区分性注（盘面如实＝降级写入器丢弃计量行；执法不豁免；0q 锚定族同行为类）——Python `_verify_v02_usage_metering` 同形落盘。
+- **处置三文**：④设计稿勘注（D5 trait 形态实落 `usage_meter_labels`／D8 corpus 钉值演进／§4 后勘注块六件含崩溃刊判定语义〔计量行前报·行后过〕）；⑤Python 镜像头注计数勘正（v02=35→41，0bw③／0bz／0df 历次加条目未回写）；⑥BACKLOG 0df 条目同步达成态（P1 表＋开放项段）。
+- **验证读数**：orz-loop lib **883/0**（基线 882＋1 幂等钉）；orz-assurance **303/0**（基线 301＋2 直调钉；Rust↔Python parity **262 场景** × ALL_FAMILIES 逐格恰等）；orz-tui lib **172/9**（同一 ACAF 预存集合、零新增）；orz-bin bins **15/0**；orz-web **47/0**；fmt 触碰件净；clippy 触碰面零新增；门禁 `valid: true`（manifest 重生成随 orz `7966d171` 同步）。
+- **边界（不得据本批宣称）**：零跑批、未重建未发行——装机位 0.9.1 不受影响；计量行语义（D1–D8）与 ADR §14.86 不变，本批只收口审查发现的 P2 项；金额派生台账仍另行立项。
+
+### 1.227 2026-10-17 287 批 0df 任务级计费机械记录点——`run_usage_metered` 事件族（**S1 勘定＋S2 落码同批**，ADR §14.86／v1.89，计数不变 62）
+
+- **用户令**：2026-10-16「我打算给下一个版本的 orz 配个任务级计费，跟着会话一起存档」＋「请将这一内容记为
+  待办吧，作为新的机械记录点」（284 立项）＋2026-10-17「把配置侧的 reasoning effort 档位写进任务行——与
+  观测到的 reasoning token 分列」＋「请先进行0df吧」。
+- **S1 定案（设计稿 [`PER_TASK_METERING_DESIGN`](PER_TASK_METERING_DESIGN_2026-10-17.md) D1–D8，五项待勘定全数闭合）**：
+  D1 载体改判**独立 EventType**（否 284 档预设的 mechanical_audit kind——轮级对象键语义不合／schema 主车道
+  专属约束与子代理折算相抵／审查卡渲染负担）；D2 一 run 一行（终态前，两车道同 journal 同折）；D3 payload
+  九字段（**含 `prompt_tokens`**——journal `model_output` 缺该口径 ⇒ 折算必须在内存 ModelResponse 到达点）；
+  D4 **金额不入 journal**（in-band 无自足来源＋哈希链不可改写 ⇒ 金额归因＝run 行 token × 金额来源**派生台账**
+  配对〔283 方法学机械化、另行立项〕；折算不入机械记录防冒称实付）；D5 `effort_tier` 配置侧设计值 gateway
+  trait 单读（降级链是 per-call 局部量，降级事实由 request_header_change 承载）；D6 折算器挂
+  `SharedLoopServices`（per-run 复位沿 `for_new_run` 先例）；D7 五终态臂 `record_terminal` 前恰一条（非
+  completed 保守 incomplete；grill 随 `journal: None` 丢弃）；D8 `run_started` 锚 `usage_metering:"run-v1"`
+  ＋`usage_metering` 法官族（0q 先例同构＝历史刊零回归）。
+- **S2 落码（orz `6e107c77`，12 文件 +630/−3，不推送）**：event.rs 变体＋families.rs `verify_usage_metering`
+  ＋ALL_FAMILIES＋corpus 场景 +2（钉值 259→261）＋对拍表＋新模块 `orz-loop/src/usage_meter.rs`＋
+  `SharedLoopServices.usage_meter`（4 构造点）＋ModelResponse 到达点折算＋两 Err 臂 mark_incomplete＋
+  trait `usage_meter_labels`（DeepSeek 实现＝`config.model_id`＋thinking 档设计值）＋controller 复位/标签/锚/
+  五终态写点 helper＋dispatch 两点透传＋TUI 降级 Unknown＋runtime 合约五件（envelope enum／registry／
+  payload schema／run-started 锚容忍／fixtures 三件）＋Python `_verify_v02_usage_metering`。
+- **验证读数**：orz-loop lib **882/0**（基线 877＋5 钉）；orz-assurance **301/0**（含 Rust↔Python parity 261
+  场景 × ALL_FAMILIES 逐格恰等）；orz-tui lib **172/9**（同一 ACAF 预存集合、零新增）；orz-bin bins **15/0**；
+  orz-web **47/0**＋前端冒烟全过；fmt 触碰件净；clippy 零新增；门禁 `valid: true`（manifest 重生成 1,488 entries）。
+- **边界（不得据本批宣称）**：金额读数**不在**本机械记录内（派生台账另行立项）；历史会话无计量行＝如实缺口
+  不追补；`model_calls` 是 loop 轮数非 HTTP 尝试数；未重建未发行——装机位 0.9.1 不产计量行，随下一版载体
+  （与 286 缺省开同车）生效；S4 判据＝run journal 终态前恰一行＋锚＋五项与 provider 账面可对＋子代理折入。
+- **台账**：本卷 §1.227；[`287 批档`](audits/287_0DF_S1_S2_RUN_USAGE_METERED_2026-10-17.md)；设计稿；
+  ADR §14.86（v1.89）；索引头行 v4.259 → v4.260；BACKLOG `0df` 节 S1/S2 勘注＋本批指针行/计数行；
+  TODO 计数行/P1 路由行 0df 注记；`orz_source_manifest.sha256` 重生成。零跑批；计数 62 不变。
+- 关键词：287 批、0df、任务级计费、run_usage_metered、事件族、face_fingerprint 先例、RunUsageMeter、
+  SharedLoopServices 宿主、双车道统一折算、prompt_tokens 补账、usage_meter_labels、effort_tier 设计值、
+  reasoning_tokens 分列、金额不入 journal、派生台账回填、grandfather 锚 run-v1、usage_metering 法官族、
+  corpus 261、索引 v4.260、计数 62 不变。
+
+### 1.226 2026-10-17 286 批 检索启用门默认开——单源解析与四面接线（**设计裁决落码批**，ADR §14.85／v1.88，计数不变 62）
+
+- **用户令（2026-10-17 逐字）**：「正常版本的 orz 检索门默认开即可，检索部分是很重要的信息获取，得常开」。
+- **触发证据（285 批档 §4，画图轮真机）**：同会话四 run 探针全为 `retrieval_enabled=false`、`activations` 空 ⇒
+  该轮检索既非本地浏览器车道、也非检索子代理 HTTP 兜底，而由模型自驱终端原始 HTTP 完成
+  （40 条网络命令；429×10／404×9／403×4；终端非零退出 13 次）。
+- **裁决（ADR-0010 §14.85，局部取代 §14.65 缺省面）**：检索启用门**缺省开**（正常版本每会话默认注册检索工具族）；
+  显式关保留（`ORZ_RETRIEVAL_ENABLED=0`，或 legacy `--retrieval-mode off`）；门机制／拒绝码
+  `retrieval_not_enabled`／lane 语义退役结论不变。
+- **落码**：新增 `orz-host/src/retrieval_gate.rs`（`resolve_retrieval_enabled` 纯核＋`retrieval_enabled_from_env`
+  薄壳；单源）；orz-bin 解析改薄委托（删本地重复实现）；`StdioAgentHandler::with_trust_policy`（TUI 进程内面）、
+  `StoredActivationSnapshot::for_session`（侧车初值）、`codex_app` 会话创建（Codex app-server 面）三处改走单源值；
+  谓侧车 `retrieval_enabled` 降级为存档读数（每会话最终门值＝本次解析值 ⇒ 既有会话同样缺省开）。
+- **不取项（登记）**：① `orz-loop` 控制器结构体字面初值不动（未设态，生产四面显式注入；改它会翻动 877 条
+  测试的禁用门用例）；② `scripts/dogfood_launch.ps1` 的 `ORZ_RETRIEVAL_ENABLED=1` 保留（缺省开后冗余但无害）。
+- **验证读数**：orz-host lib 单线程 **368/0**（+3 钉）；orz-bin `--bins` **33/0**（含改写钉）；orz-tui lib
+  **172/9**（同一 ACAF 预存集合）；orz-web **47/47**＋前端冒烟全过；fmt 触碰区净；clippy 零新增；门禁 `valid: true`。
+- **生效路径**：缺省开属载体面行为——本批**未重建未发行**（装机位仍 0.9.1），须随下一版载体重建换装后生效；
+  下一真机轮判据＝探针 `retrieval_enabled=true`、检索族不再列 `incomplete`、外部 lane 出现
+  `browser_read`／`web_search`／`web_fetch` 调用（浏览器可用性仍以 `browser_launch_result` 事实行为准）。
+- **台账**：本卷；[`286 批档`](audits/286_RETRIEVAL_GATE_DEFAULT_ON_2026-10-17.md)；ADR §14.85；
+  [`双车道设计 §3.1 勘注`](RETRIEVAL_SUBAGENT_DUAL_LANE_DESIGN_2026-09-09.md)；索引条目
+  `FUS-RETRIEVAL-DUAL-LANE`＋头行 v4.258 → v4.259；BACKLOG `0t` 勘注＋本批指针行/计数行；TODO 计数行/P0 路由行 0t 注记。
+  零跑批；计数 62 不变。
+- 关键词：286 批、检索启用门、缺省开、fail-closed 缺省退役、retrieval_gate、单源解析、ORZ_RETRIEVAL_ENABLED、
+  显式关、legacy retrieval-mode、TUI 进程内面、侧车初值、Codex app-server、画图轮证据、模型自驱 curl、
+  缺省开待载体重建、ADR §14.85、v1.88、索引 v4.259、计数 62 不变。
+
+### 1.225 2026-10-16 285 批 真机走查（画图轮）三项渲染处置＋0dd／0de 真机读数登记（**落码批**，web＋orz-tui 双实现同改，计数不变 62）
+
+- **由来**：用户 2026-10-16 个人真机使用（落点 `C:\Users\1\OneDrive\Desktop\画图`）后反馈四项——
+  ①当前轮对话结束后会话自动折叠、要手动打开；②反例问询前的最终回复未被 web 层静默折叠、依旧渲染（「只要最后的输出即可」）；
+  ③偶尔冒出一串「机械审查」（附原文：一串 `[机械审查] （轮 0）`）；④本轮测试落点。
+- **取证（只读重放）**：`RUN-e689a7ea-0..3`（同会话 4 run，21:53–23:10，turn 1–4）——把
+  `orz-web/assets/app/{state.js,projection.js}` 投影对真实 `events.jsonl` 逐事件重放，三条现象逐条复现：
+  ①终态后 70 张消息卡全 `collapsed`、展开模型卡 0；②门前 1,461 字符草稿整篇展开、门后 1,571 字符正式输出另起卡；
+  ③`mechanical_audit_update` 的 payload 是 `{kind, payload:{key,round,summary,anomaly}}`（比其余事件多一层），web 按平铺读 ⇒ 键空、轮缺省 0。
+- **处置（三件）**：**F1** 收尾只折机器行（对话卡保持可读；回归 CONTENT_PANE「折叠策略」原文）；
+  **F2** 反例门静默折叠——新增 `foldSupersededBeforeGate()`：门到即折本 turn 的非告警模型卡与全部工具行、流式指针复位
+  （用户卡不折、往轮不动）；**F3** 机械审查按嵌套读（与 orz-tui `/payload/key` 指针同源），幽灵行根除。
+  接缝＝`projection.js`＋`view_model.rs`／`projection.rs`（双实现同步纪律）；钉子＝frontend smoke 两节＋orz-tui 4 条。
+- **真机读数（0dd／0de S4 证据，闭合待裁决）**：0dd＝4 run 零 `session_archive`、`.gsa` 无 `archives/`、跨提示词跨 77 分钟连续
+  （三键未取证）；0de＝`mode=model_summary`／`reason=model_selected`／`estimated_tokens_after=196332`（UI 估数非 0）、
+  零 `form=reminder_only_no_compressible`、收束段无逼轮。
+- **观察项（候选，不计数）**：A＝LIF 域迁移突发（run1/2/3 各 5／9／16 条、同轮交替 `normal↔low_progress`，run3 全在轮 83）
+  ——「机械审查串」主要体量来源，机理未勘定；B＝门后中间输出仍展开（run2 两卡皆展开，未取 supersede 规则）；
+  C＝机器行体量（权限／票据／快照／机械审查逐条进内容区，收束口径待裁决）。
+- **勘误**：`CLI_PROJECT_INDEX.md` 尾部两条 284 批头行副本删除（同批头行本已在第 1 行）。
+- **验证**：frontend smoke 全过；`cargo test -p orz-web` 47/47；`cargo test -p orz-tui --lib` 172 过／9 败（同 ACAF 预存集合）；
+  fmt 触碰区净；clippy 零新增；门禁 `valid: true`。
+- **台账**：本卷；[`285 批档`](audits/285_LIVE_DOGFOOD_WEB_RENDER_FIXES_2026-10-16.md)；索引头行 v4.257 → v4.258；
+  BACKLOG 本批指针行／计数行；TODO 计数行／P1 路由行 0dd／0de 注记。orz 子树落码提交（不推送）；父仓登记面待提交批；
+  零跑批、未重建、未发行，装机位保持 0.9.1。计数 62 不变。
+- 关键词：285 批、真机走查、画图轮、RUN-e689a7ea、收尾只折机器行、反例门静默折叠、机械审查幽灵行、嵌套载荷、
+  双实现同步、LIF 域迁移抖动、0dd／0de S4 真机读数、索引 v4.258、计数 62 不变。
+
+### 1.224 2026-10-16 284 批 任务级计费机械记录点立项（0df；**登记批**，零源码零跑批零 API、计数 61 → 62）
+
+- **由来**：Reddit 评论线第三轮（2026-10-16）——评论者对上一轮回复追问粒度「session-level token counts anywhere, or only usage-page daily totals?」，该问决定单任务成本能否直接归因（会话级即可按任务摊，日总量只能按天倒推工作量）；用户在回复中给出意向「我打算给下一个版本的 orz 配个任务级计费，跟着会话一起存档好了」，随后下令「请将这一内容记为待办吧，作为新的机械记录点」。
+- **立项内容（0df）**：单位＝**任务**（run／题）；内容＝token（hit／miss／completion）＋**真口径金额**（实付；折算单列，不得混称）；形态＝**机械记录**（机械层记账、**只记不发模型**，沿 0bg `lif_domain` 先例）；存档＝**随会话存档同走**（与 0cy 会话卫生收卷／0dd 手动存档面接口）。
+- **动因对照**：283 批的单任务成功成本全部靠事后只读复算（逐题余额差分＋10 分钟粒度余额序列）；而 TB 2.1 那一轮金额面因缺机械记录不可得（`jobs-official` 210 份 `result.json` 的 usage 逐件 null＋该窗无余额台账＋控制台分项未取回）⇒ 同一 harness 同一模型，一轮能给单任务成本、另一轮只能给 token 口径。本项即补齐该缺口。
+- **S1 待勘定（四项）**：kind 闭枚举扩档（schema＋Python 镜像＋Rust 三处同改，沿 0ae／0bg 纪律）／金额来源（provider 账单侧读数 vs 宿主侧余额差分）／粒度（run 级 vs 题级）／与 0dd 会话归档形态的接口。
+- **边界**：本项为零源码的意向登记，细则未裁决、实施顺序与批序未定；不动模型面投递（若需模型可见另行立项）；不得以折算值冒称实付；单任务数值的 k=1、成功样本极小与失败代价结构边界沿 283 批 §7。
+- **台账**：本卷；[`284 批档`](audits/284_TASK_LEVEL_METERING_RECORD_POINT_REGISTRATION_2026-10-16.md)；索引头行 v4.256 → v4.257；BACKLOG 计数行（61 → 62）＋本批指针行＋优先级总览 P1 行＋P1 开放项行；TODO 计数行＋P1 路由行＋`P1-0df` 节。零源码、零跑批、零 API 调用；计数 62。
+- 关键词：284 批、0df 立项、任务级计费、机械记录点、per-task metering、随会话存档、真口径与折算分栏、只记不发模型、kind 闭枚举扩档、会话级 token 计数、TB 2.1 金额面缺口、61 → 62、索引 v4.257。
+
 ### 1.223 2026-10-16 276 批 0dd S2 落码＋钉子——交互车道 run 尾自动归档退役（**落码批**，orz `4749f6b1`，零跑批、计数不变 61）
 
 - **用户令**：「请开始进S2吧」（275 批设计稿 D1–D8 定案后的落码放行）。
@@ -331,6 +464,58 @@
 - **载体三件套与清单**：WIN `orz.exe` 58,369,024（+15,872）`39f6f3fa…`／`orz-signer.exe` 6,740,480（Δ0）`dd55ded5…`／`orz-acaf-provision.exe` 6,640,128（Δ0）`34563cad…`；LIN `orz` 117,192,312（+4,016）**`f50b1f17…`（身份门新值）**／`orz-signer` 1,397,496（−16）`a57a4d29…`／`orz-acaf-provision` 1,215,952（+24）`46a7b6d0…`；换装位清单 `D:/tb-eval/orz-windows/carrier-manifest.json`／`D:/tb-eval/orz-linux/carrier-manifest.json` 刷 0.9.1（`generate_carrier_manifest.py`，各 3 entries）。
 - **台账**：本卷 §1.217；[`280 批档`](audits/280_CARRIER_REBUILD_V091_0DD_0DE_S3_2026-10-16.md)；索引头行 v4.252 → v4.253；TODO 计数行/P1 路由/P1-0dd＋P1-0de S3 勾；BACKLOG 计数行/本批指针/P1 行两格；orz 子树 `1ecad57c→0be4a364`＋`orz_source_manifest.sha256` 重生成（恰 2 行变更＝bump 两文件 `Cargo.lock`＋`crates/orz-bin/Cargo.toml` 版本行，与 bump 触碰面一一对应）。计数不变 61。
 - 关键词：280 批、0.9.1 重建、源冻结 0be4a364、0dd S3＋0de S3 合并进体、f50b1f17… 身份门、ACAF 重 provision dd55ded5…、static-pie×3、alpine/bookworm 双冒烟 0.9.1、reminder_only_no_compressible 0→7、保留面零回归、RUN-CLI-6ad2152c/6ad2153a、未推送未发行、计数 61 不变、索引 v4.253。
+
+### 1.220 2026-10-16 283 批 单任务成功成本摊派审计——基准轮真口径成本＋TB 2.1 token 口径（**只读复算批**，零源码零跑批、计数不变 61）
+
+- **由来**：Reddit 回帖评论提出「有用的数是 cost per task completed，不是 cost per token」→ 用户令
+  「成本就按照真口径算……只算跑分的成本就行，按照实际情况来，不考虑数字是否好看」→「请直接落一份审计档吧」。
+  本批为既有台账／journal 的只读复算，**零 API 调用、零新增消费**。
+- **真口径定义（本批）**：实付金额（余额差分／控制台分项），不用「token×价目表」折算、不扣赔偿 credit；
+  摊派口径＝**全包**（失败题、重跑题、事故件一律留在分母）。
+- **r4 摊派（¥223.06＝逐题台账 ¥217.04＋10-14 事故重试窗 ¥6.02）**：端到端全解 **4/36＝¥55.77／题（$7.80）**、
+  全档 core 满 **16/36＝¥13.94／题（$1.95）**、Partial **21/36＝¥10.62／题**、档级 core 满 **144/196＝¥1.55／档**、
+  strict **66/196＝¥3.38**、isolated **88/196＝¥2.53**＝**最松与最严口径差 36 倍**；
+  4 道全解题自付额合计仅 ¥29.01（均 ¥7.25／题），16 道 core 满均 ¥5.49／题 vs 未全解 20 道均 ¥6.40／题
+  ＝**失败题不比成功题便宜**。
+- **五轮横比（真口径·全包）**：0cr ¥157.49（1/36 全解＝157.49；11/36 core 满＝14.32；134/196＝1.18）／
+  0cw ¥212.41（5/36＝42.48；15/36＝14.16；131/196＝1.62）／r3 ¥77.80–83.32（14 题止损：3/14＝25.93；8/14＝9.73；50/68＝1.56）／
+  r4 ¥223.06（4/36＝55.77；16/36＝13.94；144/196＝1.55）／τ² 0db ¥13.05（2/97 止损＝6.53／题）。
+  **排序翻转**：按每轮排 0cr 最便宜，按每个端到端全解题排 0cr 最贵（2.8×r4），按 core 满口径三轮几乎打平——
+  「便宜跑批」与「便宜地解决问题」不是同一排名。对外唯一可引＝**r4**（净室官方形态、36/36 全完成）。
+- **未归属差额归属**：轮内余额净降 ¥249.96 − 台账 ¥217.04 ＝ **¥32.85**，逐笔对齐后＝
+  **¥26.44（10-13 08:02–20:58，与 τ² 0db banking 轮同窗、非 SCB）**＋**¥6.02（10-14 事故重试窗，属 r4）**
+  ＋¥0.39（五处题间采样间隙）。三值并列登记：¥217.04／**¥223.06**／¥249.96（对外取 ¥223.06）。
+- **每 token 实付读数**：V1 ¥0.109／M（10-05～10-07 国庆档，命中折价吃满：命中占输入 53.4%、只占账单 1.4%）／
+  0cw ¥0.152／M／r3 ¥0.153／M／**r4 ¥0.164／M（=¥223.06÷1,361.7M journal token）**；
+  r4 journal 的 `model_output` 逐轮携带 hit／miss／completion（14,257 轮全字段非空）⇒ token 与金额都可落到题目粒度。
+  **「整轮 $22」为价格窗产物**：同轮放到 r4 价格档约 ¥216–250。
+- **TB 2.1（真口径不可得，只登记 token 口径）**：115 作业／120 journal＝**411.2M tokens**
+  （hit 374.2M／miss 23.4M／out 13.6M）、5,242 模型轮、单题中位 **3.0M**（p10 0.6M／p90 7.4M／max 12.3M）；
+  解出中位 3.2M vs 未解中位 2.0M＝**失败早死**；成绩 73/89＝82.0%（142 批）；
+  按自测单价区间 ¥0.109–0.20／M 折算＝全线 ¥44.8–82.2、**每解出题 ¥0.61–1.13（$0.09–0.16）**。
+  **不可得之因**：该窗无余额台账；`jobs-official` 210 份 result.json 的 token／cost 字段**逐件为 null**（适配器不上报 usage）；
+  控制台分项未取回——到手后可原地升级为真口径（口径与公式不变，只换分子）。
+- **形态学新增观察**：同一 harness／同一模型，**失败成本结构相反**——TB 2.1 失败≈早死（token 低、近乎免费）⇒
+  单任务成功成本被压低；SCB 失败与成功同价（checkpoint 链须走到末档）⇒ 同一指标恶化 5–7 倍。
+  跨基准引用单任务成功成本必须带「失败代价结构」，否则同一模型得出方向相反的结论。
+- **2026-10-17 追加勘注（逐档形态学，用户令）**：`r4_checkpoint_ledger.jsonl` 198 行先沿 §2 口径剔除
+  p18 断盘件那一对 ⇒ 196 行，再剔两行无时长的机械截停（p11 ckpt5／p30 ckpt2，`rounds=0`）⇒
+  **194 行：全部 `end_turn`**，零 killed／cancelled、零档达 7200 s 的 90%；失败档 50 对通过档 144＝
+  墙钟均值 **1223 s 对 835 s（1.47×）**、轮次均值 84.3 对 67.5（1.25×）；最长失败档 3,518 s
+  （上限 **49%**）、中位 14%；失败分布八档皆有、峰值 ckpt2（12/50）、末档仅 1；失败档占全轮墙钟
+  17.0 h／50.4 h＝**33.7%**。
+  ⇒ **SCB「失败不便宜」＝36 题／196 档（每题 3–8 档、中位 5）的宽度＋每档约 1.5 倍时长，
+  非超时磨盘或末档死磕**；
+  金额不重算（§2 的 196 档分母不变）。详见 [`283 批档 §6.1`](audits/283_COST_PER_SOLVED_TASK_LEDGER_2026-10-16.md)。
+- **边界（不得宣称）**：k=1 且成功样本极小（r4 端到端 4 例，±1 题＝±25%）；档级／题级、core／strict／isolated、
+  196／36 分母须成套声明；**credit 不抵扣**（+464.70 覆盖 0cw／r3 几乎全部与 r4 的 10-14 前 ¥105.40——
+  按净额 0cw／r3 会归零，故一律毛额）；TB 2.1 为重构非实付；本批**零 API 调用**。
+- **台账**：本卷 §1.220；[`283 批档`](audits/283_COST_PER_SOLVED_TASK_LEDGER_2026-10-16.md)（含 2026-10-17 §6.1 追加勘注）；
+  索引头行 v4.255 → v4.256；BACKLOG 计数行／本批指针行；TODO 计数行。零源码、零 orz 子树改动、零源清单重生成。
+  计数不变 61。
+- 关键词：283 批、单任务成功成本、真口径、实付摊派、r4 ¥223.06、端到端全解 ¥55.77、全档 core 满 ¥13.94、
+  档级 core 满 ¥1.55、36 倍口径差、未归属 ¥32.85、τ² 同窗 ¥26.44、事故重试 ¥6.02、实付单价 ¥0.109–0.164／M、
+  TB 2.1 token 口径 411.2M、单题中位 3.0M、失败早死结构、credit 不抵扣、计数 61 不变、索引 v4.256。
 
 ### 1.219 2026-10-16 282 补记 0.9.1 发行回读核证（**回读核证批**，零源码零跑批零改动、计数不变 61）
 

@@ -4955,6 +4955,83 @@ RLI 影子默认关、生产 1D 不动）。选型出处按用户裁决**脱敏�
    （recli 实测 spike 进入 13 次／5,166s 已足稀疏，禁拟合；S4 真机读数现突发聚集再
    以数据议最小间隔）。
 
+#### §14.86 任务级计费机械记录点——`run_usage_metered` 事件族（0df）（2026-10-17，v1.89）
+
+**来源**：2026-10-16 用户令——「我打算给下一个版本的 orz 配个任务级计费，跟着会话
+一起存档」＋「请将这一内容记为待办吧，作为新的机械记录点」＋2026-10-17 追加
+「把配置侧的 reasoning effort 档位写进任务行——与观测到的 reasoning token 分列」
+〔284 批立项；S1 设计 287 批〕。设计权威：[`PER_TASK_METERING_DESIGN_2026-10-17`](../docs/PER_TASK_METERING_DESIGN_2026-10-17.md)（D1–D8）。
+
+1. **裁决（D1–D2）**：每个 run 终态由机械层落**恰一条** `run_usage_metered`
+   journal 事件（独立事件族，非 mechanical_audit kind——轮级对象键语义不合、主车道
+   专属约束与子代理折算相抵、审查卡渲染负担）；主车道与检索子代理同 journal
+   （子代理轮写主 run journal），一行覆盖全部车道消耗。载体＝run journal ⇒ 随
+   0dd 手动存档／0cy 收卷**自动同走，存档面零新增**。
+2. **计量内容（D3/D5）**：`model`／`model_calls`（loop 轮数）／`prompt_tokens`／
+   `cache_hit_tokens`／`cache_miss_tokens`／`completion_tokens`／
+   `reasoning_tokens`（五项逐轮饱和求和，折算点＝内存 ModelResponse 到达点——
+   journal `model_output` 缺 prompt 口径不可重放）＋`effort_tier`（**配置侧设计值**
+   max|high|low|disabled|unknown，gateway trait 单读；空响应链降级是 per-call 局部
+   量不改 config，降级事实由 request_header_change 承载）＋`usage_incomplete`
+   （任一轮五项有缺或非 completed 终态臂保守置 true）。**effort_tier 与
+   reasoning_tokens 分列**：档位恒定 ≠ 推理量恒定（r4 实证全轮一档下推理占
+   completion 76%、逐题 28%–90%）。
+3. **金额面（D4）**：机械记录**不记金额**——in-band 无自足来源（provider 不报
+   cost；余额差分并发不安全＋TB 2.1 端点不可用实证＋每 run 增计费 API；账单侧无
+   API 面）；journal 哈希链不可改写 ⇒ 回填结构性不能改历史行——金额归因＝run 行
+   token × 金额来源（余额差分/账单导出）在**派生台账**配对（283 方法学机械化，工
+   具另行立项）。**折算（rate card）不入机械记录**：陈旧价目即「以折算冒称实付」
+   温床（两栏分列纪律）；provider 未来若上报 cost 走 payload v0.3 加字段。
+4. **折算与写点（D6–D7）**：折算器 `RunUsageMeter` 挂 `SharedLoopServices`
+   （per-run 新建，沿 `for_new_run` 隔离先例；dispatch 透传子代理 svc）；
+   controller 五终态臂 `record_terminal` 前经统一 helper 落行，grill 模式随
+   `journal: None` 自动丢弃；机械模板压缩零模型调用不入计量，模型参与压缩在主循
+   环轮内自然折入。
+5. **执法（D8）**：`run_started` 增 optional grandfather 锚
+   `usage_metering: "run-v1"`（0q `failure_pipeline` 先例同构）⇒ `usage_metering`
+   法官族（Rust 执法＋Python 冻结镜像对拍）只对带锚 run 要求「恰一条＋终态前＋
+   形状/枚举/非负」；历史刊零回归。**零模型面改动**（无注入/无新工具/无文案）；
+   TUI 降级 Unknown、web 走 default 臂，UI 零改动。历史会话无计量行＝如实缺口，
+   不追补。
+
+#### §14.85 检索启用门默认开——正常版本常开（2026-10-17，v1.88）
+
+**来源**：2026-10-17 用户令——「正常版本的 orz 检索门默认开即可，检索部分是很重要的
+信息获取，得常开」。触发证据＝画图轮真机读数（285 批档 §4）：同一会话四个 run 探针
+全为 `retrieval_enabled=false`、`activations` 空 ⇒ 该轮文献检索**既非本地浏览器车道、
+也非检索子代理 HTTP 兜底**，改由模型自驱终端的原始 HTTP 完成（40 条网络命令、结果面
+429×10／404×9／403×4、终端非零退出 13 次）。**本条局部取代 §14.65 的 fail-closed
+缺省**；§14.65 的门机制、拒绝码与 lane 语义退役结论不变（对**显式关**的会话继续成立）。
+
+1. **裁决**：会话级检索启用门**缺省开**——正常版本的 orz 每个新会话默认注册检索工具
+   族（主面裸 `web_search` 单一派发入口＋外部 lane 的 `browser_read`／`web_search`／
+   `web_fetch`）。检索为信息获取主通道，须常开；不再要求调用方显式开。
+2. **显式关保留**（唯一推荐关法 `ORZ_RETRIEVAL_ENABLED=0`；legacy
+   `--retrieval-mode off`／`ORZ_RETRIEVAL_MODE=off` 兼容映射仍作关）。优先级＝显式
+   `ORZ_RETRIEVAL_ENABLED`（`1`/`true`/`yes`/`on` ⇒ 开；其余显式值 ⇒ 关）> legacy
+   `ORZ_RETRIEVAL_MODE`（非 `off` ⇒ 开，打印弃用提示）> **默认开**。
+3. **单源解析**：解析实现唯一落 `orz-host/src/retrieval_gate.rs`
+   （`resolve_retrieval_enabled` 纯核＋`retrieval_enabled_from_env` env 薄壳，
+   2026-10-17 286 批落码）；`orz-bin` 入口（stdio 面与 `-p` 无头面）、
+   `StdioAgentHandler::with_trust_policy`（TUI 进程内面）、
+   `StoredActivationSnapshot::for_session`（新会话侧车初值）与 Codex app-server 面
+   （`codex_app`）**共用该值**，不再有任何面硬编码 fail-closed。会话侧车
+   `retrieval_enabled` 字段降级为存档读数：每会话最终门值＝本次解析值（一律覆盖
+   侧车旧值），故缺省开对既有会话同样生效。
+4. **边界（不得据本条宣称）**：门开 ≠ 浏览器可用——浏览器可用性仍是事件事实
+   （`browser_launch_result`），`web_search` 走本地浏览器引擎 SERP（Google 主序、
+   Bing 回退）、失败按真实类别回退；`browser_read` 调用期普通失败回传、换道由模型
+   自主（§14.65 §3.4 结论不变）。ACAF 票据、`web_search` 全局并发 1、候选 cap、
+   轮预算等既有硬门一律不变；本门只决定「检索工具族是否注册」。
+5. **无头／评测车道**：同吃缺省开（`orz -p` 走同一解析）。需要确定性离线或对照的
+   评测轮用显式关（`ORZ_RETRIEVAL_ENABLED=0`），并在该轮账面上如实登记。
+6. **落码与钉子（286 批）**：新增 `retrieval_gate.rs`（纯核三族钉子：缺省开／显式关
+   胜出／legacy 映射）；orz-bin 解析改薄委托并改写 `retrieval_enabled_env_decisions`
+   （缺省断言翻面＋显式关两值）；stdio 默认与侧车 `for_session` 初值改走单源；
+   `codex_app` 会话创建改传单源值。读数＝orz-host lib 单线程 368/0（+3 钉）、
+   orz-bin `--bins` 33/0（含改写钉）、orz-tui lib 172/9（同一 ACAF 预存集合、
+   零新增败）、orz-web 47/0＋前端冒烟全过。
+
 #### §14.84 会话生命周期用户主权——交互车道 run 尾自动归档退役（0dd）（2026-10-16，v1.87）
 
 **来源**：web 真人测试轮实证（0.9.0 载体、会话 2b1f85d2：run_finished 后 80ms 自动

@@ -12,6 +12,10 @@
     "failure_pipeline": {
       "const": "funnel-v1",
       "description": "0q 统一失败事件管线 (2026-09-08, ADR-0010 §14.63): 失败事件管线的 journal 级版本锚 —— failure_agg_coverage 法官族（error 形状完成 ↔ failure_target/failure_agg_absent XOR 对账）只在本标记之后的刊执法；缺省 = 漏斗前旧刊，grandfather 不回溯（0q 设计 §3.2-4）。"
+    },
+    "usage_metering": {
+      "const": "run-v1",
+      "description": "0df 任务级计费机械记录点 (2026-10-17, ADR-0010 §14.86): 用量计量的 journal 级版本锚 —— usage_metering 法官族（每个 run 恰一条 run_usage_metered＋终态前＋字段形状＋零轮非零和）只在本标记之后的刊执法；缺省 = 计量前旧刊，grandfather 不回溯。"
     }
   }
 }

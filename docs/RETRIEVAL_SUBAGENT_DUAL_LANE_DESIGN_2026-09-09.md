@@ -144,6 +144,14 @@
   模式退役消失，改由独立会话启用门承接（如 `retrieval_enabled=false`）；未
   启用会话主面与外部 lane 均无检索工具，任何检索派发仍 fail-closed 拒绝
   （拒绝码保留、脱离模式状态机）。
+  **勘注（2026-10-17 用户令，ADR-0010 §14.85）**：启用门的**缺省值由关改开**
+  ——「正常版本的 orz 检索门默认开即可，检索部分是很重要的信息获取，得常开」。
+  门机制、拒绝码与「未启用即无检索工具」的执法语义**全部不变**（本条 R2 与
+  §4 fail-closed 不变量对**显式关**的会话继续成立）；变的是缺省与解析单源：
+  解析唯一实现＝`orz-host/src/retrieval_gate.rs`，缺省**开**，显式关经
+  `ORZ_RETRIEVAL_ENABLED=0`（或 legacy `--retrieval-mode off`）。理由＝真机
+  实证 fail-closed 缺省下模型自驱 `curl` 原始 HTTP（429／403／404 与手工
+  抓搜索页），检索通道闲置。
 - **主面投影（R2 补充）**：`apply_retrieval_surface_projection` 的模式分支
   退役；检索启用会话主面恒以现行 local_browser 形态投影（裸 `web_search`
   单一派发入口 + 既有英文入口标注），模式差异不再进入工具面。

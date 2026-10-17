@@ -80,10 +80,10 @@ PULL_TRIES = 4
 
 # 载体锁定值（2026-10-16 换装 0.9.1＝0dd run 尾自动归档退役＋0de 治理摩擦综合四件〔D1 开窗前置／
 # D3 收束同消息豁免／D5 括号注解剥除／D6 投影双字段／D7 rounds_since 贯通〕＋279 处置批〔`1ecad57c`〕
-# 0.9.1 代窗口重建源冻结 orz `0be4a364`（bump 批；进件＝`1ecad57c`＋`644f6b01` 278＋`4749f6b1` 276）；
-# 旧值 0.9.0 = 1ce40857f67cf0ac8c5a25909d7ea1a082ba0411097b0bf13c71c4f5b1a1a30b〔0cy 代窗口〕）
+# 0.9.2 代窗口重建源冻结 orz `c678c21b`（bump 批；进件＝`7966d171` 288 处置＋`b94f9fb7` 286 缺省开＋`6e107c77` 287 计量行）；
+# 旧值 0.9.1 = f50b1f17987ff7989003823cfafb1cc85968523e9a0455e1fe17da2dd1ccef1b〔0dd/0de 代窗口〕）
 EXPECTED_CARRIER_SHA256 = (
-    'f50b1f17987ff7989003823cfafb1cc85968523e9a0455e1fe17da2dd1ccef1b'
+    '45ea8b604a8bfccb8140f007e38649c2a1e91c314634048d6fc924a987b23c1e'
 )
 # 适配器锁定值（现行 tb_agents/orz.py，含 F1 试次隔离＋0ax ORZ_WEB_SEARCH_LOCAL 透传；
 # 旧值 2737cfadc5c43603b73164b51343e58a671c0efeee8d9ab7a626dda8dae51490）

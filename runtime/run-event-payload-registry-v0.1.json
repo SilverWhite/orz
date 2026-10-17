@@ -301,6 +301,10 @@
       "face_fingerprint": {
         "schema": "runtime/face-fingerprint-event-payload-v0.2.schema.json",
         "slug": "face-fingerprint"
+      },
+      "run_usage_metered": {
+        "schema": "runtime/run-usage-metered-event-payload-v0.2.schema.json",
+        "slug": "run-usage-metered"
       }
     }
   },

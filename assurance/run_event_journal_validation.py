@@ -32,7 +32,8 @@ parseability and `schema_version` are NOT checked beyond the envelope schema
 itself plus the chain rules.
 
 Single registry authority (Task D S3 flip, 2026-09-06): the mapping lives in
-`runtime/run-event-payload-registry-v0.1.json` (v01=34 / v02=35; 0z S2 adds seven host-resource families + run_terminated terminal); the
+`runtime/run-event-payload-registry-v0.1.json` (v01=34 / v02=41; 2026-10-17
+288 处置批勘正——0bw③／0bz／0df 历次加条目未回写本注，v02=35 系陈旧读数); the
 `PAYLOAD_SCHEMA_BY_EVENT_TYPE(_V02)` dicts below are import-time derived
 views consumed by this module, `runtime/tests/test_run_event_conformance.py`
 and `scripts/check_repository.py`. The former export script
@@ -4473,6 +4474,144 @@ def _verify_v02_face_fingerprint(events: list[dict[str, Any]]) -> list[str]:
         prev = (round_no, entries)
     return errors
 
+
+_USAGE_METER_EFFORT_TIERS = ("max", "high", "low", "disabled", "unknown")
+_USAGE_METER_TOKEN_FIELDS = (
+    "prompt_tokens",
+    "cache_hit_tokens",
+    "cache_miss_tokens",
+    "completion_tokens",
+    "reasoning_tokens",
+)
+
+
+def _verify_v02_usage_metering(events: list[dict[str, Any]]) -> list[str]:
+    """0df 任务级计费机械记录点 (2026-10-17, ADR-0010 §14.86): per-run
+    metering coverage — Rust twin `families.rs::verify_usage_metering`.
+
+    - Grandfather anchor: fires only when `run_started` declares
+      `usage_metering: "run-v1"` (0q `failure_pipeline` 先例同构); any other
+      declared version is an error.
+    - Exactly one `run_usage_metered`, placed before the first terminal
+      event; payload shape-checked (model 非空、六个计数器非负整数、
+      effort_tier 闭集、usage_incomplete 布尔).
+    - Cross-field: `model_calls == 0` ⇒ 五项 token 和全 0（未折入任何响应的
+      run 不可能消耗已计数 token）.
+    """
+    errors: list[str] = []
+    anchored = False
+    for index, event in enumerate(events):
+        if event.get("event_type") != "run_started":
+            continue
+        payload = event.get("payload")
+        anchor = payload.get("usage_metering") if isinstance(payload, dict) else None
+        if anchor is None:
+            continue
+        if anchor == "run-v1":
+            anchored = True
+        else:
+            errors.append(
+                f"event {index}: run_started usage_metering {anchor!r} is not "
+                "a known usage-metering version (run-v1)"
+            )
+    if not anchored:
+        return errors
+    terminal_types = (
+        "run_finished",
+        "run_failed",
+        "run_cancelled",
+        "run_invalidated",
+        "run_terminated",
+    )
+    terminal_index = next(
+        (
+            i
+            for i, event in enumerate(events)
+            if event.get("event_type") in terminal_types
+        ),
+        None,
+    )
+    meter_indices = [
+        i
+        for i, event in enumerate(events)
+        if event.get("event_type") == "run_usage_metered"
+    ]
+    if len(meter_indices) != 1:
+        # 288 处置批（2026-10-17，与 Rust verify_usage_metering 同形）：锚已
+        # 落盘后中途 journal 降级的刊，计量行被降级写入器丢弃——`got 0` 属
+        # 盘面如实，附区分性文案（不豁免执法；0q 锚定族同行为类）。
+        degraded_note = ""
+        if not meter_indices and any(
+            event.get("event_type") == "run_terminated"
+            and isinstance(event.get("payload"), dict)
+            and event["payload"].get("reason") == "journal_degraded"
+            for event in events
+        ):
+            degraded_note = (
+                "; journal degraded mid-run drops the metered line "
+                "(disk-faithful: the degraded writer discards "
+                "post-degradation records, ADR-0010 §14.86 D7)"
+            )
+        errors.append(
+            "anchored run must carry exactly one run_usage_metered, got "
+            f"{len(meter_indices)}{degraded_note}"
+        )
+    if terminal_index is not None and meter_indices and meter_indices[0] > terminal_index:
+        errors.append(
+            f"event {meter_indices[0]}: run_usage_metered must precede the "
+            f"terminal event (event {terminal_index})"
+        )
+    for index in meter_indices:
+        payload = events[index].get("payload")
+        if not isinstance(payload, dict):
+            errors.append(f"event {index}: run_usage_metered payload must be an object")
+            continue
+        model = payload.get("model")
+        if not isinstance(model, str) or not model:
+            errors.append(
+                f"event {index}: run_usage_metered model must be a non-empty string"
+            )
+        model_calls = payload.get("model_calls")
+        model_calls_ok = (
+            isinstance(model_calls, int)
+            and not isinstance(model_calls, bool)
+            and model_calls >= 0
+        )
+        if not model_calls_ok:
+            errors.append(
+                f"event {index}: run_usage_metered model_calls must be a "
+                "non-negative integer"
+            )
+        token_sums: list[int] = []
+        for field in _USAGE_METER_TOKEN_FIELDS:
+            value = payload.get(field)
+            if (
+                isinstance(value, int)
+                and not isinstance(value, bool)
+                and value >= 0
+            ):
+                token_sums.append(value)
+            else:
+                errors.append(
+                    f"event {index}: run_usage_metered {field} must be a "
+                    "non-negative integer"
+                )
+        if payload.get("effort_tier") not in _USAGE_METER_EFFORT_TIERS:
+            errors.append(
+                f"event {index}: run_usage_metered effort_tier must be one of "
+                "max/high/low/disabled/unknown"
+            )
+        if not isinstance(payload.get("usage_incomplete"), bool):
+            errors.append(
+                f"event {index}: run_usage_metered usage_incomplete must be a boolean"
+            )
+        if model_calls_ok and model_calls == 0 and any(s != 0 for s in token_sums):
+            errors.append(
+                f"event {index}: model_calls 0 with non-zero token sums — a run "
+                "that folded no response cannot have consumed counted tokens"
+            )
+    return errors
+
 def _py_int(value: Any) -> int | None:
     """Mirror of the Rust judge's `families::py_int` — Python `isinstance`
     over JSON values: ints and bools count (bool is an int in Python), floats,
@@ -4794,6 +4933,9 @@ def validate_journal_text(text: str) -> list[str]:
         # 0bz S1 (2026-09-28): model-face prefix fingerprint — Rust twin in
         # `families.rs::verify_face_fingerprint` (same-day roster).
         errors.extend(_verify_v02_face_fingerprint(events))
+        # 0df (2026-10-17): per-run usage metering coverage — Rust twin in
+        # `families.rs::verify_usage_metering` (same-day roster).
+        errors.extend(_verify_v02_usage_metering(events))
     return errors
 
 
