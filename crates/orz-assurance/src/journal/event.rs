@@ -265,6 +265,22 @@ pub enum EventType {
     // message_count/total_chars/face_sha256/messages/stable_prefix_messages/
     // first_divergent。
     FaceFingerprint,
+
+    // 0df (2026-10-17, PER-TASK-METERING / ADR-0010 §14.86): 任务级计费机械
+    // 记录点——每个 run 终态前恰一条（controller 五终态臂统一写点），主车道
+    // 与检索子代理同 journal（子代理轮折入同一行）。折算点＝内存
+    // ModelResponse 到达点（journal `model_output` 缺 prompt 口径不可重放）；
+    // 五项 token 逐轮饱和求和。`effort_tier` 是配置侧设计值（gateway 单读；
+    // 空响应链降级是 per-call 局部量，降级事实由 request_header_change 承
+    // 载），与观测 `reasoning_tokens` 分列。金额不入机械记录（哈希链不可改
+    // 写，金额归因走派生台账配对）。随会话存档同走（footprint 整目录收 run
+    // dirs，存档面零新增）；grill 模式随 `journal: None` 自动丢弃。执法＝
+    // `usage_metering` 法官族＋`run_started` grandfather 锚
+    // `usage_metering:"run-v1"`（0q `failure_pipeline` 先例同构，历史刊零回
+    // 归）。payload：model/model_calls/prompt_tokens/cache_hit_tokens/
+    // cache_miss_tokens/completion_tokens/reasoning_tokens/effort_tier/
+    // usage_incomplete。
+    RunUsageMetered,
 }
 
 impl EventType {

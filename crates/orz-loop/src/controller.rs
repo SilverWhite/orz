@@ -552,6 +552,11 @@ pub struct AgentLoopController {
     /// policy denials in the current run. Mutex since `run_turn_inner` is
     /// `&self` and a turn may run on any thread; reset at turn start.
     pub(crate) denial_state: Mutex<DenialState>,
+    /// 0df（2026-10-17，ADR-0010 §14.86 / PER_TASK_METERING_DESIGN D6）：run
+    /// 级 usage 折算器——主车道与检索子代理折入同一 meter，`run_turn_inner`
+    /// 起点复位（per-run 隔离，同 `denial_state` 纪律）、终态前落恰一条
+    /// `run_usage_metered`。
+    pub(crate) usage_meter: Mutex<crate::usage_meter::RunUsageMeter>,
     /// REV-083-18c (2026-09-27): memo for `blackboard_watermark_label` —
     /// the label is rendered on every blackboard read (plus audit paths)
     /// but only moves when the live byte count moves; cache the formatted
@@ -903,6 +908,8 @@ impl AgentLoopController {
             // v7（S1 修订批）：会话级提醒水位——构造时为空（新会话从零开始；
             // ACP 会话在 prompt 起始经 `with_context_scale_notified` 注入侧车值）。
             context_scale_notified: Mutex::new(Vec::new()),
+            // 0df：run 级 usage 折算器（run_turn_inner 起点复位）。
+            usage_meter: Mutex::new(crate::usage_meter::RunUsageMeter::default()),
             denial_state: Mutex::new(DenialState::default()),
             watermark_label_cache: Mutex::new(None),
             // 滑块上下文 v8（2026-09-16 勘误批，设计 §2 §3 §8）：生产在构造时
@@ -1543,6 +1550,8 @@ impl AgentLoopController {
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: MAX_TOOL_ROUNDS,
             mid_run_call_ids: Mutex::new(std::collections::HashMap::new()),
+            // 0df：run 级 usage 折算器（run_turn_inner 起点复位）。
+            usage_meter: Mutex::new(crate::usage_meter::RunUsageMeter::default()),
             // 第二批分档：测试组件构造不固化预算默认，档位默认在 dispatch
             // 生效；需要显式预算的测试直接写 controller 字段。
             retrieval_subagent_wallclock: None,
@@ -3467,6 +3476,15 @@ impl AgentLoopController {
                 let _ = self
                     .journal_pending_write_control_reviews(host, &mut writer)
                     .await;
+                // 0df（ADR-0010 §14.86）：终态前计量行——非 completed 臂保守
+                // 置不完整（终态前在途轮的消耗不可知）；链已死也只尽力而为
+                //（原始错误不被遮蔽）。标签从共享底层 gateway 读（
+                // `for_new_run` 复制同一 config，设计值同源）。
+                let (usage_meter_model, usage_meter_tier) =
+                    self.main_agent.gateway.usage_meter_labels();
+                let _ = self
+                    .journal_usage_meter(&mut writer, &usage_meter_model, &usage_meter_tier, true)
+                    .await;
                 let _ = writer.record_terminal(event, payload).await;
                 let _ = journal.flush_async().await;
                 Err(e)
@@ -3571,6 +3589,13 @@ impl AgentLoopController {
         // IP2a: the denial circuit breaker is per-run — a fresh turn starts
         // clean (D-3: "连续拒绝 3 次/轮" — the window is one run).
         *self.denial_state.lock().unwrap_or_else(|e| e.into_inner()) = DenialState::default();
+        // 0df（2026-10-17，ADR-0010 §14.86）：usage 折算器随 run 复位
+        //（per-run 隔离，同 denial_state 纪律；跨 run 串账＝记录面谎言）。
+        *self
+            .usage_meter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            crate::usage_meter::RunUsageMeter::default();
         // GAP-DENIAL-POLICY-REVISION (2026-08-12): policy revision is also
         // per-run — a fresh run starts at 0 (same window as the breaker).
         self.policy_revision
@@ -3623,6 +3648,9 @@ impl AgentLoopController {
         // 同一 run 实例（同一 run 内计数/档位一致）。
         let run_gateway = self.main_agent.gateway.for_new_run();
         let run_main_agent = MainAgent::new(run_gateway.clone());
+        // 0df：计量标签单读——(配置模型 id, thinking 档设计值)，run 起点
+        // 读一次、终态复用（设计值语义：降级链不改 config，见 trait 注）。
+        let (usage_meter_model, usage_meter_tier) = run_gateway.usage_meter_labels();
 
         // 1. tool_availability_check — the v0.2 single probe face snapshot
         // BEFORE run_started (Python conformance: the probe must precede
@@ -4210,10 +4238,17 @@ impl AgentLoopController {
         // 事件管线的 journal 级 grandfather 锚——法官对账族
         // （failure_agg_coverage）只对本标记之后的刊执法；旧刊不回溯
         // （0q 设计 §3.2-4）。
+        // 0df（ADR-0010 §14.86）：`usage_metering: "run-v1"` 是用量计量的
+        // journal 级 grandfather 锚——usage_metering 法官族（恰一条＋终态
+        // 前＋字段形状）只对本标记之后的刊执法；旧刊不回溯。
         writer
             .record(
                 EventType::RunStarted,
-                serde_json::json!({"prompt": prompt, "failure_pipeline": "funnel-v1"}),
+                serde_json::json!({
+                    "prompt": prompt,
+                    "failure_pipeline": "funnel-v1",
+                    "usage_metering": "run-v1",
+                }),
             )
             .await?;
         writer
@@ -4317,6 +4352,8 @@ impl AgentLoopController {
                 // 0ar S2：检索调用计数仅检索车道启用；主车道证据另计
                 //（main_evidence），倒数不落主面。
                 retrieval_calls: None,
+                // 0df：主车道轮与子代理轮折入同一 run meter。
+                usage_meter: &self.usage_meter,
             },
             self,
             writer,
@@ -4424,6 +4461,10 @@ impl AgentLoopController {
                 );
             }
         }
+        // 0df（ADR-0010 §14.86）：completed 臂的计量行——按 meter 实况落
+        //（usage_incomplete 只在折算轮有缺时为 true）。
+        self.journal_usage_meter(writer, &usage_meter_model, &usage_meter_tier, false)
+            .await?;
         // 0z S2 §4.3：降级卷以 `run_terminated { reason: journal_degraded }`
         // 显式收尾（正常完成时本调用恒为 RunFinished，行为不变）。
         writer
@@ -5407,11 +5448,134 @@ mod tests {
                 EventType::CounterexampleGate,
                 EventType::FaceFingerprint,
                 EventType::ModelOutput,
+                // 0df (2026-10-17, ADR-0010 §14.86): the per-run usage
+                // metering row lands once, immediately before the terminal.
+                EventType::RunUsageMetered,
                 EventType::RunFinished,
             ],
             "{types:?}"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0df（2026-10-17，ADR-0010 §14.86）：per-run 计量行三面钉——①同
+    /// controller 两个 run 各**恰一条** `run_usage_metered`（终态前；
+    /// `model_calls` 与该 run 轮数恰等 ⇒ per-run 复位实证，不跨 run 串账）；
+    /// ②run_started 带 `usage_metering: "run-v1"` grandfather 锚；
+    /// ③`usage_metering` 法官族对两 run 全绿（fake 无 usage ⇒ 行按实况
+    /// `usage_incomplete: true`，非法外完整）。
+    #[tokio::test]
+    async fn run_usage_metered_lands_once_per_run_and_resets() {
+        // 一 run 一本 journal（终态后不可追加）——同 controller 跨两个独立
+        // journal 跑两个 run，复位语义由「第二 run 行 model_calls 仍为该
+        // run 自身轮数」实证。
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec![
+            "第一轮答",
+            "第二轮答",
+            "第三轮答",
+            "第四轮答",
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-METER".to_string(),
+            1,
+            "任务".to_string(),
+            vec!["步骤一".to_string()],
+        );
+
+        for run in 0..2 {
+            let dir = test_dir();
+            let journal = JournalRecorder::new(dir.clone());
+            let host = TestHost {
+                journal,
+                tool_result: None,
+            };
+            let run_id = format!("RUN-METER-{run}");
+            let result = controller
+                .run_turn(&host, "题目", &run_id, MANIFEST, 0, None, None, None)
+                .await;
+            assert!(result.is_ok(), "run {run}: {result:?}");
+
+            let text = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+            let events: Vec<serde_json::Value> = text
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect();
+            // ② grandfather 锚随 run_started 落盘。
+            let started = events
+                .iter()
+                .find(|e| e["event_type"] == "run_started")
+                .expect("run_started present");
+            assert_eq!(started["payload"]["usage_metering"], "run-v1");
+
+            // ① 恰一条、终态前、轮数与本 run 恰等（复位实证）。
+            let rows: Vec<&serde_json::Value> = events
+                .iter()
+                .filter(|e| e["event_type"] == "run_usage_metered")
+                .collect();
+            assert_eq!(rows.len(), 1, "run {run}: exactly one meter row");
+            let terminal_pos = events
+                .iter()
+                .position(|e| e["event_type"] == "run_finished")
+                .expect("run_finished present");
+            let meter_pos = events
+                .iter()
+                .position(|e| e["event_type"] == "run_usage_metered")
+                .unwrap();
+            assert!(meter_pos < terminal_pos, "meter row must precede terminal");
+            let payload = &rows[0]["payload"];
+            assert_eq!(payload["model_calls"], 2, "run {run} folded rounds");
+            // fake 无 usage ⇒ 如实 incomplete（不装完整）。
+            assert_eq!(payload["usage_incomplete"], true);
+            assert_eq!(payload["effort_tier"], "unknown");
+
+            // ③ 法官族对单个 run 的全事件零违例。
+            let family_errors = orz_assurance::journal::families::verify_usage_metering(&events);
+            assert!(family_errors.is_empty(), "{family_errors:?}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// 0df 钉：失败臂（脚本耗尽）同样落**恰一条**计量行且保守置
+    /// `usage_incomplete: true`（终态前在途轮消耗不可知）＋法官族绿。
+    #[tokio::test]
+    async fn run_usage_metered_failure_arm_marks_incomplete() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let result = controller
+            .run_turn(
+                &host,
+                "题目",
+                "RUN-METER-FAIL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await;
+        assert!(result.is_err(), "exhausted script must fail the run");
+
+        let text = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+        let events: Vec<serde_json::Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let rows: Vec<&serde_json::Value> = events
+            .iter()
+            .filter(|e| e["event_type"] == "run_usage_metered")
+            .collect();
+        assert_eq!(rows.len(), 1, "exactly one meter row on the failure arm");
+        assert_eq!(rows[0]["payload"]["usage_incomplete"], true);
+        assert_eq!(events.iter().any(|e| e["event_type"] == "run_failed"), true);
+        let family_errors = orz_assurance::journal::families::verify_usage_metering(&events);
+        assert!(family_errors.is_empty(), "{family_errors:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

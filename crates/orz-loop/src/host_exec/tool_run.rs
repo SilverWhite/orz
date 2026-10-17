@@ -4941,6 +4941,9 @@ mod tests {
                 EventType::CounterexampleGate,
                 EventType::FaceFingerprint,
                 EventType::ModelOutput,
+                // 0df (2026-10-17, ADR-0010 §14.86): the per-run usage
+                // metering row lands once, immediately before the terminal.
+                EventType::RunUsageMetered,
                 EventType::RunFinished,
             ],
             "{types:?}"

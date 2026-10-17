@@ -177,6 +177,32 @@ impl AgentLoopController {
         Ok(())
     }
 
+    /// 0df（2026-10-17，ADR-0010 §14.86 / PER_TASK_METERING_DESIGN D7）：
+    /// run 终态前落**恰一条** `run_usage_metered`（五终态臂共用；grill 模式
+    /// 随 `journal: None` 自动丢弃）。`force_incomplete`＝非 completed 臂
+    /// 保守置位——终态前在途轮的消耗不可知，如实登记不装完整。
+    pub(crate) async fn journal_usage_meter(
+        &self,
+        writer: &mut EventWriter<'_>,
+        model: &str,
+        effort_tier: &str,
+        force_incomplete: bool,
+    ) -> Result<(), AgentLoopError> {
+        let payload = {
+            let mut meter = self
+                .usage_meter
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if force_incomplete {
+                meter.mark_incomplete();
+            }
+            meter.metered_payload(model, effort_tier)
+        };
+        writer
+            .record(orz_assurance::EventType::RunUsageMetered, payload)
+            .await
+    }
+
     /// TER 全面审查 P1-1 (2026-09-04)：idle-kill `tool_running` 事件生产者。
     /// host 在工具执行 / run 收尾边界 drain `LoopHost::drain_terminal_idle_kills`；
     /// loop 只对**本 run 内已记过 mid-run `tool_running`** 的 auto-bg 调用补记

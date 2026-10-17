@@ -433,6 +433,16 @@ pub trait ModelGateway: Send + Sync {
         "unknown-config".to_string()
     }
 
+    /// 0df（2026-10-17，ADR-0010 §14.86 / PER_TASK_METERING_DESIGN D5）：run
+    /// 尾 `run_usage_metered` 行的标签单读——`(配置模型 id, 配置 thinking 档
+    /// 设计值)`。控制器在 run 起点读一次、终态复用；空响应链降级是 per-call
+    /// 局部量、从不改写 config，故本值恒为**设计值**（降级事实由
+    /// `request_header_change` 指纹面承载，计量行不重复）。default 让测试
+    /// fake 保持显式 `unknown/unknown` 形态，直到选择覆写。
+    fn usage_meter_labels(&self) -> (String, String) {
+        ("unknown".to_string(), "unknown".to_string())
+    }
+
     /// `cancel` is a cooperative cancellation check (Phase 3 slice #11):
     /// streaming transports poll it between wire chunks and bail with
     /// `GatewayError::Cancelled` when set. Buffered backends may ignore it —

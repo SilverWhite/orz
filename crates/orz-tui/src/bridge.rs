@@ -496,7 +496,10 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
         // 降级 Unknown 与其余宿主事实族同姿态）。
         | EventType::WriteControlReview
         // 0bz S1：模型面前缀指纹——纯观测面（无专用 TUI 卡片，同姿态）。
-        | EventType::FaceFingerprint => TuiEvent::Unknown {
+        | EventType::FaceFingerprint
+        // 0df：任务级计费机械记录——run 终态计量行（无专用 TUI 卡片，同
+        // 姿态；模型面零感知，UI 呈现随专门批另议）。
+        | EventType::RunUsageMetered => TuiEvent::Unknown {
             event_type: event.event_type.to_string(),
         },
     }

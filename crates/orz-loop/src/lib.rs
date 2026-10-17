@@ -50,6 +50,7 @@ pub mod selfhistory;
 pub mod summary;
 pub mod tool;
 pub mod tool_probe;
+pub(crate) mod usage_meter;
 
 #[cfg(test)]
 pub(crate) mod controller_test_support;

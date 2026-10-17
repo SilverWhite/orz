@@ -450,6 +450,8 @@ impl AgentLoopController {
             session_id: self.session_id.as_deref(),
             in_flight_tools: Some(&in_flight_tools),
             retrieval_calls: Some(&retrieval_calls),
+            // 0df：子代理轮折入 run 的同一 meter（controller 持有）。
+            usage_meter: &self.usage_meter,
         };
         let loop_future = Box::pin(run_agent_loop(
             &svc,
@@ -574,6 +576,8 @@ impl AgentLoopController {
                         // 会话收尾压缩路径不发起检索——同一计数器只读传递
                         //（保持 svc 形状一致，压缩路径零增量）。
                         retrieval_calls: Some(&retrieval_calls),
+                        // 0df：同一 run meter（压缩路径零模型调用，零增量）。
+                        usage_meter: &self.usage_meter,
                     };
                     // 0ah 收口清理批（2026-09-16，v7→v8 收口）：有状态折叠点
                     // 退役 ⇒ session-end 的保留起点按无状态 `collapsed_cut`

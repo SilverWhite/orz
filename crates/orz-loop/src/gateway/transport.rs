@@ -2076,6 +2076,19 @@ impl ModelGateway for DeepSeekTransport {
         self.config_fingerprint_impl()
     }
 
+    /// 0df（2026-10-17，ADR-0010 §14.86）：计量标签单读——静态 config 的
+    /// 模型 id 与 thinking 档设计值（`for_new_run` 复制 config、降级链是
+    /// per-call 局部量，本值即 run 的设计值）。
+    fn usage_meter_labels(&self) -> (String, String) {
+        let tier = match self.config.thinking {
+            ThinkingMode::EnabledMax => "max",
+            ThinkingMode::EnabledHigh => "high",
+            ThinkingMode::EnabledLow => "low",
+            ThinkingMode::Disabled => "disabled",
+        };
+        (self.config.model_id.clone(), tier.to_string())
+    }
+
     /// STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
     /// §2.2)：per-run 隔离——退化计数全新（配置复制、健康状态归零；
     /// 2026-08-28 R1 起无会话 thinking 档位）。长驻进程（ACP server）

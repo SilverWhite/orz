@@ -731,6 +731,11 @@ pub(crate) struct SharedLoopServices<'a> {
     /// 该读数（已得计数＋缺口）。检索车道传 `Some`（dispatch 持有
     /// AtomicU64），主车道传 `None`。
     pub retrieval_calls: Option<&'a std::sync::atomic::AtomicU64>,
+    /// 0df（2026-10-17，ADR-0010 §14.86）：run 级 usage 折算器——主车道与
+    /// 检索子代理在各自轮的 `ModelResponse` 到达点折入**同一个** run meter
+    /// （controller 持有、per-run 复位；非 Option——两车道都要折，行覆盖
+    /// 全部车道消耗）。终态前由 controller 落恰一条 `run_usage_metered`。
+    pub usage_meter: &'a std::sync::Mutex<crate::usage_meter::RunUsageMeter>,
 }
 
 /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, TODO P0-0k 第一批
@@ -3344,9 +3349,20 @@ pub(crate) async fn run_agent_loop(
             // is a cancel, not a model failure — it must end the run with
             // `run_cancelled`, not a spurious `run_failed`.
             Err(GatewayError::Cancelled) => {
+                // 0df：取消中断轮——usage 不可观测，置不完整位。
+                svc.usage_meter
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .mark_incomplete();
                 return Err(AgentLoopError::Cancelled);
             }
             Err(other) => {
+                // 0df：失败/流中断轮——usage 不可观测（F-06 的 partial
+                // ModelOutput 载荷全 null 同语义），置不完整位。
+                svc.usage_meter
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .mark_incomplete();
                 if let Some(roles) = view_debug.as_ref() {
                     tracing::error!(
                         "model request failed ({other}); view roles: {}",
@@ -3453,6 +3469,15 @@ pub(crate) async fn run_agent_loop(
                 return Err(AgentLoopError::Model(other.to_string()));
             }
         };
+
+        // 0df（2026-10-17，ADR-0010 §14.86）：usage 折算点——ModelResponse
+        // 到达即折入 run meter（五项 token 饱和求和＋轮数；任一项缺席置
+        // incomplete）。放内存面而非 journal 重放：`model_output` 事件不
+        // 携带 prompt 口径。取消检查点之前折——响应已到达、消耗已发生。
+        svc.usage_meter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .fold_response(&response);
 
         // Cooperative cancellation checkpoint (Phase 3 slice #7): a
         // cancelled run may omit this round's `model_output` — the chain
@@ -6187,6 +6212,9 @@ mod tests {
         pacing: &'a AtomicU32,
         policy: &'a AtomicU64,
     ) -> SharedLoopServices<'a> {
+        // 0df：meter 是 run 级状态；本 helper 不对它断言——per-call 泄漏
+        // 一份保持调用点签名稳定（压缩路径零模型调用，meter 恒默认态）。
+        let usage_meter: &'a Mutex<crate::usage_meter::RunUsageMeter> = Box::leak(Box::default());
         SharedLoopServices {
             blackboard,
             lif: test_lif(),
@@ -6200,6 +6228,7 @@ mod tests {
             session_id: None,
             in_flight_tools: None,
             retrieval_calls: None,
+            usage_meter,
         }
     }
 

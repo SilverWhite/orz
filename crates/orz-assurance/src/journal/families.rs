@@ -1621,6 +1621,9 @@ pub const ALL_FAMILIES: &[&str] = &[
     // 扩展): write-control command review — block/warn/allow per command.
     "write_control_review",
     "face_fingerprint",
+    // 0df (2026-10-17, ADR-0010 §14.86): per-run usage metering coverage
+    // (grandfather anchor `usage_metering: "run-v1"`).
+    "usage_metering",
 ];
 
 // ---------------------------------------------------------------------------
@@ -2268,6 +2271,135 @@ pub fn verify_face_fingerprint(events: &[Value]) -> Vec<String> {
     errors
 }
 
+/// Python `_verify_v02_usage_metering` (0df 任务级计费机械记录点, 2026-10-17,
+/// ADR-0010 §14.86): per-run metering coverage — "每个 run 恰一条、终态前、
+/// 字段形状" becomes an executable assertion.
+///
+/// - Grandfather anchor: the rule fires only on journals whose `run_started`
+///   payload declares `usage_metering: "run-v1"`; older journals are not
+///   retroactively enforced (0q `failure_pipeline: "funnel-v1"` 先例同构).
+///   Any other declared version is an error.
+/// - On an anchored journal: exactly one `run_usage_metered` event, placed
+///   before the first terminal event; payload shape-checked (model 非空、六个
+///   计数器非负整数、effort_tier 闭集、usage_incomplete 布尔)。
+/// - Cross-field: `model_calls == 0` ⇒ 五项 token 和全 0（未折入任何响应的
+///   run 不可能消耗已计数 token）。
+pub fn verify_usage_metering(events: &[Value]) -> Vec<String> {
+    const EFFORT_TIERS: &[&str] = &["max", "high", "low", "disabled", "unknown"];
+    const TOKEN_FIELDS: &[&str] = &[
+        "prompt_tokens",
+        "cache_hit_tokens",
+        "cache_miss_tokens",
+        "completion_tokens",
+        "reasoning_tokens",
+    ];
+    let mut errors = Vec::new();
+    let mut anchored = false;
+    for (index, event) in events.iter().enumerate() {
+        if event.get("event_type").and_then(Value::as_str) != Some("run_started") {
+            continue;
+        }
+        match str_of(event["payload"].get("usage_metering")) {
+            None => {}
+            Some("run-v1") => anchored = true,
+            Some(other) => errors.push(format!(
+                "event {index}: run_started usage_metering {other:?} is not \
+                 a known usage-metering version (run-v1)"
+            )),
+        }
+    }
+    if !anchored {
+        return errors;
+    }
+    let terminal_index = events.iter().position(|event| {
+        matches!(
+            event.get("event_type").and_then(Value::as_str),
+            Some(
+                "run_finished"
+                    | "run_failed"
+                    | "run_cancelled"
+                    | "run_invalidated"
+                    | "run_terminated"
+            )
+        )
+    });
+    let meter_indices: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| {
+            event.get("event_type").and_then(Value::as_str) == Some("run_usage_metered")
+        })
+        .map(|(index, _)| index)
+        .collect();
+    if meter_indices.len() != 1 {
+        errors.push(format!(
+            "anchored run must carry exactly one run_usage_metered, got {}",
+            meter_indices.len()
+        ));
+    }
+    if let (Some(terminal), Some(&meter)) = (terminal_index, meter_indices.first())
+        && meter > terminal
+    {
+        errors.push(format!(
+            "event {meter}: run_usage_metered must precede the terminal \
+             event (event {terminal})"
+        ));
+    }
+    for &index in &meter_indices {
+        let payload = &events[index]["payload"];
+        if str_of(payload.get("model"))
+            .map(str::is_empty)
+            .unwrap_or(true)
+        {
+            errors.push(format!(
+                "event {index}: run_usage_metered model must be a non-empty string"
+            ));
+        }
+        let model_calls = payload.get("model_calls").and_then(Value::as_u64);
+        if model_calls.is_none() {
+            errors.push(format!(
+                "event {index}: run_usage_metered model_calls must be a \
+                 non-negative integer"
+            ));
+        }
+        let mut token_sums = Vec::new();
+        for field in TOKEN_FIELDS {
+            match payload.get(*field).and_then(Value::as_u64) {
+                Some(sum) => token_sums.push(sum),
+                None => errors.push(format!(
+                    "event {index}: run_usage_metered {field} must be a \
+                     non-negative integer"
+                )),
+            }
+        }
+        if !matches!(
+            payload.get("effort_tier").and_then(Value::as_str),
+            Some(tier) if EFFORT_TIERS.contains(&tier)
+        ) {
+            errors.push(format!(
+                "event {index}: run_usage_metered effort_tier must be one of \
+                 max/high/low/disabled/unknown"
+            ));
+        }
+        if !payload
+            .get("usage_incomplete")
+            .map(Value::is_boolean)
+            .unwrap_or(false)
+        {
+            errors.push(format!(
+                "event {index}: run_usage_metered usage_incomplete must be a boolean"
+            ));
+        }
+        if model_calls == Some(0) && token_sums.iter().any(|&sum| sum != 0) {
+            errors.push(format!(
+                "event {index}: model_calls 0 with non-zero token sums — a run \
+                 that folded no response cannot have consumed counted tokens"
+            ));
+        }
+    }
+    errors
+}
+
 /// Run one named rule family (S2b ∪ S2c) over a parsed journal; unknown names
 /// yield an empty list (the caller validates the name).
 pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
@@ -2292,6 +2424,8 @@ pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
         "resource_limit_hit" => verify_resource_limit_hit(events),
         // 0bw③ (2026-09-27): write-control command review family.
         "write_control_review" => verify_write_control_review(events),
+        // 0df (2026-10-17): per-run usage metering coverage family.
+        "usage_metering" => verify_usage_metering(events),
         // 0bz S1 (2026-09-28): model-face prefix fingerprint family.
         "face_fingerprint" => verify_face_fingerprint(events),
         // 0ac S3-b (2026-09-13, F-007 裁决 (a)): immediate-feedback families.
@@ -6248,6 +6382,74 @@ mod tests {
                     ),
                 ],
             ),
+            (
+                // 0df（2026-10-17）：run_usage_metered 锚定 run 的正常形态——
+                // 锚＋终态前恰一条计量行（子代理折算不改变行数，同一行）。
+                "usage_metering_ok",
+                vec![
+                    ev(
+                        "run_started",
+                        json!({"prompt": "p", "usage_metering": "run-v1"}),
+                    ),
+                    ev(
+                        "run_usage_metered",
+                        json!({
+                            "model": "deepseek-chat", "model_calls": 2,
+                            "prompt_tokens": 200, "cache_hit_tokens": 150,
+                            "cache_miss_tokens": 50, "completion_tokens": 80,
+                            "reasoning_tokens": 40, "effort_tier": "max",
+                            "usage_incomplete": false,
+                        }),
+                    ),
+                    ev(
+                        "run_finished",
+                        json!({"status": "completed", "turn_count": 2, "tool_rounds": 1}),
+                    ),
+                ],
+            ),
+            (
+                // 0df（2026-10-17）：违例——三行（恰一条破）＋末行在终态后
+                // （终态前破）＋首行 effort_tier 越闭集＋model_calls 0 带非
+                // 零 token 和（零轮不可能有已计数消耗）。
+                "usage_metering_violations",
+                vec![
+                    ev(
+                        "run_started",
+                        json!({"prompt": "p", "usage_metering": "run-v1"}),
+                    ),
+                    ev(
+                        "run_usage_metered",
+                        json!({
+                            "model": "deepseek-chat", "model_calls": 0,
+                            "prompt_tokens": 10, "cache_hit_tokens": 0,
+                            "cache_miss_tokens": 10, "completion_tokens": 0,
+                            "reasoning_tokens": 0, "effort_tier": "ultra",
+                            "usage_incomplete": false,
+                        }),
+                    ),
+                    ev(
+                        "run_usage_metered",
+                        json!({
+                            "model": "deepseek-chat", "model_calls": 1,
+                            "prompt_tokens": 100, "cache_hit_tokens": 90,
+                            "cache_miss_tokens": 10, "completion_tokens": 30,
+                            "reasoning_tokens": 20, "effort_tier": "max",
+                            "usage_incomplete": true,
+                        }),
+                    ),
+                    ev("run_failed", json!({"error": "boom"})),
+                    ev(
+                        "run_usage_metered",
+                        json!({
+                            "model": "deepseek-chat", "model_calls": 1,
+                            "prompt_tokens": 1, "cache_hit_tokens": 1,
+                            "cache_miss_tokens": 0, "completion_tokens": 0,
+                            "reasoning_tokens": 0, "effort_tier": "low",
+                            "usage_incomplete": true,
+                        }),
+                    ),
+                ],
+            ),
         ]
     }
 
@@ -6286,6 +6488,9 @@ mod tests {
             "face_fingerprint_progression_and_violations",
             "face_fingerprint",
         );
+        // 0df（2026-10-17）：usage_metering 违例——三行破恰一条＋末行终态
+        // 后＋effort_tier 越闭集＋零轮非零和；ok 场景全族绿（默认行）。
+        expect("usage_metering_violations", "usage_metering");
         expect("control_tickets_unknown", "control_tickets");
         expect("control_tickets_kind_conflict", "control_tickets");
         expect("control_tickets_one_shot", "control_tickets");
@@ -6808,6 +7013,7 @@ fams = {
     "first_result_deadline": v._verify_v02_first_result_deadline,
     "write_control_review": v._verify_v02_write_control_review,
     "face_fingerprint": v._verify_v02_face_fingerprint,
+    "usage_metering": v._verify_v02_usage_metering,
 }
 data = json.load(sys.stdin)
 out = {}
@@ -6898,8 +7104,10 @@ json.dump(out, sys.stdout)
         // _violations (该族对拍 parity 自此非平凡——此前合成语料无场景).
         // 258 → 259 (0bz S1, 2026-09-28): +face_fingerprint_progression_
         // and_violations (good progression ＋ stable/LCP 相悖 ＋ kind 错标).
+        // 259 → 261 (0df, 2026-10-17): +usage_metering_ok / _violations
+        // (锚定 run 的恰一行正形 ＋ 三行/终态后/越集/零轮非零和四违例).
         assert_eq!(
-            scenario_count, 259,
+            scenario_count, 261,
             "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(
