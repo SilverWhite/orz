@@ -136,6 +136,15 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.233 2026-10-17 293 批 真机反馈四项取证登记——web 桥 0.9.2＋0df S4 首批真机计量读数（**记录批**，零源码零跑批，计数不变 62）
+
+- **用户令**：「现在我正在真机使用orz以下是我发现的问题，请将其记录下来」＋四项反馈（换行排版／ctrl+z／撤回与中途补充是否未实装〔附提议语义〕／消耗感觉低了很多）。落点＝`C:\Users\1\OneDrive\Desktop\新建文件夹`；活跃会话 `b41b096d`（web 桥，3 run）。
+- **①多行输入渲染折叠（web 层独有缺陷，根因落点）**：输入面 Shift+Enter 正常（`main.js:732-736`）、存档 `\n` 逐字保留（`conversations/b41b096d.json`）；渲染面＝`widgets.js:388-389` 用户/系统卡 `textContent` 直填＋`app.css:242` `.msg-card .msg-body` 无 `white-space: pre-wrap` ⇒ 换行折叠为空格「全都混在一起」；TUI 逐行绘制不受影响。修复候选＝CSS 一行，待裁决。
+- **②Ctrl+Z**：`keymap.js:79-83` 全局绑定＝**取消运行**语义（注释同）、在 `inInput` 豁免之前 ⇒ 输入框内抢占原生文本撤销；`stopRun`（`main.js:140-145`）`!acpSessionId || !state.running` 时静默 return；服务端链路完整（`acp_server.rs` `cancel_current_run` Phase 3 slice #7＋bootstrap 窗）；今日 3 run 零取消痕迹 ⇒ 缺运行中样本，待真机复现取证。
+- **③撤回／中途补充未设计未实装（用户判断属实）**：全仓检索零命中；运行中补充输入现被 `main.js:76-79` 直接拒绝；**用户提议语义原样登记＝中途补充自动接在当前思考/动作结束后投递、不中途打断模型**；撤回语义待定义。
+- **④0df S4 首批真机计量读数**（3 run `run_usage_metered` 各恰 1 条、`usage_incomplete=false`）：合计 calls=108／prompt 13,499,734／hit 12,614,144（**93.4%**）／miss 885,590／completion 185,310／reasoning 83,885；对照 10-13 会话 2b1f85d2（`model_output` 逐次聚合：103 calls／prompt 17,971,087／hit 84.0%／miss 2,868,495／completion 1,176,363／reasoning 1,043,459）＝**等效成本代理 5.56M → 2.33M（−58%）**、miss −69%、completion −84%、reasoning −92%；驱动＝缓存命中↑＋压缩负载骤降（旧 run1 七次压缩 vs 新会话一次）＋模型单轮输出变短；0.9.2 自身改动面均不减模型面 token ⇒ **非 0.9.2 有意优化**，不作因果定论。
+- **附带核证**：**286 检索门缺省开真机生效首证**＝`activations/b41b096d.json` `retrieval_enabled: true`＋RUN-1 一次外部检索（`browser_launch_result`＋`retrieval_result_committed`＋serp/retrieval 落盘、Europe PMC 题录面）。登记 `OBS-WEB-DOGFOOD-2026-10-17`（candidate，仅记录不计数）；0df S4 读数与 286 事实登记均不作闭合裁决。门禁 `valid: true`。明细＝[`293 批档`](audits/293_LIVE_DOGFOOD_FEEDBACK_RECORD_AND_USAGE_READING_2026-10-17.md)。
+
 ### 1.232 2026-10-17 292 批 0.9.2 发行——GitHub Release `v0.9.2` 双平台包（**发行批**，零源码零跑批，计数不变 62）
 
 - **用户令**：「请检查当前运行版本，是0.9.2吧？哦对，请发布0.9.2安装包」。前置核证＝装机位（290 换装）与评测载体位（289）`--build-info` 均 `0.9.2 os=windows` rc0——**当前运行版本＝0.9.2**。
