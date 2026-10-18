@@ -393,6 +393,7 @@ pub(crate) fn not_found_result(task_id: &str) -> TaskOutputResult {
         truncated: false,
         truncation_hint: String::new(),
         raw_output_bytes: 0,
+        new_bytes: None,
     }
 }
 
@@ -655,6 +656,7 @@ fn format_subagent_snapshot(snap: &SubagentSnapshot, wait_hint: WaitHint) -> Tas
                 truncated: false,
                 truncation_hint: String::new(),
                 raw_output_bytes,
+                new_bytes: None,
             })
         }
         SubagentSnapshotStatus::Running {
@@ -702,6 +704,7 @@ fn format_subagent_snapshot(snap: &SubagentSnapshot, wait_hint: WaitHint) -> Tas
                 truncated: false,
                 truncation_hint: String::new(),
                 raw_output_bytes,
+                new_bytes: None,
             })
         }
         SubagentSnapshotStatus::Completed {
@@ -740,6 +743,7 @@ fn format_subagent_snapshot(snap: &SubagentSnapshot, wait_hint: WaitHint) -> Tas
                 truncated: false,
                 truncation_hint: String::new(),
                 raw_output_bytes,
+                new_bytes: None,
             })
         }
         SubagentSnapshotStatus::Failed { error } => {
@@ -759,6 +763,7 @@ fn format_subagent_snapshot(snap: &SubagentSnapshot, wait_hint: WaitHint) -> Tas
                 truncated: false,
                 truncation_hint: String::new(),
                 raw_output_bytes,
+                new_bytes: None,
             })
         }
         SubagentSnapshotStatus::Cancelled { reason } => {
@@ -781,6 +786,7 @@ fn format_subagent_snapshot(snap: &SubagentSnapshot, wait_hint: WaitHint) -> Tas
                 truncated: false,
                 truncation_hint: String::new(),
                 raw_output_bytes,
+                new_bytes: None,
             })
         }
     }
@@ -1051,6 +1057,7 @@ pub(crate) mod test_helpers {
             owner_session_id: None,
             description: None,
             is_backgrounded: false,
+            new_output_bytes: None,
         }
     }
 

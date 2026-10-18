@@ -3056,9 +3056,14 @@ mod tests {
             .finalize(config_with(&ids), test_session_context(&tmp))
             .expect("finalize");
         let (desc, field_desc) = bash_texts(&toolset);
+        // 0dh S2：边界句改为分号接续后，通知句为小写形态。
         assert!(
-            desc.contains("You are notified on completion"),
+            desc.contains("you are notified on completion"),
             "reminders on: description should promise notification: {desc}"
+        );
+        assert!(
+            desc.contains("Background tasks survive across turns until the session ends"),
+            "reminders on: description should state the session-domain boundary: {desc}"
         );
         assert!(
             field_desc.contains("you are notified on completion"),
@@ -3075,9 +3080,15 @@ mod tests {
             !desc.contains("notified on completion"),
             "reminders off: description must not promise notification: {desc}"
         );
+        // 0dh S2：is_background 描述句改为分号接续后，指针句为小写形态。
         assert!(
-            desc.contains("Check on it later with the get_task_output tool"),
+            desc.contains("check on it later with the get_task_output tool"),
             "reminders off: description should point at get_task_output: {desc}"
+        );
+        // 0dh S2 (ADR-0010 §14.87)：字段描述带会话域边界句。
+        assert!(
+            field_desc.contains("survive across turns until the session ends"),
+            "is_background description should state the session-domain boundary: {field_desc}"
         );
         assert!(
             !field_desc.contains("notified on completion")

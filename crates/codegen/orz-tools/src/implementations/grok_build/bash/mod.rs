@@ -345,7 +345,7 @@ pub struct BashToolInput {
     // reminders (`system_reminders_enabled` template flag); otherwise it
     // points at the get-output tool when one is served.
     #[schemars(
-        description = "Set to true for long-running commands that should run in the background (e.g., dev servers, long builds). Returns a task id immediately while the command keeps running in the background${%- if system_reminders_enabled %}; you are notified on completion, so do not poll or sleep-wait for it${%- elif tools.by_kind.background_task_action %}; check on it later with the ${{ tools.by_kind.background_task_action }} tool${%- endif %}."
+        description = "Set to true for long-running commands that should run in the background (e.g., dev servers, long builds, overnight training). Returns a task id immediately while the command keeps running in the background${%- if system_reminders_enabled %}; you are notified on completion, so do not poll or sleep-wait for it${%- elif tools.by_kind.background_task_action %}; check on it later with the ${{ tools.by_kind.background_task_action }} tool${%- endif %}. Background tasks survive across turns until the session ends, you stop them, or the ~30h safety cap."
     )]
     #[serde(
         default,
@@ -598,7 +598,11 @@ pub(crate) fn format_default_prompt(bash: &BashOutput, append_noop_reminder: boo
 // always unbounded regardless of this value — the model owns their lifetime via
 // the background-task tooling. Absolute safety clamp for configured maxes: 10h.
 pub(crate) const DEFAULT_MAX_TIMEOUT_MS: u64 = 300_000; // 5 minutes
-const ABSOLUTE_MAX_TIMEOUT_MS: u64 = 36_000_000;
+// 0dh S2 (2026-10-18, ADR-0010 §14.87; 用户裁决「10h→30h」)：模型正向
+// `timeout`（后台）的钳制上限与执行侧绝对兜底（`DEFAULT_BG_MAX_RUNTIME`，
+// 30h）同值放宽——执行侧 poll tick 的 `timeout.min(max_runtime)` 是唯一
+// 执法点，本常量只封模型可选 cap 的上限。
+const ABSOLUTE_MAX_TIMEOUT_MS: u64 = 108_000_000;
 /// Resident default FG block before auto-bg when auto_background_on_timeout
 /// is on. TER T1.2 (2026-09-03) 单一生效源：serde 缺省 / `Default` / 显式
 /// `null` 回退 / schema 描述渲染共用本常量；终端后端兜底常量同步为同值
@@ -1525,6 +1529,23 @@ impl BashTool {
         ))
     }
 
+    /// 0dh S2 (ADR-0010 §14.87)：起任务结果文案 just-in-time——一次说清
+    /// 生命周期边界（跨 turn 存活至会话结束／kill／30h 兜底）与增量读出
+    /// 指引；不在常驻面重复（教学面用户令：极常用工具不得长备注常驻注入）。
+    fn background_started_summary(
+        task_id: &str,
+        write_control_warn: Option<&crate::types::exec_policy::CommandFinding>,
+    ) -> String {
+        let mut summary = format!(
+            "Background task {task_id} started. It keeps running across turns while this session lives — until it exits, you stop it, or the ~30h safety cap; each output read returns only what arrived since your last read"
+        );
+        if let Some(finding) = write_control_warn {
+            summary.push(' ');
+            summary.push_str(&crate::types::exec_policy::warn_line(finding));
+        }
+        summary
+    }
+
     /// TER T1.2 (2026-09-03) + TER T1.4 (2026-09-04)：模型面「中间回报 /
     /// 后台化点」文案从生效 deadline 单源渲染
     /// （[`Self::effective_fg_wait_ms`] = `min(默认超时, 预算)`，与
@@ -1707,10 +1728,10 @@ ${%- if auto_background_on_timeout %}
   - No timeout kill: a foreground command is never killed for hitting its timeout — it is automatically backgrounded and you receive a task id to check output later.
 ${%- else %}
   - Timeout enforcement: when the timeout fires, the wrapper${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately (no graceful-termination grace period).${%- else %} kills the child process group (SIGTERM, escalated to SIGKILL after a ~1s grace period). Descendants that did not detach via `setsid` / `nohup` will also be killed.${%- endif %}
-${%- endif %} `${{ params.execute.timeout }}: 0` in `${%- if params is defined and params.execute is defined and params.execute.is_background %}${{ params.execute.is_background }}${%- else %}background${%- endif %}: true` mode disables the wrapper timeout entirely${%- if tools.by_kind.kill_task_action %}; the child's lifetime is owned by the model via ${{ tools.by_kind.kill_task_action }}${%- endif %}.
+${%- endif %} In `${%- if params is defined and params.execute is defined and params.execute.is_background %}${{ params.execute.is_background }}${%- else %}background${%- endif %}: true` mode a `${{ params.execute.timeout }}: 0` (or omitted) timeout means the task runs until it exits, you stop it${%- if tools.by_kind.kill_task_action %} via ${{ tools.by_kind.kill_task_action }}${%- endif %}, or the ~30h safety cap fires; you own its lifetime until then.
   - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.
   - Call-scope lifecycle (0bh ②, 2026-09-22): every descendant process started inside this call is reaped together with the call — the wrapper owns them (${%- if is_windows %}Job Object kill-on-close${%- else %}process-group signal${%- endif %}). Put long-lived work on the managed background path (see the background parameter below — that path is its entry) rather than starting a detached daemon here.
-  - You can use the ${{ params.execute.is_background }} parameter to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background.${%- if system_reminders_enabled %} You are notified on completion, so do not poll or sleep-wait for it.${%- elif tools.by_kind.background_task_action %} Check on it later with the ${{ tools.by_kind.background_task_action }} tool.${%- endif %}${%- if has_unix_utilities %} You do not need to use '&' at the end of the command when using this parameter.${%- endif %}
+  - You can use the ${{ params.execute.is_background }} parameter to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background${%- if system_reminders_enabled %}; you are notified on completion, so do not poll or sleep-wait for it${%- elif tools.by_kind.background_task_action %}; check on it later with the ${{ tools.by_kind.background_task_action }} tool${%- endif %}. Background tasks survive across turns until the session ends, you stop them, or the ~30h safety cap.${%- if has_unix_utilities %} You do not need to use '&' at the end of the command when using this parameter.${%- endif %}
 ${%- if shell_uses_semicolon %}
   - '&&' is not supported in this shell; chain sequential commands with ';'.
 ${%- endif %}
@@ -2365,14 +2386,7 @@ impl xai_tool_runtime::Tool for BashTool {
                 output_file: bg_output_file.to_string_lossy().to_string(),
                 status: "running".to_string(),
                 command: input.command,
-                summary: {
-                    let mut summary = format!("Background task {} started", task_id);
-                    if let Some(finding) = &write_control_warn {
-                        summary.push(' ');
-                        summary.push_str(&crate::types::exec_policy::warn_line(finding));
-                    }
-                    summary
-                },
+                summary: Self::background_started_summary(&task_id, write_control_warn.as_ref()),
                 retrieval_hint,
                 pre_formatted: None,
                 pid: bg_pid,
@@ -6101,6 +6115,30 @@ mod tests {
             );
         }
 
+        /// 0dh S2（298 批，钉⑦）：起任务 summary 的边界句字面钉——会话域
+        /// 跨 turn 存活／kill／~30h 兜底／增量读出指引，just-in-time 一行，
+        /// 无常驻注入。
+        #[test]
+        fn background_started_summary_states_session_domain_boundary() {
+            let summary = BashTool::background_started_summary("task-1", None);
+            assert!(
+                summary.starts_with("Background task task-1 started."),
+                "{summary}"
+            );
+            assert!(
+                summary.contains("keeps running across turns while this session lives"),
+                "session-domain boundary missing: {summary}"
+            );
+            assert!(
+                summary.contains("~30h safety cap"),
+                "absolute backstop missing: {summary}"
+            );
+            assert!(
+                summary.contains("only what arrived since your last read"),
+                "incremental-read guidance missing: {summary}"
+            );
+        }
+
         #[test]
         fn unix_shell_omits_utility_and_chaining_notes() {
             let out = render(BashTool::default_description_template_enabled(), true);
@@ -6116,7 +6154,10 @@ mod tests {
                 "must not emit the `;`-chaining note on Unix, got:\n{out}"
             );
             // The OS-neutral contract (timeout/kill mechanics) is still present.
-            assert!(out.contains("disables the wrapper timeout"));
+            // 0dh S2 (ADR-0010 §14.87)：timeout:0 语义改写——runs until exit /
+            // kill / ~30h safety cap（S1 勘定结论三：显式后台非真无界）。
+            assert!(out.contains("the ~30h safety cap fires"));
+            assert!(!out.contains("disables the wrapper timeout"));
         }
 
         #[test]
@@ -6181,8 +6222,13 @@ mod tests {
                 !pwsh.contains("You do not need to use '&' at the end"),
                 "bash `&` note leaked into PowerShell description, got:\n{pwsh}"
             );
+            // 0dh S2：会话域边界句在 auto_bg 开臂照渲染（教学面一句话）。
             assert!(
-                pwsh.contains("disables the wrapper timeout"),
+                pwsh.contains("Background tasks survive across turns until the session ends"),
+                "session-domain boundary line missing, got: {pwsh}"
+            );
+            assert!(
+                pwsh.contains("the ~30h safety cap fires"),
                 "OS-neutral timeout tail dropped on Windows, got:\n{pwsh}"
             );
 
@@ -6212,7 +6258,11 @@ mod tests {
                 "escape-hatch kill copy missing on Windows:\n{pwsh_off}"
             );
             assert!(!pwsh_off.contains("SIGTERM"));
-            assert!(pwsh_off.contains("disables the wrapper timeout"));
+            assert!(
+                pwsh_off.contains("the ~30h safety cap fires"),
+                "escape-hatch arm keeps the OS-neutral timeout tail:
+{pwsh_off}"
+            );
 
             // 后台禁用模板恒渲染杀文案，shell 分支一致。
             let pwsh_disabled = render_flags(

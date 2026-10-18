@@ -45,9 +45,32 @@ const COMPLETED_TASK_TTL: Duration = Duration::from_secs(300); // 5 minutes
 /// SIGTERM → SIGKILL grace period. Uses a 1-second grace.
 const SIGTERM_GRACE: Duration = Duration::from_secs(1);
 /// Maximum lifetime for a background task. After this, the actor
-/// will gracefully kill it. Set to 10 hours to support long
-/// background monitor and bash runs.
-const BACKGROUND_MAX_RUNTIME: Duration = Duration::from_secs(36_000);
+/// will gracefully kill it. 0dh S2 (2026-10-18, ADR-0010 §14.87; 用户裁决
+/// 2026-10-17「10h 不够，放宽至 30h」): 10h → **30h** — supports overnight
+/// training runs inside a live orz session (cross-run survival, finalize-sweep
+/// exempt). This is the SINGLE enforcement point: the poll tick kills at
+/// `process.timeout.min(max_runtime)`, so explicit background tasks with
+/// `timeout: 0`/none (`Duration::MAX`) are bounded by it too. Env override:
+/// `GROK_BG_MAX_RUNTIME_MS` (clamped to ≥ 1h — the absolute backstop cannot be
+/// configured away; invalid/0 falls back to the default).
+const DEFAULT_BG_MAX_RUNTIME: Duration = Duration::from_secs(108_000);
+/// Floor for `GROK_BG_MAX_RUNTIME_MS`: an absolute backstop below one hour is
+/// a misconfiguration, not a policy.
+const BG_MAX_RUNTIME_FLOOR: Duration = Duration::from_secs(3_600);
+/// 0dh S2 (D6): cap on one background task's un-served incremental buffer.
+/// Overflow drops the OLDEST bytes (counted in `unserved_skipped` and reported
+/// on the next serve); the output file always keeps the full history.
+const UNSERVED_CAP_BYTES: usize = 256 * 1024;
+
+fn bg_max_runtime_from_env() -> Duration {
+    match std::env::var("GROK_BG_MAX_RUNTIME_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        Some(ms) if ms > 0 => Duration::from_millis(ms).max(BG_MAX_RUNTIME_FLOOR),
+        _ => DEFAULT_BG_MAX_RUNTIME,
+    }
+}
 /// Max time an *auto-backgroundable* foreground command blocks the turn before
 /// it's moved to the background (kept running, never killed), independent of its
 /// requested `timeout`. A short second timer for the auto-background budget.
@@ -97,7 +120,8 @@ pub fn idle_kill_reason(idle_timeout: Duration) -> String {
 }
 
 /// Max bytes a command's output file may reach before the actor kills it — the
-/// size analogue of [`BACKGROUND_MAX_RUNTIME`], stopping an unbounded writer
+/// size analogue of the background absolute backstop (`DEFAULT_BG_MAX_RUNTIME`),
+/// stopping an unbounded writer
 /// (`yes`, a runaway log) from filling the disk. Env override:
 /// `GROK_MAX_OUTPUT_FILE_BYTES`.
 const MAX_OUTPUT_FILE_BYTES: u64 = 5 * 1024 * 1024 * 1024; // 5 GiB
@@ -366,6 +390,16 @@ struct ProcessState {
     truncated: bool,
     /// Total bytes written to file (before truncation)
     total_bytes: usize,
+    /// 0dh S2 (ADR-0010 §14.87, D6 增量读出)：自上次 `get_task_output` 读取
+    /// 以来未被取走的输出字节（仅后台化任务累计）。服务端游标的承载——
+    /// 取走（serve）即清空；上帽丢弃最旧段并记入 `unserved_skipped`
+    /// （完整历史恒在 output_file，`read_file` 兜底）。
+    unserved: Vec<u8>,
+    /// 增量帽溢出丢弃的字节数（serve 时随快照如实报告）。
+    unserved_skipped: u64,
+    /// 该任务是否已被 `get_task_output` 读取过至少一次（游标首读语义：
+    /// 首读返回既有全部窗口，后续读只回新增段）。
+    served_once: bool,
     /// Exit status once process completes
     exit_status: Option<ExitStatus>,
     /// Whether process was backgrounded and how
@@ -597,6 +631,17 @@ impl ProcessState {
         self.start_time.elapsed() > self.timeout
     }
 
+    /// Wall-clock start in Unix ms — the session-mark clock (0dh S2). Matches
+    /// the registry row's `started_at` (attach-time `SystemTime::now()`) to
+    /// within scheduling jitter; the sweep compares with the same 5s tolerance
+    /// as the pid-reuse guard.
+    fn start_wall_time_ms(&self) -> u64 {
+        self.start_wall_time
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
     /// Build a snapshot of this process's current state.
     /// Uses async I/O to read output from disk for completed background tasks.
     async fn to_task_snapshot(&self, task_id: &str) -> TaskSnapshot {
@@ -621,7 +666,19 @@ impl ProcessState {
         } else {
             crate::util::encoding::decode_text(&self.output_buffer).0
         };
+        self.to_task_snapshot_with_output(task_id, output, None)
+            .await
+    }
 
+    /// [`Self::to_task_snapshot`] with a caller-supplied `output` body and
+    /// incremental byte report (0dh S2 D6): the incremental serve path puts
+    /// the served segment in `output` and reports its raw byte count.
+    async fn to_task_snapshot_with_output(
+        &self,
+        task_id: &str,
+        output: String,
+        new_output_bytes: Option<u64>,
+    ) -> TaskSnapshot {
         TaskSnapshot {
             task_id: task_id.to_string(),
             command: self.command.clone(),
@@ -650,6 +707,40 @@ impl ProcessState {
             owner_session_id: self.owner_session_id.clone(),
             description: self.description.clone(),
             is_backgrounded: self.bg_status.is_backgrounded(),
+            new_output_bytes,
+        }
+    }
+
+    /// 0dh S2 (D6): append freshly-read output bytes to the incremental
+    /// (un-served) buffer of a backgrounded task. Capped — the oldest overflow
+    /// is dropped and counted in `unserved_skipped` (the output file keeps the
+    /// full history; `read_file` is the fallback). Foreground tasks never
+    /// accumulate: their one result reaches the caller directly.
+    fn record_new_output(&mut self, new_bytes: &[u8]) {
+        let backgrounded = self.bg_status.is_backgrounded();
+        record_unserved_bytes(
+            &mut self.unserved,
+            &mut self.unserved_skipped,
+            backgrounded,
+            new_bytes,
+        );
+    }
+
+    /// 0dh S2 (D6): take the un-served segment for one incremental serve.
+    /// A trailing incomplete UTF-8 sequence is retained so the next serve
+    /// completes it (multi-byte split across polls).
+    fn take_unserved(&mut self) -> (Vec<u8>, u64) {
+        let seg = std::mem::take(&mut self.unserved);
+        let skipped = std::mem::take(&mut self.unserved_skipped);
+        let mut serve_to = seg.len();
+        if let Err(e) = std::str::from_utf8(&seg) {
+            serve_to = e.valid_up_to();
+        }
+        if serve_to < seg.len() {
+            self.unserved = seg[serve_to..].to_vec();
+            (seg[..serve_to].to_vec(), skipped)
+        } else {
+            (seg, skipped)
         }
     }
 }
@@ -711,6 +802,11 @@ struct LocalTerminalActor {
     /// TER T1.5: idle+CPU 兜底阈值（actor 级，测试可缩短；
     /// `Duration::ZERO` = 禁用）。
     idle_kill_timeout: Duration,
+
+    /// 0dh S2 (ADR-0010 §14.87)：后台任务绝对兜底（构造时从
+    /// `GROK_BG_MAX_RUNTIME_MS` 解析，缺省 30h、下限 1h）。poll tick 的
+    /// `timeout.min(self.max_runtime)` 是唯一执法点。
+    max_runtime: Duration,
 
     /// Per-command output-file size cap (on the actor so tests can shrink it).
     /// See [`MAX_OUTPUT_FILE_BYTES`].
@@ -783,6 +879,7 @@ impl LocalTerminalActor {
             completed_task_ttl,
             foreground_block_budget,
             idle_kill_timeout,
+            max_runtime: bg_max_runtime_from_env(),
             output_file_cap,
             _cgroup_guard: cgroup_guard,
             memory_monitor,
@@ -807,16 +904,19 @@ impl LocalTerminalActor {
         command: &str,
         cwd: &std::path::Path,
         env: &HashMap<String, String>,
+        lifetime: xai_tty_utils::SpawnLifetime,
     ) -> Result<SpawnResult, ComputerError> {
         #[cfg(unix)]
         if self.persistent_shell {
-            return self.spawn_persistent_command(command, cwd, env).await;
+            return self
+                .spawn_persistent_command(command, cwd, env, lifetime)
+                .await;
         }
 
         #[cfg(unix)]
         if self.login_shell_capture && login_env_capture_enabled() {
             self.ensure_static_shell_initialized(cwd).await;
-            return self.spawn_static_command(command, cwd, env).await;
+            return self.spawn_static_command(command, cwd, env, lifetime).await;
         }
 
         #[cfg(unix)]
@@ -836,6 +936,7 @@ impl LocalTerminalActor {
             login_env,
             self.search_shadows,
             self.shell_env_policy.as_ref(),
+            lifetime,
         )?;
         Ok(SpawnResult {
             child,
@@ -879,6 +980,7 @@ impl LocalTerminalActor {
         command: &str,
         cwd: &std::path::Path,
         env: &HashMap<String, String>,
+        lifetime: xai_tty_utils::SpawnLifetime,
     ) -> Result<SpawnResult, ComputerError> {
         use command_fds::CommandFdExt;
 
@@ -928,7 +1030,7 @@ impl LocalTerminalActor {
 
         let mut process_group = crate::util::ProcessGroup::new()
             .map_err(|e| ComputerError::io(format!("ProcessGroup::new: {e}")))?;
-        if let Err(e) = process_group.attach(&child) {
+        if let Err(e) = process_group.attach_with_lifetime(lifetime, &child) {
             // 0z S1 复核 F-9：attach 失败 = 该子进程不受 run 级限项与树回收覆盖，
             // 必须可见（计数在 attach_pid 内，日志级别提到 warn）。
             tracing::warn!("Failed to attach static-shell child to ProcessGroup: {e}");
@@ -977,6 +1079,7 @@ impl LocalTerminalActor {
         command: &str,
         cwd: &std::path::Path,
         env: &HashMap<String, String>,
+        lifetime: xai_tty_utils::SpawnLifetime,
     ) -> Result<SpawnResult, ComputerError> {
         use command_fds::CommandFdExt;
 
@@ -1061,7 +1164,7 @@ impl LocalTerminalActor {
 
         let mut process_group = crate::util::ProcessGroup::new()
             .map_err(|e| ComputerError::io(format!("ProcessGroup::new: {e}")))?;
-        if let Err(e) = process_group.attach(&child) {
+        if let Err(e) = process_group.attach_with_lifetime(lifetime, &child) {
             tracing::warn!("Failed to attach persistent-shell child to ProcessGroup: {e}");
         }
 
@@ -1132,6 +1235,54 @@ impl LocalTerminalActor {
         }
     }
 
+    /// 0dh S2 (D6, ADR-0010 §14.87): `GetTask` with the incremental read
+    /// cursor. A backgrounded task serves "output since the last
+    /// get_task_output read": the FIRST serve returns the full current window
+    /// (legacy shape, cursor pinned to now), later serves return only the new
+    /// segment (with a skip notice when the un-served buffer overflowed). A
+    /// serve that observes completion returns the remainder, then the cursor
+    /// is sealed — subsequent reads fall back to the legacy tail window.
+    /// Everything else (foreground, completed tombstones, wait paths) keeps
+    /// the legacy snapshot; full history is always on `output_file`.
+    async fn take_task_snapshot(&mut self, task_id: &str) -> Option<TaskSnapshot> {
+        let Some(p) = self.processes.get_mut(task_id) else {
+            return self.completed_task_snapshots.get(task_id).cloned();
+        };
+        if !p.bg_status.is_backgrounded() {
+            return Some(p.to_task_snapshot(task_id).await);
+        }
+        let first_serve = !p.served_once;
+        let completed = p.exit_status.is_some();
+        let (segment, skipped) = p.take_unserved();
+        p.served_once = true;
+        if first_serve {
+            // First read = the full window so far (cursor pins here).
+            let total = p.total_bytes as u64;
+            let snap = p.to_task_snapshot(task_id).await;
+            return Some(TaskSnapshot {
+                new_output_bytes: Some(total),
+                ..snap
+            });
+        }
+        if completed && segment.is_empty() && skipped == 0 {
+            // Cursor sealed on the completing serve; later reads see the
+            // legacy tail window (completed tasks re-read from disk).
+            return Some(p.to_task_snapshot(task_id).await);
+        }
+        let (seg_text, _) = crate::util::encoding::decode_text(&segment);
+        let mut body = String::new();
+        if skipped > 0 {
+            body.push_str(&format!(
+                "[incremental buffer skipped {skipped} earlier bytes — use read_file on the output_file for the full history]\n"
+            ));
+        }
+        body.push_str(&seg_text);
+        Some(
+            p.to_task_snapshot_with_output(task_id, body, Some(segment.len() as u64))
+                .await,
+        )
+    }
+
     async fn handle_command(&mut self, cmd: TerminalCommand) {
         match cmd {
             TerminalCommand::Run { request, reply } => {
@@ -1141,10 +1292,7 @@ impl LocalTerminalActor {
                 self.handle_run_background(request, reply).await;
             }
             TerminalCommand::GetTask { task_id, reply } => {
-                let snapshot = match self.processes.get(&task_id) {
-                    Some(p) => Some(p.to_task_snapshot(&task_id).await),
-                    None => self.completed_task_snapshots.get(&task_id).cloned(),
-                };
+                let snapshot = self.take_task_snapshot(&task_id).await;
                 let _ = reply.send(snapshot);
             }
             TerminalCommand::Kill { task_id, reply } => {
@@ -1269,7 +1417,12 @@ impl LocalTerminalActor {
             process_group,
             state_dump_handle,
         } = match self
-            .spawn_command(&request.command, &request.working_directory, &request.env)
+            .spawn_command(
+                &request.command,
+                &request.working_directory,
+                &request.env,
+                xai_tty_utils::SpawnLifetime::Call,
+            )
             .await
         {
             Ok(r) => r,
@@ -1309,6 +1462,9 @@ impl LocalTerminalActor {
             truncation_decode_label: None,
             truncated: false,
             total_bytes: 0,
+            unserved: Vec::new(),
+            unserved_skipped: 0,
+            served_once: false,
             exit_status: None,
             bg_status: BackgroundStatus::Foreground {
                 auto_bg_on_timeout: request.auto_background_on_timeout,
@@ -1398,12 +1554,20 @@ impl LocalTerminalActor {
         reply: oneshot::Sender<Result<BackgroundHandle, ComputerError>>,
     ) {
         // Background commands fork the current shell state but don't update it on exit.
+        // 0dh S2 (ADR-0010 §14.87): the explicit background shell is a
+        // session-domain spawn — the registry row is written `lifetime=session`
+        // and the host's finalize sweep refuses it (cross-run survival).
         let SpawnResult {
             child,
             process_group,
             state_dump_handle,
         } = match self
-            .spawn_command(&request.command, &request.working_directory, &request.env)
+            .spawn_command(
+                &request.command,
+                &request.working_directory,
+                &request.env,
+                xai_tty_utils::SpawnLifetime::Session,
+            )
             .await
         {
             Ok(r) => r,
@@ -1446,6 +1610,9 @@ impl LocalTerminalActor {
             truncation_decode_label: None,
             truncated: false,
             total_bytes: 0,
+            unserved: Vec::new(),
+            unserved_skipped: 0,
+            served_once: false,
             exit_status: None,
             bg_status: BackgroundStatus::Backgrounded {
                 reason: BackgroundReason::Explicit,
@@ -1700,27 +1867,29 @@ impl LocalTerminalActor {
         // 0b. Kill backgrounded tasks that exceeded their absolute deadline.
         // TER T1.4 (2026-09-04)：去硬杀——自动后台化任务在
         // `transition_to_background` 处把原解析超时退役为
-        // `BACKGROUND_MAX_RUNTIME`（10h 绝对兜底），因此这里只对「绝对
+        // `max_runtime`（绝对兜底，0dh S2 起 30h），因此这里只对「绝对
         // 兜底」或「显式后台任务的正向模型超时 kill-backstop」生效，分层
         // timeout（普通/程序/模型上限）不再是杀活跃命令的点；无活跃场景
         // 由 T1.5 idle+CPU 兜底接管（连续 300s 无输出增长才 kill）。
+        // 显式后台 `timeout: 0`/未设（`Duration::MAX`）同样被本 min 钳住——
+        // 绝对兜底无例外（0dh S1 勘定结论三）。
         let bg_expired: Vec<String> = self
             .processes
             .iter()
             .filter(|(_, p)| {
                 p.bg_status.is_backgrounded()
                     && p.exit_status.is_none()
-                    && p.start_time.elapsed() > p.timeout.min(BACKGROUND_MAX_RUNTIME)
+                    && p.start_time.elapsed() > p.timeout.min(self.max_runtime)
             })
             .map(|(id, _)| id.clone())
             .collect();
 
         for task_id in &bg_expired {
             if let Some(process) = self.processes.get_mut(task_id) {
-                // 显式后台任务的正向模型超时（< 10h 硬上限）报
+                // 显式后台任务的正向模型超时（< 兜底上限）报
                 // `signal: timeout`（kill-backstop）；自动后台化任务与
-                // 未设超时的后台任务都只撞 10h 绝对兜底，报 `max_runtime`。
-                let tier_timeout = process.timeout < BACKGROUND_MAX_RUNTIME;
+                // 未设超时的后台任务都只撞绝对兜底，报 `max_runtime`。
+                let tier_timeout = process.timeout < self.max_runtime;
                 tracing::warn!(
                     task_id,
                     tier_timeout,
@@ -1983,6 +2152,7 @@ impl LocalTerminalActor {
                     owner_session_id: p.owner_session_id.clone(),
                     description: p.description.clone(),
                     is_backgrounded: true,
+                    new_output_bytes: None,
                 };
                 self.completed_task_snapshots.insert(id.clone(), snapshot);
             }
@@ -2098,6 +2268,9 @@ impl LocalTerminalActor {
         if !new_bytes.is_empty() {
             process.output_buffer.extend_from_slice(&new_bytes);
             process.total_bytes += new_bytes.len();
+            // 0dh S2 (D6): backgrounded tasks accumulate the un-served
+            // incremental segment for the get_task_output cursor.
+            process.record_new_output(&new_bytes);
             if let Some(ref mut file) = process.file_handle {
                 let _ = file.write_all(&new_bytes).await;
                 let _ = file.flush().await;
@@ -2292,11 +2465,18 @@ impl LocalTerminalActor {
         // TER T1.4 (2026-09-04) 去硬杀：后台化截止语义统一——自动后台化
         // （ForegroundTimeout）不再保留原解析超时（分层 timeout 只作前台
         // auto-bg deadline 引用，后台化后即退役）；用户主动后台化
-        // （Explicit / UserSignal）维持 10h 硬上限。三种后台化路径统一
-        // 收敛到 `BACKGROUND_MAX_RUNTIME`（`0b` 清扫 signal=max_runtime），
+        // （Explicit / UserSignal）同受绝对兜底封顶。三种后台化路径统一
+        // 收敛到 `max_runtime`（0dh S2 起 30h，`0b` 清扫 signal=max_runtime），
         // 无活跃场景由 T1.5 idle+CPU 兜底接管；显式后台任务的正向模型
         // 超时 kill-backstop 在 `handle_run_background` 处解析，不走本转换。
-        process.timeout = BACKGROUND_MAX_RUNTIME;
+        process.timeout = self.max_runtime;
+        // 0dh S2 (ADR-0010 §14.87)：前台 spawn 时 spawn sink 已把登记行写成
+        // `lifetime=call`——转换时刻把 pid 标记进进程内会话集，finalize sweep
+        // 据此豁除（跨 run 存活，用户裁决「不做收割」）。以 attach 时钟为
+        // 伴（pid 复用防护与 sweep 侧同容差比对）。
+        if let Some(pid) = process.pid {
+            xai_tty_utils::mark_spawn_session(pid, process.start_wall_time_ms());
+        }
         let result = Ok(process.to_result());
         process.notify_waiters(result);
         let tool_call_id = process.tool_call_id.clone();
@@ -3147,6 +3327,33 @@ fn try_read_nonblocking(
         Poll::Pending => None,
     }
 }
+/// 0dh S2 (D6): append freshly-read output bytes to a task's incremental
+/// (un-served) buffer. Free function over the disjoint fields so the pipe-drain
+/// paths can call it while holding field borrows of `ProcessState`. Capped —
+/// the oldest overflow is dropped (UTF-8-boundary aligned) and counted in
+/// `*unserved_skipped` (the output file keeps the full history).
+fn record_unserved_bytes(
+    unserved: &mut Vec<u8>,
+    unserved_skipped: &mut u64,
+    backgrounded: bool,
+    new_bytes: &[u8],
+) {
+    if !backgrounded || new_bytes.is_empty() {
+        return;
+    }
+    unserved.extend_from_slice(new_bytes);
+    if unserved.len() > UNSERVED_CAP_BYTES {
+        let mut drop_to = unserved.len() - UNSERVED_CAP_BYTES;
+        // Advance past any UTF-8 continuation bytes so the kept tail starts on
+        // a character boundary.
+        while drop_to < unserved.len() && (unserved[drop_to] & 0xC0) == 0x80 {
+            drop_to += 1;
+        }
+        unserved.drain(..drop_to);
+        *unserved_skipped += drop_to as u64;
+    }
+}
+
 /// Soft-kill the process tree. Non-blocking, fire-and-forget.
 /// The actor's poll loop will reap the process on the next tick.
 fn send_sigterm_to_group(process: &ProcessState) {
@@ -3180,6 +3387,7 @@ fn send_sigkill_to_group(process: &mut ProcessState) {
 /// Bounded by `DRAIN_TIMEOUT` so a backgrounded child holding the
 /// pipe open cannot block the actor loop indefinitely.
 async fn drain_remaining_output(process: &mut ProcessState) {
+    let backgrounded = process.bg_status.is_backgrounded();
     let timed_out = tokio::time::timeout(DRAIN_TIMEOUT, async {
         if let Some(stdout) = process.child.stdout.as_mut() {
             let mut buf = [0u8; READ_BUFFER_SIZE];
@@ -3189,6 +3397,15 @@ async fn drain_remaining_output(process: &mut ProcessState) {
                     Ok(n) => {
                         process.output_buffer.extend_from_slice(&buf[..n]);
                         process.total_bytes += n;
+                        // Disjoint-field borrow: the stdout handle above holds
+                        // `process.child.stdout`, so the free function takes
+                        // only the incremental-buffer fields.
+                        record_unserved_bytes(
+                            &mut process.unserved,
+                            &mut process.unserved_skipped,
+                            backgrounded,
+                            &buf[..n],
+                        );
                         if let Some(ref mut file) = process.file_handle {
                             let _ = file.write_all(&buf[..n]).await;
                         }
@@ -3205,6 +3422,12 @@ async fn drain_remaining_output(process: &mut ProcessState) {
                     Ok(n) => {
                         process.output_buffer.extend_from_slice(&buf[..n]);
                         process.total_bytes += n;
+                        record_unserved_bytes(
+                            &mut process.unserved,
+                            &mut process.unserved_skipped,
+                            backgrounded,
+                            &buf[..n],
+                        );
                         if let Some(ref mut file) = process.file_handle {
                             let _ = file.write_all(&buf[..n]).await;
                         }
@@ -3575,6 +3798,8 @@ fn apply_child_env(
 
 /// Spawn the shell command and attach the child to a [`ProcessGroup`] for
 /// grandchild teardown (`killpg` on Unix, `TerminateJobObject` on Windows).
+/// `lifetime` rides the registry observation (0dh S2): the background path
+/// marks its shell `Session` so the host's finalize sweep refuses the row.
 fn spawn_shell_command(
     command: &str,
     cwd: &std::path::Path,
@@ -3582,6 +3807,7 @@ fn spawn_shell_command(
     login_env: Option<&HashMap<String, String>>,
     search_shadows: SearchShadowConfig,
     shell_env_policy: Option<&crate::util::ShellEnvironmentPolicy>,
+    lifetime: xai_tty_utils::SpawnLifetime,
 ) -> std::io::Result<(tokio::process::Child, crate::util::ProcessGroup)> {
     // `login_env` and `search_shadows` are only consumed by the `#[cfg(unix)]`
     // shell wrapper below; keep them live on Windows to avoid unused-arg warnings.
@@ -3720,7 +3946,7 @@ fn spawn_shell_command(
         }
     };
 
-    if let Err(e) = group.attach(&child) {
+    if let Err(e) = group.attach_with_lifetime(lifetime, &child) {
         tracing::warn!("Failed to attach child to ProcessGroup: {e}");
     }
     Ok((child, group))
@@ -4796,6 +5022,139 @@ mod tests {
         let _ = tokio::fs::remove_file(&output_file).await;
     }
 
+    /// 0dh S2（钉①，298 批；ADR-0010 §14.87）：显式后台声明即立即后台化
+    /// ——`run_background` 回执即时到达（远短于前台预算），不烧 180s。
+    #[tokio::test]
+    async fn explicit_background_reply_arrives_without_fg_budget() {
+        let backend = LocalTerminalBackend::new_with_foreground_budget(Duration::from_secs(180));
+        let output_file =
+            std::env::temp_dir().join(format!("terminal-test-0dh-bg-{}.out", std::process::id()));
+        let request = TerminalRunRequest {
+            command: "sleep 60".to_string(),
+            working_directory: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+            timeout: Duration::from_secs(300),
+            output_byte_limit: 10000,
+            output_file: output_file.clone(),
+            notification_handle: ToolNotificationHandle::noop(),
+            tool_call_id: "test-0dh-bg".to_string(),
+            display_command: None,
+            auto_background_on_timeout: false,
+            foreground_block_budget: None,
+            kind: TaskKind::Bash,
+            owner_session_id: None,
+            description: None,
+        };
+        // 10s 远小于 180s 预算：若声明路径误烧前台预算，此处超时即红。
+        let handle = tokio::time::timeout(Duration::from_secs(10), backend.run_background(request))
+            .await
+            .expect("run_background must reply immediately")
+            .expect("run_background ok");
+        assert!(!handle.task_id.is_empty());
+        let outcome = backend.kill_task(&handle.task_id).await;
+        assert!(matches!(
+            outcome,
+            KillOutcome::Killed | KillOutcome::AlreadyExited
+        ));
+        let _ = tokio::fs::remove_file(&output_file).await;
+    }
+
+    /// 0dh S2（钉⑤，D6 增量读出三态）：首读＝既有全窗（游标钉定）；
+    /// 续读＝只回新增段（不再含旧批）；终态读＝余段返回后封口，再读回落
+    /// 现役尾窗（completed 快照、new_output_bytes=None）。
+    #[tokio::test]
+    async fn incremental_cursor_first_delta_and_seal() {
+        let backend = LocalTerminalBackend::new();
+        let output_file = std::env::temp_dir().join(format!(
+            "terminal-test-0dh-cursor-{}.out",
+            std::process::id()
+        ));
+        // 分批产出对 shell 中立（POSIX `;` 串接 / PowerShell `;` 串接）。
+        let command = if cfg!(unix) {
+            "echo FIRST-BATCH; sleep 0.8; echo SECOND-BATCH; sleep 0.8; echo THIRD-BATCH"
+                .to_string()
+        } else {
+            "Write-Output FIRST-BATCH; Start-Sleep -Milliseconds 800; Write-Output SECOND-BATCH; Start-Sleep -Milliseconds 800; Write-Output THIRD-BATCH"
+                .to_string()
+        };
+        let request = TerminalRunRequest {
+            command,
+            working_directory: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+            timeout: Duration::from_secs(30),
+            output_byte_limit: 10000,
+            output_file: output_file.clone(),
+            notification_handle: ToolNotificationHandle::noop(),
+            tool_call_id: "test-0dh-cursor".to_string(),
+            display_command: None,
+            auto_background_on_timeout: false,
+            foreground_block_budget: None,
+            kind: TaskKind::Bash,
+            owner_session_id: None,
+            description: None,
+        };
+        let handle = backend.run_background(request).await.unwrap();
+
+        // 轮询到首批产出（最多 ~4s）。
+        let mut first = None;
+        for _ in 0..80 {
+            if let Some(snap) = backend.get_task(&handle.task_id).await
+                && snap.output.contains("FIRST-BATCH")
+            {
+                first = Some(snap);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let first = first.expect("first batch must appear");
+        assert!(
+            first.new_output_bytes.is_some(),
+            "first serve pins the cursor and reports its payload size"
+        );
+
+        // 等第二批落地后续读：只含新增段，不含首批。
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        let second = backend
+            .get_task(&handle.task_id)
+            .await
+            .expect("task still alive");
+        assert!(
+            second.output.contains("SECOND-BATCH"),
+            "delta serve must carry the new batch, got: {:?}",
+            second.output
+        );
+        assert!(
+            !second.output.contains("FIRST-BATCH"),
+            "delta serve must not replay the first serve, got: {:?}",
+            second.output
+        );
+        assert!(second.new_output_bytes.is_some());
+
+        // 等任务完成：终态读返回余段（或封口后现役尾窗），再读＝完整尾窗
+        // （completed 快照读 output_file，new_output_bytes=None）。
+        let done = backend
+            .wait_for_completion(&handle.task_id, Some(Duration::from_secs(10)))
+            .await
+            .expect("task completes");
+        assert!(done.completed);
+        let seal = backend.get_task(&handle.task_id).await.expect("snapshot");
+        let _ = seal;
+        let legacy = backend.get_task(&handle.task_id).await.expect("snapshot");
+        assert!(legacy.completed);
+        assert_eq!(
+            legacy.new_output_bytes, None,
+            "sealed cursor → legacy shape"
+        );
+        assert!(
+            legacy.output.contains("FIRST-BATCH")
+                && legacy.output.contains("SECOND-BATCH")
+                && legacy.output.contains("THIRD-BATCH"),
+            "legacy completed window reads the full file, got: {:?}",
+            legacy.output
+        );
+        let _ = tokio::fs::remove_file(&output_file).await;
+    }
+
     #[tokio::test]
     async fn test_kill_background_task() {
         let backend = LocalTerminalBackend::new();
@@ -5350,8 +5709,82 @@ mod tests {
 
     #[tokio::test]
     async fn test_background_max_runtime_constant() {
-        // Static assertion: guard against accidental changes
-        assert_eq!(BACKGROUND_MAX_RUNTIME, Duration::from_secs(36_000));
+        // 0dh S2 (ADR-0010 §14.87; 用户裁决 2026-10-17「10h→30h」)：绝对兜底
+        // 缺省 30h；env 口子钳位下限 1h、非法/0 回落缺省。
+        assert_eq!(DEFAULT_BG_MAX_RUNTIME, Duration::from_secs(108_000));
+        assert_eq!(BG_MAX_RUNTIME_FLOOR, Duration::from_secs(3_600));
+    }
+
+    // 0dh S2 (D4)：env 口子解析——缺省/非法/0 回落 30h；超下限取值生效；
+    // 低于下限钳到 1h（绝对兜底不可配没）。
+    #[test]
+    fn bg_max_runtime_env_default_floor_and_clamp() {
+        // Guards are bound (not `let _ =`) so each lives to the end of the
+        // test and restores the caller's env on scope exit.
+        let _g_unset = EnvGuard::set("GROK_BG_MAX_RUNTIME_MS", None);
+        assert_eq!(
+            bg_max_runtime_from_env(),
+            Duration::from_secs(108_000),
+            "env unset → 30h default"
+        );
+        let _g_2h = EnvGuard::set("GROK_BG_MAX_RUNTIME_MS", Some("7200000"));
+        assert_eq!(
+            bg_max_runtime_from_env(),
+            Duration::from_secs(7_200),
+            "2h override passes the floor"
+        );
+        let _g_1m = EnvGuard::set("GROK_BG_MAX_RUNTIME_MS", Some("60000"));
+        assert_eq!(
+            bg_max_runtime_from_env(),
+            Duration::from_secs(3_600),
+            "sub-floor override clamps to 1h"
+        );
+        let _g_zero = EnvGuard::set("GROK_BG_MAX_RUNTIME_MS", Some("0"));
+        assert_eq!(
+            bg_max_runtime_from_env(),
+            Duration::from_secs(108_000),
+            "zero env → 30h default (backstop cannot be configured away)"
+        );
+        let _g_bad = EnvGuard::set("GROK_BG_MAX_RUNTIME_MS", Some("abc"));
+        assert_eq!(
+            bg_max_runtime_from_env(),
+            Duration::from_secs(108_000),
+            "invalid env → 30h default"
+        );
+    }
+
+    /// Scoped env-var guard for the resolution test (serial execution not
+    /// required: the var is only read by `bg_max_runtime_from_env`).
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: test-only, single-threaded env mutation within one test
+            // process (edition-2024 marks set_var/remove_var unsafe).
+            unsafe {
+                match value {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: mirror of `set` — test-only restore.
+            unsafe {
+                match self.previous.take() {
+                    Some(v) => std::env::set_var(self.key, v),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -6416,6 +6849,9 @@ mod tests {
             truncation_decode_label: None,
             truncated: false,
             total_bytes: 0,
+            unserved: Vec::new(),
+            unserved_skipped: 0,
+            served_once: false,
             exit_status: None,
             bg_status: BackgroundStatus::Foreground {
                 auto_bg_on_timeout: false,

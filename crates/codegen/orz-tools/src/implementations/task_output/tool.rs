@@ -78,6 +78,10 @@ pub(crate) fn snapshot_to_result(
         truncated,
         truncation_hint,
         raw_output_bytes,
+        // 0dh S2 (D6 incremental read, ADR-0010 §14.87): rides the snapshot's
+        // cursor report — Some on an incremental serve, None for legacy
+        // snapshots (waits / completed tail windows / foreground).
+        new_bytes: s.new_output_bytes,
     }
 }
 
@@ -113,6 +117,7 @@ mod tests {
             owner_session_id: None,
             description: None,
             is_backgrounded: false,
+            new_output_bytes: None,
         }
     }
 

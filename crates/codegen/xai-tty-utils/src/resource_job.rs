@@ -371,6 +371,29 @@ pub fn attach_failure_count() -> u64 {
 // Spawn registration sink (FUS-HOST-RESOURCE-SAFETY §4.2 item 3, 0z S2)
 // ---------------------------------------------------------------------------
 
+/// Ownership lifetime of one spawned child (0dh S2, 2026-10-18: ADR-0010
+/// §14.87). `Call` (default) = the historical per-dispatch domain — the child
+/// tree is teardown-eligible at the run's finalize sweep. `Session` =
+/// framework-managed background task (explicit `is_background`): the host's
+/// finalize sweep refuses these rows (`session_owned`); the tree is torn down
+/// only by kill_task / task completion / the absolute backstop / session end.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SpawnLifetime {
+    #[default]
+    Call,
+    Session,
+}
+
+impl SpawnLifetime {
+    /// The registry-record spelling (`.gsa/process_trees` rows).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SpawnLifetime::Call => "call",
+            SpawnLifetime::Session => "session",
+        }
+    }
+}
+
 /// One child-spawn observation, delivered to the ambient sink by
 /// [`crate::ProcessGroup::attach_pid`] — the single choke point every tool
 /// child already flows through. The host owns the call id and the session
@@ -398,6 +421,10 @@ pub struct SpawnObservation {
     /// receiver's duty.
     #[cfg(windows)]
     pub job_handle_dup: isize,
+    /// Ownership domain of this child (0dh S2). `Call` rows are finalize-sweep
+    /// candidates; `Session` rows are refused by the finalize sweep (the host
+    /// writes this verbatim into the registry record).
+    pub lifetime: SpawnLifetime,
 }
 
 type SinkFn = dyn Fn(SpawnObservation) + Send + Sync;
@@ -405,6 +432,54 @@ type SinkFn = dyn Fn(SpawnObservation) + Send + Sync;
 /// The ambient registration sink — `Some` exactly while a tool call is being
 /// dispatched by the host on this seam.
 static SPAWN_SINK: Mutex<Option<Arc<SinkFn>>> = Mutex::new(None);
+
+/// Session-domain spawn marks (0dh S2, ADR-0010 §14.87): pid → attach-time
+/// clock (Unix ms). Populated by the terminal actor when a command is
+/// backgrounded AFTER a foreground spawn (auto-bg at the 180s budget / Ctrl+G)
+/// — those children's registry rows were already written with `lifetime=call`
+/// by the dispatch-time sink, so the finalize sweep consults this in-memory
+/// set as the second exemption source. Process-lifetime scoped by design: the
+/// marks die with the host process, so a dead session's rows are swept at the
+/// next assembly exactly like any other orphan (0bq intent preserved).
+static SESSION_SPAWNS: std::sync::LazyLock<Mutex<std::collections::HashMap<u32, u64>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// Mark `pid` as a session-domain background task (auto-bg / user-signal
+/// transition; the explicit `is_background` path carries `Session` directly on
+/// its observation). Idempotent; later marks keep the first attach clock.
+pub fn mark_spawn_session(pid: u32, started_at_ms: u64) {
+    let mut set = SESSION_SPAWNS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    set.entry(pid).or_insert(started_at_ms);
+}
+
+/// The attach clock recorded for `pid` when it was marked session-domain.
+pub fn session_spawn_started_at(pid: u32) -> Option<u64> {
+    SESSION_SPAWNS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .get(&pid)
+        .copied()
+}
+
+/// Full snapshot of the session-domain spawn set (host finalize-sweep input).
+pub fn session_spawn_marks() -> Vec<(u32, u64)> {
+    SESSION_SPAWNS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .iter()
+        .map(|(pid, ts)| (*pid, *ts))
+        .collect()
+}
+
+/// Test seam: drop every session mark (never call from production paths).
+pub fn clear_session_spawn_marks_for_tests() {
+    SESSION_SPAWNS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clear();
+}
 
 fn spawn_sink_slot() -> std::sync::MutexGuard<'static, Option<Arc<SinkFn>>> {
     SPAWN_SINK

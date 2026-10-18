@@ -48,10 +48,12 @@ mod resource_job;
 #[cfg(windows)]
 pub use resource_job::COMMIT_NOTIFICATION_MODE;
 pub use resource_job::{
-    CommitNotificationMode, JobLimits, JobNotification, JobReadback, RunResourceJob,
-    SpawnObservation, SpawnSinkGuard, attach_failure_count, drain_global_run_notifications,
-    global_run_job, image_fingerprint_from_pid, install_global_run_job, record_attach_failure,
-    replace_global_run_job_for_tests, set_spawn_sink, terminate_job_handle,
+    CommitNotificationMode, JobLimits, JobNotification, JobReadback, RunResourceJob, SpawnLifetime,
+    SpawnObservation, SpawnSinkGuard, attach_failure_count, clear_session_spawn_marks_for_tests,
+    drain_global_run_notifications, global_run_job, image_fingerprint_from_pid,
+    install_global_run_job, mark_spawn_session, record_attach_failure,
+    replace_global_run_job_for_tests, session_spawn_marks, session_spawn_started_at,
+    set_spawn_sink, terminate_job_handle,
 };
 // HANDLE-backed helpers exist only where Job Object handles do; the unconditional
 // re-export broke every non-Windows build of the workspace (E0432 on Linux).
@@ -482,6 +484,21 @@ impl ProcessGroup {
         self.attach_pid(pid)
     }
 
+    /// Attach with an explicit ownership lifetime (0dh S2, ADR-0010 §14.87):
+    /// the terminal actor's background path marks its shell `Session` so the
+    /// host writes a session-domain registry row (finalize sweep refuses
+    /// those). Lifetime is per-attach, not per-group.
+    pub fn attach_with_lifetime(
+        &mut self,
+        lifetime: crate::resource_job::SpawnLifetime,
+        child: &tokio::process::Child,
+    ) -> io::Result<()> {
+        let pid = child
+            .id()
+            .ok_or_else(|| io::Error::other("ProcessGroup::attach: child has already exited"))?;
+        self.attach_pid_with_lifetime(pid, lifetime)
+    }
+
     /// Attach a `std::process::Child` (rather than tokio's). The PID is read via
     /// `Child::id()`, which is valid until the child is reaped with `wait()`.
     pub fn attach_std(&mut self, child: &std::process::Child) -> io::Result<()> {
@@ -493,6 +510,16 @@ impl ProcessGroup {
     /// `setpgid`) or a `detach_*` helper (Unix `setsid`) — otherwise `kill`
     /// would signal the wrong group.
     pub fn attach_pid(&mut self, pid: u32) -> io::Result<()> {
+        self.attach_pid_with_lifetime(pid, crate::resource_job::SpawnLifetime::Call)
+    }
+
+    /// [`Self::attach_pid`] with an explicit ownership lifetime for the
+    /// registry observation (0dh S2).
+    pub fn attach_pid_with_lifetime(
+        &mut self,
+        pid: u32,
+        lifetime: crate::resource_job::SpawnLifetime,
+    ) -> io::Result<()> {
         #[cfg(unix)]
         {
             self.leader = Some(ProcessGroupId::new(pid)?);
@@ -504,6 +531,7 @@ impl ProcessGroup {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0),
+                lifetime,
             });
             Ok(())
         }
@@ -555,6 +583,7 @@ impl ProcessGroup {
                 image_sha256,
                 started_at,
                 job_handle_dup,
+                lifetime,
             });
 
             assign_result.map_err(|e| {

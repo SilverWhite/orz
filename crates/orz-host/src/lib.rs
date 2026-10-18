@@ -452,6 +452,7 @@ impl OrzHost {
                 &crate::process_tree::pid_alive,
                 &crate::process_tree::image_hash_of_pid,
                 &crate::process_tree::creation_time_of_pid,
+                &[],
             );
             registry.execute_sweep(decisions, "parent_abort", &crate::process_tree::kill_pid);
         }
@@ -597,6 +598,11 @@ impl OrzHost {
             &crate::process_tree::pid_alive,
             &crate::process_tree::image_hash_of_pid,
             &crate::process_tree::creation_time_of_pid,
+            // 0dh S2 (ADR-0010 §14.87): session-domain background tasks are
+            // exempt from the run-end sweep — explicit spawns via their row's
+            // `lifetime=="session"`, auto-bg / Ctrl+G transitions via the
+            // actor's in-process mark (pid + attach clock).
+            &xai_tty_utils::session_spawn_marks(),
         );
         registry.execute_sweep(decisions, "run_shutdown", &crate::process_tree::kill_pid);
     }
@@ -1219,6 +1225,11 @@ impl OrzHost {
                         started_at: observation.started_at,
                         run_id: run_id.clone(),
                         job_name: "call".to_string(),
+                        // 0dh S2 (ADR-0010 §14.87): explicit background spawns
+                        // carry `Session` — the finalize sweep refuses these
+                        // rows (cross-run survival); everything else stays a
+                        // finalize candidate.
+                        lifetime: observation.lifetime.as_str().to_string(),
                     };
                     if let Err(e) = crate::process_tree::write_record(&dir, &record) {
                         tracing::debug!("process tree registration failed: {e}");
@@ -2221,6 +2232,43 @@ mod tests {
             "expected run_terminal_cmd (GrokBuild bash), got {names:?}"
         );
     }
+    /// 0dh S2（298 批，钉⑥；ADR-0010 §14.87）：生产工具集显式后台面端到端
+    /// ——`is_background` 进模型 schema、伴随工具 get_task_output/kill_task
+    /// 同台（requires_expr 强制）、描述带会话域边界句。
+    #[tokio::test]
+    async fn explicit_background_surface_visible_in_production_toolset() {
+        let toolset = shared_toolset();
+        let defs = toolset.tool_definitions();
+        let names: Vec<String> = defs.iter().map(|d| d.function.name.clone()).collect();
+        assert!(
+            names.iter().any(|n| n == "get_task_output"),
+            "companion read tool must be served, got {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n == "kill_task"),
+            "companion kill tool must be served, got {names:?}"
+        );
+        let bash = defs
+            .iter()
+            .find(|d| d.function.name == "run_terminal_cmd")
+            .expect("run_terminal_cmd definition");
+        let props = &bash.function.parameters["properties"];
+        assert!(
+            props.get("is_background").is_some(),
+            "is_background must be visible in the production schema, keys: {:?}",
+            props
+                .as_object()
+                .map(|o| o.keys().cloned().collect::<Vec<_>>())
+        );
+        let field_desc = props["is_background"]["description"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            field_desc.contains("survive across turns until the session ends"),
+            "is_background description must state the session-domain boundary: {field_desc}"
+        );
+    }
+
     /// GAP-ENCODING-GATE e2e: `read_file` through the host decodes a
     /// GB18030 file with the fixed chain and forwards the observed stage to
     /// the loop's `ToolResult.output_encoding` (journaled upstream as

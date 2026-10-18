@@ -4429,7 +4429,11 @@ mod tests {
                 // `face_fingerprint` 事件（2026-09-28 落码，晚于 0bi 对齐）
                 // 入列 ⇒ 9 → 10；在 0.8.8 源冻结（2da7dba0，本批改动 stash
                 // 对照）上同形失败＝漂移先于本批，本批仅对齐实现事实。
-                assert_eq!(replay.event_count, 10);
+                // 0dh S2 随批对齐（298 批）：0df S2（287 批，`6e107c77`）的
+                // `run_usage_metered` 终态前恰一条入列 ⇒ 10 → 11；在干净基线
+                // （c678c21b，本批改动 stash 对照）上同形失败＝漂移先于本批
+                // （287 批读数未含 orz-host lib），本批仅对齐实现事实。
+                assert_eq!(replay.event_count, 11);
                 assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -4501,7 +4505,10 @@ mod tests {
                     // `model_output` 消失：11 → 9。146 批差分（0.8.9 代
                     // 窗口）：0bz S1 逐轮 `face_fingerprint` 事件入列
                     // ⇒ 9 → 10（0.8.8 冻结位同形失败＝漂移先于本批）。
-                    assert_eq!(replay.event_count, 10, "preflight + turn events");
+                    // 0dh S2 随批对齐（298 批）：0df S2（287 批）的
+                    // `run_usage_metered` 终态前恰一条入列 ⇒ 10 → 11
+                    // （干净基线 c678c21b 同形失败＝漂移先于本批）。
+                    assert_eq!(replay.event_count, 11, "preflight + turn events");
                     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
                 }
 

@@ -428,6 +428,15 @@ pub struct TaskOutputResult {
     /// stagnation.
     #[serde(default)]
     pub raw_output_bytes: usize,
+    /// 0dh S2 (ADR-0010 §14.87, D6 incremental read): raw byte count of THIS
+    /// response's payload when served through the get_task_output cursor.
+    /// `Some` on an incremental serve — the first serve reports the full
+    /// window so far, later serves only the new bytes since the previous
+    /// read; `None` for legacy snapshots (blocking waits, completed-task
+    /// tail windows, foreground results). The full history is always on
+    /// `output_file`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_bytes: Option<u64>,
 }
 
 impl TaskOutputOutput {

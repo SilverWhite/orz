@@ -812,6 +812,7 @@ mod tests {
             owner_session_id: None,
             description: None,
             is_backgrounded: false,
+            new_output_bytes: None,
         };
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(msg.contains("abc-123"));
@@ -842,6 +843,7 @@ mod tests {
             owner_session_id: None,
             description: None,
             is_backgrounded: false,
+            new_output_bytes: None,
         };
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(msg.contains("idle-killed"), "{msg}");
@@ -877,6 +879,7 @@ mod tests {
             owner_session_id: None,
             description: None,
             is_backgrounded: false,
+            new_output_bytes: None,
         };
         let msg = format_monitor_completion(&task, Some("get_command_or_subagent_output"));
         assert!(
@@ -911,6 +914,7 @@ mod tests {
             owner_session_id: None,
             description: None,
             is_backgrounded: false,
+            new_output_bytes: None,
         };
         let msg = format_monitor_completion(&task, None);
         assert!(
@@ -940,6 +944,7 @@ mod tests {
             owner_session_id: None,
             description: None,
             is_backgrounded: false,
+            new_output_bytes: None,
         };
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(msg.contains("cargo test"));
@@ -966,6 +971,7 @@ mod tests {
             owner_session_id: None,
             description: None,
             is_backgrounded: false,
+            new_output_bytes: None,
         };
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(msg.contains("exit code: unknown"));
@@ -995,6 +1001,7 @@ mod tests {
             owner_session_id: None,
             description: None,
             is_backgrounded: false,
+            new_output_bytes: None,
         };
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(
@@ -1035,6 +1042,7 @@ mod tests {
             owner_session_id: None,
             description: None,
             is_backgrounded: false,
+            new_output_bytes: None,
         };
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(
@@ -1074,6 +1082,7 @@ mod tests {
             owner_session_id: None,
             description: None,
             is_backgrounded: false,
+            new_output_bytes: None,
         };
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(msg.contains("exit code: 0"));
@@ -1236,6 +1245,7 @@ mod tests {
             owner_session_id: None,
             description: None,
             is_backgrounded: false,
+            new_output_bytes: None,
         }
     }
     fn make_running(id: &str) -> TaskSnapshot {
@@ -1258,6 +1268,7 @@ mod tests {
             owner_session_id: None,
             description: None,
             is_backgrounded: false,
+            new_output_bytes: None,
         }
     }
     fn make_bg_started(id: &str) -> crate::types::output::BackgroundTaskStarted {
@@ -1392,6 +1403,7 @@ mod tests {
             truncated: false,
             truncation_hint: String::new(),
             raw_output_bytes: 4,
+            new_bytes: None,
         }));
         let r = reminder.collect_reminders(shared.clone(), &output).await;
         assert!(
@@ -1544,6 +1556,7 @@ mod tests {
             truncated: false,
             truncation_hint: String::new(),
             raw_output_bytes: 0,
+            new_bytes: None,
         }));
         let r = reminder.collect_reminders(shared, &output).await;
         assert!(
@@ -1577,6 +1590,7 @@ mod tests {
                     truncated: false,
                     truncation_hint: String::new(),
                     raw_output_bytes: 0,
+                    new_bytes: None,
                 },
                 TaskOutputResult {
                     task_id: "sub-2".into(),
@@ -1591,6 +1605,7 @@ mod tests {
                     truncated: false,
                     truncation_hint: String::new(),
                     raw_output_bytes: 0,
+                    new_bytes: None,
                 },
             ],
             summary: "2/2 tasks completed (wait_all)".into(),

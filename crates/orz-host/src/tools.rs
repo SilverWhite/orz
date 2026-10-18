@@ -160,21 +160,26 @@ pub fn read_file_coarse_gate_from_config(config: &toml::Value) -> Option<usize> 
 ///   `min(解析超时, 180s 预算)` 先到者处自动后台化并返回一次「运行 +
 ///   工具自身情况」中间状态；后台化后原解析超时退役，仅 10h 绝对兜底
 ///   （T1.5 idle+CPU 兜底随后接管）——不再有「满 timeout 杀活跃命令」。
-/// - 工具面封闭：`enabled_background` 自 T1.1 起由 struct/serde 默认 true
-///   单一提供；`hide_background_input` 自 TER T1.3（2026-09-04）起同样由
-///   BashParams struct/serde 默认（true）单一提供，本函数不再显式注入
-///   （缺省经 serde 解析即 true，`is_background` 不出现在模型面 schema）；
-///   另注入 `allow_background_operator=false` 封掉 `&`，保持模型侧
-///   「一次调用 = 一个结果」，显式后台化不开放。
-/// - TER 全面审查 S6（2026-09-04）边界登记：模型面封闭 = orz-host 装配
-///   默认（此处显式注入 false 保证）；codegen BashParams 库层默认保留
-///   兼容开放（`allow_background_operator` 默认 true，纯 struct 直用仍可
-///   显式后台），该边界随 ADR §14.53 转正一并裁定。
+/// - 显式后台面受控重开（0dh S2，2026-10-18；ADR-0010 §14.87，296 批用户
+///   裁决「启用 Grok＋三处借鉴」）：本函数显式注入 `hide_background_input:
+///   false` 重开 `is_background` 模型面——声明即立即后台化（不烧 180s 前台
+///   预算），`requires_expr` 强制 get_task_output/kill_task 同台（保留面
+///   `RETAINED_GROK_BUILD_TOOLS` +2）。**BashParams struct/serde 缺省仍为
+///   `true`（库层封闭不变）**——封闭态是其他宿主的安全缺省，orz 生产以
+///   装配注入显式重开（TER T1.3「宿主装配默认」边界的受控反转）。
+///   `allow_background_operator=false` 维持：`&` 不开放，「一次调用 = 一个
+///   结果」纪律保持，显式后台走参数不走 shell 操作符。
+/// - TER 全面审查 S6（2026-09-04）边界登记（历史）：模型面封闭曾为 orz-host
+///   装配缺省；0dh 裁决对 T1.3 面的修订见 ADR §14.87。
 /// 外层 ORZ_TOOL_TIMEOUT_SECS=900 维持全局兜底（终端命令实际到不了外层值）。
 pub(crate) fn run_terminal_cmd_tool_params() -> Option<serde_json::Map<String, serde_json::Value>> {
     Some(serde_json::Map::from_iter([
         (
             "allow_background_operator".to_string(),
+            serde_json::Value::Bool(false),
+        ),
+        (
+            "hide_background_input".to_string(),
             serde_json::Value::Bool(false),
         ),
         ("timeout_secs".to_string(), serde_json::Value::from(600.0)),
@@ -417,6 +422,12 @@ pub fn build_toolset(
         "search_replace",
         "web_search",
         "web_fetch",
+        // 0dh S2 (2026-10-18, ADR-0010 §14.87)：显式后台面重开的强制伴随——
+        // `requires_expr`（bash 工具，`enabled_background ∧ ¬hide_background_input`
+        // 时）要求 BackgroundTaskAction/KillTaskAction 同台。8 工具面纪律的
+        // 第二个用户显式例外（+2，296 批裁决授权）。
+        "get_task_output",
+        "kill_task",
     ];
     let tools: Vec<_> = builder
         .known_tool_ids()
@@ -428,12 +439,11 @@ pub fn build_toolset(
                     .any(|t| id.ends_with(&format!(":{t}")))
         })
         .map(|id| {
-            // TER T1.3 (2026-09-04)：模型面封闭（`hide_background_input`
-            // struct/serde 默认 true）+ `allow_background_operator=false`
-            // ——显式 `&`/`is_background` 不开放，`requires_expr` 不再要求
-            // 被禁的 get_task_output/kill_task 同台；内部 auto-background
-            // 仍开启，可观察性/可取消性由 180s 中间回报（PID + 落盘输出）
-            // 与完成提醒承担（scheduler 族工具不保留）。
+            // 0dh S2 (2026-10-18, ADR-0010 §14.87)：显式后台面受控重开——
+            // `hide_background_input=false` 注入（见 run_terminal_cmd_tool_params）
+            // ＋ get_task_output/kill_task 保留同台；`allow_background_operator=false`
+            // 维持（`&` 不开放）。auto-background 管线不动（180s 中间回报 +
+            // 完成提醒 + 终止命令继续为 auto-bg 承担可观察性）。
             let params = if id.ends_with(":run_terminal_cmd") {
                 run_terminal_cmd_tool_params()
             } else if id == "GrokBuild:read_file"
@@ -892,16 +902,15 @@ mod config_tests {
     }
 
     /// THIN-HARNESS-REDESIGN §4.6 审查处理 (2026-08-27) +
-    /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：run_terminal_cmd
-    /// 的分层超时与中间回报配置——`enabled_background` /
-    /// `auto_background_on_timeout` 自 TER T1.1 起由 BashParams
-    /// struct/serde 默认（true）单一提供（此处不注入，缺省即 true），
-    /// `foreground_block_budget_ms` 自 TER T1.2 起由 BashParams
+    /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2) + 0dh S2 (2026-10-18,
+    /// ADR-0010 §14.87)：run_terminal_cmd 的分层超时与中间回报配置——
+    /// `enabled_background` / `auto_background_on_timeout` 自 TER T1.1 起由
+    /// BashParams struct/serde 默认（true）单一提供（此处不注入，缺省即
+    /// true），`foreground_block_budget_ms` 自 TER T1.2 起由 BashParams
     /// struct/serde 默认（180_000，满 180s 后台化并返回一次中间状态）
     /// 单一提供（此处不注入，缺省经 serde 解析即 180_000）、
-    /// `hide_background_input` 自 TER T1.3 起由 BashParams struct/serde
-    /// 默认（true）单一提供（此处不注入，缺省经 serde 解析即 true——
-    /// `is_background` 不出现在模型面 schema）、
+    /// `hide_background_input=false` 自 0dh S2 起显式注入（TER T1.3 封闭面
+    /// 受控重开——`is_background` 进模型面 schema；库层缺省 true 不变）、
     /// `allow_background_operator=false`（封掉 `&`）、
     /// `timeout_secs=600`（程序/脚本缺省；普通命令 300s 由宿主逐调用
     /// 注入；TER T1.4 起只作 auto-bg deadline 引用）、
@@ -927,8 +936,8 @@ mod config_tests {
             "TER T1.2: omitted budget must resolve to the 180s resident default"
         );
         assert!(
-            parsed.hide_background_input,
-            "TER T1.3: omitted hide_background_input must resolve to the resident true default"
+            !parsed.hide_background_input,
+            "0dh S2 (ADR §14.87): explicit injection reopens the is_background model surface"
         );
         assert_eq!(
             params.get("allow_background_operator"),
@@ -937,8 +946,8 @@ mod config_tests {
         );
         assert_eq!(
             params.get("hide_background_input"),
-            None,
-            "TER T1.3: hide flag no longer injected — BashParams resident default is the single source"
+            Some(&serde_json::Value::Bool(false)),
+            "0dh S2: the reopen is an explicit host injection, not a library default flip"
         );
         assert_eq!(
             params.get("timeout_secs"),
@@ -953,12 +962,13 @@ mod config_tests {
         assert!(
             params.get("enabled_background").is_none()
                 && params.get("auto_background_on_timeout").is_none(),
-            "TER T1.1/T1.2/T1.3: flags + budget + hide now come from BashParams resident defaults, \
+            "TER T1.1/T1.2: flags + budget come from BashParams resident defaults, \
              no redundant mainline injection"
         );
         // 键名逐字匹配 BashParams 字段（未知键会被静默忽略，防拼写漂移）。
         for key in [
             "allow_background_operator",
+            "hide_background_input",
             "timeout_secs",
             "max_timeout_secs",
         ] {

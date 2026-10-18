@@ -1058,6 +1058,13 @@ impl ToolOutput {
                     if !r.output_file.is_empty() {
                         lines.push(format!("Output File: {}", r.output_file));
                     }
+                    // 0dh S2 (D6 incremental read, ADR-0010 §14.87): one-line
+                    // cursor report — just-in-time teaching, no resident note.
+                    if let Some(nb) = r.new_bytes {
+                        lines.push(format!(
+                            "New output: {nb} bytes since the last read (full history: output_file)"
+                        ));
+                    }
                     lines.push(String::new());
                     lines.push("=== Output ===".to_string());
                     if r.output.is_empty() {
@@ -2160,6 +2167,7 @@ mod tests {
                 truncated: false,
                 truncation_hint: String::new(),
                 raw_output_bytes: 5,
+                new_bytes: None,
             })
             .into(),
         );
@@ -2185,6 +2193,7 @@ mod tests {
             truncated: false,
             truncation_hint: String::new(),
             raw_output_bytes: 5,
+            new_bytes: None,
         }));
         let prompt = out.to_prompt_format();
         assert!(prompt.contains("Duration: 5.00s"), "{prompt}");
@@ -2213,6 +2222,7 @@ mod tests {
             truncated: false,
             truncation_hint: String::new(),
             raw_output_bytes: 4,
+            new_bytes: None,
         }));
         let prompt = out.to_prompt_format();
         assert!(!prompt.contains("Output File"), "{prompt}");
@@ -2231,6 +2241,7 @@ mod tests {
             truncated: raw_output_bytes > 100,
             truncation_hint: String::new(),
             raw_output_bytes,
+            new_bytes: None,
         }
     }
     /// Identical status + raw_output_bytes → same signature.
@@ -2284,6 +2295,7 @@ mod tests {
                 truncated: false,
                 truncation_hint: String::new(),
                 raw_output_bytes: 11,
+                new_bytes: None,
             })
             .into(),
         );

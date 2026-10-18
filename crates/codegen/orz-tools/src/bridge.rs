@@ -860,6 +860,7 @@ mod tests {
             owner_session_id: owner.map(|s| s.to_string()),
             description: None,
             is_backgrounded: false,
+            new_output_bytes: None,
         }
     }
 

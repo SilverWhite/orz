@@ -262,6 +262,13 @@ pub struct TaskSnapshot {
     /// True after explicit/user/auto backgrounding; false for pure foreground runs.
     #[serde(default)]
     pub is_backgrounded: bool,
+    /// 0dh S2 (ADR-0010 §14.87, D6 incremental read): raw byte count of THIS
+    /// response's payload when served through the get_task_output cursor —
+    /// `Some` on an incremental serve (first serve = the full window so far,
+    /// later serves = only new bytes), `None` for legacy snapshots (waits,
+    /// tombstones, foreground). The full history stays on `output_file`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_output_bytes: Option<u64>,
 }
 
 impl TaskSnapshot {
