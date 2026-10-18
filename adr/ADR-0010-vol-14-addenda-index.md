@@ -5138,7 +5138,7 @@ finalize sweep 跨 run 收割；用户手起进程存活＝job 域外）＋用�
    设计稿随批勘正 v1.1（§2.1/§2.2 勘定结论、D2⑥ 锚点、§5 风险两边界、S4 判据增补⑥⑦）；
    §14.55 第 7 条「10h 兜底」值随本条加指针注。S3 载体重建与 S4 真机待续。
 
-#### §14.88 消息撤回＋中途补充——Claude Code 形态移植（0di）（2026-10-18，v1.91）
+#### §14.88 消息撤回＋中途补充——Claude Code 形态移植（0di）（2026-10-18，v1.92）
 
 **来源**：2026-10-17 web 真机反馈（293 批 N3＝运行中补充输入被直接拒绝、无任何撤回入口）
 ＋用户裁决「撤回和中途补充就完全借鉴 claude code，撤回和中途补充部分单独立一个项吧」＋
@@ -5155,14 +5155,18 @@ deferred 语义／CC `/rewind` 编辑式重发）；296 批立项 64 → 65〕�
    车道不 drain）；队列**跨 run 存活**（空闲期投递＝下一 run 首投递；cancel 不清队）；
    上限每条 ≤256 KiB／深度 ≤16 fail-closed。**不做**打断式形态（Esc 硬打断/Send-Now/
    mid-turn steering/Cursor 切走式——295/296 两轮已定）。
+   **v1.92（0dj/305 批）**：queue_append 与 restore/recall 共用 `runs` 锁原子互斥；排队回执
+   收窄为「可用的下一次模型调用边界」。容量帽是传输面而非上下文预算保证，drain 点不移动；
+   极端满队形态进入 S4 判据。
 2. **投递事件（D3）**：`supplement_delivered` 事件族（非终态；payload＝supplement_seq
    run 内从 1 严格递增＋character_count＋text）——**prompt_submitted 同姿态**（registry
    v02 条目＋payload schema＋fixtures 三件＋v02 enum；**无法官族/无 Python 新族/无锚**，
    不变量由 loop 单元钉承载）；事件先于当轮 `model_request` 落链；历史刊零回归。
 3. **撤回（D4/D5）**：CC `/rewind` **编辑式重发**——idle-only（`RestoreInflightGuard`
-   同锁互斥：run/restore/recall 三方）；目标＝**用户消息 ordinal**（续接包 messages 的
-   User 序数，侧车唯一真相面）；截断＝该条含自身及之后全部移除＋原文回输入框；落点＝
-   `continuation` 截断→侧车立即落盘→写回；**排队残余一并丢弃**（计数回显）。
+   同锁互斥：run/restore/recall 三方）；目标＝**真实用户消息 ordinal**（续接包 messages 的
+   User 序数排除机械注入块与任务状态尾随块，侧车唯一真相面）；截断＝该条含自身及之后全部
+   移除＋原文回输入框；落点＝截断候选侧车**成功落盘后**才清队并写回，失败时会话与队列原样
+   归还；**排队残余一并丢弃**（计数回显）。
    通道＝`_orz/recall_preview`＋`_orz/recall`；入口＝web/TUI `/rewind` 命令
    （对话框/modal 两段确认；不做逐卡按钮）。
 4. **不回滚面（诚实边界）**：①工作区文件（用户裁决，git 兜底）；②LIF 会话轴/黑板
@@ -5170,8 +5174,11 @@ deferred 语义／CC `/rewind` 编辑式重发）；296 批立项 64 → 65〕�
    可见撤回段黑板内容，S4 真机观察体感、混淆再议黑板 epoch 标记）；③run journal 历史
    （evidence chain 不可变）。侧车审计＝`recall_log`（serde default 零迁移，审计随工件
    ——会话卷是 local session artifact 非 run evidence chain，recall 不建 RST run）。
-5. **0dd 衔接**：撤回＝会话生命周期用户主权的**内容面**操作；idle 门与 close/archive
-   in-flight 票共用 `runs` 表互斥天然串行，`close_session` 语义零改动。
-6. **批序**：S1 设计稿＋S2 落码＋钉子（同批，0df/0cl 先例）→ S3 载体重建（**与 0dh S3
-   同车**）→ S4 真机（判据＝补充不打断且边界后生效／撤回后上下文与侧车一致＋原文可
-   编辑重发／不回滚面为预期确认／ext 三方法双面可用）。
+5. **失败可见面与 UI 对齐（v1.92）**：web/TUI 对本 run 已投递补充计数；run 失败、取消或无效
+   时明确提示这些补充未写回会话。TUI supplement 逐事件成卡，不再按正文折叠同文输入；web
+   `/rewind` 增运行态前端守卫（服务端 preview idle 门仍为最终权威），Unicode 省略号按字符计。
+6. **0dd 衔接**：撤回＝会话生命周期用户主权的**内容面**操作；run/restore/recall 在单进程
+   会话内共用 `runs` 表互斥；`close_session` 语义零改动。跨进程同会话、grill 并发和 close×recall
+   归档竞态属正常产品拓扑不可达的登记边界，不据此扩张机制。
+7. **批序**：S1 设计稿＋S2 落码＋钉子→0dj 审查处置（305 批）→S3 载体重建（**与 0dh S3
+   同车**）→S4 真机；S4 增补双入口并发、失败提示、撤回×排队、机械块菜单与极端量判据。
