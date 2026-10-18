@@ -136,6 +136,16 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.241 2026-10-18 301 批 0dg 两件落码——web 对话卡 pre-wrap＋Ctrl+Z 输入框豁免与闲置反馈（**修复批**，零模型面改动，计数不变 65）
+
+- **触发**：用户令「接下来请进行0dg吧」（294 批立项 GAP-WEB-DOGFOOD-UX-FIX；293 批 N1/N2 真机取证；orz-tui 不受影响不改——「双实现同步纪律」两件不适用＝TUI 无此缺陷）。
+- **①对话卡换行（293 N1）**：根因＝非「模型」卡 `body.textContent` 直填＋`.msg-card .msg-body` 无 pre-wrap ⇒ `white-space: normal` 折叠换行（存档/回放面 `\n` 逐字保留，缺陷 web 层独有）。修法＝widgets.js 非模型卡 body 加 `.plain` 类＋app.css 两条白名单规则（`.msg-card .msg-body.plain { white-space: pre-wrap; }`＋`.system-line` 同面）；**模型卡 markdown 面不动**（`\n` 由段落化消费）；**随批裁决＝markdown 渲染替代维持不做**（零 md 管道注入面）。
+- **②Ctrl+Z（293 N2）**：根因＝keymap Ctrl/Cmd+Z 全局分支无 `inInput` 豁免（输入框内原生撤销被抢占）＋stopRun 闲置期静默 return（「不好使」体感）。修法＝分支补 `!inInput`（输入框内放行原生撤销不 preventDefault；输入框外「取消运行」语义保留、**不拆分**）＋stopRun 闲置臂 `flash('当前无运行中')`（与运行中「已发送取消」同通道 4s 横幅）；服务端 cancel 链路不动。
+- **钉两枚（frontend_smoke §12）**：①`.plain`/`.msg-body` 作用面断言＋app.css 两规则字面＋textContent 保 `\n`；②Ctrl+Z TEXTAREA 零 preventDefault 零取消＋BODY preventDefault 恰一次＋闲置 flash 文案「当前无运行中」。
+- **落码（orz `ba77aacb`，5 文件 +68/−4，不推送）读数**：`node crates/orz-web/tests/frontend_smoke.mjs` 全部通过（含新两节）＋`cargo test -p orz-web` 47/0＋clippy orz-web 本体零告警（19 条全为依赖预存基线）＋触碰件零 Rust 文件 fmt 不适用；orz_source_manifest 重算 1,488 entries（恰 5 行变化）。
+- **台账**：本卷；[`301 批档`](audits/301_0DG_WEB_DOGFOOD_UX_FIX_2026-10-18.md)；BACKLOG 本批指针＋计数行（65 不变）＋P1 总览行＋`0dg` 专节两件达成注记；TODO 计数行＋P1 路由行＋`P1-0dg` 两件勾选；索引头行 v4.273 → v4.274。**闭合待用户裁决；未推送**。
+- 关键词：301 批、0dg、pre-wrap、msg-body plain、system-line、Ctrl+Z、inInput 豁免、原生文本撤销、stopRun 闲置反馈、当前无运行中、frontend_smoke §12、47/0、计数 65 不变、索引 v4.274。
+
 ### 1.240 2026-10-18 300 批 提交推送——293–299 累积件（**提交推送批**，零源码语义增量零跑批，不发行，计数不变 65）
 
 - **触发**：用户令「请先进行提交与推送吧」（沿 291 批形态：推送前纯快进核证、推送后 ls-remote 逐位一致）。
