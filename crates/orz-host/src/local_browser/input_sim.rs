@@ -103,7 +103,10 @@ pub(crate) enum SimEvent {
     MouseDown(f64, f64),
     MouseUp(f64, f64),
     /// 滚轮（像素；`delta_y` 负值 = 向上）。
-    Wheel { dx: i64, dy: i64 },
+    Wheel {
+        dx: i64,
+        dy: i64,
+    },
     Sleep(u64),
 }
 
@@ -186,11 +189,7 @@ pub(crate) fn plan_key(key: &str, seed: u64) -> Vec<SimEvent> {
 
 /// `click` 动作计划：WindMouse 轨迹（从 `from` 到 `to`）→ 按下 → 驻留 →
 /// 抬起 → 收尾停留。轨迹点间 sleep 由 800px/s 与步长推出。
-pub(crate) fn plan_click(
-    from: (f64, f64),
-    to: (f64, f64),
-    seed: u64,
-) -> Vec<SimEvent> {
+pub(crate) fn plan_click(from: (f64, f64), to: (f64, f64), seed: u64) -> Vec<SimEvent> {
     let mut rng = SimRng::new(seed);
     let mut plan = vec![SimEvent::Sleep(rng.jitter_pct(PRE_MOVE_MS, 30))];
     for (x, y) in wind_mouse_path(from, to, &mut rng) {
@@ -339,7 +338,8 @@ mod tests {
             .count();
         assert!(gaps >= 1, "sentence gap missing: {plan:?}");
         assert!(
-            plan.iter().any(|e| matches!(e, SimEvent::KeyDown(k) if k == "Enter")),
+            plan.iter()
+                .any(|e| matches!(e, SimEvent::KeyDown(k) if k == "Enter")),
             "submit key missing"
         );
     }
@@ -359,7 +359,10 @@ mod tests {
         }
         let last = *path.last().unwrap();
         let rest = ((to.0 - last.0).powi(2) + (to.1 - last.1).powi(2)).sqrt();
-        assert!(rest < WIND_THRESHOLD + WIND_MAX_STEP, "did not converge: {rest}");
+        assert!(
+            rest < WIND_THRESHOLD + WIND_MAX_STEP,
+            "did not converge: {rest}"
+        );
     }
 
     #[test]
@@ -367,15 +370,14 @@ mod tests {
         let plan = plan_click((10.0, 10.0), (210.0, 110.0), 3);
         assert!(plan.iter().any(|e| matches!(e, SimEvent::MouseDown(..))));
         assert!(plan.iter().any(|e| matches!(e, SimEvent::MouseUp(..))));
-        let dwell = plan
-            .iter()
-            .find_map(|e| match e {
-                SimEvent::Sleep(ms) => Some(*ms),
-                _ => None,
-            });
+        let dwell = plan.iter().find_map(|e| match e {
+            SimEvent::Sleep(ms) => Some(*ms),
+            _ => None,
+        });
         assert!(dwell.is_some());
         assert!(
-            plan.iter().any(|e| matches!(e, SimEvent::Sleep(ms) if (60..=140).contains(ms))),
+            plan.iter()
+                .any(|e| matches!(e, SimEvent::Sleep(ms) if (60..=140).contains(ms))),
             "press dwell missing"
         );
         // 轨迹总时长 ≈ 距离/800px/s（240px ≈ 300ms，容差放宽 2×）。
@@ -386,7 +388,10 @@ mod tests {
                 _ => None,
             })
             .sum();
-        assert!((250..=2_000).contains(&total), "click duration {total}ms off");
+        assert!(
+            (250..=2_000).contains(&total),
+            "click duration {total}ms off"
+        );
     }
 
     #[test]

@@ -381,8 +381,6 @@ async fn run_loop(
                                 if app.restoring {
                                     app.content.add_system_message(
                                         "恢复进行中——请等待完成", false);
-                                } else if app.running {
-                                    client.spawn_queue_append(text);
                                 } else if app.grill_active {
                                     // Grill mode (2026-08-08): chat input is
                                     // the answer to the previous question —
@@ -390,6 +388,8 @@ async fn run_loop(
                                     // ReadOnly policy, recorded to the grill
                                     // JSONL, never a run journal.
                                     run_grill_prompt(server, client, app, terminal, text).await?;
+                                } else if app.running {
+                                    client.spawn_queue_append(text);
                                 } else {
                                     run_prompt(client, app, &mut tail_state, cwd, text).await?;
                                 }
@@ -418,7 +418,7 @@ async fn run_loop(
                     Some(ClientMsg::SupplementQueued { depth, error }) => {
                         match error {
                             None => app.content.add_system_message(
-                                &format!("已排队（第 {depth} 条）——将在当前运行的下一次模型调用前投递"),
+                                &format!("已排队（第 {depth} 条）——将在可用的下一次模型调用边界投递"),
                                 false,
                             ),
                             Some(e) => app.content.add_system_message(

@@ -1070,7 +1070,11 @@ pub async fn handle_browser_control(
         }
         "click" => {
             reject_url_for_action(action_name, &obj)?;
-            reject_keys(action_name, &obj, &["query", "text", "submit", "key", "dx", "dy"])?;
+            reject_keys(
+                action_name,
+                &obj,
+                &["query", "text", "submit", "key", "dx", "dy"],
+            )?;
             let selector = match obj.get("selector") {
                 None => None,
                 Some(v) => {
@@ -1156,7 +1160,9 @@ pub async fn handle_browser_control(
             reject_keys(
                 action_name,
                 &obj,
-                &["query", "text", "submit", "key", "selector", "x", "y", "dx", "dy", "script"],
+                &[
+                    "query", "text", "submit", "key", "selector", "x", "y", "dx", "dy", "script",
+                ],
             )?;
             if obj.contains_key("url") && url_arg.is_none() {
                 return Err(ToolError::ExecutionFailed(
@@ -1183,7 +1189,9 @@ pub async fn handle_browser_control(
             reject_keys(
                 action_name,
                 &obj,
-                &["query", "text", "submit", "key", "selector", "x", "y", "dx", "dy"],
+                &[
+                    "query", "text", "submit", "key", "selector", "x", "y", "dx", "dy",
+                ],
             )?;
             let code = obj
                 .get("script")
@@ -1355,7 +1363,10 @@ fn reject_keys(
 }
 
 /// 0bs ⑪：非输入动作的输入参数拒绝（navigate/search/历史/等待/快照）。
-fn reject_input_params(action: &str, obj: &serde_json::Map<String, serde_json::Value>) -> Result<(), ToolError> {
+fn reject_input_params(
+    action: &str,
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), ToolError> {
     reject_keys(
         action,
         obj,
@@ -1371,10 +1382,7 @@ pub(crate) fn bounded_script_output(text: &str) -> String {
     if total <= CONTROL_SCRIPT_MAX_OUTPUT_CHARS {
         return text.to_string();
     }
-    let head: String = text
-        .chars()
-        .take(CONTROL_SCRIPT_MAX_OUTPUT_CHARS)
-        .collect();
+    let head: String = text.chars().take(CONTROL_SCRIPT_MAX_OUTPUT_CHARS).collect();
     format!(
         "{head}\n[script output truncated: {CONTROL_SCRIPT_MAX_OUTPUT_CHARS} of {total} chars shown]"
     )

@@ -46,6 +46,8 @@ export const state = {
   // ── 会话/运行 ──
   running: false,
   turnCounter: 0,
+  // 已进入当前 run 模型面的补充数；失败/取消时提示 SUCCESS-ONLY 回滚。
+  deliveredSupplements: 0,
   sessionId: null,
   gateBlock: null,
   pendingPermission: null, // {request, respond} 由 acp.js 注入

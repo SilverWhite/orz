@@ -5,6 +5,16 @@
 use crate::app::TuiApp;
 use crate::events::TuiEvent;
 
+fn disclose_rolled_back_supplements(app: &mut TuiApp) {
+    let count = std::mem::take(&mut app.delivered_supplements);
+    if count > 0 {
+        app.content.add_system_message(
+            &format!("[提示] 本次运行已投递的 {count} 条补充未写回会话；请按需重新发送"),
+            true,
+        );
+    }
+}
+
 /// Apply one event to the app's view model, returning status messages.
 pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
     match event {
@@ -17,6 +27,7 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
         }
         TuiEvent::RunStarted { prompt, .. } => {
             app.running = true;
+            app.delivered_supplements = 0;
             // A new run clears the previous gate block — the OSC title's ⚠
             // state is per-run (slice #9).
             app.gate_block = None;
@@ -33,6 +44,7 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
         }
         TuiEvent::RunFinished { status } => {
             app.running = false;
+            app.delivered_supplements = 0;
             // Turn ended — clear the streamed-text append target so the
             // next turn's first text delta starts a fresh card (review
             // P3-1: a turn ending on a tool round leaves the empty-card
@@ -51,6 +63,7 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             app.content.collapse_non_warnings();
             app.content
                 .add_system_message(&format!("[错误] {error}"), true);
+            disclose_rolled_back_supplements(app);
             vec![format!("运行失败: {error}")]
         }
         TuiEvent::RunCancelled { reason } => {
@@ -60,6 +73,7 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             app.content.collapse_non_warnings();
             app.content
                 .add_system_message(&format!("运行已取消（{reason}）"), false);
+            disclose_rolled_back_supplements(app);
             vec!["运行已取消".into()]
         }
         TuiEvent::RunInvalidated { status } => {
@@ -69,6 +83,7 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             app.content.collapse_non_warnings();
             app.content
                 .add_system_message(&format!("运行无效（{status}）"), true);
+            disclose_rolled_back_supplements(app);
             vec![format!("运行无效: {status}")]
         }
 
@@ -91,25 +106,17 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             app.marker.add_user_input(card_line);
             vec!["用户消息".into()]
         }
-        // 0di：补充投递卡——与 prompt_submitted 同面（turn 计数递增；
-        // 去重键含序数避免同文补充被折叠）。
+        // 0di：补充投递卡——与 prompt_submitted 同面（turn 计数递增）。
+        // supplement_delivered 本身是一条唯一 journal 事实；同文补充也是
+        // 独立用户输入，必须逐事件成卡，不能按正文与历史 prompt 去重。
         TuiEvent::SupplementDelivered {
-            supplement_seq,
+            supplement_seq: _,
             text,
         } => {
             app.turn_counter += 1;
-            let existing = app.content.items.iter().position(|item| {
-                matches!(item, crate::view_model::ContentItem::Message(m)
-                    if m.role == "用户" && m.content == text)
-            });
-            let card_line = match existing {
-                Some(idx) => idx + 1,
-                None => {
-                    app.content.add_user_message(&text);
-                    app.content.items.len()
-                }
-            };
-            let _ = supplement_seq;
+            app.delivered_supplements = app.delivered_supplements.saturating_add(1);
+            app.content.add_user_message(&text);
+            let card_line = app.content.items.len();
             app.marker.add_user_input(card_line);
             vec!["补充投递".into()]
         }
@@ -854,6 +861,45 @@ mod tests {
             timestamp: String::new(),
         });
         assert_eq!(a.content.items.len(), 1, "RunStarted must dedupe");
+    }
+
+    #[test]
+    fn supplements_with_identical_text_render_as_distinct_user_cards() {
+        let mut a = app();
+        a.accept_event(TuiEvent::RunStarted {
+            prompt: "同文".into(),
+            timestamp: String::new(),
+        });
+        a.accept_event(TuiEvent::SupplementDelivered {
+            supplement_seq: 1,
+            text: "同文".into(),
+        });
+        a.accept_event(TuiEvent::SupplementDelivered {
+            supplement_seq: 2,
+            text: "同文".into(),
+        });
+        let user_cards = a
+            .content
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(item, ContentItem::Message(m) if m.role == "用户" && m.content == "同文")
+            })
+            .count();
+        assert_eq!(
+            user_cards, 3,
+            "prompt plus two supplements are distinct facts"
+        );
+        assert_eq!(a.delivered_supplements, 2);
+
+        a.accept_event(TuiEvent::RunCancelled {
+            reason: "user_cancelled".into(),
+        });
+        assert_eq!(a.delivered_supplements, 0);
+        assert!(a.content.items.iter().any(|item| {
+            matches!(item, ContentItem::Message(m)
+                if m.role == "系统" && m.content.contains("2 条补充未写回会话"))
+        }));
     }
 
     #[test]

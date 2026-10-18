@@ -140,6 +140,9 @@ pub struct TuiApp {
     pub quit: bool,
     /// Prompt counter for card turn labels (each prompt = one run).
     pub turn_counter: u32,
+    /// Number of queued supplements already delivered into the current run.
+    /// A non-success terminal uses this to disclose SUCCESS-ONLY rollback.
+    pub delivered_supplements: u32,
 
     // ── session / run identity ──
     /// Session cwd (explorer tree root; journal scan base). Set by the
@@ -201,6 +204,7 @@ impl TuiApp {
             restoring: false,
             quit: false,
             turn_counter: 0,
+            delivered_supplements: 0,
             cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             session_id: None,
             gate_block: None,

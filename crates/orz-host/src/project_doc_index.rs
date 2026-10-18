@@ -1161,7 +1161,9 @@ mod tests {
         let p = dir.join("docs").join("gbk.md");
         std::fs::write(
             &p,
-            [b'#', b' ', 0xD6, 0xD0, 0xCE, 0xC4, 0xB1, 0xEA, 0xCC, 0xE2, b'\n'],
+            [
+                b'#', b' ', 0xD6, 0xD0, 0xCE, 0xC4, 0xB1, 0xEA, 0xCC, 0xE2, b'\n',
+            ],
         )
         .unwrap();
         let headings = extract_headings(&p);

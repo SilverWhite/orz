@@ -630,8 +630,8 @@ pub fn structured_from_output(
         {
             let mut payload = serde_json::json!({ "citations": ws.citations });
             if let Some(facts) = &ws.browser_serp {
-                payload["browser_serp"] = serde_json::to_value(facts)
-                    .unwrap_or(serde_json::Value::Null);
+                payload["browser_serp"] =
+                    serde_json::to_value(facts).unwrap_or(serde_json::Value::Null);
             }
             Some(payload)
         }

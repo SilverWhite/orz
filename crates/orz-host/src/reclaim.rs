@@ -211,7 +211,10 @@ impl ReclaimLadder {
 
     /// Cumulative bytes deleted in this run so far (observation face).
     pub fn run_total_deleted(&self) -> u64 {
-        *self.run_total_deleted.lock().unwrap_or_else(|e| e.into_inner())
+        *self
+            .run_total_deleted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// The configured window (clamped to the 3-round ceiling).
@@ -249,9 +252,12 @@ impl ReclaimLadder {
         // effective remaining budget — once the run deleted its share, later
         // passes reject rather than oscillate delete/rebuild forever.
         if self.run_total_cap_bytes > 0 {
-            let headroom = self
-                .run_total_cap_bytes
-                .saturating_sub(*self.run_total_deleted.lock().unwrap_or_else(|e| e.into_inner()));
+            let headroom = self.run_total_cap_bytes.saturating_sub(
+                *self
+                    .run_total_deleted
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()),
+            );
             remaining = remaining.min(headroom);
         }
         for candidate in candidates {
@@ -288,11 +294,14 @@ impl ReclaimLadder {
                 decisions.push((candidate.clone(), ReclaimDecision::Permanent));
             } else {
                 decisions.push((candidate.clone(), ReclaimDecision::Pending));
-                self.pending.lock().unwrap_or_else(|e| e.into_inner()).push(PendingDeletion {
-                    path: candidate.path.clone(),
-                    size_bytes: candidate.size_bytes,
-                    enqueued_round: current_round,
-                });
+                self.pending
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(PendingDeletion {
+                        path: candidate.path.clone(),
+                        size_bytes: candidate.size_bytes,
+                        enqueued_round: current_round,
+                    });
             }
         }
         decisions
@@ -380,7 +389,10 @@ impl ReclaimLadder {
                 freed += candidate.size_bytes;
             }
         }
-        *self.run_total_deleted.lock().unwrap_or_else(|e| e.into_inner()) += freed;
+        *self
+            .run_total_deleted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) += freed;
         freed
     }
 
@@ -443,7 +455,10 @@ impl ReclaimLadder {
     }
 
     fn push_fact(&self, fact: ReclaimFact) {
-        self.facts.lock().unwrap_or_else(|e| e.into_inner()).push(fact);
+        self.facts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(fact);
     }
 }
 
@@ -643,7 +658,10 @@ mod tests {
             std::fs::remove_dir_all(p).map_err(io::Error::from)
         });
         assert_eq!(freed, size);
-        let snapshot = snapshot_at_delete.lock().unwrap_or_else(|e| e.into_inner()).expect("delete happened");
+        let snapshot = snapshot_at_delete
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .expect("delete happened");
         assert!(
             snapshot >= 1,
             "the permanent fact must exist BEFORE the deletion ran"

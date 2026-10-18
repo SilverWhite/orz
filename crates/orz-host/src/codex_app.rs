@@ -440,7 +440,12 @@ impl CodexAppServer {
         // the assurance layer runs silently and completely regardless (§2.4).
         let thread_id = match params.get("threadId").and_then(Value::as_str) {
             Some(tid) => {
-                if self.threads.lock().unwrap_or_else(|e| e.into_inner()).contains_key(tid) {
+                if self
+                    .threads
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains_key(tid)
+                {
                     // Real-protocol "resume" is a second `turn/start` on this
                     // thread (fixture-pinned); a second `thread/start` on a
                     // live thread is refused (slice #16 closure — see module
@@ -449,7 +454,12 @@ impl CodexAppServer {
                         "thread {tid} already exists — a second thread/start on a live thread is refused; turn/start resumes it"
                     )));
                 }
-                if self.retired_threads.lock().unwrap_or_else(|e| e.into_inner()).contains(tid) {
+                if self
+                    .retired_threads
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(tid)
+                {
                     return Err(DispatchError::conflict(format!(
                         "thread {tid} was closed — re-creating it would corrupt its journals (P1-2)"
                     )));
@@ -618,7 +628,10 @@ impl CodexAppServer {
         // interrupt after unsubscribe is a no-op; the fallback TUI quits on
         // close anyway. The id is retired: re-creating it would restart
         // prompt_count at 0 and append onto the old journals (P1-2).
-        self.threads.lock().unwrap_or_else(|e| e.into_inner()).remove(thread_id);
+        self.threads
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(thread_id);
         self.retired_threads
             .lock()
             .unwrap()
@@ -701,7 +714,12 @@ impl CodexAppServer {
             }
         }
         // Release the thread for the next turn on every path.
-        if let Some(entry) = self.threads.lock().unwrap_or_else(|e| e.into_inner()).get_mut(thread_id) {
+        if let Some(entry) = self
+            .threads
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(thread_id)
+        {
             entry.active_turn = None;
             entry.agent_item = None;
         }

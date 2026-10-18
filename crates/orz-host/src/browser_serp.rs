@@ -58,10 +58,10 @@ impl BrowserSerpBackend for HostBrowserSerp {
         // 会话上限都在会话内实现；信封即取证面）。
         let args = serde_json::json!({ "action": "search", "query": query });
         let call = crate::local_browser::handle_browser_control(browser.as_ref(), &args).await;
-        let (session_used, session_cap) = browser
-            .serp_session_navigations()
-            .await
-            .unwrap_or((0, crate::local_browser::SERP_MAX_NAVIGATIONS_PER_SESSION as u32));
+        let (session_used, session_cap) = browser.serp_session_navigations().await.unwrap_or((
+            0,
+            crate::local_browser::SERP_MAX_NAVIGATIONS_PER_SESSION as u32,
+        ));
         let envelope = match call {
             Ok(result) => serde_json::from_str::<serde_json::Value>(&result.output)
                 .unwrap_or(serde_json::Value::Null),

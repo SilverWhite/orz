@@ -101,7 +101,8 @@ fn is_shell_tool(tool: &str) -> bool {
 }
 
 /// Grok permission manager wrapped for the LoopHost contract.
-pub struct PermissionBridge {    handle: PermissionHandle,
+pub struct PermissionBridge {
+    handle: PermissionHandle,
     /// Session working directory.
     ///
     /// REV-083-18g (2026-09-27): the retired read-scope mirror was the last
@@ -197,10 +198,10 @@ impl PermissionBridge {
             // subagent inheritance only; enforcement lives in
             // `access_in_scope` below (P1).
             Vec::new(), // web_fetch_allowed_domains
-            true,       // initial_yolo — 默认自动审批（用户令 2026-09-26）；policy 短路仍在 yolo 之前
-            None,       // client_identifier
-            false,      // remember_tool_approvals
-            hub,        // interactive prompter — codex app-server (slice #12)
+            true,  // initial_yolo — 默认自动审批（用户令 2026-09-26）；policy 短路仍在 yolo 之前
+            None,  // client_identifier
+            false, // remember_tool_approvals
+            hub,   // interactive prompter — codex app-server (slice #12)
         );
         Ok(Self {
             handle,
@@ -318,8 +319,7 @@ impl PermissionBridge {
                 self.handle.request(access, update, None, None, None).await
             }
         };
-        let decision = match tokio::time::timeout(PERMISSION_PROMPT_TIMEOUT, request_fut).await
-        {
+        let decision = match tokio::time::timeout(PERMISSION_PROMPT_TIMEOUT, request_fut).await {
             Ok(decision) => decision,
             Err(_) => {
                 tracing::warn!(

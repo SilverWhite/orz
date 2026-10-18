@@ -624,15 +624,33 @@ mod tests {
     fn status_user_messages_are_de_groked_and_keep_http_code() {
         for code in [502u16, 503, 504] {
             let msg = status_user_message(StatusCode::from_u16(code).unwrap());
-            assert!(msg.contains("AI"), "502..=504 must carry the generic AI wording: {msg}");
-            assert!(!msg.contains("Grok"), "user-facing copy must not say Grok: {msg}");
-            assert!(msg.contains(&format!("(HTTP {code})")), "status code must stay visible: {msg}");
+            assert!(
+                msg.contains("AI"),
+                "502..=504 must carry the generic AI wording: {msg}"
+            );
+            assert!(
+                !msg.contains("Grok"),
+                "user-facing copy must not say Grok: {msg}"
+            );
+            assert!(
+                msg.contains(&format!("(HTTP {code})")),
+                "status code must stay visible: {msg}"
+            );
         }
         for code in [520u16, 521, 522, 523, 524] {
             let msg = status_user_message(StatusCode::from_u16(code).unwrap());
-            assert!(msg.contains("AI"), "520..=524 must carry the generic AI wording: {msg}");
-            assert!(!msg.contains("Grok"), "user-facing copy must not say Grok: {msg}");
-            assert!(msg.contains(&format!("(HTTP {code})")), "status code must stay visible: {msg}");
+            assert!(
+                msg.contains("AI"),
+                "520..=524 must carry the generic AI wording: {msg}"
+            );
+            assert!(
+                !msg.contains("Grok"),
+                "user-facing copy must not say Grok: {msg}"
+            );
+            assert!(
+                msg.contains(&format!("(HTTP {code})")),
+                "status code must stay visible: {msg}"
+            );
         }
     }
 

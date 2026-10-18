@@ -8042,13 +8042,10 @@ body"
     #[tokio::test]
     async fn supplement_queue_survives_run_and_drains_next_run() {
         let dir1 = test_dir();
-        let queue: std::sync::Mutex<std::collections::VecDeque<String>> =
-            std::sync::Mutex::new(std::collections::VecDeque::new());
         let host1 = SupplementHost {
             journal: JournalRecorder::new(dir1.clone()),
             queue: std::sync::Mutex::new(std::collections::VecDeque::new()),
         };
-        let _ = &queue;
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec!["一", "二"]));
         let controller = AgentLoopController::with_gateway(gateway);
         controller
@@ -8074,10 +8071,8 @@ body"
             .run_turn(&host2, "任务二", "RUN-S2", MANIFEST, 0, None, None, None)
             .await
             .expect("run 2");
-        let types2: Vec<EventType> = read_supplement_test_events(&dir2)
-            .iter()
-            .map(|e| e.event_type.clone())
-            .collect();
+        let events2 = read_supplement_test_events(&dir2);
+        let types2: Vec<EventType> = events2.iter().map(|e| e.event_type.clone()).collect();
         let supp = types2
             .iter()
             .position(|t| *t == EventType::SupplementDelivered)
@@ -8089,6 +8084,16 @@ body"
         assert!(
             types2.contains(&EventType::PromptSubmitted) && supp < face2,
             "leftover must be delivered at run 2's first loop-top, before the model-request face: {types2:?}"
+        );
+        let payload = &events2
+            .iter()
+            .find(|e| e.event_type == EventType::SupplementDelivered)
+            .expect("run 2 supplement payload")
+            .payload;
+        assert_eq!(
+            payload["supplement_seq"],
+            serde_json::json!(1),
+            "supplement_seq resets for the next run"
         );
         let _ = std::fs::remove_dir_all(&dir1);
         let _ = std::fs::remove_dir_all(&dir2);

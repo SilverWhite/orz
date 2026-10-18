@@ -484,7 +484,10 @@ mod tests {
         let dir = test_dir();
         // 布景：带 repo 配置的目录＝非交互子进程 fail-closed 的场景。
         std::fs::create_dir_all(dir.join(".grok").join("roles")).unwrap();
-        assert!(check_workspace_trust(&dir).is_err(), "布景：授信前必须不可信");
+        assert!(
+            check_workspace_trust(&dir).is_err(),
+            "布景：授信前必须不可信"
+        );
 
         let store_path = dir.join("grok-home").join("trusted_folders.toml");
         std::fs::create_dir_all(dir.join("grok-home")).unwrap();

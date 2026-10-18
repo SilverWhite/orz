@@ -21,6 +21,7 @@ use orz_loop::blackboard::{Blackboard, ExternalRetSection, InternalRetSection};
 use orz_loop::controller::RetrievalMode;
 use orz_loop::gateway::model::{Message, Role, ToolCall};
 use orz_loop::orientation::OrientationSessionState;
+use orz_loop::prompt::{STATUS_LINE_PREFIX, is_injected_block_text};
 use orz_workspace::permission::PermissionHookTransport;
 
 use flate2::Compression;
@@ -693,13 +694,16 @@ fn load_conversation_sidecar(base_dir: &Path, session_id: &str) -> Option<Stored
 /// 副本为权威写入，侧车为回退（orientation/activation 同纪律）。空对话
 /// 不落盘（全新会话在首个成功 prompt 前没有文件，`load` 的 NotFound →
 /// `None` 自然覆盖）。
-fn persist_conversation_sidecar(base_dir: &Path, continuation: &StoredConversation) {
+fn persist_conversation_sidecar(
+    base_dir: &Path,
+    continuation: &StoredConversation,
+) -> Result<(), String> {
     // 0di：撤回把会话截断到空（撤回首条用户消息之前）时**必须**落盘——
     // 空跳过会让重启复活已撤回的尾巴。recall_log 非空＝撤回面在案，空
     // 状态是真实语义；其余空续接包维持跳过（全新会话在首个成功 prompt
     // 前没有文件，`load` 的 NotFound → `None` 自然覆盖）。
     if continuation.messages.is_empty() && continuation.recall_log.is_empty() {
-        return;
+        return Ok(());
     }
     let path = conversation_sidecar_path(base_dir, &continuation.session_id);
     if let Some(parent) = path.parent()
@@ -709,7 +713,10 @@ fn persist_conversation_sidecar(base_dir: &Path, continuation: &StoredConversati
             "conversation sidecar dir create failed ({}): {e}",
             parent.display()
         );
-        return;
+        return Err(format!(
+            "conversation sidecar dir create failed ({}): {e}",
+            parent.display()
+        ));
     }
     match scrubbed_json_pretty(continuation) {
         Some(json) => {
@@ -718,10 +725,19 @@ fn persist_conversation_sidecar(base_dir: &Path, continuation: &StoredConversati
                     "conversation sidecar write failed ({}): {e}",
                     path.display()
                 );
+                return Err(format!(
+                    "conversation sidecar write failed ({}): {e}",
+                    path.display()
+                ));
             }
         }
-        None => tracing::warn!("conversation sidecar scrub/serialize failed — not written"),
+        None => {
+            let reason = "conversation sidecar scrub/serialize failed — not written".to_string();
+            tracing::warn!("{reason}");
+            return Err(reason);
+        }
     }
+    Ok(())
 }
 
 /// 会话存档产物（blocking 打包阶段的结果）。`None` = 无可归档内容（从未
@@ -2789,7 +2805,7 @@ pub async fn headless_session_archive(
     if !incremental_archive_due(base_dir, session_id, &full) {
         return result;
     }
-    persist_conversation_sidecar(base_dir, &full);
+    let _ = persist_conversation_sidecar(base_dir, &full);
     result.sidecar_written = !full.messages.is_empty();
     // 三键 journal 键按 `RUN-{session8}-` 前缀扫描；无头 run id
     // （`RUN-CLI-{ts}`）不携带会话段 ⇒ 显式注入本次 run（去重合并）。
@@ -2958,6 +2974,16 @@ impl Drop for RestoreInflightGuard {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&self.session);
     }
+}
+
+/// Recall ordinals are a user-message space, not every persisted `Role::User`
+/// record. Mechanical status/compaction/clear/whitelist blocks are retained
+/// for restore correctness but must never appear in `/rewind` or be returned
+/// to the editor as if the user had typed them.
+fn recallable_user_message(message: &Message) -> bool {
+    message.role == Role::User
+        && !is_injected_block_text(&message.content)
+        && !message.content.trim().starts_with(STATUS_LINE_PREFIX)
 }
 
 impl AcpServer {
@@ -3634,7 +3660,7 @@ impl AcpServer {
             full.context_scale_notified = controller.context_scale_notified_keys();
             // 0di：撤回审计日志原样带回（跨 prompt 延续；见 take-out 处注）。
             full.recall_log = restored_recall_log;
-            persist_conversation_sidecar(&base_dir, &full);
+            let _ = persist_conversation_sidecar(&base_dir, &full);
             if let Some(session) = self
                 .sessions
                 .lock()
@@ -4088,6 +4114,19 @@ impl AcpServer {
         session_id: &str,
         text: &str,
     ) -> Result<serde_json::Value, AcpError> {
+        // Hold the run-state lock through the push. A Prompt marker is the
+        // intended queueing window; a Restore marker is recall/restore's
+        // exclusive section and must reject append atomically (otherwise a
+        // push can land after recall clears the old branch).
+        let runs = self
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(runs.get(session_id), Some(RunInFlight::Restore)) {
+            return Err(AcpError::InvalidRequest(format!(
+                "supplement rejected: a restore or recall is in flight for session {session_id}"
+            )));
+        }
         let queue = {
             let sessions = self
                 .sessions
@@ -4105,6 +4144,7 @@ impl AcpServer {
                 crate::SUPPLEMENT_QUEUE_MAX_DEPTH
             ))
         })?;
+        drop(runs);
         Ok(serde_json::json!({
             "queued": true,
             "depth": queue.depth(),
@@ -4114,6 +4154,15 @@ impl AcpServer {
     /// 0di：撤回预览——会话续接包的用户消息清单（ordinal 1-based 递增，
     /// 侧车唯一真相面）。run/restore 在途时拒绝（撤回与提示同锁互斥）。
     pub fn handle_recall_preview(&self, session_id: &str) -> Result<serde_json::Value, AcpError> {
+        let runs = self
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if runs.contains_key(session_id) {
+            return Err(AcpError::InvalidRequest(format!(
+                "recall preview rejected: a run or restore is already in flight for session {session_id}"
+            )));
+        }
         let (conversation, queue_depth) = {
             let sessions = self
                 .sessions
@@ -4132,7 +4181,7 @@ impl AcpServer {
         let preview: Vec<serde_json::Value> = messages
             .iter()
             .enumerate()
-            .filter(|(_, m)| m.role == Role::User)
+            .filter(|(_, m)| recallable_user_message(m))
             .enumerate()
             .map(|(i, (_, m))| {
                 let preview: String = m.content.chars().take(RECALL_PREVIEW_CHARS).collect();
@@ -4167,7 +4216,7 @@ impl AcpServer {
                 "recall rejected: a run or restore is already in flight for session {session_id}"
             ))
         })?;
-        let (base_dir, mut continuation, queue) = {
+        let (base_dir, continuation, queue) = {
             let mut sessions = self
                 .sessions
                 .lock()
@@ -4186,13 +4235,11 @@ impl AcpServer {
                 session.supplement_queue.clone(),
             )
         };
-        // 未投递补充一并丢弃（撤回重开的分支不得注入陈旧意图；计数回显）。
-        let dropped_supplements = queue.clear();
         // 定位 ordinal 用户消息（1-based；越界 fail-closed，不静默钳位）。
         let mut user_seen: u32 = 0;
         let mut cut_index: Option<usize> = None;
         for (idx, m) in continuation.messages.iter().enumerate() {
-            if m.role == Role::User {
+            if recallable_user_message(m) {
                 user_seen += 1;
                 if user_seen == ordinal {
                     cut_index = Some(idx);
@@ -4218,23 +4265,45 @@ impl AcpServer {
         };
         let recall_text = continuation.messages[cut_index].content.clone();
         let removed_messages = continuation.messages.len() - cut_index;
-        continuation.messages.truncate(cut_index);
-        let remaining_messages = continuation.messages.len();
-        continuation.recall_log.push(RecallRecord {
+        let dropped_supplements = queue.depth();
+        let mut recalled = continuation.clone();
+        recalled.messages.truncate(cut_index);
+        let remaining_messages = recalled.messages.len();
+        recalled.recall_log.push(RecallRecord {
             recalled_at: now_epoch_secs(),
             ordinal,
             removed_messages,
             remaining_messages,
             dropped_supplements,
         });
-        persist_conversation_sidecar(&base_dir, &continuation);
+        // Recall's success contract depends on durable truncation. Unlike
+        // ordinary run write-back, a warning-only sidecar failure would let
+        // the removed tail revive after restart. Keep both the continuation
+        // and supplement queue untouched unless the durable write succeeds.
+        if let Err(reason) = persist_conversation_sidecar(&base_dir, &recalled) {
+            if let Some(session) = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get_mut(session_id)
+            {
+                session.continuation = Some(continuation);
+            }
+            return Err(AcpError::Host(format!(
+                "recall rejected: durable conversation write failed: {reason}"
+            )));
+        }
+        // 未投递补充只在定位和持久化均成功后丢弃；Restore marker makes
+        // the depth stable because queue_append now rejects this interval.
+        let cleared = queue.clear();
+        debug_assert_eq!(cleared, dropped_supplements);
         if let Some(session) = self
             .sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get_mut(session_id)
         {
-            session.continuation = Some(continuation);
+            session.continuation = Some(recalled);
         }
         Ok(serde_json::json!({
             "recalled": true,
@@ -4517,7 +4586,7 @@ mod tests {
                 reasoning_content: None,
                 round: None,
             });
-        persist_conversation_sidecar(&base, &continuation);
+        persist_conversation_sidecar(&base, &continuation).unwrap();
         let sidecar = base
             .join(".gsa")
             .join("conversations")
@@ -5218,7 +5287,7 @@ mod tests {
             Some(1_700_000_000.0),
             &Blackboard::default(),
         );
-        persist_conversation_sidecar(&base, &full);
+        persist_conversation_sidecar(&base, &full).unwrap();
 
         archive_session_package(
             &base,
@@ -6086,7 +6155,7 @@ mod tests {
             Some(1_700_000_000.0),
             &Blackboard::default(),
         );
-        persist_conversation_sidecar(&base, &full);
+        persist_conversation_sidecar(&base, &full).unwrap();
 
         let server = shadow_server();
         server
@@ -7549,7 +7618,7 @@ mod tests {
         // v7（S1 修订批，设计 §3.5.1，DP-16）：会话级刻度水位同信封往返
         // （每级每会话一次；跨 prompt 不重发、新会话从零开始）。
         full.context_scale_notified = vec!["500k".to_string(), "900k".to_string()];
-        persist_conversation_sidecar(&base, &full);
+        persist_conversation_sidecar(&base, &full).unwrap();
         let stored = load_conversation_sidecar(&base, "sess-roundtrip").expect("sidecar loads");
         assert_eq!(stored.session_id, "sess-roundtrip");
         assert_eq!(stored.messages.len(), 3);
@@ -7639,7 +7708,7 @@ mod tests {
     fn empty_conversation_not_persisted() {
         let base = test_dir();
         let empty = StoredConversation::empty("sess-empty", Some(1_700_000_000.0));
-        persist_conversation_sidecar(&base, &empty);
+        persist_conversation_sidecar(&base, &empty).unwrap();
         assert!(!conv_sidecar_path(&base, "sess-empty").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -8049,7 +8118,7 @@ mod tests {
             Some(1_700_000_000.0),
             &Blackboard::default(),
         );
-        persist_conversation_sidecar(base, &full);
+        persist_conversation_sidecar(base, &full).unwrap();
     }
 
     /// 0cy N1：收卷＝「先写包后删源」——无会话表（进程外遗留）时，扫描把
@@ -8532,6 +8601,11 @@ mod tests {
             server.handle_queue_append("sess-qcap", "").is_err(),
             "empty text rejected"
         );
+        let oversized = "x".repeat(crate::SUPPLEMENT_MAX_BYTES + 1);
+        assert!(
+            server.handle_queue_append("sess-qcap", &oversized).is_err(),
+            "per-message byte cap must fail closed"
+        );
         let queue = server
             .sessions
             .lock()
@@ -8576,13 +8650,32 @@ mod tests {
             .await
             .unwrap();
         seed_recall_conversation(&server, "sess-rprev");
+        {
+            let mut sessions = server.sessions.lock().unwrap();
+            let messages = &mut sessions
+                .get_mut("sess-rprev")
+                .unwrap()
+                .continuation
+                .as_mut()
+                .unwrap()
+                .messages;
+            messages.insert(2, user_msg("[任务状态 v0.1]\n步骤 1\n[/任务状态]"));
+            messages.insert(
+                4,
+                user_msg("[前文上下文已压缩 v0.1]\n机械摘要\n[/前文上下文已压缩]"),
+            );
+        }
         let preview = server.handle_recall_preview("sess-rprev").unwrap();
         let messages = preview["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 3, "three user messages");
         assert_eq!(messages[0]["ordinal"], serde_json::json!(1));
         assert_eq!(messages[0]["preview"], serde_json::json!("第一个问题"));
         assert_eq!(messages[2]["ordinal"], serde_json::json!(3));
-        assert_eq!(preview["total_messages"], serde_json::json!(5));
+        assert_eq!(preview["total_messages"], serde_json::json!(7));
+        // Recall ordinal 2 must target the second real user message, not a
+        // persisted mechanical Role::User block.
+        let recalled = server.handle_recall("sess-rprev", 2).unwrap();
+        assert_eq!(recalled["recall_text"], serde_json::json!("第二个问题"));
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -8648,6 +8741,22 @@ mod tests {
             2,
             "failed recall must not clear the continuation"
         );
+        server
+            .handle_queue_append("sess-rtrunc", "失败撤回后仍应保留")
+            .unwrap();
+        assert!(server.handle_recall("sess-rtrunc", 9).is_err());
+        assert_eq!(
+            server
+                .sessions
+                .lock()
+                .unwrap()
+                .get("sess-rtrunc")
+                .unwrap()
+                .supplement_queue
+                .depth(),
+            1,
+            "failed recall must not clear queued supplements"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -8708,7 +8817,78 @@ mod tests {
         );
         // run 仍在册（guard 提前返回未动 runs 表）。
         assert!(server.runs.lock().unwrap().contains_key("sess-rbusy"));
+        let preview_err = server.handle_recall_preview("sess-rbusy").unwrap_err();
+        assert!(
+            matches!(preview_err, AcpError::InvalidRequest(ref m) if m.contains("in flight")),
+            "preview must use the same idle gate: {preview_err:?}"
+        );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn queue_append_is_rejected_during_restore_or_recall() {
+        let base = supplement_test_dir("q-restore-busy");
+        let server = shadow_server();
+        server
+            .handle_session_new(
+                "sess-qrestore",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        server
+            .runs
+            .lock()
+            .unwrap()
+            .insert("sess-qrestore".to_string(), RunInFlight::Restore);
+        let err = server
+            .handle_queue_append("sess-qrestore", "不得落到撤回后的分支")
+            .unwrap_err();
+        assert!(matches!(err, AcpError::InvalidRequest(ref m) if m.contains("restore or recall")));
+        assert_eq!(
+            server
+                .sessions
+                .lock()
+                .unwrap()
+                .get("sess-qrestore")
+                .unwrap()
+                .supplement_queue
+                .depth(),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn recall_persist_failure_keeps_conversation_and_queue() {
+        let base = supplement_test_dir("r-persist-fail");
+        let server = shadow_server();
+        server
+            .handle_session_new(
+                "sess-rpersist",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        seed_recall_conversation(&server, "sess-rpersist");
+        server
+            .handle_queue_append("sess-rpersist", "落盘失败时不得丢")
+            .unwrap();
+        std::fs::remove_dir_all(&base).unwrap();
+        std::fs::write(&base, b"not a directory").unwrap();
+
+        let err = server.handle_recall("sess-rpersist", 2).unwrap_err();
+        assert!(
+            matches!(err, AcpError::Host(ref m) if m.contains("durable conversation write failed"))
+        );
+        let sessions = server.sessions.lock().unwrap();
+        let session = sessions.get("sess-rpersist").unwrap();
+        assert_eq!(session.continuation.as_ref().unwrap().messages.len(), 5);
+        assert_eq!(session.supplement_queue.depth(), 1);
+        drop(sessions);
+        std::fs::remove_file(&base).unwrap();
     }
 
     #[tokio::test]

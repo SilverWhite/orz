@@ -67,7 +67,9 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
     } else if std::env::var_os("ORZ_REAL").is_some() {
         println!("orz web: 模型传输：真实（继承自调用方 ORZ_REAL）");
     } else {
-        println!("orz web: ⚠ 模型传输：fake（测试替身，回应无意义）——真实模型请用 `orz web --real`");
+        println!(
+            "orz web: ⚠ 模型传输：fake（测试替身，回应无意义）——真实模型请用 `orz web --real`"
+        );
     }
     // 批六（2026-09-25 用户报告「旧的归档消失了」）：从错误目录启动时
     // 桥扫的是那个目录的 .gsa——工作区必须印在启动台面上，一眼可辨。
@@ -80,7 +82,11 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
     // 直接挑明，不等用户撞墙。
     let missing: Vec<&str> = ["ORZ_ACAF_MANIFEST", "ORZ_ACAF_KEYSTORE", "ORZ_ACAF_BINARY"]
         .into_iter()
-        .filter(|k| std::env::var(k).map(|v| v.trim().is_empty()).unwrap_or(true))
+        .filter(|k| {
+            std::env::var(k)
+                .map(|v| v.trim().is_empty())
+                .unwrap_or(true)
+        })
         .collect();
     if !missing.is_empty() {
         println!(

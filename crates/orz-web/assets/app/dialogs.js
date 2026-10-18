@@ -379,7 +379,7 @@ export function openRewind() {
         row.style.padding = '2px 4px';
         row.style.cursor = 'pointer';
         row.style.background = i === selected ? 'rgba(0,0,0,0.18)' : '';
-        row.textContent = `#${entry.ordinal}  ${entry.preview}${entry.character_count > entry.preview.length ? '…' : ''}（${entry.character_count} 字符）`;
+        row.textContent = `#${entry.ordinal}  ${entry.preview}${entry.character_count > Array.from(entry.preview).length ? '…' : ''}（${entry.character_count} 字符）`;
         row.addEventListener('click', () => {
           selected = i;
           renderRows();

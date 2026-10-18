@@ -981,17 +981,12 @@ impl CdpBrowserSession {
                     .await?
             }
             super::BrowserControlAction::Key { key } => {
-                self.control_input_key(&mut control, &key, &mut log_lines).await?
+                self.control_input_key(&mut control, &key, &mut log_lines)
+                    .await?
             }
             super::BrowserControlAction::Click { selector, x, y } => {
-                self.control_input_click(
-                    &mut control,
-                    selector.as_deref(),
-                    x,
-                    y,
-                    &mut log_lines,
-                )
-                .await?
+                self.control_input_click(&mut control, selector.as_deref(), x, y, &mut log_lines)
+                    .await?
             }
             super::BrowserControlAction::Scroll { dx, dy } => {
                 self.control_input_scroll(&mut control, dx, dy, &mut log_lines)
@@ -1513,7 +1508,10 @@ impl CdpBrowserSession {
 
     /// 输入动作序号派生 seed（同会话逐次变化、可复核）。
     fn next_input_seed(&self) -> u64 {
-        let seq = self.input_seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let seq = self
+            .input_seq
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
         0x0B5_2026 ^ seq.wrapping_mul(7919)
     }
 
@@ -1719,8 +1717,8 @@ impl CdpBrowserSession {
         page_ws: &mut WsSession,
         selector: &str,
     ) -> Result<Option<(f64, f64)>, CdpError> {
-        let selector_literal = serde_json::to_string(selector)
-            .unwrap_or_else(|_| "\"\"".to_string());
+        let selector_literal =
+            serde_json::to_string(selector).unwrap_or_else(|_| "\"\"".to_string());
         let expr = format!(
             "(() => {{ const el = document.querySelector({selector_literal}); \
              if (!el) return null; const r = el.getBoundingClientRect(); \
@@ -1728,8 +1726,10 @@ impl CdpBrowserSession {
              return {{ x: r.left + r.width / 2, y: r.top + r.height / 2 }}; }})()"
         );
         let value = page_ws.evaluate_value(&expr).await?;
-        let (Some(x), Some(y)) = (value.get("x").and_then(Value::as_f64), value.get("y").and_then(Value::as_f64))
-        else {
+        let (Some(x), Some(y)) = (
+            value.get("x").and_then(Value::as_f64),
+            value.get("y").and_then(Value::as_f64),
+        ) else {
             return Ok(None);
         };
         Ok(Some((x, y)))

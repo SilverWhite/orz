@@ -29,6 +29,17 @@ function toolCalls(p) {
   }));
 }
 
+function discloseRolledBackSupplements() {
+  const count = state.deliveredSupplements;
+  state.deliveredSupplements = 0;
+  if (count > 0) {
+    vm.addSystemMessage(
+      `[提示] 本次运行已投递的 ${count} 条补充未写回会话；请按需重新发送`,
+      true,
+    );
+  }
+}
+
 export function applyJournalEvent(ev) {
   const p = ev.payload ?? {};
   switch (ev.event_type) {
@@ -40,6 +51,7 @@ export function applyJournalEvent(ev) {
 
     case 'run_started':
       state.running = true;
+      state.deliveredSupplements = 0;
       state.gateBlock = null;
       vm.setRunState('运行中', true);
       vm.syncToolbar();
@@ -54,6 +66,7 @@ export function applyJournalEvent(ev) {
      * 渲染为用户卡（与 prompt_submitted 同面，投递即可见确认）。 */
     case 'supplement_delivered':
       state.turnCounter++;
+      state.deliveredSupplements++;
       vm.addUserMessage(str(p, 'text'));
       break;
 
@@ -262,6 +275,7 @@ export function applyJournalEvent(ev) {
 
     case 'run_finished': {
       state.running = false;
+      state.deliveredSupplements = 0;
       vm.setRunState('完成', true);
       vm.collapseNonWarnings();
       vm.anchorFinalOutput();
@@ -276,6 +290,7 @@ export function applyJournalEvent(ev) {
       vm.collapseNonWarnings();
       vm.anchorFinalOutput();
       vm.addSystemMessage(`[错误] ${str(p, 'error')}`, true);
+      discloseRolledBackSupplements();
       vm.syncToolbar();
       break;
 
@@ -285,6 +300,7 @@ export function applyJournalEvent(ev) {
       vm.collapseNonWarnings();
       vm.anchorFinalOutput();
       vm.addSystemMessage(`运行已取消（${str(p, 'reason')}）`, false);
+      discloseRolledBackSupplements();
       vm.syncToolbar();
       break;
 
@@ -294,6 +310,7 @@ export function applyJournalEvent(ev) {
       vm.collapseNonWarnings();
       vm.anchorFinalOutput();
       vm.addSystemMessage(`运行无效（${str(p, 'status')}）`, true);
+      discloseRolledBackSupplements();
       vm.syncToolbar();
       break;
 
@@ -303,6 +320,7 @@ export function applyJournalEvent(ev) {
       vm.collapseNonWarnings();
       vm.anchorFinalOutput();
       vm.addSystemMessage(`运行终止（${str(p, 'reason') || str(p, 'kind')}）`, true);
+      discloseRolledBackSupplements();
       vm.syncToolbar();
       break;
 

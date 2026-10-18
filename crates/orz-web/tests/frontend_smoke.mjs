@@ -674,6 +674,13 @@ assert.ok(suppCard, 'supplement_delivered 必须产出内容项');
 assert.equal(suppCard.role, '用户', '补充投递卡＝用户卡（与 prompt_submitted 同面）');
 assert.equal(suppCard.content, '补充：改用中文输出');
 assert.equal(state.turnCounter, turnBefore + 1, '投递卡计一 turn');
+assert.equal(state.deliveredSupplements, 1, '本 run 已投递补充计数必须递增');
+applyJournalEvent({ event_type: 'run_cancelled', payload: { reason: 'user_cancelled' } });
+assert.equal(state.deliveredSupplements, 0, '非成功终态必须清零已投递计数');
+assert.ok(
+  state.content.items.some((item) => item.role === '系统' && item.content.includes('1 条补充未写回会话')),
+  '失败/取消必须明确提示已投递补充未写回',
+);
 console.log('ok  0di ① supplement_delivered 投递卡（用户面渲染）');
 
 // ②ext 线格式与接线——acp.js 三个 `_orz/*` 方法字面（`_` 前缀＝ACP 扩展
@@ -688,10 +695,12 @@ assert.ok(mainSrc.includes('sessionQueueAppend'), '运行中排队臂必须调 s
 const submitHead = mainSrc.slice(mainSrc.indexOf('async function submitPrompt'), mainSrc.indexOf('async function submitPrompt') + 600);
 assert.ok(!submitHead.includes('当前有运行在进行'), 'submitPrompt 运行中 flash 拒绝臂必须退役（排队臂取代）');
 assert.ok(mainSrc.includes("case '/rewind':"), '/rewind 命令必须接线');
+assert.ok(mainSrc.includes("flash('当前有运行在进行，结束或取消后才能撤回')"), '/rewind 必须有运行态前端守卫');
 const dialogsSrc = readFileSync(new URL('../assets/app/dialogs.js', import.meta.url), 'utf8');
 assert.ok(dialogsSrc.includes('export function openRewind()'), 'dialogs 必须含 openRewind');
 assert.ok(dialogsSrc.includes('rewindRecall'), '撤回确认必须走 rewindRecall 动作');
 assert.ok(dialogsSrc.includes('fillInput(r.recall_text'), '撤回后原文必须回输入框');
+assert.ok(dialogsSrc.includes('Array.from(entry.preview).length'), '省略号判定必须按 Unicode 字符而非 UTF-16 码元');
 console.log('ok  0di ② ext 线格式与排队/撤回接线字面');
 
 // ③撤回对话框行为——mock 动作面（bindDialogActions 重绑）：列表渲染、

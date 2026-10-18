@@ -76,13 +76,13 @@ async function ensureSession() {
 async function submitPrompt(text, isRetry = false) {
   if (state.running) {
     // 0di（2026-10-18，ADR-0010 §14.88）：运行中不拒绝——入会话级补充队列，
-    // 当前运行的下一次模型调用边界投递（不打断当前轮；CC #50246 deferred
+    // 可用的下一次模型调用边界投递（不打断当前轮；CC #50246 deferred
     // 语义）。队列跨 run 存活；取消运行不清队。
     try {
       const sessionId = await ensureSession();
       const r = await acp.sessionQueueAppend(sessionId, text);
       vm.addSystemMessage(
-        `已排队（第 ${r.depth} 条）——将在当前运行的下一次模型调用前投递`,
+        `已排队（第 ${r.depth} 条）——将在可用的下一次模型调用边界投递`,
         false,
       );
       renderAll();
@@ -714,7 +714,11 @@ function runSlash(cmd) {
     case '/rewind':
       // 0di：撤回（编辑式重发）——对话框列会话用户消息，选择后截断并把
       // 原文回输入框。
-      dialogs.openRewind();
+      if (state.running) {
+        flash('当前有运行在进行，结束或取消后才能撤回');
+      } else {
+        dialogs.openRewind();
+      }
       break;
     case '/open':
       dialogs.openCommand('command://');

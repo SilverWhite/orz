@@ -254,7 +254,10 @@ mod tests {
         slot.release("w1").await;
         assert!(slot.try_acquire("w1").await, "release must reopen the slot");
         assert!(slot.is_held("w2").await, "other workspace untouched");
-        assert!(slot.any_held().await, "observability: some workspace is held");
+        assert!(
+            slot.any_held().await,
+            "observability: some workspace is held"
+        );
     }
 
     #[tokio::test]
@@ -302,7 +305,10 @@ mod tests {
     async fn slot_guard_releases_on_drop() {
         let slot = SessionSlot::default();
         let guard = SlotGuard::new(slot.clone(), "w1".to_string());
-        assert!(slot.try_acquire("w1").await, "guard must hold the slot first");
+        assert!(
+            slot.try_acquire("w1").await,
+            "guard must hold the slot first"
+        );
         drop(guard);
         // Drop spawns the async release; yield until it lands.
         for _ in 0..50 {
