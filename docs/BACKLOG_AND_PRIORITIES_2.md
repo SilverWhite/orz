@@ -136,6 +136,14 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.235 2026-10-17 295 批 0dh 选型对证＋N3 撤回/中途补充外部调研（**记录批**，零源码零跑批，计数不变 64）
+
+- **用户两问**：「那是启用Grok的即可还是借鉴claude code的？」／「消息撤回/中途补充的设计我们也做外部调研吧……额外注意不打断模型当前动作这点，我们不做即时打断的那种补充」。
+- **0dh 选型对证**：Grok（`is_background`＋get_task_output/kill_task＋requires_expr＋完成 reminder）与 Claude Code（`run_in_background`＋BashOutput/TaskOutput＋KillShell）**表层同构**；建议＝**基座启用 Grok 逃生阀（已在树、与 orz 管线咬合、零新表层）＋借鉴三处**——教学一句话＋参数自解释／增量读出〔现役 get_task_output 整读 output_file 尾部截断缓冲，长日志下增量显著省 token〕／生命周期边界显式化〔Claude Code 会话内跨轮不跨会话；orz 按用户裁决走更远＝跨 run 不收割＋30h〕；**待用户拍板进 S1**。
+- **N3 中途补充调研**：Claude Code＝运行中输入即排队、不打断、**下一 LLM 调用边界 flush**（GitHub #50246 deferred 语义）、可叠多条；Codex＝Tab 队列同态；Cursor＝排队消息处理时切走丢手头活（反面教材）；Esc／Send-Now／priority mid-turn steering＝即时打断形态，**用户明确不做**。⇒ 用户裁决「自动接在当前思考/动作结束后」与 Claude Code queue 形态完全同形。orz 现状＝web `submitPrompt` running 即拒、ACP prompt 单飞；S1 勘定项＝排队归属（前端/桥/loop）＋flush 点定义＋ACP 并发语义＋排队可见面。
+- **N3 撤回调研**：Claude Code `/rewind` checkpointing＝checkpoint 绑定用户消息自动捕获、可恢复 code/conversation/both、**恢复会话＝原 prompt 回输入框编辑重发**（＝业界主流编辑式撤回）；官方诚实边界＝bash 副作用不可回退。orz 映射＝会话面截断（conversations/*.json 即载体）＋上下文 messages 截断同源；**文件面是否做 checkpoint 留用户裁决**；与 0dd 衔接。
+- 两项均为**记录**：0dh 补 S0-2 指针、OBS candidate N3 补调研指针；维持 candidate 待裁决，不立项不计数。门禁 `valid: true`。明细＝[`295 批档`](audits/295_0DH_CHANNEL_VERDICT_AND_N3_RECALL_SUPPLEMENT_SURVEY_2026-10-17.md)。
+
 ### 1.234 2026-10-17 294 批 0dg＋0dh 双立项——293 修复杂项＋长程进程显式通道（**立项＋只读取证批**，零源码零跑批，计数 62 → 64）
 
 - **用户令五项**：「293批中需要修的内容直接落成一个待办杂项吧」／「长进程跨run存活，不做收割，而且10h不够，放宽至30h」／「请查询目前orz最新会话的存档……昨晚模型告知我他无法启动长程」／「grok的后台进程管理机制我们留没留，能不能拿来用啊」／「教模型怎么用……机制得往简化做了……我们查一下业界的实现吧」。
