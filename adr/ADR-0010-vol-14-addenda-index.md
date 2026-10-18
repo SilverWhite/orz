@@ -3560,7 +3560,8 @@ TER M1/M2 全面审查（多子代理并行 + 提交态复核，有条件 PASS�
    live 读取时渲染层显式标注「不可用」，不渲染成「（无）」让模型误读
    （`terminal_live_capable`）；idle 采样覆盖边界（daemonize/关管道后由
    10h 兜底 + 会话清理负责；Linux CPU 记账按 pgrp 汇总——跨 pgrp 视为
-   部分未知，宁可少杀不误杀）。
+   部分未知，宁可少杀不误杀）。〔兜底值勘注（299 批）：本条「10h 兜底」
+   已被 §14.87 第 3 条 30h 改值实质波及，读数以 §14.87 为准。〕
 8. **W-F13 阅读面边界登记（全面审查 M1R-1/2/3 收口）**：read_file 64KB
    档的 token 估算按 ASCII 成立，多字节内容（CJK/emoji）可能超 25K 读档
    但仍在 50K 单轮硬预算内——按最坏 3 byte/char 复核随 M3 压测；
@@ -5113,3 +5114,26 @@ finalize sweep 跨 run 收割；用户手起进程存活＝job 域外）＋用�
    3028/0＋orz-host 串行 372/0＋orz-workspace 1500/0＋orz-loop 串行 883/0＋assurance
    303/0＋orz-bin 57/0＋orz-tui 172/9（基线同形 ACAF 预存集）＋clippy 99=99 零新增。
    proxy 车道（orz-agent）不在生产装配范围不动。S3 载体重建与 S4 真机待续。
+7. **全面审查处置与 S2-R 修复（0dh S2-R，2026-10-18，299 批；orz `7f85de3a`）**：用户令
+   「对当前完成的0dh进行全面检查」三路并行只读深查——符合性 D1–D8 全符合、实现质量
+   P2×4＋P3×9 零 P0/P1、设计面 **P0×1＝跨 run 存活被第二杀手结构性否决**：S2 时
+   terminal backend 住 host 内而 **host 每 prompt 重建**（`handle_session_prompt` 内
+   `build_host`），prompt 尾 host drop ⇒ 命令通道闭 ⇒ actor `shutdown_all()` 无差别
+   杀光全部后台任务（无 lifetime 过滤）——finalize sweep 豁除覆盖不到的第二个 run 边界
+   杀手；S1 勘定「跨 run 死因唯一＝finalize sweep」**随本条勘正**（历史归因 ep96＝sweep
+   无误；「唯一」推定遗漏了 teardown，30h/游标/跨 run 提醒在 S2 后仍全部不可达）。
+   **修复＝会话级 terminal backend**（本节第 2 条「宿主进程存活⇒跨 run 存活」的物理锚点
+   自此成立）：`StoredSession.terminal_backend` 会话持有（一 actor 一会话）＋`build_host`
+   查表注入（构造变体 `with_bridge_and_hub_policy_with_terminal`，None＝一次性车道
+   旧行为）＋`close_session` 同步 cancel→`shutdown_all` 收殓会话域任务（镜像 browser
+   `SharedBrowser` detached-shutdown 先例）；跨进程残余兜底链不变（Job KILL_ON_JOB_CLOSE
+   ＋下会话 Start sweep 收 breakaway 残余）。**e2e 钉
+   `session_terminal_backend_survives_host_rebuild_and_close_teardown`**（真 spawn：两轮
+   host 重建后存活×close 收殓）——该场景 S2 八面单元钉无一覆盖。随批处置＝混合 sweep
+   refusal 审计补齐／首读 payload 语义＋渲染补 m total（外部契约零新增字段）／封口臂
+   断言／30h 跨常量一致性钉／stale 注释·死导出·unmark·EnvGuard 注释 P3 清理／三颗
+   sweep 钉跨平台拆分（决策层合成行跨平台、执行层真杀保留 cfg(windows)）。读数＝
+   orz-host 串行 374/0＋orz-tools 3031/0＋orz-workspace 1500/0＋xai-tty-utils 35/0＋
+   xai-tool-types 100/0；clippy 告警位置列表 stash 前后逐位 diff 零新增；fmt 触碰件净。
+   设计稿随批勘正 v1.1（§2.1/§2.2 勘定结论、D2⑥ 锚点、§5 风险两边界、S4 判据增补⑥⑦）；
+   §14.55 第 7 条「10h 兜底」值随本条加指针注。S3 载体重建与 S4 真机待续。

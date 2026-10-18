@@ -136,6 +136,16 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.239 2026-10-18 299 批 0dh 全面审查处置＋S2-R 修复——P0 生命周期缺口闭合（**修复批**，计数不变 65）
+
+- **触发**：用户令「请对当前完成的0dh进行全面检查，包括设计合理性、实现合理性、设计与实现的符合性。如审查压力大请派出子代理」→ 三路并行只读深查（符合性／实现质量／设计合理性，子代理结论主会话亲验）→ 用户令「其他审查出的全部问题都需要处理，如待处理项较多，可拉起子代理帮助处理」＋修复方向裁决「把 shutdown_all 改为和 orz 主进程绑定……只要能 orz 进程本身结束后收掉残余进程就可以」。
+- **审查结论**：符合性＝D1–D8 全符合、批档无不实表述（低偏差 6 项）；实现质量＝零 P0/P1、P2×4＋P3×9；设计面＝**P0×1**——**跨 run 存活被第二杀手结构性否决**：terminal backend 原住 host 内而 host 每 prompt 重建（`build_host` in `handle_session_prompt`），prompt 尾 host drop ⇒ 命令通道闭 ⇒ actor `shutdown_all` 无差别杀光全部后台任务（无 lifetime 过滤）＝finalize sweep 豁除覆盖不到的第二个 run 边界杀手；30h/游标/跨 run 提醒连带全部不可达、教学文案向模型承诺假不变量；**S1 勘定「死因唯一＝sweep」勘正**（历史归因无误，「唯一」推定遗漏 teardown）。用户方案必要修正记录＝仅改 `shutdown_all` 不充分（`ProcessState` drop 闭 Job 句柄照杀＋actor 灭则管理面亡），正解＝backend 会话级持有使 `shutdown_all` 触发点收敛为会话关闭/进程退出（与用户目标等价）。
+- **落码（orz `7f85de3a`，15 文件 +701/−89，不推送）**：①P0＝会话级 terminal backend（`StoredSession.terminal_backend` session_new 一次构造＋`build_host` 查表注入〔`with_bridge_and_hub_policy_with_terminal` 变体，None＝一次性车道旧行为〕＋`close_session` 同步 cancel 收殓；browser `SharedBrowser` 先例；grill/stdio/codex_app/TUI 自动继承；跨进程残余兜底链不变）；②**e2e 钉 `session_terminal_backend_survives_host_rebuild_and_close_teardown`**（真 spawn：prompt1 尾存活×prompt2 尾存活×close 收殓——该缺口 S2 八面单元钉无一覆盖）；③P2-1 execute_sweep 混合分支 refusal 审计＋NotRunning 清理两分支统一（零收割臂逐字节兼容）＋新钉；④P2-2 首读 payload 语义＋渲染补 m total（外部契约零新增字段）＋`raw_output_bytes` doom-loop 修复；⑤P2-3 封口臂断言；⑥P2-4 30h 值钉＋跨常量一致性钉；⑦P3＝stale 10h 注释六处/unmark_spawn_session 三面接线＋单测/死导出删除/EnvGuard 注释如实化；⑧三颗 sweep 钉跨平台拆分（决策层合成行跨平台、执行层真杀保留 cfg(windows)）；⑨orz-workspace hub.rs fixture 连带补字段。
+- **读数**：orz-host 串行 374/0（基线 372＋2 钉）＋orz-tools 3031/0（+3）＋orz-workspace 1500/0＋xai-tty-utils 35/0（+1）＋xai-tool-types 100/0；fmt 触碰件净（预存漂移非触碰区照旧）；clippy 对比法升级＝告警位置列表 stash 前后逐位 diff：orz-host 114=114（新变体 `too_many_arguments` 沿仓内 #[allow] 先例）＋其余触碰 crate 零新增；下游 orz-bin/orz-tui/orz-web check 干净；全仓 check 受 protoc 缺失阻断＝环境预存（proxy 车道，0dh 未触碰）。
+- **边界登记三项**：死 session 行留盘至下次装配清扫（0bq 域取证面）／idle-kill 事实跨 run 可能重复上报（per-host 去重语义，信息面无害）／session_new 重创建＝新任务域。设计稿勘正 **v1.1**（§2.1/§2.2 勘定结论两块＋D2⑥ 锚点＋§5 风险两边界〔breakaway 不受 30h 管辖＋CPU-busy 仅墙钟一闸〕＋S4 判据增补⑥跨 run 读出连续性＋⑦refusal 行陷阱注）；ADR §14.87 第 7 条＋§14.55 第 7 条指针注。
+- **台账**：本卷；[`299 批档`](audits/299_0DH_S2R_REVIEW_DISPOSAL_2026-10-18.md)；BACKLOG 本批指针＋计数行（65 不变）＋P1 路由行 0dh stale「S1 待启动」勘正＋0dh 节 S2-R 达成；TODO 计数行＋P1 路由行＋`P1-0dh` S2-R 勾选＋S4 判据增补；索引头行 v4.271 → v4.272＋AUTH-LONGRUNNING 条目勘正。**未推送**。
+- 关键词：299 批、0dh S2-R、全面审查、P0 actor teardown、第二杀手、会话级 terminal backend、StoredSession、close_session 拆树、e2e 钉、混合 sweep 审计、m total、封口断言、跨平台拆分、设计稿 v1.1、计数 65 不变、索引 v4.272。
+
 ### 1.238 2026-10-18 298 批 0dh S2 落码——长程进程显式通道（**落码批**，零跑批，计数不变 65）
 
 - **触发**：用户令「请开始进行S2吧」（承 297 S1 设计稿 D1–D8）。

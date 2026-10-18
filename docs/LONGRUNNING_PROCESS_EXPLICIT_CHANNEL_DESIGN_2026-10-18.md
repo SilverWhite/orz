@@ -1,6 +1,7 @@
 # 长程进程显式通道设计稿（0dh S1）——TER 封闭面受控重开＋收割语义修订＋30h 兜底
 
-> 版本：v1.0（2026-10-18，297 批）。
+> 版本：v1.1（2026-10-18；v1.0＝297 批，**v1.1＝299 批全面审查勘正**——§2.1/§2.2 勘定结论、
+> D2⑥ 生命周期边界、§5 风险表述、S4 判据增补；勘正由 S2-R 修复批承载落码，orz `7f85de3a`）。
 > 上游：294 批立项（S0 机制盘点＋业界调研）→ 295 批 S0-2 选型对证（Grok↔Claude Code 同构）→
 > **296 批用户定案＝启用 Grok（`hide_background_input=false` 逃生阀）＋借鉴 Claude Code 三处**。
 > 本稿为 S1 设计稿：把选型定案落成可实施细则，并勘定五项待勘（收割豁除×0bq 并存／per-call
@@ -49,6 +50,16 @@
 **前台域 by-design 拆树**：前台 shell 被收殓时其 per-call Job 句柄闭合，脱离出去仍留在 job 内的
 孙进程整树回收。正解是**教学**（长程必须走显式声明通道），不是重挂 Job。
 
+> **v1.1 勘正（299 批）**：本节「actor 持有原句柄直到任务终」的执法前提在 v1.0 时**不成立**——
+> 生产 ACP 装配下 terminal backend 住在 host 内，而 **host 每 prompt 重建**（`handle_session_prompt`
+> 内 `build_host`，作者自注「host 每次 prompt 新建」；grill/stdio/codex_app/TUI 全部经此路径），
+> prompt 尾 host drop ⇒ backend 亡 ⇒ 命令通道闭 ⇒ actor `None` 臂执行 `shutdown_all()`
+> **无差别杀光全部后台任务**（无 lifetime 过滤）。即 actor 生命周期＝**单 prompt**，非「会话级」。
+> S2-R 修复（orz `7f85de3a`）＝terminal backend 提为**会话级持有**（`StoredSession.terminal_backend`，
+> browser `SharedBrowser` 先例；`build_host` 查表注入＋`close_session` 同步 cancel 收殓），
+> 本节前提自此成立；e2e 钉 `session_terminal_backend_survives_host_rebuild_and_close_teardown`
+> 钉住「host 重建后任务存活×close 收殓」。
+
 ### §2.2 跨 run 死因唯一＝`run_shutdown` finalize sweep
 
 `OrzHost::finalize_process_trees`（lib.rs:580）在 run 尾以
@@ -64,6 +75,13 @@
 
 **勘定结论二（豁除面）**：跨 run 存活的修订点是**唯一**的——finalize sweep 对受管后台任务
 开豁除口；Start sweep、前台域拆树、0bq 孤儿兜底全部不动。
+
+> **v1.1 勘正（299 批）**：「跨 run 死因唯一＝finalize sweep」为**事实性遗漏**——run 边界历来有
+> **两个杀手**：finalize sweep ＋ actor teardown（§2.1 勘正块）。v1.0 勘定当时「唯一有效杀手」
+> 成立（ep96 有 sweep 收割 journal 实证，sweep 先杀），但据此推定「拔掉 sweep 即跨 run 存活」
+> 不成立：S2 后 sweep 豁除生效，杀手只是换成 prompt 尾的 actor teardown，ep96 原地重演。
+> S2-R 落会话级 backend 后，teardown 触发点收敛为「会话关闭 / 宿主进程退出」两处＝D2⑥
+> 会话域边界本意。历史归因（294 批 ep96 归因 sweep）无误，本勘正仅针对「唯一」的推定。
 
 ### §2.3 30h 兜底执法点已在，且显式后台并非真无界
 
@@ -150,6 +168,11 @@ schema、显式输入被拒（bash/mod.rs:2208）。`requires_expr`（bash/mod.r
    run 存活（finalize 不杀、装配 sweep 因 ParentAlive 不杀）；宿主进程死亡＝会话域终止
    （actor 灭→Job 句柄闭合→直接树灭；breakaway 残余由下会话装配 sweep 收净）。本条写为
    显式声明，不沿 Claude Code「会话内跨轮」口径收缩、也不承诺跨进程重启。
+   **（v1.1 勘正，299 批）**：会话域的物理锚点＝**会话级 terminal backend**（S2-R 落地：
+   `StoredSession.terminal_backend` 持有 actor，跨 prompt 复用）——任务域终止点精确为
+   **会话关闭（`close_session` 同步 cancel→`shutdown_all` 收殓）或宿主进程退出**（OS 闭
+   Job 句柄）两处；v1.0「宿主进程存活期间跨 run 存活」的表述在 per-prompt host 重建的
+   现实下曾依赖未验证的 actor 生命周期假定（见 §2.1 勘正块）。
 
 ### D3 Job 归属层级（五项待勘②）＝零新增层，现役 actor 任务域写成设计条款
 
@@ -235,6 +258,12 @@ Job 内继承整树管理；主动 daemonize/breakaway 脱树的残余不受 Job
   （对照 ep96）；②run 尾 sweep 后存活（journal：finalize 臂 `session_owned` refusal 行）；
   ③30h 生效路径可回放（env 或短钳演示）；④完成提醒跨 run 送达；⑤增量读出真机读数
   （轮询 token 降幅对照现役整读）。
+  **（v1.1 增补，299 批）**：⑥**跨 run 读出连续性**＝run N+1 的 `get_task_output` 能读到
+  run N 起的任务（增量段续接、游标语义一致）——显式列判据，不隐含于①；⑦run 尾核证
+  注意判据②的**陷阱**：refusal 审计行只证明 sweep 不杀，任务存活性须以 ⑥/① 的进程级
+  读数为准（S2-R 前该行会「通过」而任务已 teardown 被杀）。度量协议（⑤ 的 token 降幅
+  对照：基线 run、轮询频率、计法）在 S4 开跑前钉定；breakaway 残余×0bq 交互与多会话
+  并发不干扰暂列观察项不设硬判据。
 
 ## §4 与既有设计的关系
 
@@ -254,6 +283,12 @@ Job 内继承整树管理；主动 daemonize/breakaway 脱树的残余不受 Job
 
 1. **豁除＝泄漏面扩大**：受管后台任务跨 run 存活意味着被遗忘的任务至多存活 30h／会话域
    ——用户显式裁决接受；输出 5GiB 帽与 idle-kill 300s 抑制失控面。
+   **（v1.1 勘正，299 批）**：该「至多 30h」表述有两处边界须如实登记——①**breakaway/
+   daemonize 脱树残余不受 30h 管辖**（30h 执法点＝actor poll tick；进程脱离 job 后无执法者，
+   唯一净网＝下会话装配 Start sweep；宿主进程长寿则残余随之长寿）；②**CPU-busy 失控任务
+   实际只有 30h 墙钟一道闸**（idle-kill 判 CPU 不增不判 idle、5GiB 只管输出面）——「抑制
+   失控面」对纯计算型任务不成立。S2-R 后执法前提（会话级 actor）已闭合，泄漏面以本条
+   两边界为准。
 2. **auto-bg 统一豁除的语义扩张**：普通长命令 auto-bg 后不再随 run 收殓。接受（②③④
    理由，D2④）；真机轮如现「僵尸服务堆积」摩擦，S4 后可复议收窄为显式+Ctrl+G 两路径。
 3. **游标与会话存档**：游标是 actor 内存态不入档——存档回放不依赖游标（journal 与
