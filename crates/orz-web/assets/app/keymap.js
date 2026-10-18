@@ -1,7 +1,7 @@
 /*
  * keymap.js —— 键盘模型（补充稿 §10：F6 切大区、Tab/Shift+Tab 区内移动、
  * Esc 关弹窗、Ctrl+L 命令、Ctrl+F 查找、Alt+字母 开菜单、Alt+H/F1 帮助、
- * Ctrl+Z 取消运行、双 Esc 运行历史、← → 切 Help 标签）。
+ * Ctrl+Z 取消运行（输入框内豁免还原生文本撤销，0dg ②）、双 Esc 运行历史、← → 切 Help 标签）。
  * （审查处理批 D3：补 Tab 区内移动与 Alt+字母菜单访问键。）
  */
 
@@ -76,7 +76,8 @@ export function handleKey(e) {
     e.preventDefault();
     return;
   }
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !inInput) {
+    // 输入框内豁免（0dg ②）：放行原生文本撤销；取消运行只在输入框外生效。
     actions.stopRun?.();
     e.preventDefault();
     return;

@@ -384,7 +384,7 @@ export function renderContent() {
           item.collapsed = !item.collapsed;
           renderContent();
         });
-        const body = el('div', 'msg-body');
+        const body = el('div', item.role === '模型' ? 'msg-body' : 'msg-body plain');
         body.innerHTML = item.role === '模型' ? renderMarkdown(item.content) : '';
         if (item.role !== '模型') body.textContent = item.content;
         card.appendChild(head);

@@ -138,7 +138,11 @@ async function submitPrompt(text, isRetry = false) {
 }
 
 function stopRun() {
-  if (!acpSessionId || !state.running) return;
+  if (!acpSessionId || !state.running) {
+    // 0dg ②：闲置期按下不再静默——与运行中「已发送取消」同通道反馈。
+    flash('当前无运行中');
+    return;
+  }
   acp.sessionCancel(acpSessionId);
   flash('已发送取消');
 }

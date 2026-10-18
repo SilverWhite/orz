@@ -240,6 +240,9 @@ html, body {
   user-select: none;
 }
 .msg-card .msg-body { padding: 6px 8px; overflow-wrap: anywhere; }
+/* 0dg ①（2026-10-18）：纯文本卡面（.plain＝用户/系统卡 widgets 直填
+ * textContent）保留源换行；模型卡 markdown 面不加——\n 由段落化消费。 */
+.msg-card .msg-body.plain { white-space: pre-wrap; }
 .msg-card.warning .msg-head { background: #ffd2d2; color: #7a0000; }
 .msg-card .msg-body p { margin: 0 0 8px 0; }
 .msg-card .msg-body p:last-child { margin-bottom: 0; }
@@ -302,6 +305,7 @@ html, body {
   font-size: 12px;
   color: #555;
   margin: 0 0 6px 0;
+  white-space: pre-wrap; /* 0dg ①：系统行同面（多行错误/透传不折叠为空格） */
 }
 .system-line.warning { color: #a00000; }
 .system-gap { height: 8px; } /* 消息之间空行（三稿 §3.1） */

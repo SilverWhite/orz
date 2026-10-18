@@ -13,6 +13,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 process.on('unhandledRejection', (e) => {
   console.error('frontend smoke: 未处理的 Promise 拒绝（boot 链）→', e);
@@ -601,6 +602,60 @@ assert.equal(
   '本轮锚指向门后正式输出',
 );
 console.log('ok  285 F1/F2 反例门静默折叠＋收尾只折机器行（对话卡保持可读）');
+
+/* ── 12. 0dg（2026-10-18）：对话卡 pre-wrap＋Ctrl+Z 输入框豁免与闲置反馈 ── */
+
+// ①用户/系统卡纯文本面带 .plain（pre-wrap 白名单只作用此面；模型卡
+//   markdown 面不加——\n 由段落化消费）；textContent 保留源换行；
+//   app.css 须含 .plain 与 .system-line 两条规则。
+state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
+state.marker = [];
+state.turnCounter = 0;
+vm.addUserMessage('第一行\n第二行');
+applyJournalEvent({ event_type: 'model_output', payload: { text: '模型回答' } });
+applyJournalEvent({ event_type: 'run_finished', payload: {} });
+widgets.renderContent();
+const plainBody = registry.filter((e) => (e.className || '') === 'msg-body plain').at(-1);
+const mdBody = registry.filter((e) => (e.className || '') === 'msg-body').at(-1);
+assert.ok(plainBody, '非模型卡 body 必须带 .plain（pre-wrap 作用面）');
+assert.ok(plainBody.textContent.includes('\n'), 'textContent 保留源换行（折叠发生在 CSS 层）');
+assert.ok(mdBody, '模型卡 body 存在（对照组）');
+assert.equal(mdBody.textContent, '', '模型卡 body 不带 .plain（markdown 走 innerHTML）');
+const css = readFileSync(new URL('../assets/app.css', import.meta.url), 'utf8');
+assert.match(css, /\.msg-card \.msg-body\.plain \{ white-space: pre-wrap; \}/, 'app.css 必须含 .plain pre-wrap 规则');
+assert.match(css, /\.system-line \{[^}]*white-space: pre-wrap/s, '系统行同面补 pre-wrap');
+console.log('ok  0dg ① 对话卡 pre-wrap（.plain 作用面限定＋system-line 同面）');
+
+// ②输入框内 Ctrl+Z＝放行原生文本撤销（不调 stopRun、不 preventDefault）；
+//   输入框外仍取消运行；闲置期按下给「当前无运行中」反馈（不再静默 return）。
+const connBanner = globalThis.document.getElementById('connBanner');
+const bannerBefore = connBanner.textContent;
+let prevented = 0;
+handleKey({
+  key: 'z',
+  ctrlKey: true,
+  altKey: false,
+  shiftKey: false,
+  target: { tagName: 'TEXTAREA' },
+  preventDefault() {
+    prevented++;
+  },
+});
+assert.equal(prevented, 0, '输入框内 Ctrl+Z 不得被全局键位抢占');
+assert.equal(connBanner.textContent, bannerBefore, '输入框内 Ctrl+Z 不得触发取消运行');
+handleKey({
+  key: 'z',
+  ctrlKey: true,
+  altKey: false,
+  shiftKey: false,
+  target: { tagName: 'BODY' },
+  preventDefault() {
+    prevented++;
+  },
+});
+assert.equal(prevented, 1, '输入框外 Ctrl+Z 保持取消运行语义（preventDefault）');
+assert.equal(connBanner.textContent, '当前无运行中', '闲置期按下必须有反馈（不再静默）');
+console.log('ok  0dg ② Ctrl+Z 输入框豁免＋闲置期反馈');
 
 console.log('\nfrontend smoke: 全部通过');
 process.exit(0);
