@@ -2547,6 +2547,10 @@ mod conformance_capture {
                             break result;
                         }
                         orz_tui::acp_client::ClientMsg::SessionNotification { .. } => {}
+                        // 0di：新消息面与本测试无关，照常跳过。
+                        orz_tui::acp_client::ClientMsg::SupplementQueued { .. }
+                        | orz_tui::acp_client::ClientMsg::RewindPreview { .. }
+                        | orz_tui::acp_client::ClientMsg::RecallDone { .. } => {}
                     }
                 };
                 assert!(completed.is_ok(), "prompt failed: {completed:?}");

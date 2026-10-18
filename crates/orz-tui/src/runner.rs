@@ -344,6 +344,15 @@ async fn run_loop(
                                 // the runner owns the async restore call.
                                 // The two intents are mutually exclusive by
                                 // the app-side guards; drain both anyway.
+                                // 0di：`/rewind` 请求——runner 拉取撤回预览
+                                // （`_orz/recall_preview`），modal 在 ack 时打开。
+                                if std::mem::take(&mut app.pending_rewind_open) {
+                                    client.spawn_rewind_preview();
+                                }
+                                // 0di：撤回确认——runner 持有异步 `_orz/recall`。
+                                if let Some(ordinal) = std::mem::take(&mut app.pending_rewind) {
+                                    client.spawn_rewind(ordinal);
+                                }
                                 if let Some(hash) = std::mem::take(&mut app.pending_restore) {
                                     // Review D2-1: the loop suspends for the
                                     // whole restore await, so render a frame
@@ -365,9 +374,15 @@ async fn run_loop(
                                 // the run-dir counter and corrupt the journal.
                                 // Restoring has no host in-flight marker
                                 // (record P2-2) — the TUI is the only guard.
-                                if app.running || app.restoring {
+                                // 0di（ADR-0010 §14.88）：运行中的输入改为**排队**
+                                // （会话级补充队列，下一次 LLM 调用边界投递，不打断
+                                // 当前轮；CC #50246 deferred 语义）——恢复中仍拒绝
+                                // （restore 与 prompt 互斥不变）。
+                                if app.restoring {
                                     app.content.add_system_message(
-                                        "当前有运行/恢复进行中——请等待完成", false);
+                                        "恢复进行中——请等待完成", false);
+                                } else if app.running {
+                                    client.spawn_queue_append(text);
                                 } else if app.grill_active {
                                     // Grill mode (2026-08-08): chat input is
                                     // the answer to the previous question —
@@ -398,6 +413,51 @@ async fn run_loop(
                     Some(ClientMsg::SessionNotification { text_chunk, .. }) => {
                         if !text_chunk.is_empty() {
                             app.accept_event(TuiEvent::TextDelta { text: text_chunk });
+                        }
+                    }
+                    Some(ClientMsg::SupplementQueued { depth, error }) => {
+                        match error {
+                            None => app.content.add_system_message(
+                                &format!("已排队（第 {depth} 条）——将在当前运行的下一次模型调用前投递"),
+                                false,
+                            ),
+                            Some(e) => app.content.add_system_message(
+                                &format!("[错误] 补充入队失败: {e}"),
+                                true,
+                            ),
+                        }
+                    }
+                    Some(ClientMsg::RewindPreview { entries, error }) => {
+                        match error {
+                            None => {
+                                app.open_rewind_modal(entries);
+                            }
+                            Some(e) => app.content.add_system_message(
+                                &format!("[错误] 撤回预览读取失败: {e}"),
+                                true,
+                            ),
+                        }
+                    }
+                    Some(ClientMsg::RecallDone { recall_text, removed, dropped, error }) => {
+                        match error {
+                            None => {
+                                // 原文回输入框供编辑重发（编辑式重发语义）。
+                                app.input.textarea.set_text(&recall_text);
+                                app.focus = crate::app::Focus::Chat;
+                                let dropped_note = if dropped > 0 {
+                                    format!("；{dropped} 条未投递补充已一并丢弃")
+                                } else {
+                                    String::new()
+                                };
+                                app.content.add_system_message(
+                                    &format!("已撤回 {removed} 条消息{dropped_note}——上下文已截断（运行历史/journal 不变；文件面 git 兜底），原文已回输入框"),
+                                    false,
+                                );
+                            }
+                            Some(e) => app.content.add_system_message(
+                                &format!("[错误] 撤回失败: {e}"),
+                                true,
+                            ),
                         }
                     }
                     Some(ClientMsg::PromptCompleted { seq, result }) => {
@@ -935,6 +995,10 @@ mod tests {
                         }
                         ClientMsg::SessionNotification { .. } => {}
                         ClientMsg::PermissionRequest { .. } => {}
+                        // 0di：新消息面与本测试无关，照常跳过。
+                        ClientMsg::SupplementQueued { .. }
+                        | ClientMsg::RewindPreview { .. }
+                        | ClientMsg::RecallDone { .. } => {}
                     }
                 };
                 let response = completed.expect("cancel is a success response");
@@ -1018,6 +1082,10 @@ mod tests {
                         ClientMsg::PromptCompleted { .. } => completed = true,
                         ClientMsg::SessionNotification { .. } => {}
                         ClientMsg::PermissionRequest { .. } => {}
+                        // 0di：新消息面与本测试无关，照常跳过。
+                        ClientMsg::SupplementQueued { .. }
+                        | ClientMsg::RewindPreview { .. }
+                        | ClientMsg::RecallDone { .. } => {}
                     }
                 }
                 let _ = std::fs::remove_dir_all(&base);
@@ -1088,6 +1156,10 @@ mod tests {
                         }
                         ClientMsg::SessionNotification { .. } => {}
                         ClientMsg::PermissionRequest { .. } => {}
+                        // 0di：新消息面与本测试无关，照常跳过。
+                        ClientMsg::SupplementQueued { .. }
+                        | ClientMsg::RewindPreview { .. }
+                        | ClientMsg::RecallDone { .. } => {}
                     }
                 };
                 let response = completed.expect("cancel is a success response");
@@ -1392,6 +1464,10 @@ mod tests {
                         }
                         ClientMsg::PromptCompleted { result, .. } => break result,
                         ClientMsg::SessionNotification { .. } => {}
+                        // 0di：新消息面与本测试无关，照常跳过。
+                        ClientMsg::SupplementQueued { .. }
+                        | ClientMsg::RewindPreview { .. }
+                        | ClientMsg::RecallDone { .. } => {}
                     }
                 };
                 assert!(completed.is_ok(), "prompt failed: {completed:?}");

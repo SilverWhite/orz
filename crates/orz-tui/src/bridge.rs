@@ -102,6 +102,12 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             prompt: get_str(p, "prompt"),
             character_count: get_u64(p, "character_count"),
         },
+        // 0di：中途补充投递——渲染为用户卡（非 Unknown 降级：投递是用户
+        // 可见面事实，卡片即「补充已生效」的确认）。
+        EventType::SupplementDelivered => TuiEvent::SupplementDelivered {
+            supplement_seq: get_u64(p, "supplement_seq"),
+            text: get_str(p, "text"),
+        },
         EventType::ModelRequest => TuiEvent::ModelRequest {
             provider: get_str(p, "provider"),
             model_id: get_str(p, "model_id"),

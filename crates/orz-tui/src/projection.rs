@@ -91,6 +91,28 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             app.marker.add_user_input(card_line);
             vec!["用户消息".into()]
         }
+        // 0di：补充投递卡——与 prompt_submitted 同面（turn 计数递增；
+        // 去重键含序数避免同文补充被折叠）。
+        TuiEvent::SupplementDelivered {
+            supplement_seq,
+            text,
+        } => {
+            app.turn_counter += 1;
+            let existing = app.content.items.iter().position(|item| {
+                matches!(item, crate::view_model::ContentItem::Message(m)
+                    if m.role == "用户" && m.content == text)
+            });
+            let card_line = match existing {
+                Some(idx) => idx + 1,
+                None => {
+                    app.content.add_user_message(&text);
+                    app.content.items.len()
+                }
+            };
+            let _ = supplement_seq;
+            app.marker.add_user_input(card_line);
+            vec!["补充投递".into()]
+        }
         TuiEvent::ModelRequest { provider, model_id } => {
             app.status.set_model(&model_id);
             app.status.update_item(&model_id, true);

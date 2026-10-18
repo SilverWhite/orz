@@ -68,6 +68,12 @@ const BUILTIN: &[CommandDef] = &[
         category: "运行",
     },
     CommandDef {
+        slash: "/rewind",
+        name_zh: "撤回消息",
+        description_zh: "撤回一条历史消息及其后上下文（原文回输入框供编辑重发；文件面 git 兜底）",
+        category: "会话",
+    },
+    CommandDef {
         slash: "/grill",
         name_zh: "设计拷问",
         description_zh: "进入 grill 模式（一次一问/带推荐/先探索代码库；只读工具）",

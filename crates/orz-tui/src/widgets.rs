@@ -650,7 +650,76 @@ pub fn compose_modal_overlay(
         }
         crate::modals::Modal::Find(f) => compose_find_overlay(f, box_width, max_height),
         crate::modals::Modal::Snapshots(s) => compose_snapshots_overlay(s, box_width, max_height),
+        crate::modals::Modal::Rewind(s) => compose_rewind_overlay(s, box_width, max_height),
     }
+}
+
+/// 0di：撤回选择器 overlay——Snapshots 同构（title/行/两段确认/footer，
+/// 每行恰 *box_width* 列；高度自适应裁剪、底端锚定跳滚）。
+fn compose_rewind_overlay(
+    sel: &crate::modals::RewindSelector,
+    box_width: u16,
+    max_height: u16,
+) -> Vec<String> {
+    let w = (box_width as usize).max(24);
+    let inner = w.saturating_sub(2);
+    let mut lines: Vec<String> = Vec::new();
+    let title = " 撤回 ";
+    let fill = inner.saturating_sub(str_width(title) as usize);
+    lines.push(pad_right(
+        &format!("┌{title}{}┐", "─".repeat(fill)),
+        box_width,
+    ));
+
+    lines.push(format!(
+        "│ {} │",
+        pad_right("#  消息（撤回含其后全部；原文回输入框）", inner as u16 - 2)
+    ));
+
+    if sel.entries.is_empty() {
+        lines.push(format!(
+            "│ {} │",
+            pad_right("  (无可撤回消息 — 会话尚无用户消息)", inner as u16 - 2)
+        ));
+    } else {
+        let budget = (max_height as usize).saturating_sub(4);
+        let top = sel.window_top(budget);
+        for (i, e) in sel.entries.iter().enumerate().skip(top).take(budget) {
+            let cursor = if i == sel.selected { "▸ " } else { "  " };
+            let row = if sel.confirm && i == sel.selected {
+                format!(
+                    "{cursor}确认撤回？ 撤回后上下文不含本条及其后消息（运行历史/journal 不变）— Enter 确认 / Esc 返回"
+                )
+            } else {
+                let one_line: String = e
+                    .preview
+                    .chars()
+                    .map(|c| if c == '\n' { ' ' } else { c })
+                    .collect();
+                format!(
+                    "{cursor}#{:<3} {} ({})",
+                    e.ordinal, one_line, e.character_count
+                )
+            };
+            let fitted = truncate_to_width(&row, inner as u16 - 2, "…");
+            lines.push(format!("│ {} │", pad_right(&fitted, inner as u16 - 2)));
+        }
+    }
+
+    lines.push(format!(
+        "│ {} │",
+        pad_right(
+            "Esc 关闭  ↑↓ 选择  Enter 确认撤回 · 文件面 git 兜底",
+            inner as u16 - 2,
+        )
+    ));
+    lines.push(format!("└{}┘", "─".repeat(inner)));
+
+    if lines.len() > max_height as usize {
+        lines.truncate(max_height.saturating_sub(1) as usize);
+        lines.push(format!("└{}┘", "─".repeat(inner)));
+    }
+    lines
 }
 
 /// Snapshot selector overlay (slice #10) — title / header / entry rows /

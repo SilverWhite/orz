@@ -7945,4 +7945,177 @@ body"
         assert_eq!(taken.len(), 1, "直投取走");
         assert!(taken[0].text.contains("持续越线"), "{}", taken[0].text);
     }
+
+    // ── 0di（2026-10-18，ADR-0010 §14.88）：中途补充投递 ──
+
+    /// 0di 测试辅助：读取 run journal 全事件（JSONL → RunEvent）。
+    fn read_supplement_test_events(dir: &std::path::Path) -> Vec<orz_assurance::RunEvent> {
+        let text = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+        text.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    /// 主车道 loop-top 投递：预入队两条补充，一轮 run 内恰两条
+    /// `supplement_delivered` 事件——位于 prompt_submitted 之后、首个
+    /// model_request 面（RequestHeaderChange）之前；FIFO 保序＋
+    /// supplement_seq 从 1 递增＋character_count=text chars；队列取空。
+    #[tokio::test]
+    async fn supplement_delivered_lands_at_loop_top_in_order() {
+        let dir = test_dir();
+        let host = SupplementHost {
+            journal: JournalRecorder::new(dir.clone()),
+            queue: std::sync::Mutex::new(
+                [
+                    "补充一：先看 README".to_string(),
+                    "补充二：输出用中文".to_string(),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec!["结果：完成"]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let result = controller
+            .run_turn(&host, "任务", "RUN-SUPP", MANIFEST, 0, None, None, None)
+            .await;
+        assert!(result.is_ok(), "{result:?}");
+
+        let events = read_supplement_test_events(&dir);
+        let types: Vec<EventType> = events.iter().map(|e| e.event_type.clone()).collect();
+        let first_supp = types
+            .iter()
+            .position(|t| *t == EventType::SupplementDelivered)
+            .expect("supplement events must exist");
+        let prompt_pos = types
+            .iter()
+            .position(|t| *t == EventType::PromptSubmitted)
+            .expect("prompt_submitted");
+        let face_pos = types
+            .iter()
+            .position(|t| *t == EventType::FaceFingerprint)
+            .expect("model face fingerprint");
+        // RequestHeaderChange 只指纹 system+tools（消息面无关），先于投递
+        // 无语义影响；模型请求面事件＝FaceFingerprint，投递必须在其前。
+        assert!(
+            prompt_pos < first_supp && first_supp < face_pos,
+            "supplements must land after prompt_submitted and before the model-request face: {types:?}"
+        );
+        assert_eq!(
+            types[first_supp + 1],
+            EventType::SupplementDelivered,
+            "two supplements"
+        );
+        assert!(!types[first_supp + 2..].contains(&EventType::SupplementDelivered));
+
+        let payloads: Vec<&serde_json::Value> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::SupplementDelivered)
+            .map(|e| &e.payload)
+            .collect();
+        assert_eq!(payloads[0]["supplement_seq"], serde_json::json!(1));
+        assert_eq!(
+            payloads[0]["text"],
+            serde_json::json!("补充一：先看 README")
+        );
+        assert_eq!(
+            payloads[0]["character_count"],
+            serde_json::json!("补充一：先看 README".chars().count())
+        );
+        assert_eq!(payloads[1]["supplement_seq"], serde_json::json!(2));
+        assert_eq!(payloads[1]["text"], serde_json::json!("补充二：输出用中文"));
+
+        assert!(
+            host.queue.lock().unwrap().is_empty(),
+            "loop-top drain must empty the queue"
+        );
+
+        let replay =
+            orz_assurance::replay_journal(&dir.join("events.jsonl"), Some("RUN-SUPP"), None, true);
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 队列跨 run 存活：run 1 无补充（零事件）；run 1 后入队的残余在
+    /// run 2 首 loop-top 投递（supplement_seq 随 run 复位从 1 重计）。
+    #[tokio::test]
+    async fn supplement_queue_survives_run_and_drains_next_run() {
+        let dir1 = test_dir();
+        let queue: std::sync::Mutex<std::collections::VecDeque<String>> =
+            std::sync::Mutex::new(std::collections::VecDeque::new());
+        let host1 = SupplementHost {
+            journal: JournalRecorder::new(dir1.clone()),
+            queue: std::sync::Mutex::new(std::collections::VecDeque::new()),
+        };
+        let _ = &queue;
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec!["一", "二"]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host1, "任务一", "RUN-S1", MANIFEST, 0, None, None, None)
+            .await
+            .expect("run 1");
+        let types1: Vec<EventType> = read_supplement_test_events(&dir1)
+            .iter()
+            .map(|e| e.event_type.clone())
+            .collect();
+        assert!(
+            !types1.contains(&EventType::SupplementDelivered),
+            "empty queue ⇒ zero supplement events"
+        );
+
+        // run 1 后入队（运行中排队、终态前未投递的残余同形）。
+        let dir2 = test_dir();
+        let host2 = SupplementHost {
+            journal: JournalRecorder::new(dir2.clone()),
+            queue: std::sync::Mutex::new(["跨 run 残余".to_string()].into_iter().collect()),
+        };
+        controller
+            .run_turn(&host2, "任务二", "RUN-S2", MANIFEST, 0, None, None, None)
+            .await
+            .expect("run 2");
+        let types2: Vec<EventType> = read_supplement_test_events(&dir2)
+            .iter()
+            .map(|e| e.event_type.clone())
+            .collect();
+        let supp = types2
+            .iter()
+            .position(|t| *t == EventType::SupplementDelivered)
+            .expect("run 2 must deliver the leftover at its first loop-top");
+        let face2 = types2
+            .iter()
+            .position(|t| *t == EventType::FaceFingerprint)
+            .expect("run 2 face fingerprint");
+        assert!(
+            types2.contains(&EventType::PromptSubmitted) && supp < face2,
+            "leftover must be delivered at run 2's first loop-top, before the model-request face: {types2:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir1);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// grill 轮不投递——grill 的 profile.role 也是 Main，判别必须走
+    /// LoopProfile.drain_user_supplements 显式槽位（grill=false）。
+    #[tokio::test]
+    async fn grill_turn_does_not_drain_supplements() {
+        let dir = test_dir();
+        let host = SupplementHost {
+            journal: JournalRecorder::new(dir.clone()),
+            queue: std::sync::Mutex::new(["grill 不该吃掉这条".to_string()].into_iter().collect()),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec!["grill 回答"]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let mut history: Vec<Message> = Vec::new();
+        let answer = controller
+            .run_grill_turn(&host, &mut history, "grill 问题", None, None)
+            .await
+            .expect("grill turn");
+        assert_eq!(answer, "grill 回答");
+        let remaining = host.queue.lock().unwrap().len();
+        assert_eq!(
+            remaining, 1,
+            "grill lane must not drain the supplement queue"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

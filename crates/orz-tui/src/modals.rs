@@ -347,6 +347,62 @@ pub enum Modal {
     Find(Box<FindDialog>),
     Properties(PropertiesSheet),
     Snapshots(SnapshotSelector),
+    /// 0di（2026-10-18，ADR-0010 §14.88）：撤回选择器——CC `/rewind`
+    /// 编辑式重发。列表＝会话续接包的用户消息（侧车真相面），两段确认
+    /// 与 Snapshots 同构；确认后原文回输入框供编辑重发。
+    Rewind(RewindSelector),
+}
+
+/// 0di：撤回菜单单行（ordinal＝用户消息 1-based 序数，侧车真相面）。
+#[derive(Debug, Clone)]
+pub struct RecallEntry {
+    pub ordinal: u32,
+    pub preview: String,
+    pub character_count: u64,
+}
+
+#[derive(Debug)]
+pub struct RewindSelector {
+    pub entries: Vec<RecallEntry>,
+    pub selected: usize,
+    pub confirm: bool,
+}
+
+impl RewindSelector {
+    pub fn new(entries: Vec<RecallEntry>) -> Self {
+        Self {
+            entries,
+            selected: 0,
+            confirm: false,
+        }
+    }
+
+    /// Move down, clamping at the last row (no wrap — Snapshots 同构).
+    pub fn select_next(&mut self) {
+        if !self.entries.is_empty() {
+            self.selected = (self.selected + 1).min(self.entries.len() - 1);
+        }
+    }
+
+    /// Move up, clamping at the first row.
+    pub fn select_prev(&mut self) {
+        if !self.entries.is_empty() {
+            self.selected = self.selected.saturating_sub(1);
+        }
+    }
+
+    /// Bottom-anchored jump scroll window start (SnapshotSelector 同构).
+    pub fn window_top(&self, max_rows: usize) -> usize {
+        if max_rows == 0 {
+            return 0;
+        }
+        let sel = self.selected;
+        if sel >= max_rows {
+            sel + 1 - max_rows
+        } else {
+            0
+        }
+    }
 }
 
 #[cfg(test)]
@@ -391,14 +447,15 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["快捷键", "命令", "模型", "审批", "终端", "来源"]
         );
-        // 命令 tab derives from the registry (9 builtins incl. /properties
-        // and /snapshots — slice #10).
+        // 命令 tab derives from the registry（9 builtins 起家；0di 增
+        // /rewind ——ADR-0010 §14.88 撤回入口）。
         let commands = &help.sheet.tabs[1];
         let slashes: Vec<&str> = commands.fields.iter().map(|(s, _)| s.as_str()).collect();
-        assert_eq!(slashes.len(), 11);
+        assert_eq!(slashes.len(), 12);
         assert!(slashes.contains(&"/toggle-explorer"));
         assert!(slashes.contains(&"/properties"));
         assert!(slashes.contains(&"/snapshots"));
+        assert!(slashes.contains(&"/rewind"));
         assert!(slashes.contains(&"/grill"));
         assert!(slashes.contains(&"/grill-finish"));
         // 模型 tab carries the live adapter label.

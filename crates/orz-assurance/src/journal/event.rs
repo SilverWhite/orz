@@ -281,6 +281,17 @@ pub enum EventType {
     // cache_miss_tokens/completion_tokens/reasoning_tokens/effort_tier/
     // usage_incomplete。
     RunUsageMetered,
+
+    // 0di (2026-10-18, MESSAGE-RECALL-AND-QUEUED-SUPPLEMENT / ADR-0010
+    // §14.88): 中途补充投递事实——运行中排队的用户输入在主车道 loop-top
+    // （下一次 LLM 调用边界）drain 时，每条先记本事件再追加为 User 消息
+    // （事件先于当轮 model_request）。检索/grill 车道不产出。队列跨 run
+    // 存活：空闲期投递落在下一 run 首 loop-top。prompt_submitted 同姿态
+    // （用户输入事实，非机制事件——registry v02 条目＋payload schema＋
+    // fixtures，无法官族/无 Python 新族/无锚，不变量由 loop 单元钉承载）。
+    // payload：supplement_seq（run 内从 1 严格递增）/character_count（=
+    // text chars，>0）/text（非空）。
+    SupplementDelivered,
 }
 
 impl EventType {

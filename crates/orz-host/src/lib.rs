@@ -237,6 +237,79 @@ pub struct OrzHost {
     /// 0bc 裁决 ②（2026-09-20）：commit 临限软提示**每 run 至多一条**的
     /// 去重位（内核通知可取多次，模型面提示只首件挂一次）。
     commit_hint_emitted: std::sync::atomic::AtomicBool,
+    /// 0di（2026-10-18，ADR-0010 §14.88）：会话级中途补充队列——ACP 会话
+    /// 车道经 [`OrzHost::with_supplement_queue`] 注入（`StoredSession` 持有
+    /// 同一 Arc，跨 host 每-prompt 重建存活；terminal backend/
+    /// `SharedBrowser` 会话域同先例）。`None`（一次性车道/测试宿主）＝
+    /// drain 恒空，零行为变化。
+    supplement_queue: Option<Arc<SupplementQueue>>,
+}
+
+/// 0di（2026-10-18，ADR-0010 §14.88）：会话级中途补充队列——运行中用户输入
+/// 的 agent 侧排队面。容量上限 fail-closed（每条 ≤256 KiB、深度 ≤16，超出
+/// 拒绝不静默截断）；FIFO 保序；跨 run 存活（投递前一直在队；cancel 不清
+/// 队；close_session/进程退出即灭——会话域锚点与 terminal backend 一致）。
+#[derive(Default)]
+pub struct SupplementQueue {
+    inner: std::sync::Mutex<std::collections::VecDeque<String>>,
+}
+
+/// 队列深度上限（fail-closed；超出＝`InvalidRequest`，不静默截断）。
+pub const SUPPLEMENT_QUEUE_MAX_DEPTH: usize = 16;
+/// 单条补充文本字节上限（fail-closed；与桥侧 ACP 帧上限同量级面）。
+pub const SUPPLEMENT_MAX_BYTES: usize = 256 * 1024;
+
+impl SupplementQueue {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 入队（FIFO 尾插）。容量超限返回带原因的 `Err`（调用方转协议错误，
+    /// fail-closed 不静默截断）。
+    pub fn push(&self, text: &str) -> Result<(), &'static str> {
+        if text.is_empty() {
+            return Err("empty supplement text");
+        }
+        if text.len() > SUPPLEMENT_MAX_BYTES {
+            return Err("supplement exceeds the per-message byte cap");
+        }
+        let mut q = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if q.len() >= SUPPLEMENT_QUEUE_MAX_DEPTH {
+            return Err("supplement queue is at cap");
+        }
+        q.push_back(text.to_string());
+        Ok(())
+    }
+
+    /// 出队全部（FIFO；drain 语义——取走即清）。
+    pub fn drain(&self) -> Vec<String> {
+        let mut q = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        q.drain(..).collect()
+    }
+
+    /// 当前深度（可见面读数；ext 响应回显）。
+    pub fn depth(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    /// 清空并返回被丢弃条数（recall 臂——撤回重开的分支不得注入陈旧
+    /// 意图，未投递补充一并出清）。
+    pub fn clear(&self) -> usize {
+        let mut q = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        q.drain(..).count()
+    }
 }
 
 impl OrzHost {
@@ -400,7 +473,16 @@ impl OrzHost {
             dispatch_token: std::sync::atomic::AtomicU64::new(0),
             last_resource_tier: std::sync::atomic::AtomicU8::new(0),
             commit_hint_emitted: std::sync::atomic::AtomicBool::new(false),
+            supplement_queue: None,
         })
+    }
+
+    /// 0di（2026-10-18，ADR-0010 §14.88）：注入会话级中途补充队列（builder
+    /// 式 setter——不扩 `too_many_arguments` 构造链；生产装配点＝acp_server
+    /// `build_host` 从 `StoredSession.supplement_queue` 查表注入）。
+    pub fn with_supplement_queue(mut self, queue: Arc<SupplementQueue>) -> Self {
+        self.supplement_queue = Some(queue);
+        self
     }
 
     /// 0aw（2026-09-20，HOST_RESOURCE_OS_DELEGATION_DESIGN §6；原 0z S1
@@ -1796,6 +1878,15 @@ impl LoopHost for OrzHost {
             command_len: e.command_len,
         })
         .collect()
+    }
+
+    /// 0di（2026-10-18，ADR-0010 §14.88）：会话级补充队列 drain——FIFO 取走
+    /// 全部在队补充（loop 主车道 loop-top 调用；未注入队列＝空向量）。
+    fn drain_user_supplements(&self) -> Vec<String> {
+        self.supplement_queue
+            .as_ref()
+            .map(|q| q.drain())
+            .unwrap_or_default()
     }
 
     /// 0ac S3①-b M2（2026-09-15，IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_

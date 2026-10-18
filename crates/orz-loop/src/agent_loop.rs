@@ -550,6 +550,10 @@ pub(crate) struct LoopProfile {
     /// (a retrieval result is not a run's formal answer). Grill turns fold
     /// this to `false` too (a grill question is not a run-semantic).
     pub counterexample_gate: bool,
+    /// 0di（2026-10-18，ADR-0010 §14.88）：本车道是否在 loop-top drain 会话
+    /// 级中途补充队列——**主 run 车道独占**。grill 轮的 `role` 也是 Main，
+    /// 不能作判别（grill 自有 history 面、不接队列）；检索车道天然 false。
+    pub drain_user_supplements: bool,
     /// The orientation lane this loop's completed model rounds count
     /// toward (ADR-0010 §4.2; `None` counts nothing — grill / M3).
     pub orientation_role: Option<AgentRole>,
@@ -602,6 +606,7 @@ impl LoopProfile {
         Self {
             role: AgentRole::Main,
             counterexample_gate: true,
+            drain_user_supplements: true,
             orientation_role: Some(AgentRole::Main),
             system_kind: SystemPromptKind::Main,
             tool_filter: ToolFilter::None,
@@ -624,6 +629,7 @@ impl LoopProfile {
         Self {
             role: AgentRole::Main,
             counterexample_gate: false,
+            drain_user_supplements: false,
             orientation_role: Some(AgentRole::Main),
             system_kind: SystemPromptKind::Main,
             tool_filter: ToolFilter::None,
@@ -667,6 +673,7 @@ impl LoopProfile {
         Self {
             role: agent_role,
             counterexample_gate: false,
+            drain_user_supplements: false,
             orientation_role: Some(agent_role),
             system_kind: SystemPromptKind::Retrieval {
                 role,
@@ -2296,6 +2303,9 @@ pub(crate) async fn run_agent_loop(
     // compaction and further fires, offers NO tools, and runs the template
     // round at the next loop-top.
     let mut pending_checkpoint: Option<PendingCheckpoint> = None;
+    // 0di（2026-10-18，ADR-0010 §14.88）：中途补充投递序数——run 内从 1 严格
+    // 递增（supplement_delivered payload 契约；跨 run 不延续，随 run 复位）。
+    let mut supplement_seq: u32 = 0;
     // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 首轮计划轮硬门 —
     // 主车道且黑板尚无已批准计划（新会话/新 plan epoch）时触发；已有计划
     // （恢复会话或本会话后续 run）不重复触发；检索车道不触发。计划轮计入
@@ -3202,6 +3212,37 @@ pub(crate) async fn run_agent_loop(
         // 每轮请求前把 `[任务状态]` 作为尾随用户消息、仅在变化时追加
         // （尾随消息纪律；退役前的 `[TOOL_ROUND_BUDGET] REMAINING` 同此
         // 纪律），system 提示词保持完全静态，前缀缓存不被步骤推进打断。
+        // 0di（2026-10-18，ADR-0010 §14.88）：中途补充投递——主车道 loop-top
+        // 安全间隙（压缩/检查点算术之后、模型面装配之前）drain 会话级补充
+        // 队列，FIFO 追加为 User 消息（下一次 LLM 调用边界生效，CC #50246
+        // deferred 语义；绝不在工具批内打断）。每条先落 `supplement_delivered`
+        // 事件再入 messages（事件先于当轮 model_request）。检索/grill 车道
+        // 不 drain。队列跨 run 存活：空闲期排队的补充落在下一 run 首 loop-top；
+        // cancel 不清队（失败/取消 run 的已投递补充随 SUCCESS-ONLY 写回语义
+        // 丢弃，事件留证于该 run journal）。
+        if profile.drain_user_supplements {
+            for text in host.drain_user_supplements() {
+                supplement_seq = supplement_seq.saturating_add(1);
+                writer
+                    .record(
+                        EventType::SupplementDelivered,
+                        serde_json::json!({
+                            "supplement_seq": supplement_seq,
+                            "character_count": text.chars().count(),
+                            "text": text,
+                        }),
+                    )
+                    .await?;
+                messages.push(Message {
+                    role: Role::User,
+                    content: text,
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+            }
+        }
         controller.sync_status_line_message(messages);
         // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26) × 动态上下文
         // 滑块 S1（2026-09-15，设计 §3.1）：the request view comes from the

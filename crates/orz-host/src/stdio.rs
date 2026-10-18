@@ -87,6 +87,15 @@ fn extract_prompt_text(blocks: &[ContentBlock]) -> String {
         .join("\n")
 }
 
+/// 0di: wrap a JSON value as an ACP ext-method response (`ExtResponse` is a
+/// transparent `Arc<RawValue>`; `to_raw_value` yields the boxed form).
+fn ext_response_value(v: serde_json::Value) -> AgentResponse {
+    let raw: std::sync::Arc<serde_json::value::RawValue> = std::sync::Arc::from(
+        serde_json::value::to_raw_value(&v).expect("ext response serializable"),
+    );
+    AgentResponse::ExtMethodResponse(acp::ExtResponse::new(raw))
+}
+
 impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
     async fn handle_request(&self, request: ClientRequest) -> acp::Result<AgentResponse> {
         match request {
@@ -133,6 +142,77 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
                         StopReason::Cancelled,
                     ))),
                     Err(e) => Err(acp::Error::into_internal_error(e)),
+                }
+            }
+            ClientRequest::ExtMethodRequest(args) => {
+                // 0di (2026-10-18, ADR-0010 §14.88): the client→agent
+                // extension surface — queued supplements (`_orz/queue_append`)
+                // and recall (`_orz/recall_preview` / `_orz/recall`). The acp
+                // crate strips the `_` prefix before routing here
+                // (`ExtRequest.method` = "orz/…"); unknown ext methods keep
+                // the protocol's method-not-found semantics. Zero model-face
+                // tool surface touched (ext methods are a client↔agent
+                // protocol face, not model tools).
+                let params: serde_json::Value =
+                    serde_json::from_str(args.params.get()).unwrap_or(serde_json::Value::Null);
+                match args.method.as_ref() {
+                    "orz/queue_append" => {
+                        let session_id = params
+                            .get("session_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let text = params
+                            .get("text")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default();
+                        if session_id.is_empty() {
+                            return Err(acp::Error::new(
+                                acp::ErrorCode::InvalidRequest.into(),
+                                "queue_append requires session_id",
+                            ));
+                        }
+                        self.server
+                            .handle_queue_append(&session_id, text)
+                            .map(ext_response_value)
+                            .map_err(acp::Error::into_internal_error)
+                    }
+                    "orz/recall_preview" => {
+                        let session_id = params
+                            .get("session_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        self.server
+                            .handle_recall_preview(&session_id)
+                            .map(ext_response_value)
+                            .map_err(acp::Error::into_internal_error)
+                    }
+                    "orz/recall" => {
+                        let session_id = params
+                            .get("session_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let ordinal = params.get("ordinal").and_then(|v| v.as_u64());
+                        let Some(ordinal) = ordinal else {
+                            return Err(acp::Error::new(
+                                acp::ErrorCode::InvalidRequest.into(),
+                                "recall requires ordinal (u32)",
+                            ));
+                        };
+                        let ordinal = u32::try_from(ordinal).map_err(|_| {
+                            acp::Error::new(
+                                acp::ErrorCode::InvalidRequest.into(),
+                                "recall ordinal out of range",
+                            )
+                        })?;
+                        self.server
+                            .handle_recall(&session_id, ordinal)
+                            .map(ext_response_value)
+                            .map_err(acp::Error::into_internal_error)
+                    }
+                    _ => Err(acp::Error::method_not_found()),
                 }
             }
             _ => Err(acp::Error::method_not_found()),

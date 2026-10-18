@@ -75,7 +75,21 @@ async function ensureSession() {
 
 async function submitPrompt(text, isRetry = false) {
   if (state.running) {
-    flash('当前有运行在进行（Ctrl+Z 可取消）');
+    // 0di（2026-10-18，ADR-0010 §14.88）：运行中不拒绝——入会话级补充队列，
+    // 当前运行的下一次模型调用边界投递（不打断当前轮；CC #50246 deferred
+    // 语义）。队列跨 run 存活；取消运行不清队。
+    try {
+      const sessionId = await ensureSession();
+      const r = await acp.sessionQueueAppend(sessionId, text);
+      vm.addSystemMessage(
+        `已排队（第 ${r.depth} 条）——将在当前运行的下一次模型调用前投递`,
+        false,
+      );
+      renderAll();
+    } catch (e) {
+      vm.addSystemMessage(`[错误] 补充入队失败：${e.message}`, true);
+      renderAll();
+    }
     return;
   }
   try {
@@ -409,6 +423,21 @@ ui.refresh = async () => {
 };
 ui.flashStatus = () => flash(`当前模型: ${state.modelLabel}`);
 
+/* 0di：撤回面动作（dialogs.openRewind 经 actions 调用；会话 id 就绪惰性
+ * 保证——预览/撤回都可能发生在首次 prompt 之前）。 */
+ui.rewindPreview = async () => {
+  const sessionId = await ensureSession();
+  return acp.sessionRecallPreview(sessionId);
+};
+ui.rewindRecall = async (ordinal) => {
+  const sessionId = await ensureSession();
+  return acp.sessionRecall(sessionId, ordinal);
+};
+ui.fillInput = (text) => {
+  chatInput.value = text;
+  chatInput.focus();
+};
+
 /* 会话维护三动作（执行都在桥 spawn 的 agent 子命令，前端零执行事实）。
  * 批六（2026-09-25 第七用户令）：归档/回档/删除改为组级功能键——先在
  * 组内选中会话再点功能键，动作完成后清除选中并刷新探索器。 */
@@ -681,6 +710,11 @@ function runSlash(cmd) {
       break;
     case '/stop':
       stopRun();
+      break;
+    case '/rewind':
+      // 0di：撤回（编辑式重发）——对话框列会话用户消息，选择后截断并把
+      // 原文回输入框。
+      dialogs.openRewind();
       break;
     case '/open':
       dialogs.openCommand('command://');

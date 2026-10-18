@@ -135,3 +135,23 @@ export async function sessionPrompt(sessionId, text) {
 export function sessionCancel(sessionId) {
   notify('session/cancel', { sessionId });
 }
+
+/* ── 0di（2026-10-18，ADR-0010 §14.88）：ext 面（`_orz/*`）──
+ * ACP 扩展方法走 `_` 前缀线格式（acp 库剥前缀路由为 ExtRequest）；桥为
+ * 透明中继，零改动。queue_append＝运行中排队（下一次 LLM 调用边界投递，
+ * 不打断）；recall_preview/recall＝撤回（编辑式重发）。 */
+async function extRequest(method, params) {
+  return request(method, params);
+}
+
+export function sessionQueueAppend(sessionId, text) {
+  return extRequest('_orz/queue_append', { session_id: sessionId, text });
+}
+
+export function sessionRecallPreview(sessionId) {
+  return extRequest('_orz/recall_preview', { session_id: sessionId });
+}
+
+export function sessionRecall(sessionId, ordinal) {
+  return extRequest('_orz/recall', { session_id: sessionId, ordinal });
+}

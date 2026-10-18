@@ -49,6 +49,12 @@ pub enum TuiEvent {
         prompt: String,
         character_count: u64,
     },
+    /// 0di（2026-10-18，ADR-0010 §14.88）：中途补充投递——运行中排队的用户
+    /// 输入在主车道 loop-top 生效；渲染为用户卡（与 prompt_submitted 同面）。
+    SupplementDelivered {
+        supplement_seq: u64,
+        text: String,
+    },
     ModelRequest {
         provider: String,
         model_id: String,
@@ -381,6 +387,7 @@ impl TuiEvent {
             TuiEvent::RunCancelled { .. } => "run_cancelled",
             TuiEvent::RunInvalidated { .. } => "run_invalidated",
             TuiEvent::PromptSubmitted { .. } => "prompt_submitted",
+            TuiEvent::SupplementDelivered { .. } => "supplement_delivered",
             TuiEvent::ModelRequest { .. } => "model_request",
             TuiEvent::ModelResponseReceived { .. } => "model_response_received",
             TuiEvent::ModelOutput { .. } => "model_output",

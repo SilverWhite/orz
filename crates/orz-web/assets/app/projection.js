@@ -50,6 +50,13 @@ export function applyJournalEvent(ev) {
       vm.addUserMessage(str(p, 'prompt'));
       break;
 
+    /* 0di：中途补充投递——运行中排队的用户输入在主车道 loop-top 生效；
+     * 渲染为用户卡（与 prompt_submitted 同面，投递即可见确认）。 */
+    case 'supplement_delivered':
+      state.turnCounter++;
+      vm.addUserMessage(str(p, 'text'));
+      break;
+
     case 'model_request':
       vm.setModel(str(p, 'model_id') || '模型');
       break;

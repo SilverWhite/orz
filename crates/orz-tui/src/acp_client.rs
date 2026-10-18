@@ -33,6 +33,23 @@ pub enum ClientMsg {
         session_id: String,
         text_chunk: String,
     },
+    /// 0di：补充入队回执（`_orz/queue_append`）——depth＝入队后队列深度；
+    /// error＝拒绝原因（容量上限/会话未知）。
+    SupplementQueued { depth: u64, error: Option<String> },
+    /// 0di：撤回预览应答（`_orz/recall_preview`）——entries＝用户消息清单
+    /// （侧车真相面）；error＝读取失败原因。
+    RewindPreview {
+        entries: Vec<crate::modals::RecallEntry>,
+        error: Option<String>,
+    },
+    /// 0di：撤回执行应答（`_orz/recall`）——recall_text 回输入框供编辑
+    /// 重发；dropped＝一并丢弃的未投递补充。
+    RecallDone {
+        recall_text: String,
+        removed: u64,
+        dropped: u64,
+        error: Option<String>,
+    },
     /// A spawned prompt turn finished (result of the full run).
     ///
     /// `seq` is the prompt counter snapshot at spawn time — the runner's
@@ -235,6 +252,178 @@ impl InProcessClient {
             let _ = msg_tx.send(ClientMsg::PromptCompleted { seq, result });
         });
     }
+
+    // ── 0di（2026-10-18，ADR-0010 §14.88）：ext 面（`_orz/*`）──
+
+    fn ext_params(method: &'static str, value: serde_json::Value) -> acp::ExtRequest {
+        let raw: std::sync::Arc<serde_json::value::RawValue> = std::sync::Arc::from(
+            serde_json::value::RawValue::from_string(value.to_string())
+                .expect("ext params serializable"),
+        );
+        acp::ExtRequest::new(method, raw)
+    }
+
+    /// Spawn a mid-run supplement enqueue (`_orz/queue_append`); ack rides
+    /// [`ClientMsg::SupplementQueued`]. The queue is session-scoped —
+    /// flushed at the loop's next-LLM-call boundary, never an interrupt.
+    pub fn spawn_queue_append(&self, text: String) {
+        let Some(session_id) = self.session_id.clone() else {
+            let _ = self.msg_tx.send(ClientMsg::SupplementQueued {
+                depth: 0,
+                error: Some("no session started".into()),
+            });
+            return;
+        };
+        let conn = self.conn.clone();
+        let msg_tx = self.msg_tx.clone();
+        tokio::task::spawn_local(async move {
+            let request = Self::ext_params(
+                "orz/queue_append",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "text": text,
+                }),
+            );
+            let message = match conn.ext_method(request).await {
+                Ok(resp) => match serde_json::from_str::<serde_json::Value>(resp.0.get()) {
+                    Ok(v) => ClientMsg::SupplementQueued {
+                        depth: v.get("depth").and_then(|d| d.as_u64()).unwrap_or(0),
+                        error: None,
+                    },
+                    Err(e) => ClientMsg::SupplementQueued {
+                        depth: 0,
+                        error: Some(e.to_string()),
+                    },
+                },
+                Err(e) => ClientMsg::SupplementQueued {
+                    depth: 0,
+                    error: Some(e.to_string()),
+                },
+            };
+            let _ = msg_tx.send(message);
+        });
+    }
+
+    /// Spawn the recall preview fetch (`_orz/recall_preview`); the list
+    /// rides [`ClientMsg::RewindPreview`].
+    pub fn spawn_rewind_preview(&self) {
+        let Some(session_id) = self.session_id.clone() else {
+            let _ = self.msg_tx.send(ClientMsg::RewindPreview {
+                entries: Vec::new(),
+                error: Some("no session started".into()),
+            });
+            return;
+        };
+        let conn = self.conn.clone();
+        let msg_tx = self.msg_tx.clone();
+        tokio::task::spawn_local(async move {
+            let request = Self::ext_params(
+                "orz/recall_preview",
+                serde_json::json!({
+                    "session_id": session_id,
+                }),
+            );
+            let message = match conn.ext_method(request).await {
+                Ok(resp) => match serde_json::from_str::<serde_json::Value>(resp.0.get()) {
+                    Ok(v) => {
+                        let entries = v
+                            .get("messages")
+                            .and_then(|m| m.as_array())
+                            .map(|rows| {
+                                rows.iter()
+                                    .filter_map(|r| {
+                                        Some(crate::modals::RecallEntry {
+                                            ordinal: r.get("ordinal")?.as_u64()? as u32,
+                                            preview: r
+                                                .get("preview")
+                                                .and_then(|p| p.as_str())
+                                                .unwrap_or_default()
+                                                .to_string(),
+                                            character_count: r
+                                                .get("character_count")
+                                                .and_then(|c| c.as_u64())
+                                                .unwrap_or(0),
+                                        })
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        ClientMsg::RewindPreview {
+                            entries,
+                            error: None,
+                        }
+                    }
+                    Err(e) => ClientMsg::RewindPreview {
+                        entries: Vec::new(),
+                        error: Some(e.to_string()),
+                    },
+                },
+                Err(e) => ClientMsg::RewindPreview {
+                    entries: Vec::new(),
+                    error: Some(e.to_string()),
+                },
+            };
+            let _ = msg_tx.send(message);
+        });
+    }
+
+    /// Spawn the recall (`_orz/recall`, ordinal = 1-based user-message
+    /// ordinal); the outcome rides [`ClientMsg::RecallDone`].
+    pub fn spawn_rewind(&self, ordinal: u32) {
+        let Some(session_id) = self.session_id.clone() else {
+            let _ = self.msg_tx.send(ClientMsg::RecallDone {
+                recall_text: String::new(),
+                removed: 0,
+                dropped: 0,
+                error: Some("no session started".into()),
+            });
+            return;
+        };
+        let conn = self.conn.clone();
+        let msg_tx = self.msg_tx.clone();
+        tokio::task::spawn_local(async move {
+            let request = Self::ext_params(
+                "orz/recall",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "ordinal": ordinal,
+                }),
+            );
+            let message = match conn.ext_method(request).await {
+                Ok(resp) => match serde_json::from_str::<serde_json::Value>(resp.0.get()) {
+                    Ok(v) => ClientMsg::RecallDone {
+                        recall_text: v
+                            .get("recall_text")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        removed: v
+                            .get("removed_messages")
+                            .and_then(|r| r.as_u64())
+                            .unwrap_or(0),
+                        dropped: v
+                            .get("dropped_supplements")
+                            .and_then(|d| d.as_u64())
+                            .unwrap_or(0),
+                        error: None,
+                    },
+                    Err(e) => ClientMsg::RecallDone {
+                        recall_text: String::new(),
+                        removed: 0,
+                        dropped: 0,
+                        error: Some(e.to_string()),
+                    },
+                },
+                Err(e) => ClientMsg::RecallDone {
+                    recall_text: String::new(),
+                    removed: 0,
+                    dropped: 0,
+                    error: Some(e.to_string()),
+                },
+            };
+            let _ = msg_tx.send(message);
+        });
+    }
 }
 
 #[cfg(test)]
@@ -303,6 +492,10 @@ mod tests {
                 ClientMsg::PromptCompleted { result, .. } => {
                     panic!("prompt completed before permission: {result:?}");
                 }
+                // 0di：新消息面与本测试无关，照常跳过。
+                ClientMsg::SupplementQueued { .. }
+                | ClientMsg::RewindPreview { .. }
+                | ClientMsg::RecallDone { .. } => {}
             }
         }
     }
@@ -701,6 +894,10 @@ mod tests {
                         }
                         ClientMsg::SessionNotification { .. } => {}
                         ClientMsg::PermissionRequest { .. } => {}
+                        // 0di：新消息面与本测试无关，照常跳过。
+                        ClientMsg::SupplementQueued { .. }
+                        | ClientMsg::RewindPreview { .. }
+                        | ClientMsg::RecallDone { .. } => {}
                     }
                 };
                 let response = completed.expect("cancel resolves as a success response");
@@ -791,6 +988,10 @@ mod tests {
                         }
                         ClientMsg::SessionNotification { .. } => {}
                         ClientMsg::PermissionRequest { .. } => {}
+                        // 0di：新消息面与本测试无关，照常跳过。
+                        ClientMsg::SupplementQueued { .. }
+                        | ClientMsg::RewindPreview { .. }
+                        | ClientMsg::RecallDone { .. } => {}
                     }
                 };
                 assert!(second_done.is_ok(), "run #2 completes: {second_done:?}");

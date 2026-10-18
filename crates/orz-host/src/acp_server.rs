@@ -292,6 +292,12 @@ struct StoredSession {
     /// Taken out during a run, written back on success (orientation
     /// pattern——失败 run 不写回，下一 prompt 回退侧车 pre-run 内容)。
     continuation: Option<StoredConversation>,
+    /// 0di（2026-10-18，ADR-0010 §14.88）：会话级中途补充队列——运行中经
+    /// ext 方法 `_orz/queue_append` 排队的用户输入；`build_host` 注入每轮
+    /// host（`OrzHost::with_supplement_queue`），loop 主车道 loop-top drain
+    /// （下一次 LLM 调用边界投递）。队列跨 run 存活（cancel 不清队）；
+    /// close_session/进程退出即灭（会话域锚点与 terminal backend 一致）。
+    supplement_queue: Arc<crate::SupplementQueue>,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10) + 0t (2026-09-09, ADR-0010 §14.65):
@@ -494,6 +500,26 @@ struct StoredConversation {
     /// controller 回写（SUCCESS-ONLY，同疲劳档位语义）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     context_scale_notified: Vec<String>,
+    /// 0di（2026-10-18，ADR-0010 §14.88）：撤回审计日志——每次 recall 一条，
+    /// 随侧车持久化（审计随工件：会话卷是 local session artifact、非 run
+    /// evidence chain，recall 不建 RST run）。serde default＝旧侧车零迁移。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    recall_log: Vec<RecallRecord>,
+}
+
+/// 0di：单次撤回的审计行（设计稿 D4）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RecallRecord {
+    /// 撤回时刻（epoch 秒，浮点——与 session_started_at 同尺）。
+    recalled_at: f64,
+    /// 被撤回的用户消息序数（1-based，截断时的目标）。
+    ordinal: u32,
+    /// 截断移除的消息总数（含目标用户消息自身）。
+    removed_messages: usize,
+    /// 撤回后剩余消息数。
+    remaining_messages: usize,
+    /// 撤回时一并丢弃的未投递补充条数。
+    dropped_supplements: usize,
 }
 
 impl StoredConversation {
@@ -510,6 +536,7 @@ impl StoredConversation {
             blackboard: None,
             burden_tiers_notified: Vec::new(),
             context_scale_notified: Vec::new(),
+            recall_log: Vec::new(),
         }
     }
 
@@ -538,6 +565,10 @@ impl StoredConversation {
             burden_tiers_notified: Vec::new(),
             // v7（S1 修订批）：水位在 run 成功后由调用方按 controller 回写。
             context_scale_notified: Vec::new(),
+            // 0di：recall 审计日志只在 recall 臂写入；run 写回臂不携带
+            //（full 构造只装 messages/lif/blackboard，recall_log 由调用方
+            // 从被截断的 continuation 转移）。
+            recall_log: Vec::new(),
         }
     }
 }
@@ -663,7 +694,11 @@ fn load_conversation_sidecar(base_dir: &Path, session_id: &str) -> Option<Stored
 /// 不落盘（全新会话在首个成功 prompt 前没有文件，`load` 的 NotFound →
 /// `None` 自然覆盖）。
 fn persist_conversation_sidecar(base_dir: &Path, continuation: &StoredConversation) {
-    if continuation.messages.is_empty() {
+    // 0di：撤回把会话截断到空（撤回首条用户消息之前）时**必须**落盘——
+    // 空跳过会让重启复活已撤回的尾巴。recall_log 非空＝撤回面在案，空
+    // 状态是真实语义；其余空续接包维持跳过（全新会话在首个成功 prompt
+    // 前没有文件，`load` 的 NotFound → `None` 自然覆盖）。
+    if continuation.messages.is_empty() && continuation.recall_log.is_empty() {
         return;
     }
     let path = conversation_sidecar_path(base_dir, &continuation.session_id);
@@ -713,6 +748,10 @@ struct PackagedSessionArchive {
 /// 消费者＝无头车道（`headless_session_archive`，0ak）：交互车道 run 尾
 /// 半边已随用户主权裁决退役（close 归档不受此判据管辖）。
 const ARCHIVE_INCREMENT_TOKENS: u64 = 500_000;
+
+/// 0di（ADR-0010 §14.88）：撤回预览列表单条预览的字符上限（菜单面只作
+/// 识别用；全文经 recall 响应的 recall_text 回输入框）。
+const RECALL_PREVIEW_CHARS: usize = 120;
 
 /// 归档票：会话关闭时若仍有 run 在进行，先把归档挂起，待该 run 收尾
 /// （sidecar 更新落盘后）再补触发——保证存档包含会话最后一段内容
@@ -3158,6 +3197,9 @@ impl AcpServer {
                         orz_tools::computer::local::LocalTerminalBackend::new(),
                     ),
                     continuation: Some(continuation),
+                    // 0di：会话级中途补充队列（与 terminal backend 同域——
+                    // 会话持有 Arc，build_host 每 prompt 注入 host）。
+                    supplement_queue: Arc::new(crate::SupplementQueue::new()),
                 },
             );
 
@@ -3376,6 +3418,10 @@ impl AcpServer {
         // v7（S1 修订批，设计 §3.5.1，DP-16）：会话级刻度水位随续接包跨
         // prompt 延续（新会话为空；恢复侧车不重发）。
         let restored_context_scale_notified = continuation.context_scale_notified.clone();
+        // 0di（ADR-0010 §14.88）：撤回审计日志跨 prompt 延续（recall 只在
+        // idle 臂写入；run 写回臂必须原样带回归还，否则下次成功 run 会把
+        // 撤回历史清零）。
+        let restored_recall_log = std::mem::take(&mut continuation.recall_log);
         drop(continuation);
         // IP5: attach the session's pre-mutation snapshot store — mutation
         // tools with knowable targets get tracked before execution.
@@ -3583,9 +3629,11 @@ impl AcpServer {
                 burden_notice_text = Some(decision.notice.text);
             }
             full.burden_tiers_notified = burden_tiers_notified.clone();
-            // v7（S1 修订批，DP-16）：刻度水位随侧车落盘（跨 prompt 延续；
-            // 失败 run 不更新——SUCCESS-ONLY 同疲劳档位）。
+            // v7（S1 修订批）：刻度水位随侧车落盘（跨 prompt 延续；
+            // 失败 run 不更新——SUCCESS-ONLY 同疲劳档位语义）。
             full.context_scale_notified = controller.context_scale_notified_keys();
+            // 0di：撤回审计日志原样带回（跨 prompt 延续；见 take-out 处注）。
+            full.recall_log = restored_recall_log;
             persist_conversation_sidecar(&base_dir, &full);
             if let Some(session) = self
                 .sessions
@@ -4032,6 +4080,172 @@ impl AcpServer {
         }
     }
 
+    /// 0di（2026-10-18，ADR-0010 §14.88）：中途补充入队——运行中经 ext 方法
+    /// `_orz/queue_append` 投递的用户输入，进会话级队列（跨 run 存活；
+    /// cancel 不清队；主车道 loop-top drain）。容量超限 fail-closed。
+    pub fn handle_queue_append(
+        &self,
+        session_id: &str,
+        text: &str,
+    ) -> Result<serde_json::Value, AcpError> {
+        let queue = {
+            let sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            sessions
+                .get(session_id)
+                .map(|s| s.supplement_queue.clone())
+                .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?
+        };
+        queue.push(text).map_err(|reason| {
+            AcpError::InvalidRequest(format!(
+                "supplement rejected: {reason} (per-message cap {} bytes, depth cap {})",
+                crate::SUPPLEMENT_MAX_BYTES,
+                crate::SUPPLEMENT_QUEUE_MAX_DEPTH
+            ))
+        })?;
+        Ok(serde_json::json!({
+            "queued": true,
+            "depth": queue.depth(),
+        }))
+    }
+
+    /// 0di：撤回预览——会话续接包的用户消息清单（ordinal 1-based 递增，
+    /// 侧车唯一真相面）。run/restore 在途时拒绝（撤回与提示同锁互斥）。
+    pub fn handle_recall_preview(&self, session_id: &str) -> Result<serde_json::Value, AcpError> {
+        let (conversation, queue_depth) = {
+            let sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let session = sessions
+                .get(session_id)
+                .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
+            let conversation = session
+                .continuation
+                .clone()
+                .or_else(|| load_conversation_sidecar(&session.base_dir, session_id));
+            (conversation, session.supplement_queue.depth())
+        };
+        let messages = conversation.map(|c| c.messages).unwrap_or_default();
+        let preview: Vec<serde_json::Value> = messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.role == Role::User)
+            .enumerate()
+            .map(|(i, (_, m))| {
+                let preview: String = m.content.chars().take(RECALL_PREVIEW_CHARS).collect();
+                serde_json::json!({
+                    "ordinal": i + 1,
+                    "character_count": m.content.chars().count(),
+                    "preview": preview,
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({
+            "messages": preview,
+            "total_messages": messages.len(),
+            "queue_depth": queue_depth,
+        }))
+    }
+
+    /// 0di：撤回——CC `/rewind` 编辑式重发。idle-only（`RestoreInflightGuard`
+    /// 同锁互斥：run/restore/recall 三方）；截断＝ordinal 用户消息含自身及
+    /// 之后全部移除；原文回输入框；未投递补充一并丢弃；侧车立即落盘＋
+    /// recall_log 审计行。机械面（LIF/黑板/水位档位）不回滚（设计稿 D4
+    /// 诚实边界）；run journal 历史不动。
+    pub fn handle_recall(
+        &self,
+        session_id: &str,
+        ordinal: u32,
+    ) -> Result<serde_json::Value, AcpError> {
+        // Fail-closed（与 restore 同形）：run/restore 在途即拒绝；recall
+        // 登记互斥_marker，RAII 释放。
+        let _inflight = RestoreInflightGuard::new(&self.runs, session_id).map_err(|session_id| {
+            AcpError::InvalidRequest(format!(
+                "recall rejected: a run or restore is already in flight for session {session_id}"
+            ))
+        })?;
+        let (base_dir, mut continuation, queue) = {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let session = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
+            let continuation = session
+                .continuation
+                .take()
+                .or_else(|| load_conversation_sidecar(&session.base_dir, session_id))
+                .unwrap_or_else(|| StoredConversation::empty(session_id, None));
+            (
+                session.base_dir.clone(),
+                continuation,
+                session.supplement_queue.clone(),
+            )
+        };
+        // 未投递补充一并丢弃（撤回重开的分支不得注入陈旧意图；计数回显）。
+        let dropped_supplements = queue.clear();
+        // 定位 ordinal 用户消息（1-based；越界 fail-closed，不静默钳位）。
+        let mut user_seen: u32 = 0;
+        let mut cut_index: Option<usize> = None;
+        for (idx, m) in continuation.messages.iter().enumerate() {
+            if m.role == Role::User {
+                user_seen += 1;
+                if user_seen == ordinal {
+                    cut_index = Some(idx);
+                    break;
+                }
+            }
+        }
+        let Some(cut_index) = cut_index else {
+            // 归还 take-out 的续接包（失败不得清空会话——orientation 模式
+            // 同纪律：只有成功路径才允许 continuation 停在 None 之外的状态
+            // 漂移；此处直接放回原状）。
+            if let Some(session) = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get_mut(session_id)
+            {
+                session.continuation = Some(continuation);
+            }
+            return Err(AcpError::InvalidRequest(format!(
+                "recall rejected: ordinal {ordinal} is not a user message ordinal (conversation has {user_seen})"
+            )));
+        };
+        let recall_text = continuation.messages[cut_index].content.clone();
+        let removed_messages = continuation.messages.len() - cut_index;
+        continuation.messages.truncate(cut_index);
+        let remaining_messages = continuation.messages.len();
+        continuation.recall_log.push(RecallRecord {
+            recalled_at: now_epoch_secs(),
+            ordinal,
+            removed_messages,
+            remaining_messages,
+            dropped_supplements,
+        });
+        persist_conversation_sidecar(&base_dir, &continuation);
+        if let Some(session) = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(session_id)
+        {
+            session.continuation = Some(continuation);
+        }
+        Ok(serde_json::json!({
+            "recalled": true,
+            "ordinal": ordinal,
+            "removed_messages": removed_messages,
+            "remaining_messages": remaining_messages,
+            "recall_text": recall_text,
+            "dropped_supplements": dropped_supplements,
+        }))
+    }
+
     /// Close a session and release its stored metadata.
     ///
     /// ACP 0.10.4 has no `session/close` method — the stdio server terminates
@@ -4163,6 +4377,17 @@ impl AcpServer {
                 backend
             })
         };
+        // 0di (ADR-0010 §14.88): inject the session-scoped supplement queue —
+        // queued user supplements survive the per-prompt host rebuild and are
+        // drained at the loop's main-lane loop-top (next-LLM-call boundary).
+        // Missing session row degrades to the loop's empty default.
+        let session_supplements = {
+            let sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            sessions.get(session_id).map(|s| s.supplement_queue.clone())
+        };
         // P1 permit keystore: the session's DPAPI-backed signer (or the
         // test-only memory store under TrustPolicy::Skip).
         let mut host = crate::OrzHost::with_bridge_and_hub_policy_with_terminal(
@@ -4183,6 +4408,9 @@ impl AcpServer {
         // 生产装配点——run 级 Job 硬上限 + 派发前资源预检门。
         .with_host_resource_safety()
         .with_permit_signer(handle.permit_signer.clone());
+        if let Some(queue) = session_supplements {
+            host = host.with_supplement_queue(queue);
+        }
         if let Some(timeout) = tool_timeout {
             host = host.with_tool_timeout(timeout);
         }
@@ -8213,6 +8441,355 @@ mod tests {
                 .exists()
         );
         assert!(!clear.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // ── 0di（2026-10-18，ADR-0010 §14.88）：中途补充队列与撤回 ──
+
+    fn supplement_test_dir(tag: &str) -> std::path::PathBuf {
+        let base = std::env::temp_dir().join(format!(
+            "orz-acp-0di-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    fn user_msg(text: &str) -> orz_loop::gateway::model::Message {
+        orz_loop::gateway::model::Message {
+            role: orz_loop::gateway::model::Role::User,
+            content: text.to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        }
+    }
+
+    fn assistant_msg(text: &str) -> orz_loop::gateway::model::Message {
+        orz_loop::gateway::model::Message {
+            role: orz_loop::gateway::model::Role::Assistant,
+            content: text.to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn queue_append_enqueues_fifo_with_depth_and_drains() {
+        let base = supplement_test_dir("q-fifo");
+        let server = shadow_server();
+        server
+            .handle_session_new(
+                "sess-qfifo",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        let r = server.handle_queue_append("sess-qfifo", "第一条").unwrap();
+        assert_eq!(r["queued"], serde_json::json!(true));
+        assert_eq!(r["depth"], serde_json::json!(1));
+        server.handle_queue_append("sess-qfifo", "第二条").unwrap();
+        let queue = server
+            .sessions
+            .lock()
+            .unwrap()
+            .get("sess-qfifo")
+            .unwrap()
+            .supplement_queue
+            .clone();
+        assert_eq!(queue.depth(), 2);
+        assert_eq!(
+            queue.drain(),
+            vec!["第一条".to_string(), "第二条".to_string()]
+        );
+        assert_eq!(queue.depth(), 0, "drain must empty the queue");
+        // 未知会话 fail-closed。
+        assert!(server.handle_queue_append("sess-qfifo-none", "x").is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn queue_append_fails_closed_on_empty_and_depth_cap() {
+        let base = supplement_test_dir("q-cap");
+        let server = shadow_server();
+        server
+            .handle_session_new(
+                "sess-qcap",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        assert!(
+            server.handle_queue_append("sess-qcap", "").is_err(),
+            "empty text rejected"
+        );
+        let queue = server
+            .sessions
+            .lock()
+            .unwrap()
+            .get("sess-qcap")
+            .unwrap()
+            .supplement_queue
+            .clone();
+        for i in 0..crate::SUPPLEMENT_QUEUE_MAX_DEPTH {
+            queue.push(&format!("m{i}")).expect("within cap");
+        }
+        assert!(
+            server.handle_queue_append("sess-qcap", "overflow").is_err(),
+            "depth cap must fail closed, not silently truncate"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn seed_recall_conversation(server: &AcpServer, session_id: &str) {
+        let mut sessions = server.sessions.lock().unwrap();
+        let session = sessions.get_mut(session_id).unwrap();
+        let continuation = session.continuation.as_mut().expect("continuation");
+        continuation.messages = vec![
+            user_msg("第一个问题"),
+            assistant_msg("第一个回答"),
+            user_msg("第二个问题"),
+            assistant_msg("第二个回答"),
+            user_msg("第三个问题"),
+        ];
+    }
+
+    #[tokio::test]
+    async fn recall_preview_lists_user_ordinals_from_sidecar_truth() {
+        let base = supplement_test_dir("r-preview");
+        let server = shadow_server();
+        server
+            .handle_session_new(
+                "sess-rprev",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        seed_recall_conversation(&server, "sess-rprev");
+        let preview = server.handle_recall_preview("sess-rprev").unwrap();
+        let messages = preview["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3, "three user messages");
+        assert_eq!(messages[0]["ordinal"], serde_json::json!(1));
+        assert_eq!(messages[0]["preview"], serde_json::json!("第一个问题"));
+        assert_eq!(messages[2]["ordinal"], serde_json::json!(3));
+        assert_eq!(preview["total_messages"], serde_json::json!(5));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn recall_truncates_persists_sidecar_and_returns_recall_text() {
+        let base = supplement_test_dir("r-trunc");
+        let server = shadow_server();
+        server
+            .handle_session_new(
+                "sess-rtrunc",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        seed_recall_conversation(&server, "sess-rtrunc");
+        let r = server.handle_recall("sess-rtrunc", 2).unwrap();
+        assert_eq!(r["recalled"], serde_json::json!(true));
+        assert_eq!(r["recall_text"], serde_json::json!("第二个问题"));
+        assert_eq!(r["removed_messages"], serde_json::json!(3));
+        assert_eq!(r["remaining_messages"], serde_json::json!(2));
+        // 会话内续接包已截断。
+        let remaining = server
+            .sessions
+            .lock()
+            .unwrap()
+            .get("sess-rtrunc")
+            .unwrap()
+            .continuation
+            .as_ref()
+            .unwrap()
+            .messages
+            .len();
+        assert_eq!(remaining, 2);
+        // 侧车立即落盘且带 recall_log 审计行。
+        let sidecar = base
+            .join(".gsa")
+            .join("conversations")
+            .join("sess-rtr.json");
+        assert!(sidecar.exists(), "recall must persist the sidecar");
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&sidecar).unwrap()).unwrap();
+        let log = stored["recall_log"].as_array().unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0]["ordinal"], serde_json::json!(2));
+        assert_eq!(log[0]["removed_messages"], serde_json::json!(3));
+        assert_eq!(log[0]["remaining_messages"], serde_json::json!(2));
+        // 越界 ordinal fail-closed（不静默钳位），且失败不清空会话。
+        let err = server.handle_recall("sess-rtrunc", 9).unwrap_err();
+        assert!(matches!(err, AcpError::InvalidRequest(_)));
+        assert_eq!(
+            server
+                .sessions
+                .lock()
+                .unwrap()
+                .get("sess-rtrunc")
+                .unwrap()
+                .continuation
+                .as_ref()
+                .unwrap()
+                .messages
+                .len(),
+            2,
+            "failed recall must not clear the continuation"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn recall_drops_queued_supplements_and_counts_them() {
+        let base = supplement_test_dir("r-drop");
+        let server = shadow_server();
+        server
+            .handle_session_new(
+                "sess-rdrop",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        seed_recall_conversation(&server, "sess-rdrop");
+        server
+            .handle_queue_append("sess-rdrop", "未投递补充一")
+            .unwrap();
+        server
+            .handle_queue_append("sess-rdrop", "未投递补充二")
+            .unwrap();
+        let r = server.handle_recall("sess-rdrop", 1).unwrap();
+        assert_eq!(r["dropped_supplements"], serde_json::json!(2));
+        let depth = server
+            .sessions
+            .lock()
+            .unwrap()
+            .get("sess-rdrop")
+            .unwrap()
+            .supplement_queue
+            .depth();
+        assert_eq!(depth, 0, "recall must clear undelivered supplements");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn recall_is_rejected_while_a_run_is_in_flight() {
+        let base = supplement_test_dir("r-busy");
+        let server = shadow_server();
+        server
+            .handle_session_new(
+                "sess-rbusy",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        seed_recall_conversation(&server, "sess-rbusy");
+        server.runs.lock().unwrap().insert(
+            "sess-rbusy".to_string(),
+            RunInFlight::Prompt(tokio_util::sync::CancellationToken::new()),
+        );
+        let err = server.handle_recall("sess-rbusy", 1).unwrap_err();
+        assert!(
+            matches!(err, AcpError::InvalidRequest(ref m) if m.contains("in flight")),
+            "recall must be idle-only: {err:?}"
+        );
+        // run 仍在册（guard 提前返回未动 runs 表）。
+        assert!(server.runs.lock().unwrap().contains_key("sess-rbusy"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn recall_to_empty_conversation_persists_sidecar_with_log() {
+        let base = supplement_test_dir("r-empty");
+        let server = shadow_server();
+        server
+            .handle_session_new(
+                "sess-rempty",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        seed_recall_conversation(&server, "sess-rempty");
+        // 撤回 ordinal 1＝截到首条用户消息之前＝空会话（首条即 messages[0]）。
+        let r = server.handle_recall("sess-rempty", 1).unwrap();
+        assert_eq!(r["remaining_messages"], serde_json::json!(0));
+        // 空会话再撤＝越界 fail-closed。
+        assert!(matches!(
+            server.handle_recall("sess-rempty", 1).unwrap_err(),
+            AcpError::InvalidRequest(_)
+        ));
+        // 空消息面必须落盘（撤回面在案——否则重启复活已撤回尾巴）。
+        let sidecar = base
+            .join(".gsa")
+            .join("conversations")
+            .join("sess-rem.json");
+        assert!(sidecar.exists(), "recalled-empty conversation must persist");
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&sidecar).unwrap()).unwrap();
+        assert_eq!(stored["messages"].as_array().unwrap().len(), 0);
+        assert_eq!(stored["recall_log"].as_array().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn ext_method_routes_orz_methods_and_rejects_unknown() {
+        let base = supplement_test_dir("ext-route");
+        let server = std::sync::Arc::new(shadow_server());
+        server
+            .handle_session_new(
+                "sess-ext",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        let handler =
+            StdioAgentHandler::with_trust_policy(server.clone(), crate::session::TrustPolicy::Skip);
+        // 未知 orz/* 方法 → method_not_found（现役 ext 语义）。
+        let unknown = acp::ClientRequest::ExtMethodRequest(acp::ExtRequest::new(
+            "orz/nope",
+            serde_json::value::RawValue::from_string("{}".to_string())
+                .unwrap()
+                .into(),
+        ));
+        let err = handler
+            .handle_request(unknown)
+            .await
+            .expect_err("unknown ext method must be method-not-found");
+        assert_eq!(err.code, acp::ErrorCode::MethodNotFound);
+        // queue_append 经 ext 面路由到 server handler。
+        let queue = acp::ClientRequest::ExtMethodRequest(acp::ExtRequest::new(
+            "orz/queue_append",
+            serde_json::value::RawValue::from_string(
+                r#"{"session_id":"sess-ext","text":"经 ext 投递"}"#.to_string(),
+            )
+            .unwrap()
+            .into(),
+        ));
+        let resp = handler
+            .handle_request(queue)
+            .await
+            .expect("ext queue_append");
+        let acp::AgentResponse::ExtMethodResponse(ext) = resp else {
+            panic!("expected ExtMethodResponse");
+        };
+        let value: serde_json::Value = serde_json::from_str(ext.0.get()).unwrap();
+        assert_eq!(value["queued"], serde_json::json!(true));
+        assert_eq!(value["depth"], serde_json::json!(1));
         let _ = std::fs::remove_dir_all(&base);
     }
 }

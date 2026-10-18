@@ -454,3 +454,30 @@ impl LoopHost for BlockedArchiveHost {
         self.inner.call_tool(name, args, call_id).await
     }
 }
+
+/// 0di（2026-10-18，ADR-0010 §14.88）：带会话级中途补充队列的测试宿主——
+/// 队列语义镜像生产面 `orz_host::SupplementQueue`（FIFO、drain 即清），
+/// 供 loop 侧投递钉子使用（不依赖 orz-host——loop 对队列本体无依赖，
+/// 只消费 `LoopHost::drain_user_supplements` 面）。
+pub(crate) struct SupplementHost {
+    pub(crate) journal: JournalRecorder,
+    pub(crate) queue: std::sync::Mutex<VecDeque<String>>,
+}
+
+#[async_trait]
+impl LoopHost for SupplementHost {
+    fn journal(&self) -> &JournalRecorder {
+        &self.journal
+    }
+    fn tools_registry(&self) -> &dyn ToolRegistry {
+        &EmptyRegistry
+    }
+    fn session_cwd(&self) -> std::path::PathBuf {
+        self.journal.journal_dir().to_path_buf()
+    }
+    fn drain_user_supplements(&self) -> Vec<String> {
+        std::mem::take(&mut *self.queue.lock().unwrap_or_else(|e| e.into_inner()))
+            .into_iter()
+            .collect()
+    }
+}

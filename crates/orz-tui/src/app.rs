@@ -126,6 +126,12 @@ pub struct TuiApp {
     /// the async call (slice #10; same intent-marking pattern as
     /// stop_pending).
     pub pending_restore: Option<String>,
+    /// 0di（2026-10-18，ADR-0010 §14.88）：`/rewind` 已请求——runner 拉取
+    /// 撤回预览（`_orz/recall_preview`）后经 ClientMsg 回填 modal。
+    pub pending_rewind_open: bool,
+    /// 0di：撤回选择器确认后的重放意图（ordinal）——runner 持有异步
+    /// `_orz/recall` 调用。
+    pub pending_rewind: Option<u32>,
     /// A restore is in flight. The host has no restore in-flight marker
     /// (record P2-2) and no restore cancellation token (record P3-7), so
     /// the TUI is the only guard — it blocks new prompts, re-entry and
@@ -190,6 +196,8 @@ impl TuiApp {
             pending_grill_finish: false,
             stop_pending: false,
             pending_restore: None,
+            pending_rewind_open: false,
+            pending_rewind: None,
             restoring: false,
             quit: false,
             turn_counter: 0,
@@ -497,6 +505,76 @@ impl TuiApp {
         true
     }
 
+    // ── rewind selector key helpers（0di；input.rs routes here to avoid
+    //    borrowing the modal while mutating the app）──
+
+    pub fn rewind_select_next(&mut self) {
+        if let Some(crate::modals::Modal::Rewind(s)) = &mut self.modal
+            && !s.confirm
+        {
+            s.select_next();
+        }
+    }
+
+    pub fn rewind_select_prev(&mut self) {
+        if let Some(crate::modals::Modal::Rewind(s)) = &mut self.modal
+            && !s.confirm
+        {
+            s.select_prev();
+        }
+    }
+
+    /// Esc: confirm 态先级联回选择态，否则关闭（Snapshots 同构）。
+    pub fn rewind_esc(&mut self) {
+        if let Some(crate::modals::Modal::Rewind(s)) = &mut self.modal
+            && s.confirm
+        {
+            s.confirm = false;
+            return;
+        }
+        self.close_modal();
+    }
+
+    /// Enter：第一段在选中行武装 confirm；第二段记录撤回意图
+    ///（`pending_rewind`＝ordinal）并关闭 modal。运行中拒绝（服务端
+    /// idle 门同口径——UX 前置，不等 InvalidRequest 回显）。
+    pub fn rewind_confirm(&mut self) -> bool {
+        let ordinal = match &mut self.modal {
+            Some(crate::modals::Modal::Rewind(s)) if s.entries.is_empty() => {
+                return false; // empty list: silent no-op
+            }
+            Some(crate::modals::Modal::Rewind(s)) if !s.confirm => {
+                s.confirm = true;
+                return false;
+            }
+            Some(crate::modals::Modal::Rewind(s)) => s.entries.get(s.selected).map(|e| e.ordinal),
+            _ => None,
+        };
+        if self.running || self.restoring {
+            self.content
+                .add_system_message("当前运行中——请等待完成后再撤回", false);
+            return false;
+        }
+        let Some(ordinal) = ordinal else {
+            return false;
+        };
+        self.pending_rewind = Some(ordinal);
+        self.close_modal();
+        true
+    }
+
+    /// 0di：撤回预览回填（runner 收到 ClientMsg::RewindPreview 后调用）。
+    pub fn open_rewind_modal(&mut self, entries: Vec<crate::modals::RecallEntry>) {
+        if !self.modal_available() {
+            self.queue_modal_refusal();
+            return;
+        }
+        self.modal = Some(crate::modals::Modal::Rewind(
+            crate::modals::RewindSelector::new(entries),
+        ));
+        self.focus = Focus::Modal;
+    }
+
     fn queue_modal_refusal(&mut self) {
         self.content.add_system_message("请先处理权限请求", false);
     }
@@ -518,6 +596,7 @@ impl TuiApp {
                 crate::modals::Modal::Properties(p) => p.sheet.next_tab(),
                 crate::modals::Modal::Find(_) => {}
                 crate::modals::Modal::Snapshots(_) => {} // single list, no tabs
+                crate::modals::Modal::Rewind(_) => {}    // single list, no tabs
             }
         }
     }
@@ -529,6 +608,7 @@ impl TuiApp {
                 crate::modals::Modal::Properties(p) => p.sheet.prev_tab(),
                 crate::modals::Modal::Find(_) => {}
                 crate::modals::Modal::Snapshots(_) => {} // single list, no tabs
+                crate::modals::Modal::Rewind(_) => {}    // single list, no tabs
             }
         }
     }
@@ -735,6 +815,18 @@ impl TuiApp {
             "/snapshots" => {
                 if self.open_snapshots() {
                     messages.push("快照已打开".into());
+                }
+            }
+            "/rewind" => {
+                if self.running || self.restoring {
+                    messages.push("当前有运行/恢复进行中——请等待完成后再撤回".into());
+                } else if self.pending_rewind_open {
+                    messages.push("撤回预览读取中…".into());
+                } else {
+                    // The runner owns the async preview fetch
+                    // (`_orz/recall_preview`) — the modal opens on the ack.
+                    self.pending_rewind_open = true;
+                    messages.push("正在读取可撤回消息…".into());
                 }
             }
             "/grill" => {
@@ -1073,6 +1165,80 @@ mod tests {
         assert!(!app.open_snapshots(), "permission flow is blocking");
         assert!(app.modal.is_none());
         assert!(system_has(&app, "请先处理权限请求"));
+    }
+
+    // ── 0di：撤回选择器（ADR-0010 §14.88）──
+
+    fn rewind_fixture_entries() -> Vec<crate::modals::RecallEntry> {
+        vec![
+            crate::modals::RecallEntry {
+                ordinal: 1,
+                preview: "第一个问题".into(),
+                character_count: 5,
+            },
+            crate::modals::RecallEntry {
+                ordinal: 2,
+                preview: "第二个问题".into(),
+                character_count: 5,
+            },
+        ]
+    }
+
+    #[test]
+    fn rewind_confirm_two_enter_arms_intent_and_closes() {
+        let mut app = TuiApp::new();
+        app.open_rewind_modal(rewind_fixture_entries());
+        assert!(matches!(app.modal, Some(crate::modals::Modal::Rewind(_))));
+        assert_eq!(app.focus, Focus::Modal);
+        // First Enter: confirm state, no intent yet.
+        assert!(!app.rewind_confirm());
+        let crate::modals::Modal::Rewind(sel) = app.modal.as_ref().unwrap() else {
+            panic!("rewind modal");
+        };
+        assert!(sel.confirm);
+        assert!(app.pending_rewind.is_none());
+        // Second Enter: recall intent armed (ordinal of the selected row),
+        // modal closed, focus back.
+        assert!(app.rewind_confirm());
+        assert_eq!(app.pending_rewind, Some(1));
+        assert!(app.modal.is_none());
+        assert_eq!(app.focus, Focus::Chat);
+    }
+
+    #[test]
+    fn rewind_confirm_refused_while_running() {
+        let mut app = TuiApp::new();
+        app.open_rewind_modal(rewind_fixture_entries());
+        app.rewind_confirm(); // arm confirm state
+        app.running = true;
+        assert!(!app.rewind_confirm(), "running session refuses recall");
+        assert!(app.pending_rewind.is_none());
+        // 恢复中同拒。
+        let mut app2 = TuiApp::new();
+        app2.open_rewind_modal(rewind_fixture_entries());
+        app2.rewind_confirm();
+        app2.restoring = true;
+        assert!(!app2.rewind_confirm());
+        assert!(app2.pending_rewind.is_none());
+    }
+
+    #[test]
+    fn rewind_command_refuses_while_running_and_arms_preview_when_idle() {
+        let mut app = TuiApp::new();
+        app.running = true;
+        let messages = app.dispatch_command("/rewind");
+        assert!(
+            messages.iter().any(|m| m.contains("等待完成")),
+            "running session must refuse /rewind: {messages:?}"
+        );
+        assert!(!app.pending_rewind_open);
+        app.running = false;
+        let messages = app.dispatch_command("/rewind");
+        assert!(
+            app.pending_rewind_open,
+            "idle /rewind arms the preview fetch"
+        );
+        assert!(messages.iter().any(|m| m.contains("可撤回")));
     }
 
     #[test]

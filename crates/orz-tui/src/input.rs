@@ -272,6 +272,7 @@ fn handle_modal_key(app: &mut TuiApp, key: KeyEvent) -> KeyOutcome {
     match &app.modal {
         Some(crate::modals::Modal::Find(_)) => handle_find_key(app, key),
         Some(crate::modals::Modal::Snapshots(_)) => handle_snapshots_key(app, key),
+        Some(crate::modals::Modal::Rewind(_)) => handle_rewind_key(app, key),
         _ => handle_tabbed_key(app, key),
     }
     KeyOutcome::Continue
@@ -289,6 +290,20 @@ fn handle_snapshots_key(app: &mut TuiApp, key: KeyEvent) {
             let _ = app.snapshots_confirm();
         }
         KeyCode::Esc => app.snapshots_esc(),
+        _ => {}
+    }
+}
+
+/// 0di：撤回选择器键面——Snapshots 同构（↑↓ 选择 / Enter 两段确认 /
+/// Esc 级联）。
+fn handle_rewind_key(app: &mut TuiApp, key: KeyEvent) {
+    match key.code {
+        KeyCode::Up => app.rewind_select_prev(),
+        KeyCode::Down => app.rewind_select_next(),
+        KeyCode::Enter => {
+            let _ = app.rewind_confirm();
+        }
+        KeyCode::Esc => app.rewind_esc(),
         _ => {}
     }
 }

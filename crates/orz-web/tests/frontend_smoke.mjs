@@ -657,5 +657,84 @@ assert.equal(prevented, 1, '输入框外 Ctrl+Z 保持取消运行语义（preve
 assert.equal(connBanner.textContent, '当前无运行中', '闲置期按下必须有反馈（不再静默）');
 console.log('ok  0dg ② Ctrl+Z 输入框豁免＋闲置期反馈');
 
+/* ── 13. 0di（2026-10-18）：中途补充排队＋撤回（编辑式重发） ── */
+
+// ①supplement_delivered 投递卡——运行中排队的用户输入在 loop-top 生效后
+//   经 journal 事件渲染为用户卡（投递即可见确认；turn 计数递增）。
+state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
+state.marker = [];
+state.turnCounter = 0;
+const turnBefore = state.turnCounter;
+applyJournalEvent({
+  event_type: 'supplement_delivered',
+  payload: { supplement_seq: 1, character_count: 9, text: '补充：改用中文输出' },
+});
+const suppCard = state.content.items.at(-1);
+assert.ok(suppCard, 'supplement_delivered 必须产出内容项');
+assert.equal(suppCard.role, '用户', '补充投递卡＝用户卡（与 prompt_submitted 同面）');
+assert.equal(suppCard.content, '补充：改用中文输出');
+assert.equal(state.turnCounter, turnBefore + 1, '投递卡计一 turn');
+console.log('ok  0di ① supplement_delivered 投递卡（用户面渲染）');
+
+// ②ext 线格式与接线——acp.js 三个 `_orz/*` 方法字面（`_` 前缀＝ACP 扩展
+//   方法线格式，acp 库剥前缀路由 ExtRequest）；main.js 运行中排队臂调
+//   sessionQueueAppend（flash 拒绝臂退役）；/rewind 命令与对话框接线。
+const acpSrc = readFileSync(new URL('../assets/app/acp.js', import.meta.url), 'utf8');
+assert.ok(acpSrc.includes("'_orz/queue_append'"), 'acp.js 必须含 queue_append ext 线格式');
+assert.ok(acpSrc.includes("'_orz/recall_preview'"), 'acp.js 必须含 recall_preview ext 线格式');
+assert.ok(acpSrc.includes("'_orz/recall'"), 'acp.js 必须含 recall ext 线格式');
+const mainSrc = readFileSync(new URL('../assets/app/main.js', import.meta.url), 'utf8');
+assert.ok(mainSrc.includes('sessionQueueAppend'), '运行中排队臂必须调 sessionQueueAppend');
+const submitHead = mainSrc.slice(mainSrc.indexOf('async function submitPrompt'), mainSrc.indexOf('async function submitPrompt') + 600);
+assert.ok(!submitHead.includes('当前有运行在进行'), 'submitPrompt 运行中 flash 拒绝臂必须退役（排队臂取代）');
+assert.ok(mainSrc.includes("case '/rewind':"), '/rewind 命令必须接线');
+const dialogsSrc = readFileSync(new URL('../assets/app/dialogs.js', import.meta.url), 'utf8');
+assert.ok(dialogsSrc.includes('export function openRewind()'), 'dialogs 必须含 openRewind');
+assert.ok(dialogsSrc.includes('rewindRecall'), '撤回确认必须走 rewindRecall 动作');
+assert.ok(dialogsSrc.includes('fillInput(r.recall_text'), '撤回后原文必须回输入框');
+console.log('ok  0di ② ext 线格式与排队/撤回接线字面');
+
+// ③撤回对话框行为——mock 动作面（bindDialogActions 重绑）：列表渲染、
+//   确认调 rewindRecall、原文回输入框、回执 flash。
+let recallOrdinal = null;
+let filledText = null;
+let flashed = null;
+dialogs.bindDialogActions({
+  rewindPreview: async () => ({
+    messages: [
+      { ordinal: 1, preview: '第一个问题', character_count: 5 },
+      { ordinal: 2, preview: '第二个问题', character_count: 5 },
+    ],
+  }),
+  rewindRecall: async (ordinal) => {
+    recallOrdinal = ordinal;
+    return { recalled: true, recall_text: '第二个问题', removed_messages: 3, dropped_supplements: 1 };
+  },
+  fillInput: (text) => {
+    filledText = text;
+  },
+  flash: (m) => {
+    flashed = m;
+  },
+});
+dialogs.openRewind();
+for (let i = 0; i < 5; i++) await Promise.resolve();
+const modalRoot = globalThis.document.getElementById('modalLayer');
+assert.equal(modalRoot.classList.contains('open'), true, 'openRewind 必须打开弹窗');
+// stub DOM 的 textContent 不聚合子节点——行断言走 registry 的行元素。
+const rewindRows = registry.filter((e) => e.className === 'rewind-row');
+assert.equal(rewindRows.length, 2, '列表必须渲染两行');
+assert.ok(rewindRows.some((r) => r.textContent.includes('#1')), '列表须含 #1 行');
+assert.ok(rewindRows.some((r) => r.textContent.includes('#2')), '列表须含 #2 行');
+const rewindBtn = registry.filter((e) => e.tagName === 'BUTTON' && e.textContent === '撤回').at(-1);
+assert.ok(rewindBtn, '必须存在撤回确认按钮');
+rewindBtn.click();
+for (let i = 0; i < 8; i++) await Promise.resolve();
+assert.equal(recallOrdinal, 2, '确认必须以选中行的 ordinal 调 rewindRecall');
+assert.equal(filledText, '第二个问题', '原文必须回输入框');
+assert.ok(flashed && flashed.includes('已撤回 3 条'), '撤回回执必须有 flash 提示');
+assert.ok(flashed.includes('1 条未投递补充'), '丢弃的未投递补充必须回显');
+console.log('ok  0di ③ 撤回对话框行为（列表/确认/原文回填/回执）');
+
 console.log('\nfrontend smoke: 全部通过');
 process.exit(0);

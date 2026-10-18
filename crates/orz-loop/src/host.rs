@@ -909,6 +909,14 @@ pub trait LoopHost: Send + Sync {
         Vec::new()
     }
 
+    /// 0di（2026-10-18，ADR-0010 §14.88）：会话级中途补充队列的 drain 面——
+    /// 主车道 loop-top（下一次 LLM 调用边界）取走自上次 drain 以来排队的
+    /// 用户补充文本（FIFO 保序；取走即出队）。`None` 语义由默认空向量承载：
+    /// 一次性车道/测试宿主零行为变化。队列归属与投递语义见设计稿 D1/D2。
+    fn drain_user_supplements(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     fn lsp_configured(&self) -> bool {
         false
     }

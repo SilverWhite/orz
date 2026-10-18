@@ -341,6 +341,81 @@ export function openProperties() {
 
 /* ── 命令/位置输入（AddressBar 弹窗化，补充稿 §5） ── */
 
+/* ── 0di（2026-10-18，ADR-0010 §14.88）：撤回对话框（编辑式重发）──
+ * 列表＝会话续接包的用户消息（`_orz/recall_preview`，侧车真相面）；选择
+ * 后确认＝`_orz/recall` 截断＋原文回输入框。运行历史/journal 不动（旧卡
+ * 保持为历史证据）；文件面 git 兜底；运行中由服务端 idle 门拒绝。 */
+export function openRewind() {
+  openModal(async (win, body) => {
+    const title = modalTitle('撤回消息');
+    win.appendChild(title);
+    const status = document.createElement('div');
+    status.style.margin = '6px 0';
+    status.textContent = '正在读取可撤回消息…';
+    body.appendChild(status);
+    let entries = [];
+    try {
+      const d = await actions.rewindPreview();
+      entries = d.messages || [];
+    } catch (e) {
+      status.textContent = `读取失败：${e.message}`;
+      return;
+    }
+    if (!entries.length) {
+      status.textContent = '（会话尚无用户消息，无可撤回）';
+      return;
+    }
+    status.textContent =
+      '选择要撤回的用户消息——该条及其后的上下文将被移除，原文回输入框供编辑重发（运行历史不变；文件面 git 兜底）：';
+    let selected = entries.length - 1; // 默认选最新一条（最常用）
+    const list = document.createElement('div');
+    list.style.maxHeight = '240px';
+    list.style.overflow = 'auto';
+    const renderRows = () => {
+      list.replaceChildren();
+      entries.forEach((entry, i) => {
+        const row = document.createElement('div');
+        row.className = 'rewind-row';
+        row.style.padding = '2px 4px';
+        row.style.cursor = 'pointer';
+        row.style.background = i === selected ? 'rgba(0,0,0,0.18)' : '';
+        row.textContent = `#${entry.ordinal}  ${entry.preview}${entry.character_count > entry.preview.length ? '…' : ''}（${entry.character_count} 字符）`;
+        row.addEventListener('click', () => {
+          selected = i;
+          renderRows();
+        });
+        list.appendChild(row);
+      });
+    };
+    renderRows();
+    body.appendChild(list);
+    const actionsRow = document.createElement('div');
+    actionsRow.className = 'modal-actions';
+    const ok = document.createElement('button');
+    ok.textContent = '撤回';
+    ok.addEventListener('click', async () => {
+      const entry = entries[selected];
+      ok.disabled = true;
+      try {
+        const r = await actions.rewindRecall(entry.ordinal);
+        closeModal();
+        actions.fillInput(r.recall_text || '');
+        const droppedNote = r.dropped_supplements > 0 ? `；${r.dropped_supplements} 条未投递补充已一并丢弃` : '';
+        actions.flash(`已撤回 ${r.removed_messages} 条消息${droppedNote}——原文已回输入框`);
+      } catch (e) {
+        ok.disabled = false;
+        actions.flash(`撤回失败：${e.message}`);
+      }
+    });
+    const cancel = document.createElement('button');
+    cancel.textContent = '取消';
+    cancel.addEventListener('click', closeModal);
+    actionsRow.appendChild(ok);
+    actionsRow.appendChild(cancel);
+    body.appendChild(actionsRow);
+  });
+}
+
 export function openCommand(initial) {
   openModal((win, body) => {
       const title = modalTitle('命令 / 位置');
