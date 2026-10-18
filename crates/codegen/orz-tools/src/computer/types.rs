@@ -264,11 +264,22 @@ pub struct TaskSnapshot {
     pub is_backgrounded: bool,
     /// 0dh S2 (ADR-0010 §14.87, D6 incremental read): raw byte count of THIS
     /// response's payload when served through the get_task_output cursor —
-    /// `Some` on an incremental serve (first serve = the full window so far,
-    /// later serves = only new bytes), `None` for legacy snapshots (waits,
-    /// tombstones, foreground). The full history stays on `output_file`.
+    /// `Some` on an incremental serve (first serve = the served window's own
+    /// byte length, later serves = only the new segment), `None` for legacy
+    /// snapshots (waits, tombstones, foreground). The full history stays on
+    /// `output_file`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_output_bytes: Option<u64>,
+    /// 0dh S2 review fix: task-lifetime cumulative output byte count, as
+    /// tracked by the producing actor. Rides the snapshot so the prompt
+    /// render can report the total next to the incremental
+    /// `new_output_bytes` delta without widening the external
+    /// `TaskOutputResult` contract (the total travels in its existing
+    /// `raw_output_bytes` field, whose documented meaning is exactly this
+    /// task-total size). `None` for constructors that don't track a byte
+    /// total (test fixtures, bridges).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_output_bytes: Option<u64>,
 }
 
 impl TaskSnapshot {

@@ -45,7 +45,16 @@ pub(crate) fn snapshot_to_result(
     // Compute duration before moving fields.
     // Capture raw byte count before moving `s.output`.
     let duration_secs = s.duration_secs();
-    let raw_output_bytes = s.output.len();
+    // 0dh S2 review fix: prefer the producer's task-lifetime byte total.
+    // `raw_output_bytes` documents itself as "always the actual task output
+    // size" (doom-loop growth detection leans on that), but an incremental
+    // serve's `output` is only the new segment — measuring it would report
+    // shrinking sizes. `None` (test fixtures / non-actor constructors) keeps
+    // the legacy measure-the-payload behavior.
+    let raw_output_bytes = s
+        .total_output_bytes
+        .map(|t| t as usize)
+        .unwrap_or_else(|| s.output.len());
 
     TaskOutputResult {
         task_id: s.task_id,
@@ -118,6 +127,7 @@ mod tests {
             description: None,
             is_backgrounded: false,
             new_output_bytes: None,
+            total_output_bytes: None,
         }
     }
 
@@ -130,6 +140,27 @@ mod tests {
         assert_eq!(result.status, "running");
         assert!(result.exit_code.is_none());
         assert!(result.ended.is_none());
+    }
+
+    /// 0dh S2 review fix: when the producing actor reports the task-lifetime
+    /// byte total, `raw_output_bytes` must carry that total — not the served
+    /// payload length (an incremental serve's body is only the new segment,
+    /// and doom-loop growth detection reads this field).
+    #[test]
+    fn test_snapshot_to_result_prefers_total_output_bytes() {
+        let mut snapshot = make_test_snapshot("t-total", false, None);
+        snapshot.output = "delta-only".into(); // 10-byte served segment
+        snapshot.new_output_bytes = Some(10);
+        snapshot.total_output_bytes = Some(4_096);
+
+        let result = snapshot_to_result(snapshot, "read_file", DEFAULT_TOOL_OUTPUT_BYTES);
+        assert_eq!(result.raw_output_bytes, 4_096, "total, not segment length");
+        assert_eq!(result.new_bytes, Some(10));
+
+        // Fixtures without a known total keep the legacy payload measure.
+        let legacy = make_test_snapshot("t-legacy", false, None);
+        let result = snapshot_to_result(legacy, "read_file", DEFAULT_TOOL_OUTPUT_BYTES);
+        assert_eq!(result.raw_output_bytes, "test output".len());
     }
 
     #[test]

@@ -52,8 +52,8 @@ pub use resource_job::{
     SpawnObservation, SpawnSinkGuard, attach_failure_count, clear_session_spawn_marks_for_tests,
     drain_global_run_notifications, global_run_job, image_fingerprint_from_pid,
     install_global_run_job, mark_spawn_session, record_attach_failure,
-    replace_global_run_job_for_tests, session_spawn_marks, session_spawn_started_at,
-    set_spawn_sink, terminate_job_handle,
+    replace_global_run_job_for_tests, session_spawn_marks, set_spawn_sink, terminate_job_handle,
+    unmark_spawn_session,
 };
 // HANDLE-backed helpers exist only where Job Object handles do; the unconditional
 // re-export broke every non-Windows build of the workspace (E0432 on Linux).

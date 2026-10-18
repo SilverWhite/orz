@@ -287,6 +287,30 @@ impl OrzHost {
         permission: Option<PermissionBridge>,
         reader: Arc<dyn crate::credentials::CredentialReader>,
     ) -> Result<Self, String> {
+        Self::with_credential_reader_and_terminal(
+            journal,
+            cwd,
+            workspace_trust,
+            permission,
+            reader,
+            None,
+        )
+    }
+
+    /// `with_credential_reader` variant that injects an externally owned
+    /// terminal backend (0dh S2-R, ADR-0010 §14.87): the ACP session lane
+    /// passes its session-scoped backend so background tasks survive the
+    /// per-prompt host rebuild. `None` keeps the historical behavior — the
+    /// host constructs a private backend whose lifetime is the host's (the
+    /// correct shape for one-shot headless lanes).
+    pub(crate) fn with_credential_reader_and_terminal(
+        journal: JournalRecorder,
+        cwd: &Path,
+        workspace_trust: WorkspaceTrust,
+        permission: Option<PermissionBridge>,
+        reader: Arc<dyn crate::credentials::CredentialReader>,
+        terminal: Option<Arc<dyn TerminalBackend>>,
+    ) -> Result<Self, String> {
         // 0p S2 复审（B5 已知 key 字面替换，2026-09-07，ADR-0010 §14.61）：
         // 装配期一次性扫描环境变量，把 KEY/TOKEN/SECRET/PASSWORD 命名的
         // 候选密钥值登记进 orz-secrets 已知密钥注册表（幂等；注册表空时
@@ -310,7 +334,8 @@ impl OrzHost {
                 "toolset.read_file coarse gate applied"
             );
         }
-        let terminal: Arc<dyn TerminalBackend> = Arc::new(LocalTerminalBackend::new());
+        let terminal: Arc<dyn TerminalBackend> =
+            terminal.unwrap_or_else(|| Arc::new(LocalTerminalBackend::new()));
         let toolset = tools::build_toolset(
             cwd,
             &web_search_config,
@@ -862,13 +887,51 @@ impl OrzHost {
         hub: Option<Arc<dyn PermissionHookTransport>>,
         policy: PermissionPolicy,
     ) -> Result<Self, String> {
+        Self::with_bridge_and_hub_policy_with_terminal(
+            session_id,
+            journal,
+            cwd,
+            workspace_trust,
+            gateway,
+            hub,
+            policy,
+            None,
+        )
+    }
+
+    /// `with_bridge_and_hub_policy` variant that injects an externally owned
+    /// terminal backend (0dh S2-R, ADR-0010 §14.87): the ACP session lane
+    /// passes the session-scoped backend held by `StoredSession`, so the
+    /// terminal actor — the sole owner of background-task state (task table,
+    /// output cursors, per-call Job handles) — survives the per-prompt host
+    /// rebuild and background tasks live across runs until the session is
+    /// closed or the host process exits. `None` (one-shot headless lanes)
+    /// keeps the historical private-backend behavior.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_bridge_and_hub_policy_with_terminal(
+        session_id: &str,
+        journal: JournalRecorder,
+        cwd: &Path,
+        workspace_trust: WorkspaceTrust,
+        gateway: Option<xai_acp_lib::AcpAgentGatewaySender>,
+        hub: Option<Arc<dyn PermissionHookTransport>>,
+        policy: PermissionPolicy,
+        terminal: Option<Arc<dyn TerminalBackend>>,
+    ) -> Result<Self, String> {
         // Clone the live-client sender before handing the original to the
         // bridge — the streamed text-delta path uses its own sender clone
         // (the permission manager gets the original).
         let live_gateway = gateway.clone();
         let bridge =
             PermissionBridge::spawn_with_hub_and_policy(session_id, gateway, hub, cwd, policy)?;
-        let mut host = Self::with_permission(journal, cwd, workspace_trust, Some(bridge))?;
+        let mut host = Self::with_credential_reader_and_terminal(
+            journal,
+            cwd,
+            workspace_trust,
+            Some(bridge),
+            crate::credentials::web_search_reader(),
+            terminal,
+        )?;
         host.session_id = Some(session_id.to_string());
         host.gateway = live_gateway;
         Ok(host)

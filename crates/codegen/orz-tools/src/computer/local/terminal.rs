@@ -53,7 +53,9 @@ const SIGTERM_GRACE: Duration = Duration::from_secs(1);
 /// `timeout: 0`/none (`Duration::MAX`) are bounded by it too. Env override:
 /// `GROK_BG_MAX_RUNTIME_MS` (clamped to ≥ 1h — the absolute backstop cannot be
 /// configured away; invalid/0 falls back to the default).
-const DEFAULT_BG_MAX_RUNTIME: Duration = Duration::from_secs(108_000);
+/// `pub(crate)`: the bash tool's `ABSOLUTE_MAX_TIMEOUT_MS` pin asserts
+/// lockstep with this backstop (single 30h story across model cap + executor).
+pub(crate) const DEFAULT_BG_MAX_RUNTIME: Duration = Duration::from_secs(108_000);
 /// Floor for `GROK_BG_MAX_RUNTIME_MS`: an absolute backstop below one hour is
 /// a misconfiguration, not a policy.
 const BG_MAX_RUNTIME_FLOOR: Duration = Duration::from_secs(3_600);
@@ -708,6 +710,9 @@ impl ProcessState {
             description: self.description.clone(),
             is_backgrounded: self.bg_status.is_backgrounded(),
             new_output_bytes,
+            // Task-lifetime total (0dh S2 review fix): rides every actor
+            // snapshot so the render can report "{n} bytes ... ({m} total)".
+            total_output_bytes: Some(self.total_bytes as u64),
         }
     }
 
@@ -1257,10 +1262,14 @@ impl LocalTerminalActor {
         p.served_once = true;
         if first_serve {
             // First read = the full window so far (cursor pins here).
-            let total = p.total_bytes as u64;
+            // `new_output_bytes` reports THIS response's payload — the served
+            // window's own byte length, which can sit below the task total
+            // when `output_byte_limit` truncated the window. The task-total
+            // rides `total_output_bytes` for the render line.
             let snap = p.to_task_snapshot(task_id).await;
+            let served = snap.output.len() as u64;
             return Some(TaskSnapshot {
-                new_output_bytes: Some(total),
+                new_output_bytes: Some(served),
                 ..snap
             });
         }
@@ -1531,6 +1540,13 @@ impl LocalTerminalActor {
 
         // Kill the process and finalize its state in one shot.
         let outcome = kill_and_finalize(process).await;
+
+        // 0dh S2 review fix: the kill is terminal — drop the in-process
+        // session mark now rather than at tombstone eviction (up to TTL
+        // later), so a killed task's stragglers stop being sweep-exempt.
+        if let Some(pid) = self.processes.get(terminal_id).and_then(|p| p.pid) {
+            xai_tty_utils::unmark_spawn_session(pid);
+        }
 
         // Resolve completion waiters immediately, so callers blocked on wait_for_completion() unblock right away.
         if let Some(waiters) = self.completion_waiters.remove(terminal_id) {
@@ -2153,8 +2169,16 @@ impl LocalTerminalActor {
                     description: p.description.clone(),
                     is_backgrounded: true,
                     new_output_bytes: None,
+                    // Metadata-only body (output stays on disk), but the byte
+                    // total is cheap and keeps `raw_output_bytes` truthful.
+                    total_output_bytes: Some(p.total_bytes as u64),
                 };
                 self.completed_task_snapshots.insert(id.clone(), snapshot);
+            }
+            // 0dh S2 review fix: the task is dead (tombstoned) — drop its
+            // in-process session mark so the set tracks only live tasks.
+            if let Some(pid) = self.processes.get(id).and_then(|p| p.pid) {
+                xai_tty_utils::unmark_spawn_session(pid);
             }
             self.processes.remove(id);
         }
@@ -2328,7 +2352,7 @@ impl LocalTerminalActor {
         }
 
         // Check for timeout. TER T1.4 (2026-09-04)：只有前台进程走本分支；
-        // 后台化任务的原解析超时已在转换时退役，由 `0b` 清扫（10h 绝对
+        // 后台化任务的原解析超时已在转换时退役，由 `0b` 清扫（30h 绝对
         // 兜底）与 T1.5 idle+CPU 兜底接管，分层 timeout 不再杀活跃命令。
         if !process.bg_status.is_backgrounded()
             && process.is_timed_out()
@@ -2372,7 +2396,7 @@ impl LocalTerminalActor {
         // 但无输出的任务（编译/训练/渲染内核）有 CPU 增长，不误杀；CPU
         // 记账不可用平台按「不判 idle」处理。
         // 登记边界（TER 全面审查 S2a/S2b，2026-09-04）：① 子进程关闭继承管道
-        // 但仍存活（daemonize/nohup）后，本采样停止——该形态由 10h 绝对兜底 +
+        // 但仍存活（daemonize/nohup）后，本采样停止——该形态由 30h 绝对兜底 +
         // 会话清理负责，不再被 idle-kill 覆盖；② Linux CPU 记账只汇总同进程组
         // （/proc pgrp），自成进程组的忙碌后代不计 CPU——该面视为“部分未知”，
         // 宁可少杀不误杀的原则由跨 pgrp 用例与后续全树记账评估承接（Windows
@@ -2440,6 +2464,12 @@ impl LocalTerminalActor {
     async fn shutdown_all(&mut self) {
         for process in self.processes.values_mut() {
             send_sigkill_to_group(process);
+            // 0dh S2 review fix: session teardown kills the task — drop the
+            // in-process session mark (dead session's rows are swept at the
+            // next assembly like any other orphan, 0bq intent preserved).
+            if let Some(pid) = process.pid {
+                xai_tty_utils::unmark_spawn_session(pid);
+            }
             // Abort the state dump reader so its spawn_blocking thread
             // doesn't outlive the actor.
             if let Some(handle) = process.state_dump_handle.take() {
@@ -4763,7 +4793,7 @@ mod tests {
 
     // TER T1.4 (2026-09-04) 去硬杀：自动后台化后，**原解析超时退役**——
     // 300ms 预算后台化 + 800ms 解析超时的任务必须越过 800ms 继续运行
-    // （分层 timeout 只作 auto-bg deadline 引用，不再杀活跃命令；10h
+    // （分层 timeout 只作 auto-bg deadline 引用，不再杀活跃命令；30h
     // 绝对兜底与 T1.5 idle+CPU 兜底另行接管）。
     #[tokio::test]
     async fn test_auto_backgrounded_task_survives_original_timeout_deadline() {
@@ -4817,9 +4847,9 @@ mod tests {
     }
 
     // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2 审查处理 P2-2)：用户
-    // 主动后台化（Ctrl+G / 显式 is_background）维持 S5-2 之前的 10h 硬上限
-    // 截止——800ms 前台原超时的任务在用户后台化后必须越过 800ms 继续运行，
-    // 不被原前台超时树杀。
+    // 主动后台化（Ctrl+G / 显式 is_background）维持硬上限截止（S5-2 时为
+    // 10h；0dh S2 起为 30h `DEFAULT_BG_MAX_RUNTIME`）——800ms 前台原超时的
+    // 任务在用户后台化后必须越过 800ms 继续运行，不被原前台超时树杀。
     #[tokio::test]
     async fn test_user_backgrounded_task_keeps_max_runtime_deadline() {
         let backend = LocalTerminalBackend::new_with_foreground_budget(Duration::from_millis(100));
@@ -4860,7 +4890,7 @@ mod tests {
         let result = run_handle.await.expect("run task").expect("run returns ok");
         assert_eq!(result.signal.as_deref(), Some("backgrounded"));
 
-        // 越过原解析超时（800ms）再查：任务仍在运行（截止=10h 硬上限）。
+        // 越过原解析超时（800ms）再查：任务仍在运行（截止=30h 硬上限）。
         tokio::time::sleep(Duration::from_millis(900)).await;
         let snap = backend.get_task(tool_call_id).await.expect("task snapshot");
         assert!(
@@ -5059,8 +5089,10 @@ mod tests {
         let _ = tokio::fs::remove_file(&output_file).await;
     }
 
-    /// 0dh S2（钉⑤，D6 增量读出三态）：首读＝既有全窗（游标钉定）；
-    /// 续读＝只回新增段（不再含旧批）；终态读＝余段返回后封口，再读回落
+    /// 0dh S2（钉⑤，D6 增量读出三态）：首读＝既有全窗（游标钉定，
+    /// `new_output_bytes`＝本次服务窗口自身的字节长——窗被
+    /// `output_byte_limit` 截断时低于任务总量）；续读＝只回新增段（不再含
+    /// 旧批）；终态读＝余段返回后封口（同样携带本次服务字节数），再读回落
     /// 现役尾窗（completed 快照、new_output_bytes=None）。
     #[tokio::test]
     async fn incremental_cursor_first_delta_and_seal() {
@@ -5111,6 +5143,11 @@ mod tests {
             first.new_output_bytes.is_some(),
             "first serve pins the cursor and reports its payload size"
         );
+        assert_eq!(
+            first.new_output_bytes,
+            Some(first.output.len() as u64),
+            "cursor report = THIS response's payload, not the task total"
+        );
 
         // 等第二批落地后续读：只含新增段，不含首批。
         tokio::time::sleep(Duration::from_millis(1_200)).await;
@@ -5128,17 +5165,49 @@ mod tests {
             "delta serve must not replay the first serve, got: {:?}",
             second.output
         );
-        assert!(second.new_output_bytes.is_some());
+        assert!(
+            !second.output.contains("THIRD-BATCH"),
+            "delta phase must precede the third batch (seal arm needs a non-empty remainder), got: {:?}",
+            second.output
+        );
+        assert_eq!(
+            second.new_output_bytes,
+            Some(second.output.len() as u64),
+            "delta serve reports the served segment's own byte length"
+        );
 
-        // 等任务完成：终态读返回余段（或封口后现役尾窗），再读＝完整尾窗
-        // （completed 快照读 output_file，new_output_bytes=None）。
+        // 等任务完成：终态首读（封口读）返回余段并携带本次服务的字节数，
+        // 随后封口——再读＝完整尾窗（completed 快照读 output_file，
+        // new_output_bytes=None）。余段由完成 tick 的 drain 先于
+        // `exit_status` 落入 unserved（见 poll_process 的 drain→exit 顺序），
+        // 封口读因此确定；保留 50ms×40 容差环吸收并行负载下的 tick 交错。
         let done = backend
             .wait_for_completion(&handle.task_id, Some(Duration::from_secs(10)))
             .await
             .expect("task completes");
         assert!(done.completed);
-        let seal = backend.get_task(&handle.task_id).await.expect("snapshot");
-        let _ = seal;
+        let mut seal = None;
+        for _ in 0..40 {
+            if let Some(snap) = backend.get_task(&handle.task_id).await
+                && snap.output.contains("THIRD-BATCH")
+                && snap.new_output_bytes.is_some()
+            {
+                seal = Some(snap);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let seal = seal.expect("seal serve must return the remainder with its payload size");
+        assert!(
+            !seal.output.contains("FIRST-BATCH") && !seal.output.contains("SECOND-BATCH"),
+            "seal serve returns only the remainder, got: {:?}",
+            seal.output
+        );
+        assert_eq!(
+            seal.new_output_bytes,
+            Some(seal.output.len() as u64),
+            "seal serve reports the remainder's own byte length"
+        );
         let legacy = backend.get_task(&handle.task_id).await.expect("snapshot");
         assert!(legacy.completed);
         assert_eq!(
@@ -5753,8 +5822,12 @@ mod tests {
         );
     }
 
-    /// Scoped env-var guard for the resolution test (serial execution not
-    /// required: the var is only read by `bg_max_runtime_from_env`).
+    /// Scoped env-var guard for the resolution test. `cargo test` runs tests
+    /// in parallel and env vars are process-global — tolerated here because
+    /// no other test in this binary touches `GROK_BG_MAX_RUNTIME_MS`, and a
+    /// concurrent production read of a transient value is neutralized by the
+    /// reader itself (sub-floor clamps to the 1h `BG_MAX_RUNTIME_FLOOR`,
+    /// invalid/0 falls back to the 30h default; no test lives that long).
     struct EnvGuard {
         key: &'static str,
         previous: Option<std::ffi::OsString>,
@@ -5763,8 +5836,9 @@ mod tests {
     impl EnvGuard {
         fn set(key: &'static str, value: Option<&str>) -> Self {
             let previous = std::env::var_os(key);
-            // SAFETY: test-only, single-threaded env mutation within one test
-            // process (edition-2024 marks set_var/remove_var unsafe).
+            // SAFETY: test-only env mutation (edition-2024 marks
+            // set_var/remove_var unsafe); cross-test races are reasoned about
+            // in the struct doc above.
             unsafe {
                 match value {
                     Some(v) => std::env::set_var(key, v),

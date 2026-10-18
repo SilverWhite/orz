@@ -861,6 +861,7 @@ mod tests {
             description: None,
             is_backgrounded: false,
             new_output_bytes: None,
+            total_output_bytes: None,
         }
     }
 

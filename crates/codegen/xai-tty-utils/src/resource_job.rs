@@ -454,15 +454,6 @@ pub fn mark_spawn_session(pid: u32, started_at_ms: u64) {
     set.entry(pid).or_insert(started_at_ms);
 }
 
-/// The attach clock recorded for `pid` when it was marked session-domain.
-pub fn session_spawn_started_at(pid: u32) -> Option<u64> {
-    SESSION_SPAWNS
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .get(&pid)
-        .copied()
-}
-
 /// Full snapshot of the session-domain spawn set (host finalize-sweep input).
 pub fn session_spawn_marks() -> Vec<(u32, u64)> {
     SESSION_SPAWNS
@@ -471,6 +462,17 @@ pub fn session_spawn_marks() -> Vec<(u32, u64)> {
         .iter()
         .map(|(pid, ts)| (*pid, *ts))
         .collect()
+}
+
+/// Remove the session-domain mark for `pid` (0dh S2 review fix: the set was
+/// grow-only). The terminal actor calls this when the owning task reaches its
+/// terminal state — completed→tombstone eviction, kill, session shutdown — so
+/// the set tracks only live background tasks. No-op for unknown pids.
+pub fn unmark_spawn_session(pid: u32) {
+    SESSION_SPAWNS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .remove(&pid);
 }
 
 /// Test seam: drop every session mark (never call from production paths).
@@ -1667,5 +1669,28 @@ mod tests {
         })
         .expect("install run ceilings");
         assert!(!job.is_kernel_enforced());
+    }
+
+    /// 0dh S2 review fix: unmark closes the loop — mark → visible in the
+    /// snapshot → unmark → gone (and unknown-pid unmark is a silent no-op).
+    /// Uses a distinct synthetic pid and clears up after itself so parallel
+    /// tests never observe this entry.
+    #[test]
+    fn unmark_spawn_session_round_trip() {
+        let pid = u32::MAX - 1; // synthetic; never a real test-process pid
+        clear_session_spawn_marks_for_tests();
+        mark_spawn_session(pid, 1_760_000_000_000);
+        assert!(
+            session_spawn_marks().iter().any(|(p, _)| *p == pid),
+            "marked pid must appear in the session spawn snapshot"
+        );
+        unmark_spawn_session(pid);
+        assert!(
+            !session_spawn_marks().iter().any(|(p, _)| *p == pid),
+            "unmarked pid must vanish from the session spawn snapshot"
+        );
+        // Unknown pid: no-op, no panic.
+        unmark_spawn_session(pid);
+        clear_session_spawn_marks_for_tests();
     }
 }

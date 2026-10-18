@@ -397,9 +397,11 @@ impl ProcessTreeRegistry {
     }
 
     /// Execute a planned sweep: audit-first (planned fact + registry audit
-    /// row) before the first kill, then the executed fact. Kills are
-    /// per-pid `TerminateProcess`/`SIGKILL`; per-pid because the kernel job
-    /// that owned the tree is gone (that is precisely the orphan scenario).
+    /// row) before the first kill, then the executed fact. Refusal rows are
+    /// audited in EVERY branch — zero-reap and mixed (reaps + refusals in
+    /// one round) alike. Kills are per-pid `TerminateProcess`/`SIGKILL`;
+    /// per-pid because the kernel job that owned the tree is gone (that is
+    /// precisely the orphan scenario).
     pub fn execute_sweep(
         &self,
         decisions: Vec<SweepDecision>,
@@ -413,40 +415,36 @@ impl ProcessTreeRegistry {
                 SweepDecision::Refuse(..) => None,
             })
             .collect();
-        if reaped.is_empty() {
-            // Refusals still get their audit row: the negative matrix is
-            // evidence too (判据 5's mechanical face on the observation side).
-            // NotRunning rows are dropped here (review F-BE-5): a stale
-            // record left in the shared registry would keep feeding future
-            // sweeps and grow the pid-reuse collision surface.
-            for (record, why) in decisions.iter().filter_map(|d| match d {
+        // Refusals get their audit row in every branch (fix 2026-10-18: a
+        // mixed sweep used to drop it): the negative matrix is evidence too
+        // (判据 5's mechanical face on the observation side). NotRunning rows
+        // are dropped here (review F-BE-5): a stale record left in the shared
+        // registry would keep feeding future sweeps and grow the pid-reuse
+        // collision surface.
+        let refusals: Vec<(&ProcessTreeRecord, &SweepRefusal)> = decisions
+            .iter()
+            .filter_map(|d| match d {
                 SweepDecision::Refuse(record, why) => Some((record, why)),
                 SweepDecision::Reap(..) => None,
-            }) {
-                if matches!(why, SweepRefusal::NotRunning) {
-                    self.remove(&record.call_id, record.pid);
-                }
+            })
+            .collect();
+        for (record, why) in &refusals {
+            if matches!(why, SweepRefusal::NotRunning) {
+                self.remove(&record.call_id, record.pid);
             }
-            let refusals: Vec<(&ProcessTreeRecord, &SweepRefusal)> = decisions
-                .iter()
-                .filter_map(|d| match d {
-                    SweepDecision::Refuse(record, why) => Some((record, why)),
-                    SweepDecision::Reap(..) => None,
-                })
-                .collect();
-            if !refusals.is_empty() {
-                let rows: Vec<AuditTarget> = refusals
-                    .iter()
-                    .map(|(record, why)| AuditTarget {
-                        call_id: record.call_id.clone(),
-                        pid: record.pid,
-                        image_sha256: record.image_sha256.clone(),
-                        started_at: record.started_at,
-                        refusal: refusal_key(why).to_string(),
-                    })
-                    .collect();
-                self.append_audit_row(reason, "refused", &rows);
-            }
+        }
+        let refusal_rows: Vec<AuditTarget> = refusals
+            .iter()
+            .map(|(record, why)| AuditTarget {
+                call_id: record.call_id.clone(),
+                pid: record.pid,
+                image_sha256: record.image_sha256.clone(),
+                started_at: record.started_at,
+                refusal: refusal_key(why).to_string(),
+            })
+            .collect();
+        self.append_audit_row(reason, "refused", &refusal_rows);
+        if reaped.is_empty() {
             return;
         }
 
@@ -1013,15 +1011,110 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Mixed-sweep audit completeness (P2-1 fix pin): a round holding both
+    /// Reap and Refuse decisions must still write the `"refused"` audit row —
+    /// the zero-reap branch already did, the mixed branch used to drop it.
+    /// The stale NotRunning row is cleaned up here too (F-BE-5), and the
+    /// journal facts stay kill-only (no refusal fact). Synthetic decisions +
+    /// synthetic kill — cross-platform, no real processes.
+    #[test]
+    fn execute_sweep_audits_refused_rows_in_mixed_sweep() {
+        let dir = unique_dir("mixed-audit");
+        let registry = ProcessTreeRegistry::new(&dir);
+        // Land the NotRunning row on disk first — the mixed branch must drop
+        // it exactly like the zero-reap branch does.
+        let stale = record(999_103, Some("c".repeat(64)), vec![], "RUN-A");
+        registry.register(&stale).expect("register stale row");
+
+        let reaped = record(999_101, Some("a".repeat(64)), vec![], "RUN-A");
+        let mut session = record(999_102, Some("b".repeat(64)), vec![], "RUN-A");
+        session.lifetime = "session".into();
+        let decisions = vec![
+            SweepDecision::Reap(reaped),
+            SweepDecision::Refuse(session, SweepRefusal::SessionOwned),
+            SweepDecision::Refuse(stale, SweepRefusal::NotRunning),
+        ];
+        registry.execute_sweep(decisions, "run_shutdown", &|_| Ok(()));
+
+        let log = std::fs::read_to_string(
+            dir.join(".gsa")
+                .join("process_trees")
+                .join("sweep-log.jsonl"),
+        )
+        .expect("sweep log exists");
+        assert!(log.contains("\"phase\":\"planned\""), "{log}");
+        assert!(log.contains("\"phase\":\"executed\""), "{log}");
+        assert!(
+            log.contains("\"phase\":\"refused\""),
+            "a mixed sweep must audit its refusals: {log}"
+        );
+        assert!(log.contains("\"refusal\":\"session_owned\""), "{log}");
+        assert!(log.contains("\"refusal\":\"not_running\""), "{log}");
+        assert!(log.contains("\"refusal\":\"reap\""), "{log}");
+        assert!(
+            registry.load_all().is_empty(),
+            "the stale NotRunning row must be dropped in a mixed sweep too"
+        );
+        let facts = registry.drain_facts();
+        assert_eq!(
+            facts.len(),
+            2,
+            "planned + executed only, no refusal fact: {facts:?}"
+        );
+        assert_eq!(facts[0].phase, "planned");
+        assert_eq!(facts[1].phase, "executed");
+        assert_eq!(facts[0].pids, [999_101]);
+        assert_eq!(facts[1].pids, [999_101]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ── 0dh S2（298 批；ADR-0010 §14.87）：会话域豁除三态 ──────────────
 
     /// lifetime=="session" 行在 finalize 臂被豁除（SessionOwned 拒绝、不杀）；
     /// 同形的 lifetime=="call" 行照杀（对照臂）。
+    ///
+    /// Decision layer = synthetic rows + closure probes driving the pure
+    /// `plan_sweep` — cross-platform, no real process needed (note the
+    /// SessionOwned check precedes the alive check, so a synthetic dead pid
+    /// still takes the exemption arm). The real-children face (real probes +
+    /// real kills) stays behind the Windows gate.
     #[test]
     fn finalize_refuses_session_owned_rows_and_reaps_call_rows() {
+        let dir = unique_dir("0dh-session");
+        let registry = ProcessTreeRegistry::new(&dir);
+        // Synthetic pids: 999_000 = own run, 999_001 = dead session row,
+        // 999_002 = live call row (the closure is the only source of truth).
+        const SESSION_PID: u32 = 999_001;
+        const CALL_PID: u32 = 999_002;
+        let mut session_row = record(SESSION_PID, Some("a".repeat(64)), vec![], "RUN-A");
+        session_row.lifetime = "session".into();
+        let call_row = record(CALL_PID, Some("a".repeat(64)), vec![], "RUN-A");
+        let decisions = registry.plan_sweep(
+            &[session_row, call_row],
+            SweepMode::Finalize {
+                own_run_id: "RUN-A",
+                own_pid: 999_000,
+            },
+            &|pid| pid == CALL_PID,
+            &|_| Some("a".repeat(64)),
+            &|_| None,
+            &[],
+        );
+        assert!(
+            matches!(
+                &decisions[0],
+                SweepDecision::Refuse(_, SweepRefusal::SessionOwned)
+            ),
+            "session row must be refused, got: {decisions:?}"
+        );
+        assert!(
+            matches!(&decisions[1], SweepDecision::Reap(_)),
+            "call row must remain a reap candidate, got: {decisions:?}"
+        );
+
         #[cfg(windows)]
         {
-            let registry = ProcessTreeRegistry::new(&unique_dir("0dh-session"));
             let session_pid = spawn_long_lived_child();
             let call_pid = spawn_long_lived_child();
             let mut session_row = record(
@@ -1061,19 +1154,64 @@ mod tests {
                 matches!(&decisions[1], SweepDecision::Reap(_)),
                 "call row must remain a reap candidate, got: {decisions:?}"
             );
-            let _ = registry;
             kill_pid(session_pid).expect("kill session sleeper");
             kill_pid(call_pid).expect("kill call sleeper");
         }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// auto-bg / Ctrl+G 转换路径：登记行是 `call`，豁除走进程内会话标记
     /// （pid + attach 时钟、容差同 pid 复用防护）；时钟漂移超容差不豁除。
+    ///
+    /// Decision layer = synthetic rows + closure probes (cross-platform);
+    /// the real-children face stays behind the Windows gate.
     #[test]
     fn finalize_honors_in_process_session_marks_with_clock_tolerance() {
+        let dir = unique_dir("0dh-marks");
+        let registry = ProcessTreeRegistry::new(&dir);
+        const PID: u32 = 999_011;
+        let row = record(PID, Some("a".repeat(64)), vec![], "RUN-A");
+        let started_at = row.started_at; // synthetic attach clock (helper default 1)
+
+        // 标记在容差内（attach 时钟 ±抖动）→ 豁除。
+        let decisions = registry.plan_sweep(
+            std::slice::from_ref(&row),
+            SweepMode::Finalize {
+                own_run_id: "RUN-A",
+                own_pid: 999_010,
+            },
+            &|pid| pid == PID,
+            &|_| Some("a".repeat(64)),
+            &|_| None,
+            &[(PID, started_at)],
+        );
+        assert!(
+            matches!(
+                &decisions[0],
+                SweepDecision::Refuse(_, SweepRefusal::SessionOwned)
+            ),
+            "in-tolerance mark must exempt, got: {decisions:?}"
+        );
+
+        // 标记时钟超容差（pid 复用防护语义）→ 不豁除，仍为收割候选。
+        let decisions = registry.plan_sweep(
+            &[row],
+            SweepMode::Finalize {
+                own_run_id: "RUN-A",
+                own_pid: 999_010,
+            },
+            &|pid| pid == PID,
+            &|_| Some("a".repeat(64)),
+            &|_| None,
+            &[(PID, started_at + CREATION_TIME_TOLERANCE_MS + 10_000)],
+        );
+        assert!(
+            matches!(&decisions[0], SweepDecision::Reap(_)),
+            "out-of-tolerance mark must not exempt, got: {decisions:?}"
+        );
+
         #[cfg(windows)]
         {
-            let registry = ProcessTreeRegistry::new(&unique_dir("0dh-marks"));
             let pid = spawn_long_lived_child();
             let mut row = record(
                 pid,
@@ -1122,16 +1260,67 @@ mod tests {
             );
             kill_pid(pid).expect("kill sleeper");
         }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 装配期 Start sweep 不查会话标记（显式传 marks 也不豁除）：宿主已死
     /// 的 session 行照扫（0bq 孤儿兜底，0dh 设计 §3 D2③）；宿主存活
     /// （parent_chain 活）则 ParentAlive 拒绝。
+    ///
+    /// Decision layer = synthetic rows + closure probes (cross-platform);
+    /// the real-children face stays behind the Windows gate.
     #[test]
     fn start_sweep_ignores_session_lifetime_marker() {
+        let dir = unique_dir("0dh-start");
+        let registry = ProcessTreeRegistry::new(&dir);
+        // Synthetic pids: 999_021 = the row itself (alive under the closure),
+        // 999_022 = live host, 999_023 = dead host.
+        const PID: u32 = 999_021;
+        const LIVE_HOST: u32 = 999_022;
+        const DEAD_HOST: u32 = 999_023;
+        let mut row = record(PID, Some("a".repeat(64)), vec![], "RUN-PREV");
+        row.lifetime = "session".into();
+
+        // 宿主进程死亡模拟：parent_chain 全 dead → 三条件成立 → 照扫
+        // （显式传标记也不豁除：Start sweep 压根不查会话标记）。
+        row.parent_chain = vec![DEAD_HOST];
+        let decisions = registry.plan_sweep(
+            &[row.clone()],
+            SweepMode::Start {
+                run_started_at: 1_000,
+            },
+            &|pid| pid == PID || pid == LIVE_HOST,
+            &|_| Some("a".repeat(64)),
+            &|_| None,
+            &[(PID, row.started_at)],
+        );
+        assert!(
+            matches!(&decisions[0], SweepDecision::Reap(_)),
+            "dead-host session row must be swept at assembly, got: {decisions:?}"
+        );
+
+        // 宿主存活（parent_chain 含活 pid）→ ParentAlive 拒绝（会话内保护）。
+        row.parent_chain = vec![LIVE_HOST];
+        let decisions = registry.plan_sweep(
+            &[row],
+            SweepMode::Start {
+                run_started_at: 1_000,
+            },
+            &|pid| pid == PID || pid == LIVE_HOST,
+            &|_| Some("a".repeat(64)),
+            &|_| None,
+            &[],
+        );
+        assert!(
+            matches!(
+                &decisions[0],
+                SweepDecision::Refuse(_, SweepRefusal::ParentAlive)
+            ),
+            "live-host row must be protected at assembly, got: {decisions:?}"
+        );
+
         #[cfg(windows)]
         {
-            let registry = ProcessTreeRegistry::new(&unique_dir("0dh-start"));
             let pid = spawn_long_lived_child();
             let mut row = record(
                 pid,
@@ -1180,5 +1369,6 @@ mod tests {
             );
             kill_pid(pid).expect("kill sleeper");
         }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

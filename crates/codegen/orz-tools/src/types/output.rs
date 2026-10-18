@@ -1060,9 +1060,13 @@ impl ToolOutput {
                     }
                     // 0dh S2 (D6 incremental read, ADR-0010 §14.87): one-line
                     // cursor report — just-in-time teaching, no resident note.
+                    // `{nb}` is THIS response's payload; `raw_output_bytes` is
+                    // the task-lifetime total (review fix: the total the D6
+                    // design requires on the render line).
                     if let Some(nb) = r.new_bytes {
                         lines.push(format!(
-                            "New output: {nb} bytes since the last read (full history: output_file)"
+                            "New output: {nb} bytes since the last read ({} bytes total; full history: output_file)",
+                            r.raw_output_bytes
                         ));
                     }
                     lines.push(String::new());
@@ -2226,6 +2230,56 @@ mod tests {
         }));
         let prompt = out.to_prompt_format();
         assert!(!prompt.contains("Output File"), "{prompt}");
+    }
+
+    /// 0dh S2 D6 render (review fix): the incremental cursor line must carry
+    /// BOTH byte counts — this response's payload (`new_bytes`) and the
+    /// task-lifetime total (`raw_output_bytes`).
+    #[test]
+    fn task_output_prompt_new_output_line_carries_delta_and_total() {
+        let out = ToolOutput::TaskOutput(TaskOutputOutput::Result(TaskOutputResult {
+            task_id: "t3".into(),
+            command: "cmd".into(),
+            status: "running".into(),
+            exit_code: None,
+            started: "2026-01-01T00:00:00Z".into(),
+            ended: None,
+            duration_secs: 1.0,
+            output: "new segment".into(),
+            output_file: "/tmp/t3.log".into(),
+            truncated: false,
+            truncation_hint: String::new(),
+            raw_output_bytes: 4096,
+            new_bytes: Some(12),
+        }));
+        let prompt = out.to_prompt_format();
+        assert!(
+            prompt.contains(
+                "New output: 12 bytes since the last read (4096 bytes total; full history: output_file)"
+            ),
+            "cursor line must carry delta and total: {prompt}"
+        );
+        // Legacy shape (no cursor serve) must not render the line at all.
+        let legacy = ToolOutput::TaskOutput(TaskOutputOutput::Result(TaskOutputResult {
+            task_id: "t4".into(),
+            command: "cmd".into(),
+            status: "running".into(),
+            exit_code: None,
+            started: "2026-01-01T00:00:00Z".into(),
+            ended: None,
+            duration_secs: 1.0,
+            output: "window".into(),
+            output_file: "/tmp/t4.log".into(),
+            truncated: false,
+            truncation_hint: String::new(),
+            raw_output_bytes: 6,
+            new_bytes: None,
+        }));
+        let prompt = legacy.to_prompt_format();
+        assert!(
+            !prompt.contains("New output:"),
+            "legacy snapshots must not render the cursor line: {prompt}"
+        );
     }
     fn make_result(status: &str, raw_output_bytes: usize) -> TaskOutputResult {
         TaskOutputResult {

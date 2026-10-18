@@ -596,13 +596,15 @@ pub(crate) fn format_default_prompt(bash: &BashOutput, append_noop_reminder: boo
 // `BashToolConfig`. `max_timeout_secs` only lowers/raises this *foreground*
 // ceiling; background tasks (`timeout: 0` / omitted in background mode) are
 // always unbounded regardless of this value — the model owns their lifetime via
-// the background-task tooling. Absolute safety clamp for configured maxes: 10h.
+// the background-task tooling. Absolute safety clamp for configured maxes:
+// 30h (`ABSOLUTE_MAX_TIMEOUT_MS`).
 pub(crate) const DEFAULT_MAX_TIMEOUT_MS: u64 = 300_000; // 5 minutes
 // 0dh S2 (2026-10-18, ADR-0010 §14.87; 用户裁决「10h→30h」)：模型正向
 // `timeout`（后台）的钳制上限与执行侧绝对兜底（`DEFAULT_BG_MAX_RUNTIME`，
 // 30h）同值放宽——执行侧 poll tick 的 `timeout.min(max_runtime)` 是唯一
-// 执法点，本常量只封模型可选 cap 的上限。
-const ABSOLUTE_MAX_TIMEOUT_MS: u64 = 108_000_000;
+// 执法点，本常量只封模型可选 cap 的上限。两者由值钉锁定同步
+// （`absolute_max_timeout_is_30h_and_matches_executor_backstop`）。
+const ABSOLUTE_MAX_TIMEOUT_MS: u64 = 108_000_000; // 30h
 /// Resident default FG block before auto-bg when auto_background_on_timeout
 /// is on. TER T1.2 (2026-09-03) 单一生效源：serde 缺省 / `Default` / 显式
 /// `null` 回退 / schema 描述渲染共用本常量；终端后端兜底常量同步为同值
@@ -1109,8 +1111,9 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 const BACKGROUND_TIMEOUT: Duration = Duration::from_secs(86400); // 24 hours
 
 /// Max time a *non-backgroundable* foreground command may block the turn. Such
-/// a command has only its requested `timeout` (up to 10h), so a long timeout
-/// would wedge the turn; we clamp and kill at this cap instead. Backgroundable
+/// a command has only its requested `timeout` (up to `ABSOLUTE_MAX_TIMEOUT_MS`,
+/// 30h), so a long timeout would wedge the turn; we clamp and kill at this cap
+/// instead. Backgroundable
 /// commands use their per-request auto-bg budget (`foreground_block_budget_ms`;
 /// resident default 180s since TER T1.2) instead — the terminal's
 /// `FOREGROUND_BLOCK_BUDGET` only backstops direct requests that carry no
@@ -1386,7 +1389,7 @@ impl BashTool {
     /// `max_timeout_secs`):
     /// - `Some(ms)` with `ms > 0`, foreground → `ms` clamped to `max_timeout_ms`.
     /// - `Some(ms)` with `ms > 0`, background → `ms` clamped only to
-    ///   [`ABSOLUTE_MAX_TIMEOUT_MS`] (10h). The foreground ceiling never bounds
+    ///   [`ABSOLUTE_MAX_TIMEOUT_MS`] (30h). The foreground ceiling never bounds
     ///   a background command's model-chosen kill-backstop; only the absolute
     ///   safety limit does.
     /// - `Some(0)` or `None` in foreground → `config_timeout` capped by max.
@@ -4993,7 +4996,7 @@ mod tests {
                 ),
                 Duration::from_millis(20 * 60 * 1_000),
             );
-            // Only the absolute 10h limit bounds it.
+            // Only the absolute 30h limit (`ABSOLUTE_MAX_TIMEOUT_MS`) bounds it.
             let above_absolute: u64 = 50 * 60 * 60 * 1_000;
             assert_eq!(
                 BashTool::resolve_effective_timeout_for_params(
@@ -5003,6 +5006,22 @@ mod tests {
                     &params,
                 ),
                 Duration::from_millis(super::super::ABSOLUTE_MAX_TIMEOUT_MS),
+            );
+        }
+
+        #[test]
+        fn absolute_max_timeout_is_30h_and_matches_executor_backstop() {
+            // 0dh S2 review fix: value pin + cross-constant consistency. The
+            // model-facing absolute cap must stay in lockstep with the
+            // executor's `DEFAULT_BG_MAX_RUNTIME` backstop (30h): the poll
+            // tick's `timeout.min(max_runtime)` is the single enforcement
+            // point, so the two limits only tell one coherent story while
+            // they are equal.
+            assert_eq!(super::super::ABSOLUTE_MAX_TIMEOUT_MS, 108_000_000);
+            assert_eq!(
+                Duration::from_millis(super::super::ABSOLUTE_MAX_TIMEOUT_MS),
+                crate::computer::local::terminal::DEFAULT_BG_MAX_RUNTIME,
+                "model cap == executor backstop (30h)"
             );
         }
 

@@ -275,6 +275,15 @@ struct StoredSession {
     /// (process tree kill + profile-dir best-effort delete) on
     /// `close_session`.
     browser: Option<crate::local_browser::SharedBrowser>,
+    /// 0dh S2-R (2026-10-18, ADR-0010 §14.87): the session's terminal
+    /// backend — the terminal actor is the sole owner of background-task
+    /// state (task table, output cursors, per-call Job handles), so it must
+    /// outlive the per-prompt host rebuild for background tasks to survive
+    /// across runs. Mirrors the browser lane: re-injected into each run's
+    /// host by `build_host`; torn down on `close_session` (backend cancel →
+    /// actor `shutdown_all` reaps session-owned tasks) or when the host
+    /// process exits (OS closes the Job handles → KILL_ON_JOB_CLOSE).
+    terminal_backend: Arc<orz_tools::computer::local::LocalTerminalBackend>,
     /// GAP-CONVERSATION-RESTORE (2026-08-10) + P2-13 B1 会话化基础
     /// (2026-09-03): the session continuation — conversation messages +
     /// 黑板 live 视图 + LIF 会话轴（round/域机器/会话起始墙钟）。跨
@@ -3142,6 +3151,12 @@ impl AcpServer {
                     orientation: Some(orientation),
                     activation_snapshot: Some(activation_snapshot),
                     browser: None,
+                    // 0dh S2-R: one terminal actor per session — background
+                    // tasks live for the session domain (across prompts),
+                    // not for a single run's host.
+                    terminal_backend: Arc::new(
+                        orz_tools::computer::local::LocalTerminalBackend::new(),
+                    ),
                     continuation: Some(continuation),
                 },
             );
@@ -4072,6 +4087,16 @@ impl AcpServer {
                 browser.shutdown().await;
             });
         }
+        // 0dh S2-R (ADR-0010 §14.87): the session domain ends here — cancel
+        // the session's terminal actor so session-owned background tasks are
+        // reaped (`shutdown_all`) instead of leaking until the host process
+        // exits. Sync and cheap (token cancellation); the actor tears down
+        // asynchronously. If a run is still in flight the run's host holds
+        // its own Arc, so the backend object stays alive until that host
+        // drops — the cancel just makes the actor exit as soon as it can.
+        if let Some(session) = removed.as_ref() {
+            session.terminal_backend.cancel();
+        }
         // Release cancellation state too — a remembered cancel must not
         // outlive its session (2026-08-05 review P2-1). A stray run/restore
         // marker is dropped the same way (slice #11, P2-2).
@@ -4121,9 +4146,26 @@ impl AcpServer {
         // canonicalize, falling back to the raw path on failure. dunce strips
         // the `\\?\` verbatim prefix on Windows (clippy.toml ban on std).
         let cwd = dunce::canonicalize(base_dir).unwrap_or_else(|_| base_dir.to_path_buf());
+        // 0dh S2-R (ADR-0010 §14.87): inject the session-scoped terminal
+        // backend so the terminal actor (task table, output cursors, Job
+        // handles) outlives this run's host — background tasks survive the
+        // per-prompt host rebuild. Missing session row (should not happen —
+        // `handle_session_prompt`/grill both resolve the session first)
+        // degrades to the historical per-host backend.
+        let session_terminal: Option<Arc<dyn orz_tools::computer::types::TerminalBackend>> = {
+            let sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            sessions.get(session_id).map(|s| {
+                let backend: Arc<dyn orz_tools::computer::types::TerminalBackend> =
+                    s.terminal_backend.clone();
+                backend
+            })
+        };
         // P1 permit keystore: the session's DPAPI-backed signer (or the
         // test-only memory store under TrustPolicy::Skip).
-        let mut host = crate::OrzHost::with_bridge_and_hub_policy(
+        let mut host = crate::OrzHost::with_bridge_and_hub_policy_with_terminal(
             session_id,
             handle.journal.clone(),
             &cwd,
@@ -4134,6 +4176,7 @@ impl AcpServer {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone(),
             policy,
+            session_terminal,
         )
         .map_err(AcpError::Host)?
         // FUS-HOST-RESOURCE-SAFETY (2026-09-12, 0z S1): 真机 ACP/stdio 路径的
@@ -4825,6 +4868,93 @@ mod tests {
                     1,
                     "session removal drops the last Arc"
                 );
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// 0dh S2-R（2026-10-18，ADR-0010 §14.87）：会话级 terminal backend 的
+    /// 生命周期钉——后台任务必须跨 per-prompt host 重建存活，且在
+    /// `close_session` 时被确定性收殓。S2-R 前 terminal backend 住在
+    /// host 里，actor 在 prompt 尾被 drop、其 `shutdown_all` 无差别杀光
+    /// 后台任务——这是 finalize sweep 豁除覆盖不到的第二个 run 边界杀手
+    /// （0dh S2 全面审查 P0 发现）；本钉是该缺口能拦住的那颗 e2e。
+    #[tokio::test]
+    async fn session_terminal_backend_survives_host_rebuild_and_close_teardown() {
+        use orz_loop::gateway::fake::ScriptedResponse;
+        use orz_tools::computer::types::TerminalBackend as _;
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
+                    // Prompt 1, round 1: declare a long-running background task.
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "run_terminal_cmd".to_string(),
+                        arguments: serde_json::json!({
+                            "command": "sleep 6",
+                            "description": "长跑测试任务",
+                            "is_background": true,
+                        }),
+                        call_id: "call-bg-1".to_string(),
+                    }]),
+                    ScriptedResponse::text("后台任务已启动。"),
+                    // 反例自查门（§4.6）：有执行事实时终答前加一轮。
+                    ScriptedResponse::text("自查：任务已在后台运行。"),
+                    // Prompt 2: a fresh host is built for this run; the task
+                    // must still be alive after its teardown.
+                    ScriptedResponse::text("第二轮结束。"),
+                    ScriptedResponse::text("自查：第二轮无动作。"),
+                ])));
+                server
+                    .handle_session_new(
+                        "sess-bg-live",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                let backend = {
+                    let sessions = server
+                        .sessions
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    sessions
+                        .get("sess-bg-live")
+                        .expect("session registered")
+                        .terminal_backend
+                        .clone()
+                };
+                server
+                    .handle_session_prompt("sess-bg-live", "起一个后台任务")
+                    .await
+                    .unwrap();
+                // P0 crux: prompt 1's host is already dropped here. Before
+                // S2-R the actor's shutdown_all had killed the task by now.
+                let tasks = backend.list_tasks().await;
+                assert_eq!(
+                    tasks.len(),
+                    1,
+                    "run 尾 host drop 后后台任务必须存活（S2-R 前此处恰死）"
+                );
+                assert!(tasks[0].exit_code.is_none(), "任务应仍在运行");
+                // Second prompt — a fresh host on the same session backend.
+                server
+                    .handle_session_prompt("sess-bg-live", "随便聊聊")
+                    .await
+                    .unwrap();
+                let tasks = backend.list_tasks().await;
+                assert_eq!(tasks.len(), 1, "第二个 run 尾后任务仍须存活");
+                // Session close = session domain end → actor cancel → reaped.
+                assert!(server.close_session("sess-bg-live"));
+                let mut reaped = false;
+                for _ in 0..40 {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    if backend.list_tasks().await.is_empty() {
+                        reaped = true;
+                        break;
+                    }
+                }
+                assert!(reaped, "close_session 必须收殓会话域后台任务");
                 let _ = std::fs::remove_dir_all(&base);
             })
             .await

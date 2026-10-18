@@ -813,6 +813,7 @@ mod tests {
             description: None,
             is_backgrounded: false,
             new_output_bytes: None,
+            total_output_bytes: None,
         };
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(msg.contains("abc-123"));
@@ -844,6 +845,7 @@ mod tests {
             description: None,
             is_backgrounded: false,
             new_output_bytes: None,
+            total_output_bytes: None,
         };
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(msg.contains("idle-killed"), "{msg}");
@@ -880,6 +882,7 @@ mod tests {
             description: None,
             is_backgrounded: false,
             new_output_bytes: None,
+            total_output_bytes: None,
         };
         let msg = format_monitor_completion(&task, Some("get_command_or_subagent_output"));
         assert!(
@@ -915,6 +918,7 @@ mod tests {
             description: None,
             is_backgrounded: false,
             new_output_bytes: None,
+            total_output_bytes: None,
         };
         let msg = format_monitor_completion(&task, None);
         assert!(
@@ -945,6 +949,7 @@ mod tests {
             description: None,
             is_backgrounded: false,
             new_output_bytes: None,
+            total_output_bytes: None,
         };
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(msg.contains("cargo test"));
@@ -972,6 +977,7 @@ mod tests {
             description: None,
             is_backgrounded: false,
             new_output_bytes: None,
+            total_output_bytes: None,
         };
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(msg.contains("exit code: unknown"));
@@ -1002,6 +1008,7 @@ mod tests {
             description: None,
             is_backgrounded: false,
             new_output_bytes: None,
+            total_output_bytes: None,
         };
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(
@@ -1043,6 +1050,7 @@ mod tests {
             description: None,
             is_backgrounded: false,
             new_output_bytes: None,
+            total_output_bytes: None,
         };
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(
@@ -1083,6 +1091,7 @@ mod tests {
             description: None,
             is_backgrounded: false,
             new_output_bytes: None,
+            total_output_bytes: None,
         };
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(msg.contains("exit code: 0"));
@@ -1246,6 +1255,7 @@ mod tests {
             description: None,
             is_backgrounded: false,
             new_output_bytes: None,
+            total_output_bytes: None,
         }
     }
     fn make_running(id: &str) -> TaskSnapshot {
@@ -1269,6 +1279,7 @@ mod tests {
             description: None,
             is_backgrounded: false,
             new_output_bytes: None,
+            total_output_bytes: None,
         }
     }
     fn make_bg_started(id: &str) -> crate::types::output::BackgroundTaskStarted {
