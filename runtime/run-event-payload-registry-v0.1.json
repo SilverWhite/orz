@@ -305,6 +305,10 @@
       "run_usage_metered": {
         "schema": "runtime/run-usage-metered-event-payload-v0.2.schema.json",
         "slug": "run-usage-metered"
+      },
+      "supplement_delivered": {
+        "schema": "runtime/supplement-delivered-event-payload-v0.2.schema.json",
+        "slug": "supplement-delivered"
       }
     }
   },

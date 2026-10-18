@@ -95,7 +95,8 @@
         "result_delivered",
         "write_control_review",
         "face_fingerprint",
-        "run_usage_metered"
+        "run_usage_metered",
+        "supplement_delivered"
       ]
     },
     "run_manifest_sha256": { "$ref": "#/$defs/sha256" },

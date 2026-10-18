@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/supplement-delivered-event-payload-v0.2.schema.json",
+  "title": "supplement_delivered event payload (Rust track, v0.2)",
+  "description": "0di 中途补充投递事实（2026-10-18，ADR-0010 §14.88 / MESSAGE-RECALL-AND-QUEUED-SUPPLEMENT 设计稿 D3）：运行中经 `_orz/queue_append` 排队的用户输入，在主车道 loop-top（下一次 LLM 调用边界）drain 时每条先落本事件、再追加为 User 消息进当轮模型请求（事件先于当轮 model_request）。检索/grill 车道不产出；队列跨 run 存活（空闲期投递落在下一 run 首 loop-top）；失败/取消 run 的已投递补充随 SUCCESS-ONLY 写回语义丢弃、本事件留证于该 run journal。prompt_submitted 同姿态（用户输入事实，非机制事件）：无法官族、无 Python 镜像新族、无 run_started 锚，不变量（supplement_seq run 内从 1 严格递增、character_count=text chars）由 orz-loop 单元钉承载；conformance 的 registry 解析为硬门（未注册事件类型即校验失败）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "supplement_seq",
+    "character_count",
+    "text"
+  ],
+  "properties": {
+    "supplement_seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "本 run 内投递序数（从 1 严格递增；跨 run 不延续——每 run 从 1 重计）。"
+    },
+    "character_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "补充文本字符数（=text 的 chars 口径，与 prompt_submitted.character_count 同尺）。"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "补充文本全文（用户输入事实面，与 prompt_submitted.prompt 同隐私姿态——run journal 已承载 prompt 全文）。"
+    }
+  }
+}

@@ -5137,3 +5137,41 @@ finalize sweep 跨 run 收割；用户手起进程存活＝job 域外）＋用�
    xai-tool-types 100/0；clippy 告警位置列表 stash 前后逐位 diff 零新增；fmt 触碰件净。
    设计稿随批勘正 v1.1（§2.1/§2.2 勘定结论、D2⑥ 锚点、§5 风险两边界、S4 判据增补⑥⑦）；
    §14.55 第 7 条「10h 兜底」值随本条加指针注。S3 载体重建与 S4 真机待续。
+
+#### §14.88 消息撤回＋中途补充——Claude Code 形态移植（0di）（2026-10-18，v1.91）
+
+**来源**：2026-10-17 web 真机反馈（293 批 N3＝运行中补充输入被直接拒绝、无任何撤回入口）
+＋用户裁决「撤回和中途补充就完全借鉴 claude code，撤回和中途补充部分单独立一个项吧」＋
+「撤回不连带工作区文件，文件面用 git 兜底即可」〔295 批外部调研（CC queue＋#50246
+deferred 语义／CC `/rewind` 编辑式重发）；296 批立项 64 → 65〕。设计权威：
+[`0DI_RECALL_SUPPLEMENT_DESIGN_2026-10-18`](../docs/0DI_RECALL_SUPPLEMENT_DESIGN_2026-10-18.md)
+（D1–D8；S1 勘定六项定案随稿 §1）。
+
+1. **中途补充（D1/D2）**：运行中输入**排队不打断**——agent 侧**会话级队列**
+   （`StoredSession.supplement_queue`，`build_host` 注入 host；terminal backend/
+   `SharedBrowser` 会话域同先例），客户端经 ACP 扩展方法 `_orz/queue_append` 投递
+   （桥为透明中继零改动；**零 8 工具面触碰**——ext_method 是 client↔agent 协议扩展面）。
+   flush 点＝**主车道 loop-top 下一次 LLM 调用边界**（FIFO 追加为 User 消息；检索/grill
+   车道不 drain）；队列**跨 run 存活**（空闲期投递＝下一 run 首投递；cancel 不清队）；
+   上限每条 ≤256 KiB／深度 ≤16 fail-closed。**不做**打断式形态（Esc 硬打断/Send-Now/
+   mid-turn steering/Cursor 切走式——295/296 两轮已定）。
+2. **投递事件（D3）**：`supplement_delivered` 事件族（非终态；payload＝supplement_seq
+   run 内从 1 严格递增＋character_count＋text）——**prompt_submitted 同姿态**（registry
+   v02 条目＋payload schema＋fixtures 三件＋v02 enum；**无法官族/无 Python 新族/无锚**，
+   不变量由 loop 单元钉承载）；事件先于当轮 `model_request` 落链；历史刊零回归。
+3. **撤回（D4/D5）**：CC `/rewind` **编辑式重发**——idle-only（`RestoreInflightGuard`
+   同锁互斥：run/restore/recall 三方）；目标＝**用户消息 ordinal**（续接包 messages 的
+   User 序数，侧车唯一真相面）；截断＝该条含自身及之后全部移除＋原文回输入框；落点＝
+   `continuation` 截断→侧车立即落盘→写回；**排队残余一并丢弃**（计数回显）。
+   通道＝`_orz/recall_preview`＋`_orz/recall`；入口＝web/TUI `/rewind` 命令
+   （对话框/modal 两段确认；不做逐卡按钮）。
+4. **不回滚面（诚实边界）**：①工作区文件（用户裁决，git 兜底）；②LIF 会话轴/黑板
+   live 视图/水位档位**机械观测面单调不回退**（黑板全量记录纪律 §14.52；撤回后模型仍
+   可见撤回段黑板内容，S4 真机观察体感、混淆再议黑板 epoch 标记）；③run journal 历史
+   （evidence chain 不可变）。侧车审计＝`recall_log`（serde default 零迁移，审计随工件
+   ——会话卷是 local session artifact 非 run evidence chain，recall 不建 RST run）。
+5. **0dd 衔接**：撤回＝会话生命周期用户主权的**内容面**操作；idle 门与 close/archive
+   in-flight 票共用 `runs` 表互斥天然串行，`close_session` 语义零改动。
+6. **批序**：S1 设计稿＋S2 落码＋钉子（同批，0df/0cl 先例）→ S3 载体重建（**与 0dh S3
+   同车**）→ S4 真机（判据＝补充不打断且边界后生效／撤回后上下文与侧车一致＋原文可
+   编辑重发／不回滚面为预期确认／ext 三方法双面可用）。
