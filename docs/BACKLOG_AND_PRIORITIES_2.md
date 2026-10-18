@@ -136,6 +136,17 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.247 2026-10-18 308 批 0.9.3 双平台载体重建进体——0dh＋0di S3 同车（**重建进体批**，零新 orz 提交，计数 60 不变）
+
+- **用户令**：「请进行重建吧」。源冻结＝orz `5fd4c42d`（303 bump `45310a09` 已含，`cargo metadata --locked` exit 0 复验）。
+- **WIN**：`build_orz.ps1 -Release -Jobs 2` exit 0（8m12s 暖）；换装 MATCH 3/3（`dabaaf7ea…`/`b597cbb0…`/`fd7f92d5…`，+138,240/Δ0/Δ0）；`.0.9.2-bak` 链预建（前件与 289 账面逐位吻合）；ACAF 重 provision exit 0（`binary_sha256=b597cbb0…`↔signer 逐位；keystore 两件 `2aa80cb8…`/`f37556ab…` 未动）；`--build-info`＝0.9.3 rc0；清单刷新。
+- **LIN**：docker rust:1.97-slim＋trixie 脚本 exit 0（38m36s；`/tmp` rg 静态树冷装）；static-pie×3（not stripped）；alpine 3.20/bookworm 双冒烟 0.9.3 os=linux rc0；直写换装位（`4d7917c3…`/`00a16266…`/`8fc0b65b…`，+184,576/+256/+240）；Linux 不重 provision（沿同口径）；清单刷新。
+- **字节判据**：0dh（`hide_background_input` 4→5／`session_owned` 0→1／`GROK_BG_MAX_RUNTIME_MS` 0→1／`~30h safety cap` 0→4／`new_bytes` 0→3・1→4＋`get_task_output`/`kill_task` +1）与 0di（`_orz/queue_append` 0→1／`_orz/recall_preview` 0→2／`_orz/recall` 0→4／`supplement_delivered` 0→4／`recall_log` 0→6；`SupplementQueue` LIN 0→6／`drain_user_supplements` LIN 0→1＝WIN 剪除面）全数进体；`0.9.3` 进体；289 窗保留面逐项持平零回归；机械旗仅由版本字面替换触发（280/289 非回归同形）。
+- **冒烟活体**：WIN scratch 两轮 rc=0（`RUN-CLI-6ad4e7cc`/`6ad4e7d8`）＝286 `retrieval_enabled:true`＋0df 双锚＋`run_usage_metered` 九字段恰终态前一条＋哈希链连续＋0cy 收卷链（`ARC-6ad4e7cc-1`＋包 v0.3＋源目录删除）＋R1 run 尾零归档（0dd 面）＋stderr `deepseek-flash`（0cv 面）；0dh/0di 行为面不入冒烟活体（fake-provider 无后台任务/ext 调用），由 S4 真机承载。
+- **身份门**：`run_r0_heavy_official.py` `EXPECTED_CARRIER_SHA256` `45ea8b60…`→`4d7917c3…`（py_compile＋--help rc0）。
+- **台账**：[`308 批档`](audits/308_CARRIER_REBUILD_V093_0DH_0DI_S3_2026-10-18.md)；索引 v4.279 → v4.280（0dh/0di 两条目 S3 达成注）；BACKLOG 本批指针＋计数行＋P1 总览行＋0dh/0di 专节批序；TODO 计数行＋P1 路由行＋两处 S3 勾；本卷 §1.247。未推送未发行（发布面停 v0.9.2；装机位未换装）。
+- 关键词：308 批、0.9.3 重建、0dh S3、0di S3、同车进体、字节判据、身份门 `4d7917c3…`、保留面零回归、计数 60 不变。
+
 ### 1.246 2026-10-18 307 批 提交推送——301–306 累积件双仓推送（**提交推送批**，零源码语义增量零跑批，计数 60 不变）
 
 - **用户令**：「请提交并推送吧」。

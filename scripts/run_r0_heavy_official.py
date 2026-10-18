@@ -83,7 +83,7 @@ PULL_TRIES = 4
 # 0.9.2 代窗口重建源冻结 orz `c678c21b`（bump 批；进件＝`7966d171` 288 处置＋`b94f9fb7` 286 缺省开＋`6e107c77` 287 计量行）；
 # 旧值 0.9.1 = f50b1f17987ff7989003823cfafb1cc85968523e9a0455e1fe17da2dd1ccef1b〔0dd/0de 代窗口〕）
 EXPECTED_CARRIER_SHA256 = (
-    '45ea8b604a8bfccb8140f007e38649c2a1e91c314634048d6fc924a987b23c1e'
+    '4d7917c335c10b11b0cd1cee67a624514ae4509f6e4a97780743ee1d284ec4e3'
 )
 # 适配器锁定值（现行 tb_agents/orz.py，含 F1 试次隔离＋0ax ORZ_WEB_SEARCH_LOCAL 透传；
 # 旧值 2737cfadc5c43603b73164b51343e58a671c0efeee8d9ab7a626dda8dae51490）
