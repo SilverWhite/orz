@@ -136,6 +136,26 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.238 2026-10-18 298 批 0dh S2 落码——长程进程显式通道（**落码批**，零跑批，计数不变 65）
+
+- **触发**：用户令「请开始进行S2吧」（承 297 S1 设计稿 D1–D8）。
+- **落码五件**（orz `21e4b741`，17 文件 +1029/−79，feat/fusion-architecture，不推送）：①通道重开＝orz-host 生产装配注入 `hide_background_input:false`（BashParams 库层缺省 true 不动）＋`RETAINED_GROK_BUILD_TOOLS` +2（get_task_output/kill_task，requires_expr 强制同台）＝8 工具面第二显式例外；②收割豁除＝`ProcessTreeRecord.lifetime`（serde default "call" 向后兼容）＋`SpawnObservation`+`SpawnLifetime`＋`ProcessGroup::attach_with_lifetime`（显式后台落 session 行）＋xai-tty-utils 进程内会话标记集（auto-bg/Ctrl+G 转换时刻标记）＋`plan_sweep(Finalize)` 第六参：session 行/在册标记 `Refuse(SessionOwned)` 审计可见不杀（Start sweep 不查标记＝0bq 兜底不动）；③30h＝`DEFAULT_BG_MAX_RUNTIME` 108_000s＋env `GROK_BG_MAX_RUNTIME_MS`（下限 1h、0/非法回落）＋`ABSOLUTE_MAX_TIMEOUT_MS` 同步＋monitor 不动；④增量游标＝`ProcessState.unserved`（256KB 帽＋UTF-8 边界保留）＋GetTask 增量臂（首读全窗/续读新增段/终态封口）＋`TaskSnapshot.new_output_bytes`＋`TaskOutputResult.new_bytes`；⑤教学三件（timeout:0 句改写／is_background 边界句／summary 提取 just-in-time 一行）。
+- **钉八面全落**（[`298 批档 §2`](audits/298_0DH_S2_IMPL_2026-10-18.md)）：不烧 180s／豁除×call 对照＋标记时钟容差／Start 照扫／30h env 钳位／游标三态（双 shell 命令真跑 2.25s）／生产工具集可见性端到端／summary 字面＋描述三钉对齐／跨 run 提醒现役承载。
+- **随批对齐（0df 漂移）**：orz-host acp 两序列钉 10→11（287 批 `run_usage_metered` 终态前入列；干净基线 c678c21b stash 对照同形失败＝漂移先于本批，146 批先例如实注记）。
+- **读数**：xai-tty-utils 132/0＋xai-tool-types 18/0＋orz-tools 3028/0＋orz-host 串行 372/0＋orz-workspace 1500/0＋orz-loop 串行 883/0（并行 2 失败＝负载敏感、单跑全过）＋assurance 303/0＋orz-bin 57/0＋orz-tui 172/9（基线同形 ACAF 预存集、零新增）；fmt 触碰件净（tools.rs:630 等预存漂移非触碰区照旧）；clippy 99=99 零新增。
+- **边界登记**：proxy 车道（orz-agent workspace_grok_build_toolset）不在 0dh 生产装配范围不动；auto-bg 统一豁除按 D2④（真机摩擦可复议收窄）；游标不入档。
+- **台账**：本卷；[`298 批档`](audits/298_0DH_S2_IMPL_2026-10-18.md)；ADR §14.87 补第 6 项；BACKLOG 本批指针＋计数行（65 不变）＋0dh 节 S2 达成；TODO 计数行＋P1 路由行＋`P1-0dh` S2 勾选；索引头行 v4.270 → v4.271＋AUTH-LONGRUNNING 条目勘正。**未推送**。
+- 关键词：298 批、0dh S2 落码、hide_background_input 注入、保留面 +2、lifetime session、SessionOwned、会话标记集、30h、GROK_BG_MAX_RUNTIME_MS、增量游标、new_bytes、acp 序列钉对齐、计数 65 不变、索引 v4.271。
+
+### 1.237 2026-10-18 297 批 0dh S1 设计稿——长程进程显式通道（**设计批**，零源码零跑批，计数不变 65）
+
+- **触发**：用户令「请开始0dh吧」（承 296 选型定案＝启用 Grok＋三处借鉴）。
+- **产物**：设计稿 [`LONGRUNNING_PROCESS_EXPLICIT_CHANNEL_DESIGN_2026-10-18`](LONGRUNNING_PROCESS_EXPLICIT_CHANNEL_DESIGN_2026-10-18.md)（D1–D8）＋ADR-0010 **§14.87（v1.90）** 转录（修订 §14.55 三点＝T1.3 受控重开／T1.5 兜底 30h／T2.3 会话域存活判据）。
+- **S1 读码勘定三结论**（bash/mod.rs＋terminal.rs＋orz-host lib.rs/process_tree.rs＋xai-tty-utils）：①**Job 归属已在**——三种后台化路径（显式/auto-bg/Ctrl+G）同归 actor 任务域（per-call Job 原句柄 actor `ProcessState` 持有至任务终；DispatchGuard 只关 dup），ep1 属前台域 by-design 拆树、正解＝教学；②**跨 run 死因唯一＝finalize sweep**（spawn sink 对所有 spawn 写 `run_id=own_run_id` 行→run 尾按三条件 kill；装配 Start sweep 因 ParentAlive 天然不杀会话内任务）；③**30h＝单执法点改值**（poll tick `timeout.min(BACKGROUND_MAX_RUNTIME)`）＋**勘正 295 批「unbounded」＝显式后台 0/None 实撞 10h 兜底（Duration::MAX 被该 min 钳住）**。
+- **五项待勘全落定**：①收割豁除＝`ProcessTreeRecord.lifetime="session"`＋finalize 臂 `Refuse(SessionOwned)` 审计可见不杀（Start sweep／前台拆树／0bq 兜底全不动；**三路径一律 session**——ep96 即 auto-bg）；②Job＝零新增层（所有权派发域→任务域写为设计条款）；③工具面＝保留面 +2（get_task_output/kill_task，requires_expr 强制同台）＝8 工具面纪律第二显式例外（296 裁决授权）；④30h＝`BACKGROUND_MAX_RUNTIME` 36_000s→108_000s＋`ABSOLUTE_MAX_TIMEOUT_MS` 同步＋env `GROK_BG_MAX_RUNTIME_MS`（下限 1h 不可配没）＋monitor 常量不动；⑤ADR §14.87。D6 增量读出＝服务端每任务字节游标＋`TaskOutputResult.new_bytes`；D5 教学三件套＝零长备注常驻注入。
+- **台账**：本卷；[`297 批档`](audits/297_0DH_S1_DESIGN_2026-10-18.md)；BACKLOG 本批指针＋计数行（65 不变）＋0dh 节 S1 达成；TODO 计数行＋P1 路由行＋`P1-0dh` S1 勾选；索引头行 v4.269 → v4.270＋AUTH-LONGRUNNING-PROCESS-EXPLICIT-CHANNEL 条目勘正。**未提交、未推送**。
+- 关键词：297 批、0dh S1、设计稿 D1–D8、ADR §14.87、v1.90、lifetime session、SessionOwned、30h、GROK_BG_MAX_RUNTIME_MS、增量游标、new_bytes、勘正 unbounded、8 工具面第二例外、计数 65 不变、索引 v4.270。
+
 ### 1.236 2026-10-17 296 批 0di 立项＋0dh 选型裁决落账（**裁决批**，零源码零跑批，计数 64 → 65）
 
 - **用户三裁决**：「撤回不连带工作区文件，文件面用git兜底即可」／「那就按照你裁决的启用grok+三处借鉴来裁决0dh」／「撤回和中途补充就完全借鉴claude code，撤回和中途补充部分单独立一个项吧」。

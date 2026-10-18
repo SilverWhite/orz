@@ -5059,3 +5059,57 @@ RLI 影子默认关、生产 1D 不动）。选型出处按用户裁决**脱敏�
    钉 N1（跨里程碑成功 run ⇒ 零 `session_archive`/零 ARC journal/水位不动，前提
    自证估算 ≥500K）＋N2（close 推迟票 run 尾消费落含足迹包）；读数＝host lib 单线程
    365/0＋web 47/0＋clippy 触碰面零新增。S3 载体重建与 S4 真机复验待续。
+
+#### §14.87 长程进程显式通道——TER T1.3 受控重开＋收割语义修订＋30h 兜底（0dh）（2026-10-18，v1.90）
+
+**来源**：2026-10-17 晚真机实锤（会话 b41b096d runs 5–7：前台调用内 `Start-Process` 被
+per-call Job kill-on-close 回收 ep1；auto-bg 受管训练进程跑至 ep96 被 `run_shutdown`
+finalize sweep 跨 run 收割；用户手起进程存活＝job 域外）＋用户令「orz 内部的 deepseek
+没办法起长程进程，这个要额外给他开一个通道」＋两裁决＝**跨 run 存活、不做收割**＋
+**绝对兜底 10h→30h**＋教学面令「极常用工具不得长备注常驻注入」〔294 批立项；295 批
+选型对证（Grok↔Claude Code 表层同构）；296 批定案＝**启用 Grok（`hide_background_input=false`
+逃生阀）＋借鉴 Claude Code 三处**〕。设计权威：
+[`LONGRUNNING_PROCESS_EXPLICIT_CHANNEL_DESIGN_2026-10-18`](../docs/LONGRUNNING_PROCESS_EXPLICIT_CHANNEL_DESIGN_2026-10-18.md)（D1–D8）。
+**本节修订 §14.55 三点**（T1.3／T1.5 兜底值／T2.3 存活判据），§14.55 其余条款不动。
+
+1. **裁决（D1，修订 §14.55 第 3 条 T1.3 面）**：ORZ 生产装配**显式受控重开**模型面后台
+   通道——宿主注入 `hide_background_input:false`（`BashParams` struct/serde 缺省 `true`
+   **不变**，库层封闭仍是其他宿主安全缺省）；`is_background` 进 schema，声明即立即
+   后台化（不烧 180s 前台预算）；`requires_expr` 强制 `get_task_output`/`kill_task`
+   同台 ⇒ 保留面 +2。**8 工具面纪律第二显式例外（+2，296 批用户裁决授权）**；
+   `&` 封闭（`allow_background_operator=false`）与「一次调用＝一个结果」不动。
+2. **裁决（D2/D3，收割语义修订）**：受管后台任务登记行增 `lifetime="session"`
+   （显式/auto-bg/Ctrl+G 三路径一律），**finalize sweep 对 session 行豁除**
+   （`Refuse(SessionOwned)` 审计可见不杀）；装配期 Start sweep、前台域拆树、0bq 孤儿
+   兜底**全不动**。per-call Job 归属＝零新增层——后台化瞬间所有权从派发域转**任务域**
+   （actor `ProcessState` 持原句柄至任务终；树拆点＝kill_task／完成／30h／会话关闭）。
+   **生命周期边界显式化**：受管后台任务寿命＝会话域（宿主进程存活⇒跨 run 存活；宿主
+   死亡⇒Job 句柄闭合树灭＋残留行由下会话装配 sweep 收净）；不承诺跨进程重启存活。
+3. **裁决（D4，修订 §14.55 第 1 条兜底值）**：`BACKGROUND_MAX_RUNTIME` 36_000s→
+   **108_000s（30h）**（唯一执法点＝poll tick `timeout.min(BACKGROUND_MAX_RUNTIME)`，
+   显式后台 `0`/`None` 同被钳——勘定勘正 295 批「unbounded」表述）；模型正向超时钳制
+   `ABSOLUTE_MAX_TIMEOUT_MS` 同步 30h；env 口子 `GROK_BG_MAX_RUNTIME_MS`（钳位下限
+   1h，绝对兜底不可配没）；idle-kill 300s CPU 感知判据原样。**S4 预登记判据＝跨 run
+   过夜训练在会话内存活至完成＋run 尾 sweep 后存活＋30h 路径可回放**。
+4. **读出与教学（D5/D6）**：借鉴 Claude Code 两处——**增量读出**＝服务端每任务字节
+   游标（运行中任务返回自上次读出以来新增段＋`new_bytes`，终态封口；全量仍走
+   `read_file(output_file)`）；**教学三件套**＝参数自解释＋描述一句话＋结果文案
+   just-in-time（起任务 summary 带会话域边界句），**零长备注常驻注入、零新触发规则**；
+   完成 reminder 现役保留（跨 run 送达为 S2 钉＋S4 核）。
+5. **契约面**：`ProcessTreeRecord`+`lifetime`（serde default 向后兼容）、
+   `SpawnObservation`+`lifetime`、`SweepRefusal`+`SessionOwned`（键 `session_owned`）、
+   `TaskOutputResult`+`new_bytes`（optional）；**journal 事件族零新增**（sweep fact／
+   tool_running/completed 现役承载）。monitor 工具 10h 常量不动（不在保留面）。
+   S2 落码→S3 载体→S4 真机批序随设计稿 §3 D8。
+6. **落码与钉子（S2，298 批）**：orz `21e4b741`（17 文件，+1029/−79）——D1 装配注入
+   `hide_background_input:false`＋保留面 +2；D2 `lifetime="session"` 行＋进程内会话
+   标记集双源豁除（Finalize 臂 `Refuse(SessionOwned)` 审计可见不杀；Start sweep/0bq
+   兜底不动）；D4 30h＋`GROK_BG_MAX_RUNTIME_MS`（下限 1h）；D6 游标三态（首读全窗/
+   续读新增/终态封口）＋`new_bytes`；D5 教学三件（timeout:0 句改写／边界句／summary
+   just-in-time）。钉八面全落（不烧 180s／豁除×call 对照＋标记容差／Start 照扫／env
+   钳位／游标三态／生产工具集可见性×伴随同台／summary 字面／跨 run 提醒现役承载）；
+   随批对齐＝orz-host acp 两序列钉 10→11（0df/287 批 `run_usage_metered` 入列，干净
+   基线 c678c21b 对照同形失败＝漂移先于本批）。读数＝xai-tty-utils 132/0＋orz-tools
+   3028/0＋orz-host 串行 372/0＋orz-workspace 1500/0＋orz-loop 串行 883/0＋assurance
+   303/0＋orz-bin 57/0＋orz-tui 172/9（基线同形 ACAF 预存集）＋clippy 99=99 零新增。
+   proxy 车道（orz-agent）不在生产装配范围不动。S3 载体重建与 S4 真机待续。
