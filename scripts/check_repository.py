@@ -473,22 +473,18 @@ def _rust_journal_conformance_errors(journal_path: Path) -> list[str]:
                 exe = str(path)
                 break
     if not exe:
-        build = subprocess.run(
-            ["cargo", "build", "-p", "orz-assurance", "--bin", "journal-conformance"],
-            cwd=ROOT / "orz",
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=1200,
-        )
-        if build.returncode != 0:
-            return [
-                "journal-conformance CLI unavailable and cargo build failed: "
-                + build.stderr.strip()[-2000:]
-            ]
-        exe = str(ROOT / "orz" / "target" / "debug" / "journal-conformance.exe")
-        if not Path(exe).is_file():
-            exe = str(ROOT / "orz" / "target" / "debug" / "journal-conformance")
+        # Hermetic fallback for the pure-Python validate jobs: never compile
+        # Rust inside the repo gate. Building `journal-conformance` cold here
+        # made the validate job depend on a Rust toolchain/protoc and could
+        # take longer than the job budget. The Python reference verifier is
+        # the same contract the Rust judge mirrors; parity is exercised by
+        # the Rust assurance test job.
+        from assurance.run_event_journal_validation import validate_journal_file
+
+        return [
+            f"python journal-conformance: {message}"
+            for message in validate_journal_file(journal_path)
+        ]
     try:
         proc = subprocess.run(
             [exe, str(journal_path), "--repo-root", str(ROOT)],
@@ -1059,8 +1055,9 @@ def _link_check_self_test() -> int:
     )
     check("README.md is tracked", "README.md" in tracked)
     check(
-        "local-only audit doc is not tracked",
-        "docs/audits/318_FULL_PROJECT_REVIEW_PHASE1_2026-10-19.md" not in tracked,
+        "review audit docs are tracked",
+        "docs/audits/318_FULL_PROJECT_REVIEW_PHASE1_2026-10-19.md" in tracked
+        and "docs/audits/319_FULL_PROJECT_REVIEW_FIX_2026-10-19.md" in tracked,
     )
     live_errors, live_warnings = _check_markdown_links()
     # Informational: a dirty tree may legitimately contain links to a

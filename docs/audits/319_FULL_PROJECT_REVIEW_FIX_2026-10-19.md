@@ -13,7 +13,7 @@
 
 | # | 318 发现 | 319 处置 | 证据 |
 |---|---|---|---|
-| P0-1 | 已推送 main CI 5/5 红；0.9.3 在红管线发行；Python 合约 69≠67；本地门禁非封闭 | ① `orz-loop` 两例固定 sleep 竞态改为**显式 host-entered 信号**（permission gate／首个 tool in-flight），并行 892/0，CI 恢复并行；② Python 事件集合/数量由 registry 派生（69），supplement `character_count` 13，生成器先去 rmtree、补两事件、表漂移零写入；③ `check_repository` 链接以 `git ls-files` tracked 集合为唯一真值，证据路径分类 warning；④ CI 增加 `if: always()`、`--no-fail-fast`、`strategy.fail-fast:false`、`orz-web`／`orz-aux` job、protoc sha256、release 前置门 | `cargo test -p orz-loop --lib` 892/0/3（并行）；`python runtime/tests/test_run_event_conformance.py` 17/17；`scripts/check_repository.py --self-test-links` 12/12；CI 5 jobs |
+| P0-1 | 已推送 main CI 5/5 红；0.9.3 在红管线发行；Python 合约 69≠67；本地门禁非封闭 | ① `orz-loop` 两例固定 sleep 竞态改为**显式 host-entered 信号**（permission gate／首个 tool in-flight），并行 892/0，CI 恢复并行；② Python 事件集合/数量由 registry 派生（69），supplement `character_count` 13，生成器先去 rmtree、补两事件、表漂移零写入；③ `check_repository` 链接以 `git ls-files` tracked 集合为唯一真值，证据路径分类 warning；纯 Python validate job 不再冷编译 Rust `journal-conformance`（二进制缺失时用 Python reference verifier，Rust 判官由 assurance job 覆盖）；④ CI 增加 `if: always()`、`--no-fail-fast`、`strategy.fail-fast:false`、`orz-web`／`orz-aux` job、protoc sha256、release 前置门 | `cargo test -p orz-loop --lib` 892/0/3（并行）；`python runtime/tests/test_run_event_conformance.py` 17/17；`scripts/check_repository.py --self-test-links` 12/12；CI 5 jobs |
 | P0-2 | `rm -rf .`／`/usr/*`／`find -delete`／Windows 通配递归删除基本不设防；`.gsa` 祖先链缺失 | 规则 1 重写为分段扫描：cwd 本体/祖先、卷根/系统根、受护根通配、`find -delete`／`-exec rm`、`xargs rm -rf`、`cd .gsa/.git && rm -rf *`、`cmd /c`／`bash -c` 内容位；规则 5 增 `carrier:session-volume-ancestor`。精确子目录与明确模式仍放行 | `exec_policy` 45/0；`write_control` 17/0；新增负向钉覆盖 `rm -rf .`、`rm -rf /usr/*`、`cd .gsa && rm -rf *`、`find /usr -delete`、`Remove-Item C:\Windows\* -Recurse` |
 | P0-3 | 模型可经 `run_terminal_cmd` 调用 `orz delete-session`／`archive`／`unarchive`／`trust`／`rollback restore` | 双门：命令面 `carrier-write` block（含 `ORZ_MAINTENANCE_TICKET` 引用、内容位递归）；`orz-bin` 各维护入口要求桥注入 `ORZ_MAINTENANCE_TICKET`（≥16，缺失 exit 2），Web 桥每次 spawn 注入随机值 | `exec_policy` 维护 CLI 负向钉；`cargo test -p orz-bin --bin orz -- maintenance_ticket` 1/0 |
 | P0-4 | `session/load` 复用 `session/new`，普通点击触发 0cy 全工作区收卷 | 拆出 `attach_session_with_options(..., sweep_enabled)`；`session/load` 走 `false`，并校验绝对/canonical cwd、同进程绑定；新增回归钉：load B 后 A 的 sidecar/run 目录原样 | `acp_server::tests::session_load_does_not_sweep_sibling_sessions` 通过 |
@@ -64,6 +64,8 @@
   新增 318（reference/reviewed）与 319（pending）指针。
 - 账本新增 `0dk`（会话附着/恢复/关闭生命周期）、`0dl`（安全保底与维护 CLI 加固），均 `pending`，
   计数 **60 → 62**。
+- P2 补充：Web `/rewind` 进入命令表；撤回预览读取并显示 `queue_depth`（撤回会一并丢弃的
+  未投递补充条数），smoke 增断言。
 
 ## §3 亲验读数
 
