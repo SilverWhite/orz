@@ -81,16 +81,18 @@ orz-bin ticket           1 passed / 0 failed
 Python conformance       17 tests OK
 Python journal validation 273 tests OK
 generator                二次运行逐字节幂等
-check_repository         318 档 tracked 模拟后仅 1 条预期 dirty；链接硬错 0
+check_repository         valid:true / error_count:0（clean tree）
 CI YAML                  PyYAML 结构校验通过（5 jobs；release main-only/needs 四 job）
 ```
 
 ## §4 残余风险与未闭环
 
-1. **远端仍未恢复绿**：本轮未 push；GitHub main 仍是旧红。必须提交并 push 后观察新 CI 五 job；
-   新增的 `orz-web`／`orz-aux` 首次运行仍可能暴露环境问题。
-2. **未重建 0.9.4 载体**：`orz_source_manifest.sha256` 需在 orz 提交后重算；0.9.3 仍不含本批补丁，
-   不能以 0.9.3 开 0dh/0di S4。
+1. **远端已恢复绿**：`origin/main` 与 `cli/feat/fusion-architecture` 已推送；run
+   [`39264260391`](https://github.com/SilverWhite/orz/actions/runs/39264260391) **8/8 job success**
+   （validate ×4、rust-tests、orz-web、orz-aux、release gate）。后续新增 job 仍可能暴露环境问题，
+   但 318 的「main 全红」已消除。
+2. **未重建 0.9.4 载体**：`orz_source_manifest.sha256` 已按 orz `7516e160` 重算并校验；0.9.3 仍不含
+   本批补丁，不能以 0.9.3 开 0dh/0di S4。
 3. **安全是阻力不是沙箱**：词法旁路仍存（未展开变量、`sudo -u`、`busybox`、python/perl 直调、
    symlink/junction/8.3、Linux 宿主上的 `C:\` 字面量、`.git` 直接删除、非删除动词写入等）；
    维护令牌可被同 UID 进程在 spawn 窗口读取 environ；TTY 双保险未落。已登记 0dl。
@@ -101,25 +103,23 @@ CI YAML                  PyYAML 结构校验通过（5 jobs；release main-only/
 6. **CI 覆盖仍偏**：orz-bin 无 lib target，其 bin/ACAF 运行时测试未进 CI；Linux Rust 构建/测试仍缺；
    17 个不可达 crate 未变。
 7. **账本仍五本**：`BACKLOG_2`／`TODO2` 未归档，112 篇 audit 可达性治理未做；本轮只登记与同步三本主账。
-8. **P2/P3 未清**：Web help/命令表未加 `/rewind`、撤回预览 `queue_depth` 未接 UI、会话 load 的
-   sessions map 无界、`#` 级代码健康与不可达 crate 未动。
+8. **P2/P3 未清**：会话 load 的 sessions map 无界、失败/取消 run 的可见输出不写回
+   continuation（SUCCESS-ONLY 设计边界）、`#` 级代码健康与不可达 crate 未动。
 
-## §5 合并顺序（建议）
+## §5 合并与远端验证
 
-1. orz 子仓提交本批（24 文件＋`Cargo.lock`，commit `41534aee`，分支 `feat/fusion-architecture`）；
-   父仓本批提交已含 submodule pin、318／319 两档、文档与 manifest 1488 条。
-2. `python scripts/generate_orz_source_manifest.py` 已重算；`check_repository.py` 实测 `valid:true`／
-   `error_count:0`。
-3. **未推送**：父仓 main 相对 `origin/main` 为 11 ahead / 4 behind（远端 4 个 README 直改提交），
-   orz `feat/fusion-architecture` 为 1 ahead；推送前需先合并／rebase 远端 4 提交，并先推 orz
-   分支（否则父仓 pin 在 CI checkout 时不可达）。
-4. push 后观察 CI 五 job；红则先修新 job 环境问题，不要先重建载体。
-5. 全绿后重建 0.9.4（双平台）→ 更新载体哈希／适配器锁定值 → 再开 0dh 6 项＋0di 9 项 S4。
-6. Phase 2 深审（权限/ACAF/session volume、上下文压缩、检索默认开、评测计量、UI/UX、代码健康、
+1. orz 子仓：`feat/fusion-architecture` 已推送至 `7516e160`（含 P0/P1 修复、Web `/rewind`
+   命令表/queue_depth、Windows 8.3 临时目录测试修复）。
+2. 父仓：已合并 `origin/main` 的 4 个 README 直改提交（merge `5e55fb2f`），随后推送
+   `cf93aef8`／`28c148d1`（manifest 1488 条、319 报告、CI UTF-8 修复）。
+3. 远端 CI：run `39264260391` **8/8 success**，含新增 `orz-web`、`orz-aux` 与 release 前置门；
+   Windows validate 的两处首跑红已修（cp1252 输出、8.3 短路径测试）。
+4. 下一步：全绿后重建 0.9.4（双平台）→ 更新载体哈希／适配器锁定值 → 再开 0dh 6 项＋0di 9 项 S4；
+   Phase 2 深审（权限/ACAF/session volume、上下文压缩、检索默认开、评测计量、UI/UX、代码健康、
    账本收敛）另批。
 
 ---
 
-**结论**：318 的 P0 已全部处置，P1 的 A/B/C 主面与 D 文档门禁已落；0di 仍保持 `pending`
-（S4 未跑、载体未重建），0dj 维持 306 闭合结论不重开。当前可提交、可推送、可开新 CI，
-但**不可用 0.9.3 开 S4，也不可在 CI 未绿前发行 0.9.4**。
+**结论**：318 的 P0 已全部处置，P1 的 A/B/C 主面与 D 文档门禁已落；远端 main CI 8/8 绿；0di 仍保持
+`pending`（S4 未跑、载体未重建），0dj 维持 306 闭合结论不重开。**不可用 0.9.3 开 S4；
+0.9.4 需在双平台重建并通过冒烟后才可发行。**
