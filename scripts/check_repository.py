@@ -17,6 +17,13 @@ from urllib.parse import unquote
 from jsonschema import Draft202012Validator, FormatChecker
 import yaml
 
+# 318 P0-1 follow-up: the report contains Chinese/arrow characters.  On
+# Windows the default console encoding is cp1252, so printing the report
+# raised UnicodeEncodeError and turned a valid gate into a red job.  Force
+# UTF-8 on the two text streams (no-op on platforms without reconfigure).
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
 
 ROOT = Path(__file__).resolve().parents[1]
 
