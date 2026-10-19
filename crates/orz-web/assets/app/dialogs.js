@@ -18,6 +18,7 @@ const SLASH_COMMANDS = [
   ['/toggle-markers', '标记栏', '显示/隐藏标记栏'],
   ['/properties', '属性', '查看当前对象属性'],
   ['/snapshots', '快照', '快照选择器（v1 只读展示）'],
+  ['/rewind', '撤回', '撤回会话中的用户消息并编辑重发'],
 ];
 
 let actions = {}; // main.js 注入的宿主动作（发送/取消/导航…）
@@ -354,9 +355,11 @@ export function openRewind() {
     status.textContent = '正在读取可撤回消息…';
     body.appendChild(status);
     let entries = [];
+    let queueDepth = 0;
     try {
       const d = await actions.rewindPreview();
       entries = d.messages || [];
+      queueDepth = d.queue_depth || 0;
     } catch (e) {
       status.textContent = `读取失败：${e.message}`;
       return;
@@ -366,7 +369,9 @@ export function openRewind() {
       return;
     }
     status.textContent =
-      '选择要撤回的用户消息——该条及其后的上下文将被移除，原文回输入框供编辑重发（运行历史不变；文件面 git 兜底）：';
+      `选择要撤回的用户消息——该条及其后的上下文将被移除，原文回输入框供编辑重发（运行历史不变；文件面 git 兜底）：${
+        queueDepth > 0 ? ` 当前有 ${queueDepth} 条未投递补充，撤回会一并丢弃。` : ''
+      }`;
     let selected = entries.length - 1; // 默认选最新一条（最常用）
     const list = document.createElement('div');
     list.style.maxHeight = '240px';
