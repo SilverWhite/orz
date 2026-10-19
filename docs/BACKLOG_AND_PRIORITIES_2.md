@@ -136,6 +136,16 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.248 2026-10-19 309 批 装机位换装 0.9.3＋GitHub Release `v0.9.3` 安装包发行（**换装＋发行批**，零源码零跑批，计数 60 不变）
+
+- **用户令**：「请进行换装吧，然后做新版本安装包发布」。
+- **装机位换装**（`C:\Users\1\AppData\Local\orz\bin`）：前件 0.9.2 三件与 289/290 账面逐位吻合→`.0.9.2-bak` ×3→0.9.3 三件换装（`dabaaf7ea…`/`b597cbb0…`/`fd7f92d5…`，与 308 载体位同源 MATCH 3/3）＋`--build-info` 0.9.3 rc0；不重 provision（266 口径）。0dh/0di 自此在日常使用面生效，S4 真机判据可由日常使用轮承载。
+- **打包**（`rel-309-stage`）：win/lin 各 6 entries；包内 README 0.9.3 派生（概要段＋详解节 0dh/0di/0dj＋解包名＋调优行补 `GROK_BG_MAX_RUNTIME_MS`＋10h→30h 改写＋边界两句＋版本信息行 `5fd4c42d`）；侧 SHA256SUMS 4 entries＋carrier-manifest 5 entries 对账 OK；资产 zip 28,360,494 B `170c23f1…`／tar.gz 37,887,053 B `dce90f47…`＋顶层 SHA256SUMS；zip 清单逐件一致＋alpine `sha256sum -c` 4/4 OK＋双镜像 build-info 0.9.3 rc0（tar `-rw-rw-rw-` 权限形态＝281/292 同构、README chmod 步骤承载）。
+- **发行**：tag `v0.9.3`（轻量）→ 本批父仓提交；推送 `origin main`＋tag；GitHub Release **Latest** 三资产＋0.9.3 增量说明（0dh/0di/0dj）；README 发布面两处对齐；`gh release view`＋回下载逐位核证。
+- **随批核答（用户问询）**：启动网址远程连接＝**不能直接**——`orz web` 环回硬门（`security::bind_addr_allowed` 仅 127.0.0.1/::1，默认 `127.0.0.1:21487`）＋per-boot 令牌＋Origin 检查＝本机形态；SSH 隧道/端口转发为正当远程路径；原生远程（LAN/公网）需立项（绑面放开＋认证强化）。
+- **台账**：[`309 批档`](audits/309_SWAP_AND_RELEASE_V093_2026-10-19.md)；索引 v4.280 → v4.281；BACKLOG 指针/计数行；TODO 计数行；本卷 §1.248；README 发布面两处；门禁 valid: true。
+- 关键词：309 批、装机位换装、0.9.3 发行、GitHub Release、rel-309-stage、环回门、SSH 隧道、计数 60 不变。
+
 ### 1.247 2026-10-18 308 批 0.9.3 双平台载体重建进体——0dh＋0di S3 同车（**重建进体批**，零新 orz 提交，计数 60 不变）
 
 - **用户令**：「请进行重建吧」。源冻结＝orz `5fd4c42d`（303 bump `45310a09` 已含，`cargo metadata --locked` exit 0 复验）。
