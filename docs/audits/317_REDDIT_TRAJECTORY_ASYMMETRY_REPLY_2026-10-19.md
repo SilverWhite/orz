@@ -3,7 +3,7 @@
 > **批次性质**：回复翻译落账批（零源码、零跑批、零 API 调用；**计数 60 不变**）。
 > **来源**：Reddit 0df 评论线再追评后用户自撰回复令「请翻译我以下的内容」＋用户开场定性
 > 「这不是一个很明显的问题吗，之前也都已经探究过了」——即 **core（checkpoint solve）优势
-> 相较 strict/isolated 优势不对称**问题，V4 四方报告既有在案（core 73.5% vs 榜首 67.3%／
+> 相较 strict/isolated 优势不对称**问题，V4 四方报告既有在案（core 73.5% vs 榜首 core 最高 67.3%＝Opus 4.6、GPT 5.5 core 66.8%／
 > strict 33.7% vs 14.8%／iso 44.9% vs 28.1%；[`V4 报告`](../SCB_V4_FOUR_WAY_CLEAN_ROOM_FULL_ROUND_REPORT_2026-10-16.md) §成绩表与命题 2/10）。
 
 ## §1 用户回复原文（中文权威）
@@ -33,7 +33,7 @@
 >
 > I first noticed this when I saw that the DeepSeek V4.1 Flash running in orz v0.9.0 posts a
 > checkpoint-solve score on SlopCode Bench close to the current official leaderboard leader,
-> GPT 5.5(high) + Codex v0.124.0 (73.5% vs 67.3%), while its strict-solve (33.7% vs 14.8%)
+> GPT 5.5(high) + Codex v0.124.0 (73.5% vs 66.8%), while its strict-solve (33.7% vs 14.8%)
 > and isolated (44.9% vs 28.1%) scores diverge hugely.
 >
 > While the round was running I also watched orz's own runs and couldn't find a harness-level
@@ -61,9 +61,8 @@
   逐格一致：core 144/196＝**73.5%**、strict 66/196＝**33.7%**、isolated 88/196＝**44.9%**。
 - 榜单侧：strict 14.8%／isolated 28.1% 均为「GPT 5.5 最好」✔；但 **core 榜首 67.3% 属
   Opus 4.6，GPT 5.5 的 core 为 66.8%**（报告成绩表注：Core 最高 67.3%〔Opus 4.6〕；GPT 5.5 66.8%）。
-  用户原句将 67.3 配于 GPT 5.5——译文按原文照译；如需与报告严格对齐，备选句：
-  「…close to the leaderboard's best checkpoint-solve score (73.5% vs 67.3%, Opus 4.6;
-  GPT 5.5 itself posts 66.8%)…」。取舍留用户，本批不改动译文正文。
+  用户原句将 67.3 配于 GPT 5.5——**2026-10-19 用户令「请直接帮我修正错误的数字」＝译文定稿
+  修正为 GPT 5.5 core 66.8%**（§2 已改正；§1 中文原文照录不回改，作历史权威）。
 - 「单调塌陷的题目很少、轨迹波动后期回升」与 V4 报告 §4.3／第二卷 §1.215 缺陷定因②
   （论文坍缩为五相位队列均值、非单题坍缩）一致。
 - wiki 链接＝V4 报告的对外 github wiki 版；URL 含括号，发帖时建议纯文本或尖括号自链形态，

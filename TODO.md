@@ -1047,7 +1047,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **闭合（2026-10-18，306 批）**：S1–S4 全达成（S4 读数〔293〕）；计数 66 → 60。
 - [x] **闭合后追记（2026-10-19，315 批查证；计数不变）**：Reddit 评论线后续轮——「逐题 28–90%」勘正为逐会话粒度（逐题聚合 67–85%）＋档级方差题内 61%/题间 39%＋占比不预测成败（r≈0.26）；SCB 源读数外部引用带「仅供参考」限定（论文 0/36）；入口：[`315 批档`](docs/audits/315_REDDIT_REASONING_SHARE_DISAGGREGATION_2026-10-19.md)。
 - [x] **闭合后追记二（2026-10-19，316 批查证；计数不变）**：Reddit 评论线追评——承诺性失败成立（50 失败档全 end_turn）＋ckpt2 非独峰（暴露归一档界风险全程存在）＋坏基底机理成立（级联 57% vs 19%＋污染档税 1.03–1.69×、通过率 45% vs 86%）；机械档界检查门登记假说不立项；入口：[`316 批档`](docs/audits/316_REDDIT_CASCADE_FORK_ANALYSIS_2026-10-19.md)。
-- [x] **闭合后追记三（2026-10-19，317 批登记；计数不变）**：Reddit 再追评用户回复——core/strict/iso 优势不对称（73.5%/33.7%/44.9% vs 榜首 67.3%/14.8%/28.1%）＋「DeepSeek 偏科、更需好开局」假说＋裁决「任由模型表现」；入口：[`317 批档`](docs/audits/317_REDDIT_TRAJECTORY_ASYMMETRY_REPLY_2026-10-19.md)。
+- [x] **闭合后追记三（2026-10-19，317 批登记；计数不变）**：Reddit 再追评用户回复——core/strict/iso 优势不对称（73.5%/33.7%/44.9% vs GPT 5.5 66.8%/14.8%/28.1%）＋「DeepSeek 偏科、更需好开局」假说＋裁决「任由模型表现」；入口：[`317 批档`](docs/audits/317_REDDIT_TRAJECTORY_ASYMMETRY_REPLY_2026-10-19.md)。
 - 入口：[`284 批档`](docs/audits/284_TASK_LEVEL_METERING_RECORD_POINT_REGISTRATION_2026-10-16.md) / BACKLOG `0df` / [`283 批档`](docs/audits/283_COST_PER_SOLVED_TASK_LEDGER_2026-10-16.md)（动因） / `0cy`／`0dd`（会话存档与生命周期面）。
 
 ### P1-0dg 293 真机反馈修复杂项——对话卡换行渲染＋Ctrl+Z 交互（GAP-WEB-DOGFOOD-UX-FIX）（P1；2026-10-17 用户令立项，BACKLOG 0dg；62 → 63；来源＝candidate `OBS-WEB-DOGFOOD-2026-10-17` 两件升级＋用户令「293批中需要修的内容直接落成一个待办杂项吧，方便后续修」）
