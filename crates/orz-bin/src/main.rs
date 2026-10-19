@@ -51,6 +51,43 @@ fn parse_benchmark_flags(args: &[String]) -> Result<(bool, bool), String> {
     Ok((allow_shell, allow_network))
 }
 
+/// 318 审查 P0-3（2026-10-19）：桥专用维护子命令的能力令牌 env 键。
+///
+/// `orz archive|unarchive|delete-session|trust` 与 `orz rollback restore` 是
+/// Web 工作台的维护面（前端两段确认后由桥 spawn）；审查发现模型可经
+/// `run_terminal_cmd` 直接构造同形 CLI 调用，绕开 UI 确认（删除侧车/journal、
+/// 改信任基线、回退用户文件）。鉴权通道＝桥 spawn 时注入的本 env（模型进程
+/// 不持有；`crates/orz-web/src/server.rs::run_agent_session_tool` 同键注入）；
+/// 值长度下限 16（防 `ORZ_MAINTENANCE_TICKET=1` 之类弱值）。
+const MAINTENANCE_TICKET_ENV: &str = "ORZ_MAINTENANCE_TICKET";
+const MAINTENANCE_TICKET_MIN_LEN: usize = 16;
+
+/// 维护令牌校验（纯函数；环境变量名与桥注入端同键）。
+///
+/// 存在性＋长度下限（trim 后）——空白/过短值一律视为未授权（fail-closed）。
+/// 纯函数便于单测：测试不触碰删除路径、不改 env。
+fn maintenance_ticket_ok(value: Option<&str>) -> bool {
+    value
+        .map(str::trim)
+        .is_some_and(|ticket| ticket.len() >= MAINTENANCE_TICKET_MIN_LEN)
+}
+
+/// 维护子命令统一鉴权门（集中唯一 helper；各入口只调用本函数）。
+///
+/// 未注入/过短 ⇒ 明确 stderr 错误＋exit 2（与参数错误同退出码，绝不静默
+/// 降级执行）。`verb` 仅用于错误文案（如 `archive`／`rollback restore`）。
+fn require_maintenance_ticket(verb: &str) {
+    let value = std::env::var(MAINTENANCE_TICKET_ENV).ok();
+    if maintenance_ticket_ok(value.as_deref()) {
+        return;
+    }
+    eprintln!(
+        "error: `orz {verb}` 是维护子命令，需要桥注入的 {MAINTENANCE_TICKET_ENV} 能力令牌\
+         （长度 ≥ {MAINTENANCE_TICKET_MIN_LEN}）；未授权调用被拒绝"
+    );
+    std::process::exit(2);
+}
+
 /// F4 / 0as (2026-09-19): switch the console output code page to UTF-8.
 /// Zero-dependency FFI (house precedent: orz-workspace foreign_sessions
 /// capability, xai-acp-lib stdin_reader) — a windows-sys edge on orz-bin
@@ -669,6 +706,8 @@ fn run_stdio() {
 /// carries success. Tracing posture matches `run_web` so failures land in
 /// the bridge log.
 fn run_archive(rest: &[String]) {
+    // 318 P0-3：桥专用维护面鉴权（无令牌/过短 ⇒ exit 2，绝不执行归档）。
+    require_maintenance_ticket("archive");
     let _guard = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -704,6 +743,9 @@ fn run_archive(rest: &[String]) {
 /// 工作区 cwd 拉起本子命令，stdout 携带结果、退出码携带成败。删除为
 /// 不可恢复操作，确认在前端弹窗完成；此处不做二次确认（桥是唯一调用方）。
 fn run_session_maintenance(verb: &str, rest: &[String]) {
+    // 318 P0-3：`unarchive`／`delete-session` 同为桥专用维护面——删除不可
+    // 恢复，未注入能力令牌一律 exit 2。
+    require_maintenance_ticket(verb);
     let _guard = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -781,6 +823,9 @@ fn run_rollback(rest: &[String]) {
             }
         },
         Some("restore") => {
+            // 318 P0-3：`rollback restore` 回退用户文件（覆写前快照仍在，
+            // 但属桥专用维护面）——`list` 只读不设门，restore 必须有令牌。
+            require_maintenance_ticket("rollback restore");
             // 复审 P3（2026-09-27）：未知旗标不静默过滤、多余位置参数不静默
             // 忽略——undo 面不做「猜用户意图」的超范围动作。
             let args: Vec<&String> = rest.iter().skip(1).collect();
@@ -819,6 +864,8 @@ fn run_rollback(rest: &[String]) {
 }
 
 fn run_trust(rest: &[String]) {
+    // 318 P0-3：`trust` 改工作区信任基线，桥专用——无令牌 exit 2。
+    require_maintenance_ticket("trust");
     let _guard = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1895,6 +1942,24 @@ mod tests {
         );
         assert!(parse_max_wallclock(Some("abc".into())).is_err());
         assert!(parse_max_wallclock(Some("".into())).is_err());
+    }
+
+    /// 318 审查 P0-3（2026-10-19）：维护子命令能力令牌校验是纯函数且
+    /// fail-closed——缺席／空白／过短（<16）一律拒绝；恰 16 与非平凡长值
+    /// 接受。测试只测纯函数，不触碰 env、不执行任何删除路径。
+    #[test]
+    fn maintenance_ticket_requires_present_value_of_at_least_16_chars() {
+        assert_eq!(MAINTENANCE_TICKET_ENV, "ORZ_MAINTENANCE_TICKET");
+        assert!(!maintenance_ticket_ok(None));
+        assert!(!maintenance_ticket_ok(Some("")));
+        assert!(!maintenance_ticket_ok(Some("   ")));
+        assert!(!maintenance_ticket_ok(Some("0123456789abcde"))); // 15
+        assert!(maintenance_ticket_ok(Some("0123456789abcdef"))); // 16
+        assert!(maintenance_ticket_ok(Some(" 0123456789abcdef ")));
+        assert!(maintenance_ticket_ok(Some(&"a".repeat(64))));
+        // 弱占位值（短 token/纯空白）不得通过。
+        assert!(!maintenance_ticket_ok(Some("1")));
+        assert!(!maintenance_ticket_ok(Some("        ")));
     }
 
     /// TER T2.3 (2026-09-04): the deterministic fake-provider scenario

@@ -13,7 +13,12 @@
 //! 分类／Windows OS 文件锁／keystore 信任锚例外）——载体面写交回审批组件。
 //! **v3.1 补强（审查 P2）**：keystore／manifest 的**祖先链臂** [`HostStateTargets::hit_ancestor`]
 //! ——宿主原生 keystore 实况位于已退役的载体安装目录内，扫荡删除／搬移祖先
-//! 不得因载体面退役而连带放行信任锚。v1 表
+//! 不得因载体面退役而连带放行信任锚。
+//! **318 审查 P0-2（2026-10-19）**：`.gsa` 会话卷本体的**祖先链臂**
+//! [`session_volume_ancestor_hit`]——删除／搬移／重命名 `.gsa` 的祖先目录
+//! （cwd 本体及其上级）同样会摧毁会话证据链；工具面按**恰等祖先目录**判定
+//! （普通工作区文件写不命中，正常 sidecar 写路径不受影响），命令面由
+//! `exec_policy` 在扫荡动词门下调用。v1 表
 //! A/B「根本性树根」仅以 [`LINUX_DISASTER_TREE_ROOTS`]／[`windows_disaster_tree_roots`]
 //! 的身份保留给命令面规则 1（`catastrophic-recursive-delete`：删除动词＋递归旗＋
 //! 目标**恰为**树根／卷根）的递归删除目标比对（[`path_equals_root`]——子目录级
@@ -323,6 +328,34 @@ pub fn path_equals_root(root: &Path, candidate: &Path) -> bool {
     path_hits_root(root, candidate) && path_hits_root(candidate, root)
 }
 
+/// `.gsa` 会话卷**祖先目录链**（318 审查 P0-2 补强，2026-10-19）：`forms`
+/// 中恰为 `{cwd}/.gsa` 的**严格祖先目录**（cwd 本体、其上级目录……直至卷根）
+/// 时返回命中（rule＝`carrier:session-volume-ancestor`）。
+///
+/// 语义边界：只命中**目录本体恰等**——普通工作区文件写（`{cwd}/src/x`）与
+/// `.gsa` 内部文件写均不命中本臂（后者由 C1 直接命中先报）；因此工具面
+/// （`search_replace`／回退面）接入本臂不会误伤正常写路径。删除／搬移／
+/// 重命名祖先目录才是本臂目标：命令面由 `exec_policy` 在扫荡动词门控下
+/// 调用（入位写 `cp`/`mkdir` 不触发）。
+pub(crate) fn session_volume_ancestor_hit(cwd: &Path, forms: &[PathBuf]) -> Option<DenyHit> {
+    let gsa = cwd.join(".gsa");
+    let canonical = crate::types::resources::session_volume_canonical_root(cwd);
+    for anchor in [&gsa, &canonical] {
+        let mut parent = anchor.parent();
+        while let Some(dir) = parent {
+            if let Some(target) = forms.iter().find(|f| path_equals_root(dir, f)) {
+                return Some(DenyHit {
+                    rule: "carrier:session-volume-ancestor",
+                    root: anchor.to_string_lossy().into_owned(),
+                    target: target.to_string_lossy().into_owned(),
+                });
+            }
+            parent = dir.parent();
+        }
+    }
+    None
+}
+
 /// 工具面（`search_replace`／回退面）机械拒绝文案（v3＝宿主状态两族；系统树
 /// 与载体面写不再拒）。
 ///
@@ -346,6 +379,13 @@ pub fn write_block_message(model_path: &str, hit: &DenyHit) -> String {
         "carrier:signer-manifest" => format!(
             "Error: {model_path} is the ACAF signer manifest ({root}), protected by \
              the write control (rule: {rule}); writes here are not permitted.",
+            root = hit.root,
+            rule = hit.rule,
+        ),
+        "carrier:session-volume-ancestor" => format!(
+            "Error: {model_path} is an ancestor directory of the `.gsa` session volume ({root}); \
+             deleting, moving or renaming it would destroy protected session state \
+             (rule: {rule}).",
             root = hit.root,
             rule = hit.rule,
         ),
@@ -387,7 +427,8 @@ pub fn candidate_forms(joined: &Path, resolved: Option<&Path>) -> Vec<PathBuf> {
 }
 
 /// 写目标机械门（v3；工具面唯一入口）——**宿主状态两窄目标专用**：C1 会话卷
-/// 域（委派既有单一源判定，语义不重写）→ C2′ keystore 根＋signer manifest。
+/// 域（委派既有单一源判定，语义不重写）→ C1′ `.gsa` 祖先目录本体（318
+/// P0-2）→ C2′ keystore 根＋signer manifest。
 /// v2 的安装目录／三件套／`grok-home` 拒绝面随 0cc 双面退役（设计 §2 条 5：
 /// 载体面写交回审批组件）；v1 的系统核心臂随整树位置锁退役（`0cb` §2/§4）。
 pub fn check_write_target(ctx: &WriteTargetCtx<'_>) -> Option<DenyHit> {
@@ -407,6 +448,12 @@ pub fn check_write_target(ctx: &WriteTargetCtx<'_>) -> Option<DenyHit> {
             root: ".gsa session volume".to_owned(),
             target: display,
         });
+    }
+
+    // C1′（318 审查 P0-2）：`.gsa` 的**祖先目录本体**——恰等才命中；普通文件
+    // 写不命中（`{cwd}/src/x` ≠ cwd），故正常写路径零变化。
+    if let Some(hit) = session_volume_ancestor_hit(ctx.cwd, &forms) {
+        return Some(hit);
     }
 
     // C2′：ACAF keystore 根＋signer manifest（v3 宿主状态窄目标）。
@@ -858,5 +905,114 @@ mod tests {
             dunce::canonicalize(tmp.join("sub")).unwrap()
         );
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 318 审查 P0-2 钉子（`.gsa` 祖先链）：恰为 `.gsa` 的**严格祖先目录**
+    /// （cwd 本体及其上级）命中；`.gsa` 本体的直接命中仍归 C1；`.gsa` 子文件
+    /// 与普通工作区文件不命中本臂（正常写路径零变化）。
+    #[test]
+    fn session_volume_ancestor_chain_hits_dirs_but_not_files() {
+        let tmp = std::env::temp_dir().join(format!(
+            "0p02-gsa-ancestor-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(tmp.join(".gsa").join("journal")).unwrap();
+        let cwd = dunce::canonicalize(&tmp).unwrap();
+
+        // cwd 本体（`.gsa` 的父目录）命中。
+        let hit = session_volume_ancestor_hit(&cwd, &candidate_forms(&cwd, None))
+            .expect("cwd is an ancestor of .gsa");
+        assert_eq!(hit.rule, "carrier:session-volume-ancestor");
+        // 再上一级同样命中。
+        assert!(
+            session_volume_ancestor_hit(&cwd, &candidate_forms(cwd.parent().unwrap(), None))
+                .is_some(),
+            "grandparent must hit"
+        );
+        // 严格性：`.gsa` 本体与 `.gsa` 内文件都不是「祖先」。
+        for target in [
+            cwd.join(".gsa"),
+            cwd.join(".gsa").join("journal").join("x.md"),
+        ] {
+            assert!(
+                session_volume_ancestor_hit(&cwd, &candidate_forms(&target, None)).is_none(),
+                "session-volume subtree is not an ancestor form: {}",
+                target.display()
+            );
+        }
+        // 普通工作区文件不命中（不误伤正常写）。
+        assert!(
+            session_volume_ancestor_hit(
+                &cwd,
+                &candidate_forms(&cwd.join("src").join("x.rs"), None)
+            )
+            .is_none()
+        );
+        let msg = write_block_message("x", &hit);
+        assert!(msg.contains("ancestor directory of the `.gsa` session volume"));
+        assert!(msg.contains("rule: carrier:session-volume-ancestor"));
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    /// 318 审查 P0-2 钉子（工具面接入）：`check_write_target` 拒 `.gsa`
+    /// 祖先目录本体，但普通文件写与 `.gsa` 子文件路径语义不变（后者仍由 C1
+    /// 直接拒，本臂不改变既有 sidecar 写控口径）。
+    #[test]
+    fn check_write_target_rejects_gsa_ancestor_dirs_only() {
+        let tmp = std::env::temp_dir().join(format!(
+            "0p02-gsa-check-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(tmp.join(".gsa")).unwrap();
+        let cwd = dunce::canonicalize(&tmp).unwrap();
+        let targets = HostStateTargets::default();
+
+        let cwd_hit = check_write_target(&WriteTargetCtx {
+            cwd: &cwd,
+            joined: &cwd,
+            resolved: None,
+            host_state: &targets,
+        })
+        .expect("cwd dir is an ancestor of .gsa");
+        assert_eq!(cwd_hit.rule, "carrier:session-volume-ancestor");
+
+        let parent_hit = check_write_target(&WriteTargetCtx {
+            cwd: &cwd,
+            joined: cwd.parent().unwrap(),
+            resolved: None,
+            host_state: &targets,
+        })
+        .expect("parent dir is an ancestor of .gsa");
+        assert_eq!(parent_hit.rule, "carrier:session-volume-ancestor");
+
+        // `.gsa` 子树：C1 直接命中（既有口径不变）。
+        let gsa_hit = check_write_target(&WriteTargetCtx {
+            cwd: &cwd,
+            joined: &cwd.join(".gsa").join("journal").join("x.md"),
+            resolved: None,
+            host_state: &targets,
+        })
+        .expect("session volume hit");
+        assert_eq!(gsa_hit.rule, "carrier:session-volume");
+
+        // 普通工作区文件：不命中（正常写路径零变化）。
+        assert!(
+            check_write_target(&WriteTargetCtx {
+                cwd: &cwd,
+                joined: &cwd.join("src").join("x.rs"),
+                resolved: None,
+                host_state: &targets,
+            })
+            .is_none()
+        );
+        let _ = std::fs::remove_dir_all(&cwd);
     }
 }

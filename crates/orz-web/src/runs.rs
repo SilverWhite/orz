@@ -41,6 +41,9 @@ pub struct RunSummary {
 #[derive(Debug, Serialize)]
 pub struct ConversationSummary {
     pub session8: String,
+    /// Full ACP session id recovered from the bounded sidecar head.  The
+    /// explorer displays `session8`, but continuation must bind the exact id.
+    pub session_id: Option<String>,
     pub size_bytes: u64,
     pub modified_ms: u128,
 }
@@ -68,6 +71,26 @@ fn modified_ms(meta: &std::fs::Metadata) -> u128 {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis())
         .unwrap_or(0)
+}
+
+/// Read the UUID-like `session_id` from the bounded JSON head without loading
+/// a multi-megabyte conversation every five-second explorer refresh.
+///
+/// 318 P1-A6: the 64 KiB probe can end in the middle of a multi-byte UTF-8
+/// character (long Chinese conversations). Strict `from_utf8` then failed the
+/// whole head even when `session_id` was fully inside it, so a valid sidecar
+/// randomly lost continuation. Lossy decoding keeps every ASCII byte before
+/// the cut intact; only the truncated tail character becomes U+FFFD.
+fn conversation_session_id(path: &Path) -> Option<String> {
+    let data = read_probe(path, 0, HEAD_PROBE_BYTES)?;
+    let text = String::from_utf8_lossy(&data);
+    let key = "\"session_id\"";
+    let tail = text.get(text.find(key)? + key.len()..)?;
+    let tail = tail.get(tail.find(':')? + 1..)?.trim_start();
+    let quoted = tail.strip_prefix('"')?;
+    let end = quoted.find('"')?;
+    let value = quoted.get(..end)?;
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 /// Pull the first complete line from the head of the file (≤ probe bytes).
@@ -276,6 +299,7 @@ pub fn list_conversations(cwd: &Path) -> Vec<ConversationSummary> {
         };
         out.push(ConversationSummary {
             session8: session8.to_string(),
+            session_id: conversation_session_id(&path),
             size_bytes: meta.len(),
             modified_ms: modified_ms(&meta),
         });
@@ -437,11 +461,54 @@ mod tests {
         let root = temp_root("conv");
         let dir = root.join(".gsa/conversations");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("6ab3dbe5.json"), "{}").unwrap();
+        std::fs::write(
+            dir.join("6ab3dbe5.json"),
+            r#"{"schema_version":"0.4","session_id":"6ab3dbe5-1111-2222-3333-444455556666","messages":[]}"#,
+        )
+        .unwrap();
         std::fs::write(dir.join("notes.txt"), "not a conversation").unwrap();
         let convs = list_conversations(&root);
         assert_eq!(convs.len(), 1);
         assert_eq!(convs[0].session8, "6ab3dbe5");
+        assert_eq!(
+            convs[0].session_id.as_deref(),
+            Some("6ab3dbe5-1111-2222-3333-444455556666")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 318 P1-A6 钉：第 65536 字节落在多字节字符中间时，`session_id` 仍须
+    /// 可解析（严格 UTF-8 解码会把整段 head 判死，长中文会话随机失去续接）。
+    #[test]
+    fn conversation_session_id_survives_utf8_boundary_at_probe_cap() {
+        let root = temp_root("conv-utf8-boundary");
+        let dir = root.join(".gsa/conversations");
+        std::fs::create_dir_all(&dir).unwrap();
+        let prefix = r#"{"schema_version":"0.4","session_id":"6ab3dbe5-1111-2222-3333-444455556666","messages":[{"role":"user","content":""#;
+        let cap = HEAD_PROBE_BYTES as usize;
+        // 让一个 3 字节汉字从 cap-2 开始：探针读 [0, cap) 时正好截在它中间。
+        // 先补 ASCII 到 cap-2，再放汉字（以及足够多的后续内容）。
+        let prefix_len = prefix.len();
+        assert!(prefix_len < cap - 2);
+        let mut body = String::with_capacity(cap + 64);
+        body.push_str(prefix);
+        body.push_str(&"x".repeat(cap - 2 - prefix_len));
+        body.push('中'); // bytes: cap-2, cap-1, cap
+        body.push_str(&"文".repeat(64));
+        body.push_str("\"}]}");
+        assert!(
+            !body.is_char_boundary(cap),
+            "test setup: probe cap must split a multi-byte char"
+        );
+        std::fs::write(dir.join("6ab3dbe5.json"), &body).unwrap();
+        let convs = list_conversations(&root);
+        assert_eq!(convs.len(), 1);
+        assert_eq!(convs[0].session8, "6ab3dbe5");
+        assert_eq!(
+            convs[0].session_id.as_deref(),
+            Some("6ab3dbe5-1111-2222-3333-444455556666"),
+            "head cut inside a multi-byte char must not drop session_id"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

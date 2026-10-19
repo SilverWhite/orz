@@ -494,7 +494,10 @@ mod tests {
                     .initialize_and_start_thread("workspace-write")
                     .await
                     .unwrap();
-                assert!(thread_id.starts_with("thr-"));
+                // 318 P1-A5: the server-generated thread id is the full 8-hex
+                // session domain (opaque to clients), not `thr-` + 4 hex.
+                assert_eq!(thread_id.len(), 8);
+                assert!(thread_id.chars().all(|c| c.is_ascii_hexdigit()));
                 let started = recv_until(&mut client, "thread/started").await;
                 let ClientMsg::ThreadStarted { thread_id: tid } = started else {
                     unreachable!()

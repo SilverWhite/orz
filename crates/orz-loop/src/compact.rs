@@ -1886,7 +1886,10 @@ mod tests {
                 Role::User,
                 &crate::prompt::context_compressed_marker(3, 160_000, None),
             ),
-            conv_message(Role::User, "[ORIENTATION v0.1] 当前任务是什么？"),
+            conv_message(
+                Role::User,
+                "[ORIENTATION v0.1] 当前任务是什么？\n[/ORIENTATION]",
+            ),
         ];
         let _ = controller
             .run_turn(

@@ -125,6 +125,10 @@ export async function sessionNew(cwd) {
   return request('session/new', { cwd, mcpServers: [] });
 }
 
+export async function sessionLoad(sessionId, cwd) {
+  return request('session/load', { sessionId, cwd, mcpServers: [] });
+}
+
 export async function sessionPrompt(sessionId, text) {
   return request('session/prompt', {
     sessionId,

@@ -27,6 +27,8 @@ pub const BASE_SYSTEM_PROMPT: &str = "";
 
 /// Counterexample gate block — 正式答案输出前, fires once per run and the
 /// block explicitly tells the model it appears only once (§4.6.5 verbatim).
+pub const COUNTEREXAMPLE_GATE_PREFIX: &str = "[COUNTEREXAMPLE_GATE";
+
 pub const COUNTEREXAMPLE_GATE_BLOCK: &str = "[COUNTEREXAMPLE_GATE v0.1]\n\
 最终回答即将输出。请对即将输出的结论做最后一次反例自查：\n\
 1. 是否存在未验证的前提？\n\
@@ -51,9 +53,14 @@ pub const ORIENTATION_INJECTED_PREFIX: &str = "[ORIENTATION";
 /// `message_block` payload and the injected message stay one source.
 pub const INITIAL_ROUND_INQUIRY_INJECTED_PREFIX: &str = "[INITIAL_ROUND_INQUIRY";
 
-/// Whether `content` is one of the runtime-injected assurance blocks.
-/// The controller filters these out of the persisted conversation (D7) — fixed injected
-/// text is not model output and repeated blocks would pollute ngram stats.
+/// Whether `content` belongs to a registered mechanical-injected block prefix
+/// family (prefix-level check — see [`INJECTED_BLOCK_PREFIXES`]).
+///
+/// 318 审查 P1-C2/C5（2026-10-19）：本函数保留为**前缀族快筛**（host
+/// `recallable_user_message` 等既有调用面据此识别“可能是框架文本”）；它
+/// **不再**是持久化/撤回过滤的唯一判据——真实用户文本可以合法地以这些
+/// 前缀开头，过滤必须改用 [`is_generated_injected_block`]（前缀＋生成形态）。
+/// 保留前缀面使旧侧车里已知框架块仍能从 `/rewind` 菜单排除。
 ///
 /// GAP-INQUIRY-SPLIT (2026-08-09): the old INFO_SUFFICIENCY and
 /// RETRIEVAL_COMPLETION_CHECK blocks are deleted (the mixed-counter inquiry
@@ -63,59 +70,216 @@ pub const INITIAL_ROUND_INQUIRY_INJECTED_PREFIX: &str = "[INITIAL_ROUND_INQUIRY"
 pub fn is_injected_block_text(content: &str) -> bool {
     let content = content.trim();
     content == COUNTEREXAMPLE_GATE_BLOCK
-        // GAP-INQUIRY-SPLIT: the injected orientation block must never be
-        // persisted — a repeated `[ORIENTATION …]` block would
-        // otherwise pollute the persisted conversation (R-8 regression point).
-        || content.starts_with(ORIENTATION_INJECTED_PREFIX)
-        // P0-0x S1: the one-shot initial-round inquiry block is mechanical
-        // injected text too — own prefix, so the two blocks stay
-        // distinguishable (neither prefix matches the other's text).
-        || content.starts_with(INITIAL_ROUND_INQUIRY_INJECTED_PREFIX)
-        || content.starts_with(TOOL_POLICY_BREAKER_PREFIX)
-        || content.starts_with(TOOL_ROUND_BUDGET_PREFIX)
-        // 2026-08-08 blackboard partition (review closure, P2-1/D2-1): the
-        // incremental-push summary `[本轮编辑] …` is mechanical injected
-        // text — same rule as the blocks above. Without registration it
-        // entered the persisted conversation, and iterating the
-        // same file for ≥11 rounds (a normal edit pattern) tripped
-        // the injected-block filter on the message's repeated 3-gram.
-        || content.starts_with(EDIT_ROUND_PUSH_PREFIX)
-        // A6 (2026-08-08): the context-compaction marker is mechanical
-        // injected text (see `context_compressed_marker`) — never
-        // persisted back into the conversation.
-        || content.starts_with(CONTEXT_COMPRESSED_PREFIX)
-        // 0cz S2（2026-10-11，设计 §5）：`[前文上下文已清零 …]`——模型主动
-        // 清零的投影层边界 marker，机械注入文本，绝不持久化。
-        || content.starts_with(crate::model_face::CLEAR_MARKER_PREFIX)
-        // A6 §8 C.2 (2026-08-08): the resident compaction-whitelist
-        // message repeats every round — mechanical injected text, never
-        // persisted back (model-written, but a resident framework-
-        // managed block, not per-round model output).
-        || content.starts_with(WHITELIST_PREFIX)
-        // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): the
-        // `[MECHANICAL_AUDIT v0.1]` execution-fact report is mechanical
-        // injected text — never persisted back into the conversation.
-        || content.starts_with(crate::mechanical_audit::MECHANICAL_AUDIT_PREFIX)
-        // P0-D S2 (2026-08-14): the model-visible action-ledger block
-        // (`[动作台账 v0.1] …`) is mechanical injected text — it exists only
-        // in per-request collapsed views, never in the persisted
-        // conversation; registered so it can never pollute the injected-block/restore filters or
-        // restore filters.
-        || content.starts_with(crate::action_ledger::ACTION_LEDGER_PREFIX)
-        // 动态上下文滑块 S1（2026-09-15，设计 §3.2/§3.4）：`[CONTEXT_SCALE …]`
-        // 提醒块（首次驱逐固化提醒 + 实际上下文 500K/900K）是机械注入文本，
-        // 每 run 只出现一次——绝不写回持久化会话（否则长单对话的 sidecar
-        // 会累积固定注入文本，且与「固定文本不是模型输出」纪律冲突）。
-        || content.starts_with(crate::context_scale::REMINDER_INJECTED_PREFIX)
-        // S1 修订批（v7，2026-09-15，设计 §3.4.1）：压缩窗口内的机械提示
-        // （「窗口剩余 N 轮」等）此前未注册 ⇒ 会被写回持久化会话（0AE
-        // 遗留缺口，审查 P2 记录）。窗口轮提示是机械注入文本，同
-        // `[CONTEXT_SCALE` 纪律。
-        || content.starts_with(crate::context_scale::WINDOW_NOTICE_PREFIX)
-        // 滑块上下文 v8（2026-09-16 勘误批，设计 §2）：`[上下文分块表 …]`
-        // 是模型面投影层派生的**分块索引**（每轮现算／按 epoch 冻结），
-        // 只存在于请求视图，绝不写回持久化会话。
-        || content.starts_with(crate::model_face::BLOCK_TABLE_PREFIX)
+        || INJECTED_BLOCK_PREFIXES
+            .iter()
+            .any(|prefix| content.starts_with(prefix))
+}
+
+/// 318 审查 P1-C2（2026-10-19）：机械注入块的**单一前缀登记表**。
+///
+/// 此前登记散落在 `is_injected_block_text` 的多条 `starts_with` 里，且缺
+/// `[工作台]`（`agent_loop.rs` 初始轮/20 轮提醒）、`[上轮检索未派发]`、
+/// `[结果投递]`、console 询问/重填、`[任务状态`——它们因此写回会话侧车并
+/// 出现在 `/rewind`。新增注入块必须在此登记（或由更精确的
+/// [`is_generated_injected_block`] 提供生成形态判定）。
+///
+/// **前缀表 ≠ 写回过滤判据**：真实用户文本可以合法地以这些前缀开头（用户
+/// 引用框架块讨论，见 P1-C5）。持久化/撤回过滤必须用
+/// [`is_generated_injected_block`]（前缀＋生成形态），而不是本表。
+pub const INJECTED_BLOCK_PREFIXES: &[&str] = &[
+    COUNTEREXAMPLE_GATE_PREFIX,
+    // GAP-INQUIRY-SPLIT: the injected orientation block must never be
+    // persisted — a repeated `[ORIENTATION …]` block would
+    // otherwise pollute the persisted conversation (R-8 regression point).
+    ORIENTATION_INJECTED_PREFIX,
+    // P0-0x S1: the one-shot initial-round inquiry block is mechanical
+    // injected text too — own prefix, so the two blocks stay
+    // distinguishable (neither prefix matches the other's text).
+    INITIAL_ROUND_INQUIRY_INJECTED_PREFIX,
+    TOOL_POLICY_BREAKER_PREFIX,
+    TOOL_ROUND_BUDGET_PREFIX,
+    // 2026-08-08 blackboard partition (review closure, P2-1/D2-1): the
+    // incremental-push summary `[本轮编辑] …` is mechanical injected
+    // text — same rule as the blocks above. Without registration it
+    // entered the persisted conversation, and iterating the
+    // same file for ≥11 rounds (a normal edit pattern) tripped
+    // the injected-block filter on the message's repeated 3-gram.
+    EDIT_ROUND_PUSH_PREFIX,
+    // A6 (2026-08-08): the context-compaction marker is mechanical
+    // injected text (see `context_compressed_marker`) — never
+    // persisted back into the conversation.
+    CONTEXT_COMPRESSED_PREFIX,
+    // 0cz S2（2026-10-11，设计 §5）：`[前文上下文已清零 …]`——模型主动
+    // 清零的投影层边界 marker，机械注入文本，绝不持久化。
+    crate::model_face::CLEAR_MARKER_PREFIX,
+    // A6 §8 C.2 (2026-08-08): the resident compaction-whitelist
+    // message repeats every round — mechanical injected text, never
+    // persisted back (model-written, but a resident framework-
+    // managed block, not per-round model output).
+    WHITELIST_PREFIX,
+    // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): the
+    // `[MECHANICAL_AUDIT v0.1]` execution-fact report is mechanical
+    // injected text — never persisted back into the conversation.
+    crate::mechanical_audit::MECHANICAL_AUDIT_PREFIX,
+    // P0-D S2 (2026-08-14): the model-visible action-ledger block
+    // (`[动作台账 v0.1] …`) is mechanical injected text — it exists only
+    // in per-request collapsed views, never in the persisted
+    // conversation; registered so it can never pollute the injected-block/
+    // restore filters.
+    crate::action_ledger::ACTION_LEDGER_PREFIX,
+    // 动态上下文滑块 S1（2026-09-15，设计 §3.2/§3.4）：`[CONTEXT_SCALE …]`
+    // 提醒块（首次驱逐固化提醒 + 实际上下文 500K/900K）是机械注入文本，
+    // 每 run 只出现一次——绝不写回持久化会话（否则长单对话的 sidecar
+    // 会累积固定注入文本，且与「固定文本不是模型输出」纪律冲突）。
+    crate::context_scale::REMINDER_INJECTED_PREFIX,
+    // S1 修订批（v7，2026-09-15，设计 §3.4.1）：压缩窗口内的机械提示
+    // （「窗口剩余 N 轮」等）此前未注册 ⇒ 会被写回持久化会话（0AE
+    // 遗留缺口，审查 P2 记录）。窗口轮提示是机械注入文本，同
+    // `[CONTEXT_SCALE` 纪律。
+    crate::context_scale::WINDOW_NOTICE_PREFIX,
+    // 滑块上下文 v8（2026-09-16 勘误批，设计 §2）：`[上下文分块表 …]`
+    // 是模型面投影层派生的**分块索引**（每轮现算／按 epoch 冻结），
+    // 只存在于请求视图，绝不写回持久化会话。
+    crate::model_face::BLOCK_TABLE_PREFIX,
+    // 318 P1-C2：常驻计划状态行（`sync_status_line_message` 注入）。
+    STATUS_LINE_PREFIX,
+    // 318 P1-C2：0ae D1 工作台写入引导/提醒（初始轮与第 20 轮各一次）。
+    WORKBENCH_INJECTED_PREFIX,
+    // 318 P1-C2：0ar S2-D3 上轮未派发检索的一次性重述。
+    DEFERRED_RETRIEVAL_INJECTED_PREFIX,
+    // 318 P1-C2：0ac S3①-b 后台任务完成事实投递（B1/B2 边界）。
+    RESULT_DELIVERY_INJECTED_PREFIX,
+    // 318 P1-C2：console 双模式询问轮与一次重填反馈。
+    CONSOLE_INQUIRY_PREFIX,
+    LEGACY_CONSOLE_INQUIRY_PREFIX,
+    CONSOLE_INQUIRY_REFILL_PREFIX,
+    // 318 P1-C2：检索批次 β 收尾回合块（检索车道一次性历史）。
+    BATCH_CLOSE_INJECTED_PREFIX,
+];
+
+/// 318 审查 P1-C2/C5（2026-10-19）：**结构化注入判据**——只有“登记前缀 ＋
+/// 该前缀实际生成形态”同时命中才算机械注入块。
+///
+/// 与 [`is_injected_block_text`]（前缀表，兼容/撤回菜单面）的区别：真实用户
+/// 完全可能以 `[工作台]`、`[任务状态` 等前缀开头（引用框架块讨论）。写回
+/// 侧车与恢复过滤若只看前缀会把这类用户原文静默丢弃（P1-C5）。本函数要求
+/// 完整生成形态：闭环标记＋版本号、固定句式/字段等；用户随手引用不会命中。
+///
+/// **host 侧 `recallable_user_message` 应迁移到本函数**（`pub` 可见性即为
+/// 此保留）；迁移前 host 仍按前缀判定，会把以登记前缀开头的真实用户消息
+/// 从 `/rewind` 菜单隐藏（侧车本身仍保留，P1-C5 的剩余面）。
+pub fn is_generated_injected_block(content: &str) -> bool {
+    let content = content.trim();
+    if content == COUNTEREXAMPLE_GATE_BLOCK {
+        return true;
+    }
+    if content.starts_with(COUNTEREXAMPLE_GATE_PREFIX) {
+        // Any other `[COUNTEREXAMPLE_GATE …]` text is not the generated
+        // block (the gate text is a compile-time constant).
+        return false;
+    }
+    // 闭环块：开标记带版本号、以闭标记结束，且中间确有内容。
+    let closed = |open: &str, close: &str| {
+        content.starts_with(open)
+            && content.ends_with(close)
+            && content.len() > open.len() + close.len()
+    };
+    if content.starts_with(ORIENTATION_INJECTED_PREFIX) {
+        return closed("[ORIENTATION v", "[/ORIENTATION]");
+    }
+    if content.starts_with(INITIAL_ROUND_INQUIRY_INJECTED_PREFIX) {
+        return closed("[INITIAL_ROUND_INQUIRY v", "[/INITIAL_ROUND_INQUIRY]");
+    }
+    if content.starts_with(TOOL_POLICY_BREAKER_PREFIX) {
+        return closed("[TOOL_POLICY_BREAKER] v0.1\n", "[/TOOL_POLICY_BREAKER]");
+    }
+    if content.starts_with(TOOL_ROUND_BUDGET_PREFIX) {
+        return closed("[TOOL_ROUND_BUDGET v0.", "[/TOOL_ROUND_BUDGET]");
+    }
+    if content.starts_with(EDIT_ROUND_PUSH_PREFIX) {
+        // `[本轮编辑] {file} {old}→{new}行变动；…` / `{file} 新建({n}行)`
+        let body = content.strip_prefix("[本轮编辑] ").unwrap_or_default();
+        return !body.is_empty()
+            && (body.ends_with("行变动") || body.ends_with("行)"))
+            && (body.contains('→') || body.contains("新建("));
+    }
+    if content.starts_with(CONTEXT_COMPRESSED_PREFIX) {
+        return closed("[前文上下文已压缩 v0.", "[/前文上下文已压缩]");
+    }
+    if content.starts_with(crate::model_face::CLEAR_MARKER_PREFIX) {
+        return closed("[前文上下文已清零 v0.", "[/前文上下文已清零]");
+    }
+    if content.starts_with(WHITELIST_PREFIX) {
+        return closed("[压缩白名单 v0.", "[/压缩白名单]");
+    }
+    if content.starts_with(crate::mechanical_audit::MECHANICAL_AUDIT_PREFIX) {
+        return closed("[MECHANICAL_AUDIT v0.", "[/MECHANICAL_AUDIT]");
+    }
+    if content.starts_with(crate::action_ledger::ACTION_LEDGER_PREFIX) {
+        return closed("[动作台账 v0.", "[/动作台账]");
+    }
+    if content.starts_with(crate::model_face::BLOCK_TABLE_PREFIX) {
+        return closed("[上下文分块表 v0.", "[/上下文分块表]");
+    }
+    if content.starts_with(crate::context_scale::REMINDER_INJECTED_PREFIX) {
+        // 五种提醒形态均为 `[CONTEXT_SCALE …] 固定正文`；无闭标记，
+        // 用正文固定词做生成形态判据。
+        return content.starts_with("[CONTEXT_SCALE ")
+            && ["当前上下文窗口", "工作现场以外", "单请求上限", "首次出现"]
+                .iter()
+                .any(|marker| content.contains(marker));
+    }
+    if content.starts_with(crate::context_scale::WINDOW_NOTICE_PREFIX) {
+        // 窗口/回执类提示均以「语义摘要」或「上下文窗口」为固定正文。
+        return content.starts_with("[模型参与压缩")
+            && ["上下文窗口", "语义摘要", "窗口剩余"]
+                .iter()
+                .any(|marker| content.contains(marker));
+    }
+    if content.starts_with(STATUS_LINE_PREFIX) {
+        return closed("[任务状态 v0.", "[/任务状态]");
+    }
+    if content.starts_with(WORKBENCH_INJECTED_PREFIX) {
+        // 0ae D1 两条固定生成文本：初始轮引导 / 第 N 轮唯一一次提醒。
+        let initial_guidance = content
+            .starts_with("[工作台] 请将本任务的工作计划与关键中间结论写入黑板（")
+            && content.contains("section=plan|notes")
+            && content.contains("硬截断（500K 估算）");
+        let round_reminder = content.starts_with("[工作台] 已 ")
+            && content.contains(" 轮未写入黑板：请把工作计划与关键中间结论固化到黑板（")
+            && content.contains("section=plan|notes")
+            && content.ends_with("此为唯一一次提醒。");
+        return initial_guidance || round_reminder;
+    }
+    if content.starts_with(DEFERRED_RETRIEVAL_INJECTED_PREFIX) {
+        return content.starts_with("[上轮检索未派发] 上一轮有 ")
+            && content.contains(" 次检索未派发（cause: ")
+            && content.ends_with('。');
+    }
+    if content.starts_with(RESULT_DELIVERY_INJECTED_PREFIX) {
+        // `render_delivery_message` 当前唯一来源＝后台任务完成事实
+        // （`format_bash_completion`：`Background task "…" completed (…)`）。
+        return content.starts_with("[结果投递] Background task \"")
+            && content.contains("\" completed (");
+    }
+    if content.starts_with(CONSOLE_INQUIRY_PREFIX) {
+        return content.starts_with(
+            "[CONSOLE_INQUIRY v0.1] console 助理层连续失败已达阈值——请只回答 JSON 模板",
+        );
+    }
+    if content.starts_with(LEGACY_CONSOLE_INQUIRY_PREFIX) {
+        // 旧侧车遗留形态（新注入带 `[CONSOLE_INQUIRY v0.1]` 登记前缀）。
+        return content.starts_with("console 助理层连续失败已达阈值——请只回答 JSON 模板")
+            && content.contains("switch=切换 direct")
+            && content.contains("stay=留在 console");
+    }
+    if content.starts_with(CONSOLE_INQUIRY_REFILL_PREFIX) {
+        return content.starts_with("[CONSOLE_INQUIRY_REFILL v0.1] 回答校验未通过：");
+    }
+    if content.starts_with(BATCH_CLOSE_INJECTED_PREFIX) {
+        return content.starts_with("[机械] 检索批次收尾：") && content.contains("唯一收尾回合");
+    }
+    false
 }
 
 /// 2026-08-08 blackboard partition (A2): prefix of the incremental-push
@@ -223,6 +387,37 @@ pub fn recovery_truncation_marker(
 /// block (`[任务状态 v0.1]`). Plan-state-derived — injected into the system
 /// prompt ONLY when a plan is set (zero dilution without one).
 pub const STATUS_LINE_PREFIX: &str = "[任务状态";
+
+/// 318 审查 P1-C2（2026-10-19）：0ae D1 工作台写入引导/提醒的固定前缀
+/// （`agent_loop.rs` post-tool-batch 间隙注入；初始轮一次、第 20 轮一次）。
+pub const WORKBENCH_INJECTED_PREFIX: &str = "[工作台]";
+
+/// 318 审查 P1-C2（2026-10-19）：0ar S2-D3「上轮检索未派发」一次性重述块
+/// 的固定前缀（`agent_loop.rs` post-tool-batch 间隙注入）。
+pub const DEFERRED_RETRIEVAL_INJECTED_PREFIX: &str = "[上轮检索未派发]";
+
+/// 318 审查 P1-C2（2026-10-19）：0ac S3①-b 后台任务完成事实投递块
+/// （`[结果投递] …`，B1/B2 边界注入）的固定前缀。
+pub const RESULT_DELIVERY_INJECTED_PREFIX: &str = "[结果投递]";
+
+/// 318 审查 P1-C2（2026-10-19）：console 双模式询问轮模板的固定前缀。
+/// 询问文本本体在 `console_mode::inquiry_template_block`（该模块的既有
+/// 文案不由本批改动）；注入点在此前缀后拼接本体，使其可稳定登记。
+pub const CONSOLE_INQUIRY_PREFIX: &str = "[CONSOLE_INQUIRY v0.1]";
+
+/// 318 审查 P1-C2（2026-10-19）：**历史形态**的 console 询问块前缀——旧
+/// 侧车里原样保留了未加登记前缀的询问文本（`console 助理层连续失败已达阈值
+/// ——请只回答 JSON 模板 …`）。前缀表登记它只为清理旧侧车/`/rewind`；
+/// 新注入一律带 [`CONSOLE_INQUIRY_PREFIX`]（结构化形态判定要求带前缀）。
+pub const LEGACY_CONSOLE_INQUIRY_PREFIX: &str = "console 助理层连续失败已达阈值";
+
+/// 318 审查 P1-C2（2026-10-19）：console 询问一次重填反馈块前缀
+/// （`console_mode::inquiry_refill_feedback` 生成）。
+pub const CONSOLE_INQUIRY_REFILL_PREFIX: &str = "[CONSOLE_INQUIRY_REFILL";
+
+/// 318 审查 P1-C2（2026-10-19）：检索车道 β 收尾回合块前缀
+/// （`retrieval::batch_close::close_round_block` 生成）。
+pub const BATCH_CLOSE_INJECTED_PREFIX: &str = "[机械] 检索批次收尾";
 
 /// A4 (2026-08-08): build the resident 极简状态行 over the blackboard plan
 /// section — goal + plan summary (total steps, current step id + goal,
@@ -670,6 +865,143 @@ mod tests {
         // A closing tag alone must never match (starts with `[/`).
         assert!(!is_injected_block_text("[/TOOL_ROUND_BUDGET]"));
         assert!(!is_injected_block_text(""));
+    }
+
+    /// 318 审查 P1-C2（2026-10-19）：所有实际生成的框架块都必须同时命中
+    /// 前缀表与**结构化生成形态**判据；漏登记会在写回时污染侧车/`/rewind`。
+    #[test]
+    fn injected_block_registry_covers_all_generated_forms() {
+        let status = build_status_line(Some("目标"), &[]);
+        let blocks: Vec<(&str, String)> = vec![
+            ("counterexample", COUNTEREXAMPLE_GATE_BLOCK.to_string()),
+            (
+                "orientation",
+                orz_assurance::orientation::checkpoint::ORIENTATION_BLOCK.to_string(),
+            ),
+            (
+                "initial-round",
+                orz_assurance::orientation::checkpoint::INITIAL_ROUND_INQUIRY_BLOCK.to_string(),
+            ),
+            (
+                "policy-breaker",
+                tool_policy_breaker_block("web_search", 3),
+            ),
+            (
+                "round-budget",
+                tool_round_budget_exhaustion_block(120),
+            ),
+            (
+                "edit-push",
+                "[本轮编辑] 1.py 12→34行变动；2.py 新建(5行)".to_string(),
+            ),
+            (
+                "compaction-marker",
+                context_compressed_marker(4, 152_000, Some("编辑 3 处")),
+            ),
+            (
+                "clear-marker",
+                "[前文上下文已清零 v0.1-清零]\n清零边界: 第 3 轮\n[/前文上下文已清零]"
+                    .to_string(),
+            ),
+            (
+                "whitelist",
+                build_whitelist_block(&["任务背景：甲".to_string()]),
+            ),
+            (
+                "mechanical-audit",
+                crate::mechanical_audit::MechanicalAuditState::new().report(None),
+            ),
+            (
+                "action-ledger",
+                crate::action_ledger::build_ledger_block(&[]),
+            ),
+            (
+                "block-table",
+                "[上下文分块表 v0.1]\n索引\n[/上下文分块表]".to_string(),
+            ),
+            ("status-line", status),
+            (
+                "workbench-initial",
+                "[工作台] 请将本任务的工作计划与关键中间结论写入黑板（blackboard_write section=plan|notes）；黑板不受上下文折叠与机械压缩影响，硬截断（500K 估算）后仍可经 blackboard_read 找回。".to_string(),
+            ),
+            (
+                "workbench-reminder",
+                "[工作台] 已 20 轮未写入黑板：请把工作计划与关键中间结论固化到黑板（blackboard_write section=plan|notes）。此为唯一一次提醒。".to_string(),
+            ),
+            (
+                "deferred-retrieval",
+                "[上轮检索未派发] 上一轮有 2 次检索未派发（cause: deferred_by_cap）：\"甲\"、\"乙\"。".to_string(),
+            ),
+            (
+                "result-delivery",
+                "[结果投递] Background task \"task-1\" completed (exit code: 0).\nCommand: dir | Duration: 1.0s\n".to_string(),
+            ),
+            (
+                "console-inquiry",
+                format!(
+                    "{} {}",
+                    CONSOLE_INQUIRY_PREFIX,
+                    crate::console_mode::inquiry_template_block()
+                ),
+            ),
+            (
+                "console-inquiry-legacy",
+                crate::console_mode::inquiry_template_block(),
+            ),
+            (
+                "console-refill",
+                crate::console_mode::inquiry_refill_feedback(&["invalid JSON".to_string()]),
+            ),
+            (
+                "retrieval-batch-close",
+                crate::retrieval::batch_close::close_round_block(
+                    crate::retrieval::batch_close::BatchCloseKind::EvidenceThresholdMet,
+                    5,
+                ),
+            ),
+        ];
+        for (name, block) in blocks {
+            assert!(
+                is_injected_block_text(&block),
+                "{name}: prefix registry missed the generated block"
+            );
+            assert!(
+                is_generated_injected_block(&block),
+                "{name}: structured generated-form predicate missed the block"
+            );
+        }
+    }
+
+    /// 318 审查 P1-C5（2026-10-19）：真实用户文本可以合法地以登记前缀开头
+    /// ——前缀表命中，但结构化生成形态不得命中（写回/撤回过滤必须保留）。
+    #[test]
+    fn user_text_with_injected_prefix_is_not_a_generated_block() {
+        for user_text in [
+            "[工作台] 这是我自己的工作笔记，不是框架注入。",
+            "[任务状态] 用户引用状态块讨论：为什么这里要重复渲染？",
+            "[上轮检索未派发] 用户引用这句话来提问。",
+            "[结果投递] 这句话是我写的，不是后台任务结果。",
+            "[本轮编辑] 我想讨论这个前缀的含义。",
+            "[CONSOLE_INQUIRY v0.1] 用户照抄前缀说明自己的问题。",
+            "[CONTEXT_SCALE 192K] 用户引用提醒块的刻度讨论。",
+        ] {
+            assert!(
+                is_injected_block_text(user_text),
+                "prefix registry should still expose the family: {user_text}"
+            );
+            assert!(
+                !is_generated_injected_block(user_text),
+                "real user text must not match the generated shape: {user_text}"
+            );
+        }
+        // 只差一个固定词也不得命中（防止形态判据退化为前缀判据）。
+        assert!(!is_generated_injected_block(
+            "[工作台] 请将本任务的工作计划与关键中间结论写入黑板（别的工具）。"
+        ));
+        assert!(!is_generated_injected_block("[任务状态 v0.1] 没有闭标记"));
+        assert!(!is_generated_injected_block(
+            "[结果投递] Background task 没有引号"
+        ));
     }
 
     /// D3-1 (2026-08-14): only the compaction marker and the whitelist

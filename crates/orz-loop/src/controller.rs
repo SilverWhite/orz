@@ -46,7 +46,9 @@ use crate::host::{LoopHost, PolicyDenial, PolicyDenialSource, ToolDef, ToolResul
 use crate::orientation::{
     AgentRole, ORIENTATION_POST_TOOL_BATCH_GAP, OrientationFireRecord, OrientationSessionState,
 };
-use crate::prompt::{is_injected_block_text, is_restore_retained_block};
+use crate::prompt::{
+    is_generated_injected_block, is_injected_block_text, is_restore_retained_block,
+};
 use crate::retrieval::activation::{ActivationRegistry, StoredActivation};
 use crate::retrieval::evidence::EvidenceRecord;
 
@@ -548,6 +550,16 @@ pub struct AgentLoopController {
     /// `with_context_scale_notified` 注入、run 成功后随 conversation sidecar
     /// 落盘（SUCCESS-ONLY 同疲劳档位）。
     context_scale_notified: Mutex<Vec<String>>,
+    /// 318 审查 P1-C5（2026-10-19）：本 run 内**真实用户来源**（prompt ＋
+    /// 成功投递的 supplement）的精确文本。`Message` 没有 `injected` 字段
+    /// （gateway 模型面 ABI 不在本批范围），来源面以 run 级精确文本表承载：
+    /// 写回过滤只对“生成形态命中且不在此表”的 User 消息生效——真实用户
+    /// 原文即使以 `[工作台]` 等前缀开头也绝不静默丢弃。
+    ///
+    /// 作用域＝run（`run_turn_inner` 起点清空、写回时取走）；容量有界
+    /// （prompt 1 条＋supplement 队列深度 16），溢出只是退回生成形态判据，
+    /// 不会丢用户文本。
+    user_authored_inputs: Mutex<Vec<String>>,
     /// IP2a denial circuit breaker (D-3, FIX_PLAN 2026-08-06): consecutive
     /// policy denials in the current run. Mutex since `run_turn_inner` is
     /// `&self` and a turn may run on any thread; reset at turn start.
@@ -873,6 +885,36 @@ pub(crate) fn compose_test_output_message(result: &crate::host::TestRunResult) -
     }
 }
 
+/// 318 审查 P1-C2/C5（2026-10-19）：会话成功写回的单消息判定（与
+/// `run_turn_inner` 的过滤同源，单测直接钉）。
+///
+/// - index 0（seed 的首条对话消息）恒保留——既有契约；
+/// - 非 User 消息恒保留（Tool 结果与 assistant 声明必须配对）；
+/// - restore-retained marker（压缩/清零/白名单）保留——恢复后据此重建边界；
+/// - 真实用户来源（prompt / 成功投递的 supplement）按**精确同文**豁免；
+/// - 其余 User 消息只有命中 [`is_generated_injected_block`] 的“前缀＋生成
+///   形态”才过滤；仅前缀相同（用户引用框架块讨论）不丢。
+fn persist_conversation_message(
+    index: usize,
+    message: &Message,
+    user_authored_inputs: &[String],
+) -> bool {
+    if index == 0 || message.role != Role::User {
+        return true;
+    }
+    if is_restore_retained_block(&message.content) {
+        return true;
+    }
+    if user_authored_inputs
+        .iter()
+        .any(|text| text == &message.content)
+    {
+        return true;
+    }
+    // 前缀表是廉价快筛；真正的过滤仍要求生成形态（P1-C5）。
+    !is_injected_block_text(&message.content) || !is_generated_injected_block(&message.content)
+}
+
 impl AgentLoopController {
     /// Default pipeline over a bare FakeProvider (empty script — callers
     /// inject a scripted provider for deterministic runs).
@@ -908,6 +950,8 @@ impl AgentLoopController {
             // v7（S1 修订批）：会话级提醒水位——构造时为空（新会话从零开始；
             // ACP 会话在 prompt 起始经 `with_context_scale_notified` 注入侧车值）。
             context_scale_notified: Mutex::new(Vec::new()),
+            // 318 P1-C5：真实用户输入来源表（run 作用域，起点清空）。
+            user_authored_inputs: Mutex::new(Vec::new()),
             // 0df：run 级 usage 折算器（run_turn_inner 起点复位）。
             usage_meter: Mutex::new(crate::usage_meter::RunUsageMeter::default()),
             denial_state: Mutex::new(DenialState::default()),
@@ -1538,6 +1582,44 @@ impl AgentLoopController {
         }
     }
 
+    /// 318 审查 P1-C5（2026-10-19）：登记本 run 的真实用户输入精确文本
+    /// （prompt 与成功投递的 supplement）。写回过滤据此豁免“用户原文恰好
+    /// 以机械块前缀开头/恰好长得像生成块”的消息——只豁免精确同文，不做
+    /// 前缀或子串匹配（避免框架文本反过来借用用户文本逃逸过滤）。
+    ///
+    /// 容量有界：prompt 1 条＋supplement 队列深度 16，留 4 倍余量后停止
+    /// 登记（溢出仅退回生成形态判据，不丢用户文本）。
+    pub(crate) fn note_user_authored_input(&self, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let mut inputs = self
+            .user_authored_inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if inputs.len() >= 64 || inputs.iter().any(|existing| existing == text) {
+            return;
+        }
+        inputs.push(text.to_string());
+    }
+
+    /// 写回时取走本 run 的真实用户输入表（一次性；run 起点亦清空）。
+    fn take_user_authored_inputs(&self) -> Vec<String> {
+        std::mem::take(
+            &mut *self
+                .user_authored_inputs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    fn reset_user_authored_inputs(&self) {
+        self.user_authored_inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+
     /// Component injection for tests (independent scripted providers).
     /// STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37)：检索
     /// 子代理不再作为 controller 常驻字段——每 run 由 `run_turn_inner`
@@ -1568,6 +1650,8 @@ impl AgentLoopController {
             compression_window_active: std::sync::atomic::AtomicBool::new(false),
             // v7（S1 修订批）：会话级提醒水位（构造时空）。
             context_scale_notified: Mutex::new(Vec::new()),
+            // 318 P1-C5：真实用户输入来源表（run 作用域，起点清空）。
+            user_authored_inputs: Mutex::new(Vec::new()),
             denial_state: Mutex::new(DenialState::default()),
             watermark_label_cache: Mutex::new(None),
             context_compact: ContextCompactConfig::default(),
@@ -3596,6 +3680,9 @@ impl AgentLoopController {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             crate::usage_meter::RunUsageMeter::default();
+        // 318 P1-C5：真实用户输入来源表随 run 复位（写回只认本 run 的
+        // prompt/supplement；跨 run 残留会让旧文本豁免新 run 的注入判定）。
+        self.reset_user_authored_inputs();
         // GAP-DENIAL-POLICY-REVISION (2026-08-12): policy revision is also
         // per-run — a fresh run starts at 0 (same window as the breaker).
         self.policy_revision
@@ -4313,6 +4400,9 @@ impl AgentLoopController {
                 m
             }
         };
+        // 318 审查 P1-C5（2026-10-19）：prompt 是真实用户输入——登记精确
+        // 文本，写回过滤对“恰好长得像机械块”的用户原文豁免（不静默丢弃）。
+        self.note_user_authored_input(prompt);
         // D2-2（2026-08-14）**随 v8 实现批退役**（2026-09-16，审查 R-3）：
         // 恢复会话「首请求前机械截断本地面」的语义与 v8 的两面设计冲突——
         // 本地面＝单对话全量（不因任何模型面动作丢失），而首请求的体积约束
@@ -4483,8 +4573,9 @@ impl AgentLoopController {
         } else if let Some(conv) = conversation {
             // GAP-CONVERSATION-RESTORE: mechanical injection blocks
             // (counterexample gate / budget / breaker / edit push /
-            // orientation) are runtime scaffolding, not dialogue — filtered
-            // so the persisted conversation stays clean dialogue (a restored
+            // orientation / status line / workbench / result delivery …)
+            // are runtime scaffolding, not dialogue — filtered so the
+            // persisted conversation stays clean dialogue (a restored
             // prompt would otherwise replay stale "once-only" gates).
             //
             // Review P2-1 (three-agent 2026-08-10): the filter only drops
@@ -4495,26 +4586,22 @@ impl AgentLoopController {
             // replayed conversation would 400 forever). Index 0 (the seed's
             // first dialogue message) is never dropped.
             //
+            // 318 审查 P1-C2/C5（2026-10-19）：判据从“前缀”升级为
+            // **前缀＋生成形态**（[`is_generated_injected_block`]）；真实用户
+            // 来源（prompt / 成功投递的 supplement）按精确文本豁免——用户
+            // 引用框架块讨论、原文恰以 `[工作台]` 等前缀开头时不得静默丢弃。
+            //
             // Review D2-4 (three-agent 2026-08-10): only a COMPLETED loop
             // reaches this write-back — hard error paths (degeneration /
             // wallclock) invalidate the run before the sidecar write, so a
             // failed run's messages never enter the conversation. The
             // stagnation guard that previously gated this is retired
             // (2026-08-22).
+            let user_authored = self.take_user_authored_inputs();
             *conv = messages
                 .into_iter()
                 .enumerate()
-                .filter(|(i, m)| {
-                    // D3-1 (2026-08-14, ADR-0010 v1.10): the compaction
-                    // marker and the whitelist block are restore-retained
-                    // (a restored prompt must see the compression notice
-                    // and the task facts); every other mechanical
-                    // injected block stays filtered.
-                    *i == 0
-                        || !(m.role == Role::User
-                            && is_injected_block_text(&m.content)
-                            && !is_restore_retained_block(&m.content))
-                })
+                .filter(|(i, m)| persist_conversation_message(*i, m, &user_authored))
                 .map(|(_, m)| m)
                 .collect();
         }
@@ -6326,6 +6413,7 @@ mod tests {
         struct SlowFirstToolHost {
             journal: JournalRecorder,
             release: Arc<Mutex<Option<tokio::sync::mpsc::Receiver<()>>>>,
+            entered: Arc<tokio::sync::Notify>,
         }
 
         #[async_trait]
@@ -6351,6 +6439,9 @@ mod tests {
                 _call_id: &str,
             ) -> Result<ToolResult, ToolError> {
                 if name == "bash" {
+                    // Signal that tool #1 is genuinely in flight; a fixed
+                    // sleep raced the loop-top work and was the CI red cause.
+                    self.entered.notify_one();
                     // Block until the test releases — the cancel lands while
                     // tool #1 is in flight.
                     let mut rx = self
@@ -6374,9 +6465,11 @@ mod tests {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let (release_tx, release_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let entered = Arc::new(tokio::sync::Notify::new());
         let host = SlowFirstToolHost {
             journal,
             release: Arc::new(Mutex::new(Some(release_rx))),
+            entered: entered.clone(),
         };
         // One round with TWO tool calls: bash (slow) + read_file.
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
@@ -6407,8 +6500,10 @@ mod tests {
             .await
         });
 
-        // The run parks inside bash (tool #1 in flight); cancel lands there.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Wait until tool #1 is genuinely in flight.
+        tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified())
+            .await
+            .expect("run must reach the first tool");
         token.cancel();
         // Cooperative: the in-flight tool finishes first.
         tokio::select! {
@@ -6610,6 +6705,7 @@ mod tests {
         struct GatedHost {
             journal: JournalRecorder,
             release: Arc<Mutex<Option<tokio::sync::mpsc::Receiver<()>>>>,
+            entered: Arc<tokio::sync::Notify>,
         }
 
         #[async_trait]
@@ -6626,6 +6722,11 @@ mod tests {
                 _tool: &str,
                 _args: &serde_json::Value,
             ) -> Result<PermitDecision, PermitError> {
+                // Signal that the run is now parked at the permission gate;
+                // the test cancels only after this point (no fixed sleep —
+                // the earlier 100 ms sleep raced the loop-top work and made
+                // this test flaky in CI).
+                self.entered.notify_one();
                 // Block until the test sends the release, then deny.
                 let mut rx = self
                     .release
@@ -6641,9 +6742,11 @@ mod tests {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let (release_tx, release_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let entered = Arc::new(tokio::sync::Notify::new());
         let host = GatedHost {
             journal,
             release: Arc::new(Mutex::new(Some(release_rx))),
+            entered: entered.clone(),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("bash", "call-1")]),
@@ -6670,8 +6773,11 @@ mod tests {
             .await
         });
 
-        // The run parks at the permission await (tool round reached).
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Wait until the run is genuinely parked at the permission await;
+        // a fixed sleep raced the loop-top work and was the CI red cause.
+        tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified())
+            .await
+            .expect("run must reach the permission gate");
         token.cancel();
         // Cooperative: cancelling does NOT abort the pending permission.
         tokio::select! {
@@ -6770,6 +6876,123 @@ mod tests {
             "unexpected error: {err}"
         );
         assert_eq!(history.len(), 0, "no turn may start without a fabric");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 318 审查 P1-C2/C5（2026-10-19）：写回判定＝“前缀＋生成形态”的结构化
+    /// 判据；真实用户文本只按前缀开头不得被过滤，来源精确同文可豁免。
+    #[test]
+    fn persist_filter_uses_generated_shape_not_bare_prefix() {
+        fn user(content: &str) -> Message {
+            Message {
+                role: Role::User,
+                content: content.to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            }
+        }
+        let generated_workbench = "[工作台] 请将本任务的工作计划与关键中间结论写入黑板（blackboard_write section=plan|notes）；黑板不受上下文折叠与机械压缩影响，硬截断（500K 估算）后仍可经 blackboard_read 找回。";
+        let generated_deferred =
+            "[上轮检索未派发] 上一轮有 2 次检索未派发（cause: deferred_by_cap）：\"甲\"、\"乙\"。";
+        let generated_result = "[结果投递] Background task \"task-1\" completed (exit code: 0).";
+        let generated_status = "[任务状态 v0.1]\n目标: 甲\n[/任务状态]";
+        // 真正注入块被过滤。
+        for block in [
+            generated_workbench,
+            generated_deferred,
+            generated_result,
+            generated_status,
+        ] {
+            assert!(
+                !persist_conversation_message(1, &user(block), &[]),
+                "generated injected block must not persist: {block}"
+            );
+        }
+        // 真实用户文本仅以同样前缀开头 ⇒ 保留。
+        for text in [
+            "[工作台] 这是我自己的工作笔记。",
+            "[上轮检索未派发] 用户引用讨论。",
+            "[结果投递] 这句话是我写的。",
+            "[任务状态] 用户引用状态块讨论。",
+        ] {
+            assert!(
+                persist_conversation_message(1, &user(text), &[]),
+                "real user prefix text must persist: {text}"
+            );
+        }
+        // 来源精确同文（prompt/supplement）即使长得与生成块一致也保留。
+        let authored = vec![generated_workbench.to_string()];
+        assert!(persist_conversation_message(
+            1,
+            &user(generated_workbench),
+            &authored
+        ));
+        // index 0 / Tool 消息 / restore-retained marker 恒保留。
+        assert!(persist_conversation_message(
+            0,
+            &user(generated_workbench),
+            &[]
+        ));
+        let mut tool = user(generated_workbench);
+        tool.role = Role::Tool;
+        tool.tool_call_id = Some("call-1".to_string());
+        assert!(persist_conversation_message(1, &tool, &[]));
+        assert!(persist_conversation_message(
+            1,
+            &user("[前文上下文已压缩 v0.1]\n摘要\n[/前文上下文已压缩]"),
+            &[]
+        ));
+    }
+
+    /// 318 P1-C5 端到端：prompt 原文以 `[工作台]` 开头时侧车必须保留。
+    #[tokio::test]
+    async fn run_turn_keeps_user_prompt_with_injected_prefix() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![ScriptedResponse::text("收到")]));
+        let controller = AgentLoopController::with_gateway(fake);
+        let prompt = "[工作台] 这是用户自己写的任务说明，不是框架注入。";
+        // 旧侧车遗留的框架文本（P1-C2 的历史污染面）必须在新写回时清掉；
+        // 当前 prompt 的前缀相似文本必须保留。
+        let polluted = "[工作台] 请将本任务的工作计划与关键中间结论写入黑板（blackboard_write section=plan|notes）；黑板不受上下文折叠与机械压缩影响，硬截断（500K 估算）后仍可经 blackboard_read 找回。";
+        let mut conversation = vec![
+            conv_message(Role::User, "第一问"),
+            Message {
+                role: Role::Assistant,
+                content: "第一答".to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            },
+            conv_message(Role::User, polluted),
+        ];
+        controller
+            .run_turn(
+                &host,
+                prompt,
+                "RUN-USER-PREFIX",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .expect("run");
+        assert!(
+            conversation.iter().any(|m| m.content == prompt),
+            "real prompt with injected prefix dropped from write-back: {conversation:?}"
+        );
+        assert!(
+            !conversation.iter().any(|m| m.content == polluted),
+            "old generated injection block survived write-back: {conversation:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -8097,6 +8320,131 @@ body"
         );
         let _ = std::fs::remove_dir_all(&dir1);
         let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// 318 审查 P1-C3（2026-10-19）：满队/大补充不得把模型面推过硬上限——
+    /// drain 后按当前模型面估算只投不越线的前缀，其余进 run 级延迟队列并落
+    /// `GateDecision{gate=supplement_delivery_budget}` 事件（不静默蒸发）。
+    #[tokio::test]
+    async fn supplement_delivery_respects_model_face_guard() {
+        let dir = test_dir();
+        // 满队样本（深度上限 16）每条 ≈6K 估算（12K ASCII chars / 2）；
+        // 总量必然越过 20K 线。
+        let pad = "x".repeat(12_000);
+        let texts: Vec<String> = (0..16).map(|i| format!("补充{i}:{pad}")).collect();
+        let host = SupplementHost {
+            journal: JournalRecorder::new(dir.clone()),
+            queue: std::sync::Mutex::new(texts.iter().cloned().collect()),
+        };
+        let fake = Arc::new(FakeProvider::from_texts(vec!["收到"]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_model_face_static_overhead(0)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_model_face_guard_tokens(20_000);
+        let mut conversation: Vec<Message> = Vec::new();
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-SUPP-BUDGET",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .expect("run must complete (no provider 400)");
+
+        let events = read_supplement_test_events(&dir);
+        let delivered: Vec<&orz_assurance::RunEvent> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::SupplementDelivered)
+            .collect();
+        assert!(
+            !delivered.is_empty(),
+            "at least the first supplement fits under the guard"
+        );
+        assert!(
+            delivered.len() < texts.len(),
+            "remaining supplements must be deferred, not delivered"
+        );
+        let delivered_texts: Vec<String> = delivered
+            .iter()
+            .map(|e| e.payload["text"].as_str().unwrap().to_string())
+            .collect();
+        let defer = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::GateDecision
+                    && e.payload["gate"] == serde_json::json!("supplement_delivery_budget")
+            })
+            .expect("budget deferral must be journaled");
+        assert_eq!(defer.payload["decision"], serde_json::json!("defer"));
+        assert_eq!(
+            defer.payload["deferred"],
+            serde_json::json!(texts.len() - delivered.len())
+        );
+        // run 尾仍未投出的补充必须再落一条明确事件（不静默蒸发）。
+        let run_end = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::GateDecision
+                    && e.payload["gate"] == serde_json::json!("supplement_delivery_budget")
+                    && e.payload["decision"] == serde_json::json!("defer_run_end")
+            })
+            .expect("run-end deferral must be journaled");
+        assert_eq!(
+            run_end.payload["deferred"],
+            serde_json::json!(texts.len() - delivered.len())
+        );
+
+        // 未投递的补充不得出现在模型请求面（这就是“provider 400”的直接防线）。
+        let request = &fake.received_requests()[0];
+        for text in texts.iter().filter(|t| !delivered_texts.contains(*t)) {
+            assert!(
+                !request.messages.iter().any(|m| &m.content == text),
+                "deferred supplement leaked into the model request"
+            );
+        }
+        // 宿主队列在 drain 时已取空；溢出由 run 级延迟队列承接（run 尾另行落账）。
+        assert!(host.queue.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 318 P1-C5 端到端：supplement 原文恰好长得像生成块时也必须保留
+    /// （来源表按精确同文豁免——只在 run 内有效，不退化为前缀豁免）。
+    #[tokio::test]
+    async fn supplement_with_injected_shape_is_not_filtered_from_writeback() {
+        let dir = test_dir();
+        let supplement = "[工作台] 请将本任务的工作计划与关键中间结论写入黑板（blackboard_write section=plan|notes）；黑板不受上下文折叠与机械压缩影响，硬截断（500K 估算）后仍可经 blackboard_read 找回。";
+        let host = SupplementHost {
+            journal: JournalRecorder::new(dir.clone()),
+            queue: std::sync::Mutex::new([supplement.to_string()].into_iter().collect()),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec!["收到"]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let mut conversation: Vec<Message> = Vec::new();
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-SUPP-SHAPE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .expect("run");
+        assert!(
+            conversation.iter().any(|m| m.content == supplement),
+            "user-authored supplement matching a generated shape was dropped: {conversation:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// grill 轮不投递——grill 的 profile.role 也是 Main，判别必须走

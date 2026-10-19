@@ -21,11 +21,13 @@ use orz_loop::blackboard::{Blackboard, ExternalRetSection, InternalRetSection};
 use orz_loop::controller::RetrievalMode;
 use orz_loop::gateway::model::{Message, Role, ToolCall};
 use orz_loop::orientation::OrientationSessionState;
-use orz_loop::prompt::{STATUS_LINE_PREFIX, is_injected_block_text};
+use orz_loop::prompt::{STATUS_LINE_PREFIX, is_generated_injected_block};
 use orz_workspace::permission::PermissionHookTransport;
 
+use agent_client_protocol as acp;
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::permission::PermissionPolicy;
@@ -243,6 +245,10 @@ fn scope_strings(scope: &[PathBuf]) -> Vec<String> {
 /// run with its own hash-chained journal.
 struct StoredSession {
     base_dir: PathBuf,
+    /// 318 P1-A7: OS-held advisory lease for this session's writable
+    /// attachment. Dropped (and released by the OS) on close_session or
+    /// process death, so a second process cannot race the same journals.
+    _lease: std::fs::File,
     trust_policy: crate::session::TrustPolicy,
     /// Per-session permission policy (slice #16): a codex thread created with
     /// `sandbox: "read-only"` runs every prompt under `PermissionPolicy::ReadOnly`
@@ -648,6 +654,152 @@ fn conversation_sidecar_path(base_dir: &Path, session_id: &str) -> PathBuf {
         .join(format!("{suffix}.json"))
 }
 
+/// First unused ordinal for a durable run family (`RUN-<s8>-<n>` or
+/// `RST-<s8>-<n>`). The run directory is the truth: a missing/corrupt sidecar
+/// must never reset the counter and reuse an existing journal directory.
+fn next_run_ordinal(base_dir: &Path, prefix: &str) -> Result<u64, String> {
+    let runs = base_dir.join(".gsa").join("runs");
+    let entries = match std::fs::read_dir(&runs) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => {
+            return Err(format!(
+                "cannot enumerate run ordinals ({}): {e}",
+                runs.display()
+            ));
+        }
+    };
+    let mut max: Option<u64> = None;
+    for entry in entries {
+        let entry =
+            entry.map_err(|e| format!("cannot read run entry ({}): {e}", runs.display()))?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(suffix) = name.strip_prefix(prefix) else {
+            continue;
+        };
+        let Ok(ordinal) = suffix.parse::<u64>() else {
+            continue;
+        };
+        max = Some(max.map_or(ordinal, |current| current.max(ordinal)));
+    }
+    Ok(max.map_or(0, |n| n.saturating_add(1)))
+}
+
+fn next_prompt_count(base_dir: &Path, session_id: &str) -> Result<u64, String> {
+    let suffix: String = session_id.chars().take(8).collect();
+    next_run_ordinal(base_dir, &format!("RUN-{suffix}-"))
+}
+
+fn next_restore_count(base_dir: &Path, session_id: &str) -> Result<u64, String> {
+    let suffix: String = session_id.chars().take(8).collect();
+    next_run_ordinal(base_dir, &format!("RST-{suffix}-"))
+}
+
+/// Session ids become path components through their 8-char prefix. Reject the
+/// forms that can escape `conversations/` or alias an unrelated session before
+/// any filesystem access.
+fn validate_session_id(session_id: &str) -> Result<(), AcpError> {
+    if session_id.is_empty()
+        || session_id.len() > 128
+        || session_id.contains('\0')
+        || session_id.contains('/')
+        || session_id.contains('\\')
+        || session_id.contains("..")
+        || session_id.contains(':')
+        || session_id.contains('*')
+        || session_id.contains('?')
+        || session_id.contains('<')
+        || session_id.contains('>')
+        || session_id.contains('|')
+        || session_id.contains('"')
+        || session_id.chars().any(|c| c.is_control())
+    {
+        return Err(AcpError::InvalidRequest(format!(
+            "invalid session id: {session_id:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn session_lease_path(base_dir: &Path, session_id: &str) -> PathBuf {
+    // Use the full id, not the 8-char display prefix: two sessions may share
+    // a prefix (`sess-idle` / `sess-idle2`), and a shared lease would make the
+    // second attachment fail with a false cross-process conflict.
+    base_dir
+        .join(".gsa")
+        .join("sessions")
+        .join(format!("{session_id}.lease"))
+}
+
+/// Take an exclusive OS lock for a writable attachment. The lock is released
+/// when the returned `File` is dropped or the process dies.
+fn acquire_session_lease(base_dir: &Path, session_id: &str) -> Result<std::fs::File, AcpError> {
+    let path = session_lease_path(base_dir, session_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            AcpError::Host(format!(
+                "cannot create session lease dir ({}): {e}",
+                parent.display()
+            ))
+        })?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| {
+            AcpError::Host(format!(
+                "cannot open session lease ({}): {e}",
+                path.display()
+            ))
+        })?;
+    file.try_lock_exclusive().map_err(|e| {
+        AcpError::InvalidRequest(format!(
+            "session {session_id} is attached to another orz process (lease {}): {e}",
+            path.display()
+        ))
+    })?;
+    Ok(file)
+}
+
+/// Sessions currently leased by any process, keyed by their 8-char display
+/// prefix. Scans the lease directory because the lease filename uses the full
+/// session id while the sweep only knows the prefix.
+fn leased_sessions(base_dir: &Path) -> Vec<String> {
+    let dir = base_dir.join(".gsa").join("sessions");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut sessions = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("lease") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+        else {
+            continue;
+        };
+        if file.try_lock_exclusive().is_err() {
+            let s8: String = stem.chars().take(8).collect();
+            sessions.push(s8);
+        } else {
+            let _ = file.unlock();
+        }
+    }
+    sessions
+}
+
 /// Load the persisted conversation (cross-prompt AND cross-process recovery —
 /// a process restart that re-creates the same `session_id` resumes the
 /// conversation). `None` = no sidecar yet (brand-new session); a corrupt
@@ -720,9 +872,28 @@ fn persist_conversation_sidecar(
     }
     match scrubbed_json_pretty(continuation) {
         Some(json) => {
-            if let Err(e) = std::fs::write(&path, json) {
+            // Atomic replace: a truncated sidecar would be treated as
+            // corrupt on the next start and silently discard the
+            // conversation. The temp file is fsynced before rename; the old
+            // sidecar survives every failure before that point.
+            let tmp = path.with_file_name(format!(
+                ".{}.tmp.{}",
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("conversation"),
+                std::process::id()
+            ));
+            let write_result = (|| -> std::io::Result<()> {
+                let mut file = std::fs::File::create(&tmp)?;
+                file.write_all(json.as_bytes())?;
+                file.sync_all()?;
+                drop(file);
+                std::fs::rename(&tmp, &path)
+            })();
+            if let Err(e) = write_result {
+                let _ = std::fs::remove_file(&tmp);
                 tracing::warn!(
-                    "conversation sidecar write failed ({}): {e}",
+                    "conversation sidecar atomic write failed ({}): {e}",
                     path.display()
                 );
                 return Err(format!(
@@ -960,7 +1131,13 @@ pub async fn archive_session_on_demand(base_dir: &Path, session8: &str) -> Resul
     };
     // 重构路径把纳入的 run 显式传给三键段（无头 run id `RUN-CLI-{s8}` 不
     // 携带 `RUN-{s8}-` 会话段，前缀扫描不中——与 0ak 显式注入同口径）。
-    let explicit: Vec<String> = reconstructed_runs.clone().unwrap_or_default();
+    let mut explicit: Vec<String> = reconstructed_runs.clone().unwrap_or_default();
+    let cli_run = format!("RUN-CLI-{session8}");
+    if base_dir.join(".gsa").join("runs").join(&cli_run).is_dir()
+        && !explicit.iter().any(|run| run == &cli_run)
+    {
+        explicit.push(cli_run);
+    }
     let Some(pkg) = archive_raw_session_package(
         base_dir,
         session8,
@@ -1229,12 +1406,14 @@ fn run_dir_session(name: &str) -> Option<String> {
     if rest.starts_with("PLAN-") {
         return None;
     }
-    let s = if let Some(cli) = rest.strip_prefix("CLI-") {
-        cli.split('-').next()?
-    } else {
-        rest.split('-').next()?
-    };
-    (!s.is_empty()).then(|| s.to_string())
+    if let Some(cli) = rest.strip_prefix("CLI-") {
+        return (!cli.is_empty()).then(|| cli.to_string());
+    }
+    let (session, ordinal) = rest.rsplit_once('-')?;
+    if session.is_empty() || ordinal.parse::<u64>().is_err() {
+        return None;
+    }
+    Some(session.to_string())
 }
 
 /// 该 run 目录是否归会话 `s8`（与 `reconstruct_conversation_from_journal`／
@@ -1777,9 +1956,12 @@ pub(crate) async fn sweep_session_leftovers_with(
         .iter()
         .map(|l| l.chars().take(8).collect())
         .collect();
+    let lease_live: Vec<String> = leased_sessions(base_dir);
     let swept: Vec<String> = candidates
         .keys()
-        .filter(|s| keep8.as_deref() != Some(s.as_str()) && !live8.iter().any(|l| l == *s))
+        .filter(|s| keep8.as_deref() != Some(s.as_str()))
+        .filter(|s| !live8.iter().any(|l| l == *s))
+        .filter(|s| !lease_live.iter().any(|l| l == *s))
         .cloned()
         .collect();
     // 共享滚动件归属：被扫集合 ∪（当前会话，若其已有足迹）中 mtime 最新者；
@@ -1788,7 +1970,10 @@ pub(crate) async fn sweep_session_leftovers_with(
         .as_deref()
         .map(|k| candidates.contains_key(k))
         .unwrap_or(false);
-    let other_live = live8.iter().any(|l| Some(l.as_str()) != keep8.as_deref());
+    let other_live = live8.iter().any(|l| Some(l.as_str()) != keep8.as_deref())
+        || lease_live
+            .iter()
+            .any(|l| Some(l.as_str()) != keep8.as_deref());
     let mut winner: Option<(String, std::time::SystemTime)> = None;
     if !other_live {
         for (s8, mtime) in candidates.iter() {
@@ -2924,7 +3109,8 @@ enum RunInFlight {
     Prompt(tokio_util::sync::CancellationToken),
     /// A snapshot restore is executing (no cancellation token — P3-7
     /// record: restores are short host-side operations, not agent runs).
-    Restore,
+    /// The id lets the RAII guard remove only its own marker.
+    Restore(u64),
 }
 
 /// How long a remembered cancel stays valid. A cancel racing the prompt's
@@ -2933,46 +3119,97 @@ enum RunInFlight {
 /// prompt (2026-08-05 review P2-1).
 const PENDING_CANCEL_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// RAII release of a session's restore-in-flight marker (Phase 3 slice #11,
-/// P2-2). Registering happens inside `new` under the same lock as the
-/// check — the shared `runs` map — so neither a concurrent restore nor a
-/// running prompt can slip between check and insert; dropping the guard
-/// removes the marker on every completion path — including errors and
-/// journal failures — so a later restore/prompt is never falsely rejected
-/// by a stale marker.
+/// RAII release of a prompt's in-flight marker. Every early return before the
+/// run starts must release the token; a leaked marker made every later prompt
+/// fail with "already in flight" until the host restarted.
+struct PromptInflightGuard {
+    runs: Arc<Mutex<HashMap<String, RunInFlight>>>,
+    session: String,
+    armed: bool,
+}
+
+impl PromptInflightGuard {
+    fn new(
+        runs: &Arc<Mutex<HashMap<String, RunInFlight>>>,
+        session_id: &str,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<Self, String> {
+        let mut map = runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if map.contains_key(session_id) {
+            return Err(session_id.to_string());
+        }
+        map.insert(session_id.to_string(), RunInFlight::Prompt(cancel));
+        drop(map);
+        Ok(Self {
+            runs: runs.clone(),
+            session: session_id.to_string(),
+            armed: true,
+        })
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PromptInflightGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.runs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&self.session);
+        }
+    }
+}
+
+/// RAII release of a session's restore-in-flight marker. The marker id makes
+/// Drop a compare-and-remove: a stale restore must not delete a newer prompt's
+/// marker after a close/session-load.
 struct RestoreInflightGuard {
     runs: Arc<Mutex<HashMap<String, RunInFlight>>>,
     session: String,
+    marker_id: u64,
 }
 
 impl RestoreInflightGuard {
-    /// Register the marker; returns `Err(session_id)` when the session
-    /// already has anything in flight (prompt or restore).
     fn new(
         runs: &Arc<Mutex<HashMap<String, RunInFlight>>>,
         session_id: &str,
     ) -> Result<Self, String> {
+        static NEXT_RESTORE_MARKER: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(1);
+        let marker_id = NEXT_RESTORE_MARKER.fetch_add(1, Ordering::Relaxed);
         let mut guard = runs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if guard.contains_key(session_id) {
             return Err(session_id.to_string());
         }
-        guard.insert(session_id.to_string(), RunInFlight::Restore);
+        guard.insert(session_id.to_string(), RunInFlight::Restore(marker_id));
         drop(guard);
         Ok(Self {
             runs: runs.clone(),
             session: session_id.to_string(),
+            marker_id,
         })
     }
 }
 
 impl Drop for RestoreInflightGuard {
     fn drop(&mut self) {
-        self.runs
+        let mut runs = self
+            .runs
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&self.session);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(
+            runs.get(&self.session),
+            Some(RunInFlight::Restore(found)) if *found == self.marker_id
+        ) {
+            runs.remove(&self.session);
+        }
     }
 }
 
@@ -2982,7 +3219,7 @@ impl Drop for RestoreInflightGuard {
 /// to the editor as if the user had typed them.
 fn recallable_user_message(message: &Message) -> bool {
     message.role == Role::User
-        && !is_injected_block_text(&message.content)
+        && !is_generated_injected_block(&message.content)
         && !message.content.trim().starts_with(STATUS_LINE_PREFIX)
 }
 
@@ -3146,14 +3383,37 @@ impl AcpServer {
         policy: PermissionPolicy,
         retrieval_enabled: bool,
     ) -> Result<serde_json::Value, AcpError> {
+        self.attach_session_with_options(
+            session_id,
+            base_dir,
+            trust_policy,
+            policy,
+            retrieval_enabled,
+            // Only a real session/new starts the hygiene sweep.
+            true,
+        )
+        .await
+    }
+
+    async fn attach_session_with_options(
+        &self,
+        session_id: &str,
+        base_dir: Option<PathBuf>,
+        trust_policy: crate::session::TrustPolicy,
+        policy: PermissionPolicy,
+        retrieval_enabled: bool,
+        sweep_enabled: bool,
+    ) -> Result<serde_json::Value, AcpError> {
+        validate_session_id(session_id)?;
         // Journals are created per-run at `session/prompt` time — the session
         // itself only records where, under what trust policy, and under what
         // permission policy runs live.
         let base = base_dir.unwrap_or_else(|| PathBuf::from("."));
+        let lease = acquire_session_lease(&base, session_id)?;
         // 0cy（docs/GSA_SESSION_HYGIENE_DESIGN_2026-10-11.md）：新会话起点＝
         // 空台账＋无前档足迹——非存活、非当前的会话足迹先收卷进
         // `archives/`（先写包后删源；唯一删改路径），再装载本会话侧车。
-        {
+        if sweep_enabled {
             let live: Vec<String> = self
                 .sessions
                 .lock()
@@ -3197,8 +3457,11 @@ impl AcpServer {
         // brand-new session starts an empty envelope with the会话轴原点 =
         // 本会话创建时刻（首 prompt 前无消息，不落盘——第一个成功 prompt
         // 才写侧车）。Legacy 侧车（无 session_started_at）补当前墙钟。
-        let mut continuation = load_conversation_sidecar(&base, session_id)
-            .unwrap_or_else(|| StoredConversation::empty(session_id, None));
+        let persisted_continuation = load_conversation_sidecar(&base, session_id);
+        let prompt_count = next_prompt_count(&base, session_id).map_err(AcpError::Host)?;
+        let restore_count = next_restore_count(&base, session_id).map_err(AcpError::Host)?;
+        let mut continuation =
+            persisted_continuation.unwrap_or_else(|| StoredConversation::empty(session_id, None));
         if continuation.session_started_at.is_none() {
             continuation.session_started_at = Some(now_epoch_secs());
         }
@@ -3209,10 +3472,11 @@ impl AcpServer {
                 session_id.to_string(),
                 StoredSession {
                     base_dir: base,
+                    _lease: lease,
                     trust_policy,
                     policy,
-                    prompt_count: 0,
-                    restore_count: 0,
+                    prompt_count,
+                    restore_count,
                     orientation: Some(orientation),
                     activation_snapshot: Some(activation_snapshot),
                     browser: None,
@@ -3241,6 +3505,118 @@ impl AcpServer {
     /// 只释放本 run 引用，不杀进程）。独立成函数以便确定性单测 ready 判定
     /// 与覆盖语义（真实「run 中懒启动换入 → 回写」依赖检索子代理链路 +
     /// 真实浏览器，属 S4 宿主机实测载体，P9）。
+    /// Attach an existing durable conversation to this host process.
+    ///
+    /// Loading requires an absolute canonical cwd and an existing sidecar. It
+    /// never runs the 0cy hygiene sweep, and ACP v1 history is replayed via
+    /// `session/update` before the response when a gateway exists.
+    pub async fn handle_session_load_with_options(
+        &self,
+        session_id: &str,
+        base_dir: PathBuf,
+        trust_policy: crate::session::TrustPolicy,
+        policy: PermissionPolicy,
+        retrieval_enabled: bool,
+    ) -> Result<serde_json::Value, AcpError> {
+        validate_session_id(session_id)?;
+        if !base_dir.is_absolute() {
+            return Err(AcpError::InvalidRequest(format!(
+                "session/load requires an absolute cwd, got {}",
+                base_dir.display()
+            )));
+        }
+        let base = base_dir.canonicalize().map_err(|e| {
+            AcpError::InvalidRequest(format!(
+                "session/load cwd cannot be canonicalized ({}): {e}",
+                base_dir.display()
+            ))
+        })?;
+        if !base.is_dir() {
+            return Err(AcpError::InvalidRequest(format!(
+                "session/load cwd is not a directory: {}",
+                base.display()
+            )));
+        }
+        let existing_base = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(session_id)
+            .map(|session| session.base_dir.clone());
+        if let Some(existing_base) = existing_base {
+            let existing = existing_base.canonicalize().unwrap_or(existing_base);
+            if existing != base {
+                return Err(AcpError::InvalidRequest(format!(
+                    "session {session_id} is already attached to a different workspace ({})",
+                    existing.display()
+                )));
+            }
+            return Ok(serde_json::json!({
+                "session_id": session_id,
+                "status": "loaded",
+            }));
+        }
+        if load_conversation_sidecar(&base, session_id).is_none() {
+            return Err(AcpError::SessionNotFound(session_id.to_string()));
+        }
+        self.attach_session_with_options(
+            session_id,
+            Some(base),
+            trust_policy,
+            policy,
+            retrieval_enabled,
+            false,
+        )
+        .await?;
+        self.replay_session_history(session_id);
+        Ok(serde_json::json!({
+            "session_id": session_id,
+            "status": "loaded",
+        }))
+    }
+
+    /// ACP v1 session/load: replay the persisted user/assistant transcript as
+    /// `session/update` notifications before the load response.
+    fn replay_session_history(&self, session_id: &str) {
+        let conversation = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(session_id)
+            .and_then(|session| session.continuation.clone());
+        let Some(conversation) = conversation else {
+            return;
+        };
+        let Some(gateway) = self.gateway() else {
+            return;
+        };
+        let mut replayed = 0usize;
+        for message in conversation.messages {
+            let user_recallable = recallable_user_message(&message);
+            let content = message.content;
+            if content.is_empty() {
+                continue;
+            }
+            let update = match message.role {
+                Role::User if user_recallable => acp::SessionUpdate::UserMessageChunk(
+                    acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(content))),
+                ),
+                Role::Assistant => acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+                    acp::ContentBlock::Text(acp::TextContent::new(content)),
+                )),
+                _ => continue,
+            };
+            let notification =
+                acp::SessionNotification::new(acp::SessionId::new(session_id.to_string()), update);
+            if !gateway.forward_fire_and_forget(notification) {
+                tracing::warn!("session/load history replay: gateway receiver dropped");
+                return;
+            }
+            replayed += 1;
+        }
+        tracing::info!(session_id, replayed, "session/load history replayed");
+    }
+
     fn fold_back_browser(
         sessions: &Mutex<HashMap<String, StoredSession>>,
         session_id: &str,
@@ -3271,6 +3647,15 @@ impl AcpServer {
         // the run fails (untrusted cwd, model error), so a retried prompt gets
         // a fresh run dir — reusing a failed run's dir would append to its
         // journal and corrupt the chain (2026-08-05 orz-tui review P2-2).
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut prompt_guard =
+            PromptInflightGuard::new(&self.runs, session_id, cancel.clone()).map_err(
+                |session_id| {
+                    AcpError::InvalidRequest(format!(
+                        "prompt rejected: a run or restore is already in flight for session {session_id}"
+                    ))
+                },
+            )?;
         let (base_dir, trust_policy, policy, prompt_number) = {
             let mut sessions = self
                 .sessions
@@ -3288,49 +3673,16 @@ impl AcpServer {
                 n,
             )
         };
-
         let suffix: String = session_id.chars().take(8).collect();
         let run_id = format!("RUN-{suffix}-{prompt_number}");
-
-        // Phase 3 slice #7: register the run's cancellation token BEFORE the
-        // bootstrap awaits — a `session/cancel` landing anywhere in this
-        // function's body (including during the trust scan) hits the token
-        // directly instead of the pending fallback. A cancel arriving in the
-        // tiny gap between the connection spawning this task and this line is
-        // consumed from the pending set — the run starts already-cancelled
-        // (the cancel-before-bootstrap race). NOTE the protocol-order
-        // semantic: a cancel that beats the NEXT prompt's registration (e.g.
-        // sent immediately after a completed run) cancels that next prompt —
-        // ACP `session/cancel` cancels the session's next operation; the TUI
-        // never hits this (it only cancels while `running`).
-        //
-        // Phase 3 slice #11 (P2-2): the restore exclusion lives in the same
-        // critical section — check + insert under one lock, so a concurrent
-        // restore cannot slip between the check and our registration
-        // (prompt-vs-restore atomicity; the restore side registers under the
-        // same map). Prompt-vs-prompt keeps the recorded overwrite semantics
-        // (slice #7 P3 — the TUI guards `running`, stdio is sequential).
-        let cancel = tokio_util::sync::CancellationToken::new();
         {
-            let mut map = self
-                .runs
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if matches!(map.get(session_id), Some(RunInFlight::Restore)) {
-                return Err(AcpError::InvalidRequest(format!(
-                    "prompt rejected: a snapshot restore is in flight for session {session_id}"
-                )));
-            }
-            map.insert(session_id.to_string(), RunInFlight::Prompt(cancel.clone()));
-            if let Some(stamped) = self
+            let mut pending = self
                 .pending_cancels
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(session_id)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(stamped) = pending.remove(session_id)
                 && stamped.elapsed() < PENDING_CANCEL_WINDOW
             {
-                // A cancel within the bootstrap window — the run starts
-                // already-cancelled. Stale/idle cancels expire silently.
                 cancel.cancel();
             }
         }
@@ -3341,10 +3693,6 @@ impl AcpServer {
         // next successful prompt.
         let bootstrap = bootstrap_session(&run_id, Some(base_dir.clone()), trust_policy).await;
         if bootstrap.is_err() {
-            self.runs
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(session_id);
             // B3 复审 P2-3：close 若已在 run 注册后发生（归档票已挂），
             // bootstrap 失败中止 run 时补触发存档。
             self.take_deferred_archive(session_id);
@@ -3678,6 +4026,7 @@ impl AcpServer {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(session_id);
+        prompt_guard.disarm();
         // B3 复审 P2-3：close 在 run 进行中发生时，归档票在此消费（run 已
         // 收尾、成功路径的 sidecar 已同步落盘；失败/取消路径不更新
         // sidecar，存档最近一次成功内容）。会话未被 close（无票）= 无操作。
@@ -4122,7 +4471,7 @@ impl AcpServer {
             .runs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if matches!(runs.get(session_id), Some(RunInFlight::Restore)) {
+        if matches!(runs.get(session_id), Some(RunInFlight::Restore(_))) {
             return Err(AcpError::InvalidRequest(format!(
                 "supplement rejected: a restore or recall is in flight for session {session_id}"
             )));
@@ -7127,7 +7476,7 @@ mod tests {
             "unexpected error: {err:?}"
         );
         assert!(
-            !base.join(".gsa").exists(),
+            !base.join(".gsa").join("runs").exists(),
             "rejected before bootstrap — no journal side effects"
         );
 
@@ -7156,7 +7505,7 @@ mod tests {
             .runs
             .lock()
             .unwrap()
-            .insert("sess-restore-busy".into(), RunInFlight::Restore);
+            .insert("sess-restore-busy".into(), RunInFlight::Restore(0));
 
         let err = server
             .restore_snapshot("sess-restore-busy", &"d".repeat(64), None)
@@ -7167,7 +7516,7 @@ mod tests {
             "unexpected error: {err:?}"
         );
         assert!(
-            !base.join(".gsa").exists(),
+            !base.join(".gsa").join("runs").exists(),
             "rejected before bootstrap — no journal side effects"
         );
 
@@ -7195,7 +7544,7 @@ mod tests {
                     .runs
                     .lock()
                     .unwrap()
-                    .insert("sess-restore-prompt".into(), RunInFlight::Restore);
+                    .insert("sess-restore-prompt".into(), RunInFlight::Restore(0));
 
                 let result = server
                     .handle_session_prompt("sess-restore-prompt", "hello")
@@ -7920,7 +8269,8 @@ mod tests {
                     .handle_session_prompt("sess-restart", "重启前的问题")
                     .await
                     .unwrap();
-                // (server1 dropped — process restart.)
+                // (server1 dropped — process restart releases its lease.)
+                drop(server1);
 
                 // Process 2: a NEW server re-creates the session.
                 let fake2 = Arc::new(FakeProvider::new(vec![ScriptedResponse::text("第二答")]));
@@ -8841,7 +9191,7 @@ mod tests {
             .runs
             .lock()
             .unwrap()
-            .insert("sess-qrestore".to_string(), RunInFlight::Restore);
+            .insert("sess-qrestore".to_string(), RunInFlight::Restore(0));
         let err = server
             .handle_queue_append("sess-qrestore", "不得落到撤回后的分支")
             .unwrap_err();
@@ -8970,6 +9320,154 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(ext.0.get()).unwrap();
         assert_eq!(value["queued"], serde_json::json!(true));
         assert_eq!(value["depth"], serde_json::json!(1));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 318 P0-4: session/load must not run the 0cy sweep.
+    #[tokio::test]
+    async fn session_load_does_not_sweep_sibling_sessions() {
+        let base = test_dir();
+        let a = "aaaaaaaa-1111-2222-3333-444455556666";
+        let b = "bbbbbbbb-1111-2222-3333-444455556666";
+        for id in [a, b] {
+            let mut conversation = StoredConversation::empty(id, None);
+            conversation.messages.push(Message {
+                role: Role::User,
+                content: "keep me".to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+            persist_conversation_sidecar(&base, &conversation).unwrap();
+        }
+        let runs = base.join(".gsa").join("runs");
+        std::fs::create_dir_all(runs.join("RUN-aaaaaaaa-0")).unwrap();
+        std::fs::create_dir_all(runs.join("RST-aaaaaaaa-0")).unwrap();
+        std::fs::create_dir_all(runs.join(format!("RUN-{}-0", &b[..8]))).unwrap();
+        std::fs::create_dir_all(runs.join(format!("RST-{}-0", &b[..8]))).unwrap();
+
+        let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![])));
+        server
+            .handle_session_load_with_options(
+                b,
+                base.clone(),
+                crate::session::TrustPolicy::Skip,
+                Default::default(),
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            base.join(".gsa")
+                .join("conversations")
+                .join("aaaaaaaa.json")
+                .exists(),
+            "sibling sidecar must survive session/load"
+        );
+        assert!(
+            runs.join("RUN-aaaaaaaa-0").exists(),
+            "sibling run directory must survive session/load"
+        );
+        let sessions = server
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let loaded = sessions.get(b).expect("loaded session present");
+        assert_eq!(loaded.prompt_count, 1);
+        assert_eq!(loaded.restore_count, 1);
+        drop(sessions);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn run_dir_session_splits_from_the_right() {
+        assert_eq!(
+            run_dir_session("RUN-thr-1a2b-0").as_deref(),
+            Some("thr-1a2b")
+        );
+        assert_eq!(
+            run_dir_session("RUN-5e55ca11-0").as_deref(),
+            Some("5e55ca11")
+        );
+        assert_eq!(
+            run_dir_session("RUN-CLI-abcdef12").as_deref(),
+            Some("abcdef12")
+        );
+        assert_eq!(run_dir_session("ARC-5e55ca11-0"), None);
+        assert_eq!(run_dir_session("RUN-PLAN-1-0"), None);
+        assert_eq!(run_dir_session("RUN-5e55ca11-x"), None);
+    }
+
+    #[test]
+    fn prompt_inflight_guard_releases_on_drop_and_disarms() {
+        let runs: Arc<Mutex<HashMap<String, RunInFlight>>> = Arc::new(Mutex::new(HashMap::new()));
+        {
+            let _guard = PromptInflightGuard::new(
+                &runs,
+                "sess-guard",
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .unwrap();
+            assert!(runs.lock().unwrap().contains_key("sess-guard"));
+        }
+        assert!(!runs.lock().unwrap().contains_key("sess-guard"));
+
+        {
+            let mut guard = PromptInflightGuard::new(
+                &runs,
+                "sess-guard-2",
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .unwrap();
+            runs.lock().unwrap().remove("sess-guard-2");
+            guard.disarm();
+        }
+        assert!(!runs.lock().unwrap().contains_key("sess-guard-2"));
+    }
+
+    #[test]
+    fn session_lease_is_exclusive_and_released_on_drop() {
+        let base = test_dir();
+        let first = acquire_session_lease(&base, "sess-lease").unwrap();
+        assert!(acquire_session_lease(&base, "sess-lease").is_err());
+        assert!(leased_sessions(&base).iter().any(|s| s == "sess-lea"));
+        drop(first);
+        assert!(acquire_session_lease(&base, "sess-lease").is_ok());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn sweep_keeps_sessions_leased_by_another_attachment() {
+        let base = test_dir();
+        let a = "aaaaaaaa-1111-2222-3333-444455556666";
+        let mut conversation = StoredConversation::empty(a, None);
+        conversation.messages.push(Message {
+            role: Role::User,
+            content: "leased sibling".to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        });
+        persist_conversation_sidecar(&base, &conversation).unwrap();
+        let _lease = acquire_session_lease(&base, a).unwrap();
+        let report = sweep_session_leftovers_with(
+            &base,
+            Some("bbbbbbbb-1111-2222-3333-444455556666"),
+            &[],
+            true,
+            crate::session::TrustPolicy::Skip,
+        )
+        .await;
+        assert!(!report.swept.iter().any(|s| s == "aaaaaaaa"));
+        assert!(
+            base.join(".gsa")
+                .join("conversations")
+                .join("aaaaaaaa.json")
+                .exists()
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

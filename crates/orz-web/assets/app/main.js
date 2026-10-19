@@ -51,9 +51,128 @@ ui.flash = flash;
 let acpSessionId = null;
 let currentRunId = null;
 let liveMode = true; // workspace://live ＝ 跟随最新 run
+// 318 P1-B3：会话恢复代次。start 时取 token，每次 await 后复核 token/导航
+// 代次/运行态/目标视图；加载期间禁发 prompt、禁切会话、禁回 live。
+let sessionLoadToken = 0;
+let pendingLoadSessionId = null;
+// 318 P1-B1/B3：本地 run 的会话句柄快照。stopRun/Ctrl+Z 只取消「实际承载
+// 本 run」的会话，不用漂移后的 acpSessionId 去取消别人。
+let currentRunSessionId = null;
+// 318 P1-B1：撤回预览/撤回必须作用于同一个显式会话（服务端按 session_id
+// 校验）；绑定/视图变化后旧预览作废，必须重新打开 /rewind。
+let rewindSessionId = null;
+
+const TERMINAL_EVENT_TYPES = new Set([
+  'run_finished',
+  'run_failed',
+  'run_cancelled',
+  'run_invalidated',
+  'run_terminated',
+]);
+const isTerminalEvent = (ev) => TERMINAL_EVENT_TYPES.has(ev?.event_type);
+
+/* 会话 run id 口径（318 P1-B5）：模型 run＝`RUN-<s8>-*`，CLI 侧车 run＝
+ * 精确 `RUN-CLI-<s8>`（无尾分隔符——前缀匹配会误吞近似会话）。只认这两
+ * 种，ARC/RST 维护 journal 永不跟随。 */
+const isSessionRunId = (runId, s8) =>
+  !!runId && (runId.startsWith(`RUN-${s8}-`) || runId === `RUN-CLI-${s8}`);
+
+const escapeRegExp = (s) => String(s ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/* 318 P2（host 侧 2026-10-19 变更）：`session/load` 要求绝对 cwd 且会
+ * canonicalize。boot/cwd 正常是绝对路径；缺省时回退 /api/boot 一次，仍
+ * 不是绝对路径则拒绝恢复（不把相对路径交给 host）。 */
+const isAbsolutePath = (p) => /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(p || '');
+
+async function resolveLoadCwd() {
+  let cwd = state.workspaceCwd;
+  if (!isAbsolutePath(cwd)) {
+    try {
+      const b = await fetchBoot();
+      if (isAbsolutePath(b.cwd)) {
+        cwd = b.cwd;
+        state.workspaceCwd = cwd;
+      }
+    } catch {
+      /* boot 不可达：保持原值，由调用方拒绝。 */
+    }
+  }
+  return cwd;
+}
+
+const viewedConversation8 = () =>
+  state.nav.current.startsWith('conversation://')
+    ? state.nav.current.slice('conversation://'.length)
+    : null;
+const boundSession8 = () => (acpSessionId ? acpSessionId.slice(0, 8) : null);
+
+/* 只读视图门（318 P1-B1）：归档/运行回放/跨会话回看都是只读历史面。
+ * submitPrompt 与 /rewind 共用；拒绝时调用方必须保留草稿。 */
+function viewReadOnlyReason() {
+  if (state.nav.current.startsWith('archive://')) {
+    return '当前是归档浏览（只读）；不能发送或撤回——请点「恢复并继续」或返回实时窗口';
+  }
+  if (state.nav.current.startsWith('run://')) {
+    return '当前是运行历史回放（只读）；不能发送或撤回——请返回实时窗口';
+  }
+  const viewed = viewedConversation8();
+  if (viewed && viewed !== boundSession8()) {
+    return `当前查看会话 ${viewed} 的历史（只读）；请先点工具栏「恢复并继续」显式恢复该会话，或返回实时窗口`;
+  }
+  return null;
+}
+
+function promptGateReason() {
+  if (state.loadingSession) return '会话恢复中——加载完成前不能发送输入';
+  return viewReadOnlyReason();
+}
+
+function rewindGateReason() {
+  if (state.loadingSession) return '会话恢复中——加载完成前不能撤回';
+  const readonly = viewReadOnlyReason();
+  if (readonly) return readonly;
+  if (!acpSessionId) return '当前没有绑定会话；撤回只作用于已恢复的活跃会话';
+  return null;
+}
+
+function setBinding(sessionId, root) {
+  acpSessionId = sessionId;
+  state.sessionId = sessionId;
+  state.boundSession8 = sessionId ? sessionId.slice(0, 8) : null;
+  state.sessionRoot = root || state.workspaceCwd;
+  rewindSessionId = null;
+  vm.syncToolbar();
+}
+
+/* 解绑本地会话（318 P1-B2/P2）。ACP 0.10.4 无 session/close，服务端会话
+ * 对象只能随进程结束；至少清本地绑定并停 tail——下一条 prompt 必须显式
+ * 新建/恢复，不能把已删除/旧会话的 sidecar 再写回。 */
+function detachBinding() {
+  closeTail();
+  currentRunId = null;
+  state.liveRunId = null;
+  acpSessionId = null;
+  state.sessionId = null;
+  state.boundSession8 = null;
+  state.sessionRoot = null;
+  currentRunSessionId = null;
+  pendingLoadSessionId = null;
+  state.loadingSession = false;
+  sessionLoadToken += 1;
+  rewindSessionId = null;
+  state.resumeTarget = null;
+  vm.syncToolbar();
+}
+
+function clearTranscript() {
+  state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
+  state.marker = [];
+  state.turnCounter = 0;
+}
 
 async function ensureSession() {
   if (acpSessionId) return acpSessionId;
+  if (state.loadingSession) throw new Error('会话恢复中——请等待或取消恢复');
   await acp.initialize();
   // cwd 来自 /api/boot（前端无法得知工作区路径；桥 spawn 子进程时已用它）。
   let cwd;
@@ -63,39 +182,99 @@ async function ensureSession() {
     cwd = undefined;
   }
   const result = await acp.sessionNew(cwd);
-  acpSessionId = result.sessionId;
-  state.sessionId = acpSessionId;
+  setBinding(result.sessionId, cwd || state.workspaceCwd);
   // 0bv ②：记录本会话的**归属工作区根**——切换工作区后本会话不迁移
   // （对话只认初始工作区），其尾/回放按该根解析（旧工作区会话＝回看）。
-  state.sessionRoot = cwd || state.workspaceCwd;
-  vm.addSystemMessage(`ACP 会话已创建（${acpSessionId}）`, false);
+  vm.addSystemMessage(`ACP 会话已创建（${result.sessionId}）`, false);
   renderAll();
-  return acpSessionId;
+  return result.sessionId;
 }
 
+async function queueSupplement(text) {
+  try {
+    const sessionId = await ensureSession();
+    if (state.loadingSession || promptGateReason()) {
+      flash('视图或会话已变化，补充未入队');
+      return;
+    }
+    const r = await acp.sessionQueueAppend(sessionId, text);
+    state.supplementQueueDepth = Math.max(state.supplementQueueDepth, r.depth || 0);
+    vm.addSystemMessage(
+      `已排队（第 ${r.depth} 条）——将在可用的下一次模型调用边界投递`,
+      false,
+    );
+    renderAll();
+  } catch (e) {
+    vm.addSystemMessage(`[错误] 补充入队失败：${e.message}`, true);
+    renderAll();
+  }
+}
+
+/* 318 P1-B4：服务端 busy 时状态重同步。客户端可能在刷新后失去本地
+ * prompt 句柄，但 agent 仍在跑——状态栏/停止键必须与真实运行同源。 */
+async function resyncBusyState() {
+  try {
+    await refreshExplorerData();
+  } catch {
+    /* 清单不可达时保留错误回显，不另行造状态。 */
+  }
+  if (state.running) return;
+  const s8 = boundSession8();
+  if (!s8) return;
+  const active = state.runs.some(
+    (r) => isSessionRunId(r.run_id, s8) && r.status === 'running',
+  );
+  if (!active) {
+    vm.addSystemMessage('（服务端报告会话正忙，但清单中未找到运行中的 run；状态保持空闲）', true);
+    renderAll();
+    return;
+  }
+  state.serverBusy = true;
+  currentRunSessionId = acpSessionId;
+  vm.setRunning(true);
+  vm.addSystemMessage('（服务端报告会话正忙：状态已重同步为「运行中」；终态到达后自动复位）', true);
+  renderAll();
+}
+
+
 async function submitPrompt(text, isRetry = false) {
+  const gate = promptGateReason();
+  if (gate) {
+    flash(gate);
+    return;
+  }
   if (state.running) {
     // 0di（2026-10-18，ADR-0010 §14.88）：运行中不拒绝——入会话级补充队列，
     // 可用的下一次模型调用边界投递（不打断当前轮；CC #50246 deferred
     // 语义）。队列跨 run 存活；取消运行不清队。
-    try {
-      const sessionId = await ensureSession();
-      const r = await acp.sessionQueueAppend(sessionId, text);
-      vm.addSystemMessage(
-        `已排队（第 ${r.depth} 条）——将在可用的下一次模型调用边界投递`,
-        false,
-      );
-      renderAll();
-    } catch (e) {
-      vm.addSystemMessage(`[错误] 补充入队失败：${e.message}`, true);
-      renderAll();
-    }
+    await queueSupplement(text);
     return;
   }
+  // 318 P1-B3：await ensureSession 期间导航/绑定可能变化——用代次与视图
+  // 快照复核，防把输入暗送到另一个会话。
+  const epoch = state.navEpoch;
+  const viewAtStart = state.nav.current;
+  let sessionId = null;
   try {
-    const sessionId = await ensureSession();
-    state.running = true;
-    vm.syncToolbar();
+    sessionId = await ensureSession();
+    if (state.loadingSession || state.navEpoch !== epoch || state.nav.current !== viewAtStart) {
+      flash('视图或会话已变化，本次输入未发送');
+      return;
+    }
+    if (state.running) {
+      await queueSupplement(text);
+      return;
+    }
+    // A resumed conversation is first shown as a merged historical replay.
+    // Before its next prompt, move to the live projection so new output cannot
+    // be painted into a stale replay surface.
+    if (!liveMode) {
+      vm.navGo('workspace://live');
+      await returnToLive();
+    }
+    currentRunSessionId = sessionId;
+    vm.setRunning(true);
+    renderStatus();
     renderToolbar();
     liveMode = true;
     // 新 run 目录由 agent 在 prompt 处理开始时创建：运行期每秒刷新一次
@@ -110,21 +289,27 @@ async function submitPrompt(text, isRetry = false) {
       refreshExplorerData().catch(() => {});
     }, 1000);
     const resp = await acp.sessionPrompt(sessionId, text);
-    state.running = false;
-    vm.syncToolbar();
+    if (currentRunSessionId === sessionId) currentRunSessionId = null;
+    if (!state.serverBusy) vm.setRunning(false);
+    renderStatus();
     renderToolbar();
     void resp;
   } catch (e) {
-    state.running = false;
-    vm.syncToolbar();
+    if (sessionId && currentRunSessionId === sessionId) currentRunSessionId = null;
+    if (!state.serverBusy) vm.setRunning(false);
+    const message = e.message || '';
+    // 318 P1-B4：服务端 busy（本客户端无本地句柄）→ 不把状态栏留在空闲。
+    if (/already in flight|run or restore is already in flight/i.test(message)) {
+      await resyncBusyState();
+    }
     // 引导期失败的 run 没有 run_started/终态事件（本次走查实证：信任门
     // fail-closed 只留 run_preflight）——状态栏标签须就地回「空闲」，
     // 不得残留「预检/运行中」。
-    vm.setRunState('空闲', true);
+    vm.setRunState(state.running ? '运行中' : '空闲', true);
     // 信任窗（批七）：桥链为非交互（is_interactive=false），未授信工作区
     // 被 fail-closed 拒绝且没有 TUI 那样的信任窗——在此补上同语义流程：
     // 确认 → 桥授信（POST /api/trust）→ 自动重发一次。
-    if (!isRetry && /workspace not trusted/.test(e.message) && confirm(`工作区尚未被信任（${state.workspaceCwd}）。信任它并重试？`)) {
+    if (!isRetry && /workspace not trusted/.test(message) && confirm(`工作区尚未被信任（${state.workspaceCwd}）。信任它并重试？`)) {
       try {
         const r = await grantTrust();
         flash(r.message || '已信任工作区');
@@ -146,18 +331,25 @@ async function submitPrompt(text, isRetry = false) {
       }
       return submitPrompt(text, true);
     }
-    vm.addSystemMessage(`[错误] ${e.message}`, true);
+    vm.addSystemMessage(`[错误] ${message}`, true);
     renderAll();
   }
 }
 
 function stopRun() {
-  if (!acpSessionId || !state.running) {
+  if (!state.running) {
     // 0dg ②：闲置期按下不再静默——与运行中「已发送取消」同通道反馈。
     flash('当前无运行中');
     return;
   }
-  acp.sessionCancel(acpSessionId);
+  // 318 P1-B3：只取消承载本 run 的会话快照——acpSessionId 可能已被（或
+  // 未来再被）其它动作改写，绝不能拿漂移后的绑定去取消别人。
+  const target = currentRunSessionId || acpSessionId;
+  if (!target) {
+    flash('本 run 的会话绑定已丢失，无法发送取消');
+    return;
+  }
+  acp.sessionCancel(target);
   flash('已发送取消');
 }
 
@@ -184,6 +376,21 @@ async function refreshExplorerData() {
   state.runs = runs;
   state.conversations = conversations;
   state.archives = archives;
+  // 318 P1-B4：外部 busy 重同步后，用清单终态复位状态（journal 尾也会在
+  // 终态事件到达时复位；两条路径都以真实运行事实为准）。
+  if (state.serverBusy && acpSessionId) {
+    const s8 = boundSession8();
+    const stillRunning = runs.some(
+      (r) => isSessionRunId(r.run_id, s8) && r.status === 'running',
+    );
+    if (!stillRunning) {
+      state.serverBusy = false;
+      currentRunSessionId = null;
+      vm.setRunning(false);
+      renderStatus();
+      renderToolbar();
+    }
+  }
   renderExplorer();
   await syncLiveTail();
   return runs;
@@ -215,10 +422,10 @@ async function syncLiveTail() {
         tailRoot = undefined;
       }
     }
-    const mine = runs.find((r) => {
-      const m = /^(?:RUN-CLI-|ARC-|RUN-)([0-9a-f]{8})/.exec(r.run_id);
-      return m?.[1] === s8;
-    });
+    // ARC/RST journals are maintenance facts, never the active model turn.
+    // 318 P1-B5：CLI 侧车 run 是精确 `RUN-CLI-<s8>`（无尾分隔符），模型 run
+    // 是 `RUN-<s8>-*`；只认这两种，ARC/RST 永不跟随。
+    const mine = runs.find((r) => isSessionRunId(r.run_id, s8));
     if (!mine) return; // 新会话首 prompt 前：空实时窗等待
     wanted = mine.run_id;
   } else {
@@ -230,13 +437,24 @@ async function syncLiveTail() {
   tailRun(
     wanted,
     0,
-    (ev) => {
-      applyJournalEvent(ev);
-      scheduleRender();
-    },
+    onLiveJournalEvent,
     undefined,
     tailRoot,
   );
+}
+
+function onLiveJournalEvent(ev) {
+  applyJournalEvent(ev);
+  // 318 P1-B4：外部 busy 运行的终态事实到达 → 状态栏/停止键复位。
+  if (state.serverBusy && isTerminalEvent(ev)) {
+    state.serverBusy = false;
+    currentRunSessionId = null;
+    vm.setRunning(false);
+    vm.addSystemMessage('（服务端运行已到达终态：状态复位为空闲）', false);
+    renderAll();
+    return;
+  }
+  scheduleRender();
 }
 
 async function startTail() {
@@ -256,6 +474,7 @@ async function openRunReplay(runId) {
   closeTail();
   currentRunId = null;
   state.liveRunId = null;
+  state.resumeTarget = null;
   liveMode = false;
   state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
   state.marker = [];
@@ -271,10 +490,18 @@ async function openRunReplay(runId) {
     pathNorm(state.sessionRoot) !== pathNorm(state.workspaceCwd)
       ? state.sessionRoot
       : undefined;
+  let sawTerminal = false;
   try {
-    await replayRun(runId, (ev) => applyJournalEvent(ev), undefined, replayRoot);
+    await replayRun(runId, (ev) => {
+      if (isTerminalEvent(ev)) sawTerminal = true;
+      applyJournalEvent(ev);
+    }, undefined, replayRoot);
   } catch (e) {
     vm.addSystemMessage(`（运行 ${runId} 读取失败：${e.message}）`, true);
+  }
+  // 318 P1-B4：无终态的旧 run 是历史未完成，绝不冒充「运行中」。
+  if (!sawTerminal) {
+    vm.addSystemMessage(`（运行 ${runId} 无终态事件——历史未完成；不代表当前运行中）`, true);
   }
   vm.addSystemMessage(`（历史回放 ${runId} —— 只读；点「后退」返回实时）`, false);
   renderAll();
@@ -285,17 +512,28 @@ async function returnToLive() {
   closeTail();
   currentRunId = null;
   liveMode = true;
+  state.resumeTarget = null;
+  rewindSessionId = null;
   state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
   state.marker = [];
   state.turnCounter = 0;
+  vm.syncToolbar();
   renderAll();
   await startTail();
 }
 
 /* 会话合并视图（走查反馈六 2026-09-25）：同一会话的全部运行按时间序
- * 连续重放进同一内容区——一整个长窗口，不逐运行割裂。 */
+ * 连续重放进同一内容区——一整个长窗口，不逐运行割裂。
+ * 318 P1-B2（2026-10-19）：打开旧会话＝**只读回看**，绝不自动
+ * session/load 改变活跃绑定；只有工具栏「恢复并继续」才显式恢复。 */
 async function openConversation(s8) {
-  const re = new RegExp(`^(?:RUN-CLI-|ARC-|RUN-)${s8}`);
+  if (state.loadingSession) {
+    flash('会话恢复中——加载完成前不能切换视图');
+    return;
+  }
+  // 318 P1-B1/P2：s8 来自 URI，进 RegExp 前必须转义（`.`/`(` 等元字符
+  // 会让构造抛错或跨会话误配；会话 id 只应是 8 hex，防御仍须在）。
+  const re = new RegExp(`^(?:RUN-CLI-|ARC-|RUN-)${escapeRegExp(s8)}`);
   const ordered = state.runs.filter((r) => re.test(r.run_id)).slice().reverse(); // 旧→新
   closeTail();
   currentRunId = null;
@@ -304,20 +542,147 @@ async function openConversation(s8) {
   state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
   state.marker = [];
   state.turnCounter = 0;
+  state.resumeTarget = null;
+  const bound = boundSession8();
+  const summary = state.conversations.find((c) => c.session8 === s8);
+  if (s8 === bound) {
+    // 当前绑定会话的历史面：不是只读回看；继续输入会先回实时再续接。
+    vm.addSystemMessage(`（会话 ${s8} 历史回放——当前活跃会话；继续输入将回到实时并续接）`, false);
+  } else if (summary?.session_id) {
+    state.resumeTarget = { s8, sessionId: summary.session_id };
+    vm.addSystemMessage(
+      `（会话 ${s8} —— 只读回看；点工具栏「恢复并继续」显式恢复后才可续接）`,
+      false,
+    );
+    if (state.running) {
+      vm.addSystemMessage('（当前有运行在进行；结束后才能恢复其他会话）', false);
+    }
+  } else {
+    vm.addSystemMessage(`（会话 ${s8} 缺少完整 ACP 标识，只读打开，不能续接）`, true);
+  }
+  vm.syncToolbar();
+  let unfinished = 0;
   try {
     for (const run of ordered) {
-      await replayRun(run.run_id, (ev) => applyJournalEvent(ev));
+      let sawTerminal = false;
+      await replayRun(run.run_id, (ev) => {
+        if (isTerminalEvent(ev)) sawTerminal = true;
+        applyJournalEvent(ev);
+      });
+      if (!sawTerminal) unfinished++;
     }
   } catch (e) {
     // 中途失败也要给出可见答复，不能留空白（错误路径修复 2026-09-25）。
     vm.addSystemMessage(`（会话 ${s8} 打开失败：${e.message}）`, true);
   }
+  const unfinishedNote = unfinished
+    ? `；其中 ${unfinished} 次运行无终态（历史未完成，不代表当前运行中）`
+    : '';
   vm.addSystemMessage(
     ordered.length
-      ? `（会话回放 ${s8} —— ${ordered.length} 次运行合并；只读；点「后退」返回实时）`
+      ? `（会话回放 ${s8} —— ${ordered.length} 次运行合并；只读；点「后退」返回实时${unfinishedNote}）`
       : `（${s8} 暂无运行记录；侧车只读）`,
-    false,
+    !!unfinished,
   );
+  renderAll();
+}
+
+/* 318 P1-B2/P1-B3：显式「恢复并继续」。唯一会执行 session/load 并切换
+ * acpSessionId/sessionId/sessionRoot 的入口；await 前后复核 load token、
+ * navEpoch、运行态与目标视图，加载期间再次点击＝取消本次恢复。 */
+async function resumeViewedConversation() {
+  if (state.loadingSession) {
+    cancelSessionLoad();
+    return;
+  }
+  const s8 = viewedConversation8();
+  if (!s8) {
+    flash('当前视图不是会话回看；请先打开一个活跃会话');
+    return;
+  }
+  if (state.running) {
+    flash('当前有运行在进行，结束或取消后才能恢复其他会话');
+    return;
+  }
+  const target = state.resumeTarget;
+  if (!target || target.s8 !== s8 || !target.sessionId) {
+    if (s8 === boundSession8()) {
+      vm.navGo('workspace://live');
+      await returnToLive();
+      flash('已回到实时会话');
+      return;
+    }
+    flash('该会话缺少完整 ACP 标识（或不是可恢复的会话回看），不能续接');
+    return;
+  }
+  const token = ++sessionLoadToken;
+  const epoch = state.navEpoch;
+  state.loadingSession = true;
+  pendingLoadSessionId = target.sessionId;
+  vm.syncToolbar();
+  renderAll();
+  vm.addSystemMessage(`（正在恢复 ACP 会话 ${s8}……）`, false);
+  renderAll();
+  const stillCurrent = () =>
+    token === sessionLoadToken &&
+    epoch === state.navEpoch &&
+    !state.running &&
+    viewedConversation8() === s8;
+  try {
+    await acp.initialize();
+    if (!stillCurrent()) {
+      vm.addSystemMessage(`（会话 ${s8} 恢复已取消：绑定未切换）`, true);
+      return;
+    }
+    const cwd = await resolveLoadCwd();
+    if (!stillCurrent()) {
+      vm.addSystemMessage(`（会话 ${s8} 恢复已取消：绑定未切换）`, true);
+      return;
+    }
+    if (!isAbsolutePath(cwd)) {
+      vm.addSystemMessage(
+        `（会话 ${s8} 恢复失败：工作区路径不是绝对路径（${cwd || '空'}），session/load 拒绝执行）`,
+        true,
+      );
+      return;
+    }
+    await acp.sessionLoad(target.sessionId, cwd);
+    if (!stillCurrent()) {
+      vm.addSystemMessage(`（会话 ${s8} 恢复结果已过期：绑定未切换）`, true);
+      return;
+    }
+    // Host（2026-10-19）在 load 返回前经 session/update 回放整段历史。
+    // 恢复成功后立即切回实时投影：先清掉 load 回放，否则随后 journal 回放
+    // 会把同一段历史渲染第二遍（B2/B3 重复渲染回归）。
+    clearTranscript();
+    setBinding(target.sessionId, cwd);
+    state.loadingSession = false;
+    pendingLoadSessionId = null;
+    state.resumeTarget = null;
+    vm.navGo('workspace://live');
+    await returnToLive();
+    vm.addSystemMessage(`（已恢复 ACP 会话 ${s8}；下一条输入将续接此会话）`, false);
+    flash(`已恢复会话 ${s8}`);
+  } catch (e) {
+    vm.addSystemMessage(`（会话 ${s8} 恢复失败，仍为只读回看：${e.message}）`, true);
+  } finally {
+    if (token === sessionLoadToken) {
+      state.loadingSession = false;
+      pendingLoadSessionId = null;
+    }
+    vm.syncToolbar();
+    renderAll();
+  }
+}
+
+function cancelSessionLoad() {
+  if (!state.loadingSession) return;
+  // 代次自增＝作废在途 load；返回时不写绑定。
+  sessionLoadToken += 1;
+  state.loadingSession = false;
+  pendingLoadSessionId = null;
+  vm.syncToolbar();
+  vm.addSystemMessage('（已取消会话恢复；绑定未切换，仍为只读回看）', false);
   renderAll();
 }
 
@@ -372,10 +737,12 @@ async function openArchive(s8) {
   closeTail();
   currentRunId = null;
   state.liveRunId = null;
+  state.resumeTarget = null;
   liveMode = false;
   state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
   state.marker = [];
   state.turnCounter = 0;
+  vm.syncToolbar();
   let d;
   try {
     d = await fetchArchive(s8);
@@ -423,31 +790,59 @@ ui.refresh = async () => {
 };
 ui.flashStatus = () => flash(`当前模型: ${state.modelLabel}`);
 
-/* 0di：撤回面动作（dialogs.openRewind 经 actions 调用；会话 id 就绪惰性
- * 保证——预览/撤回都可能发生在首次 prompt 之前）。 */
+/* 0di：撤回面动作（dialogs.openRewind 经 actions 调用）。
+ * 318 P1-B1：不再用 ensureSession() 静默绑定另一个会话——只对当前绑定
+ * 会话显式传 session_id（服务端按 id 校验）；只读/跨会话视图直接拒绝。
+ * 预览与撤回还必须命中同一个显式目标，绑定/视图变化后旧预览作废。 */
 ui.rewindPreview = async () => {
-  const sessionId = await ensureSession();
-  return acp.sessionRecallPreview(sessionId);
+  const reason = rewindGateReason();
+  if (reason) throw new Error(reason);
+  const target = acpSessionId;
+  const preview = await acp.sessionRecallPreview(target);
+  if (acpSessionId !== target || rewindGateReason()) {
+    throw new Error('撤回目标已变化（会话绑定或视图已切换），请重新打开 /rewind');
+  }
+  rewindSessionId = target;
+  return preview;
 };
 ui.rewindRecall = async (ordinal) => {
-  const sessionId = await ensureSession();
-  return acp.sessionRecall(sessionId, ordinal);
+  const reason = rewindGateReason();
+  if (reason) throw new Error(reason);
+  const target = acpSessionId;
+  if (!target || rewindSessionId !== target) {
+    throw new Error('撤回目标已变化；请重新打开 /rewind 再确认');
+  }
+  try {
+    const r = await acp.sessionRecall(target, ordinal);
+    // P2（318）：撤回不能只有 4 秒 flash——留一条持久系统行作为可回查的事实。
+    const dropped = r.dropped_supplements > 0 ? `；${r.dropped_supplements} 条未投递补充一并丢弃` : '';
+    vm.addSystemMessage(`（已撤回 ${r.removed_messages ?? '?'} 条消息${dropped}；原文已回输入框）`, false);
+    renderAll();
+    return r;
+  } finally {
+    rewindSessionId = null;
+  }
 };
 ui.fillInput = (text) => {
   chatInput.value = text;
   chatInput.focus();
 };
+// 318 P1-B2/B3：唯一显式恢复入口（工具栏按钮）。加载中再次调用＝取消。
+ui.resumeConversation = resumeViewedConversation;
 
 /* 会话维护三动作（执行都在桥 spawn 的 agent 子命令，前端零执行事实）。
  * 批六（2026-09-25 第七用户令）：归档/回档/删除改为组级功能键——先在
  * 组内选中会话再点功能键，动作完成后清除选中并刷新探索器。 */
 const isLiveSession = (s8) => {
-  const lm = /^(?:RUN-CLI-|ARC-|RUN-)([0-9a-f]{8})/.exec(state.liveRunId || '');
-  return !!(state.running && lm && lm[1] === s8);
+  return !!(state.running && state.sessionId?.slice(0, 8) === s8);
 };
 
 ui.archiveSession = async (s8) => {
   if (!s8) return;
+  if (state.loadingSession) {
+    flash('会话恢复中——加载完成前不能归档');
+    return;
+  }
   if (isLiveSession(s8)) {
     flash('该会话正在运行，暂不能归档');
     return;
@@ -465,6 +860,10 @@ ui.archiveSession = async (s8) => {
 
 ui.unarchiveSession = async (s8) => {
   if (!s8) return;
+  if (state.loadingSession) {
+    flash('会话恢复中——加载完成前不能回档');
+    return;
+  }
   if (!confirm(`回档会话 ${s8}？（移除归档包，会话回到「活跃会话」组；运行与侧车数据全部保留）`)) return;
   try {
     const r = await unarchiveSession(s8);
@@ -478,41 +877,69 @@ ui.unarchiveSession = async (s8) => {
 
 ui.deleteSession = async (s8) => {
   if (!s8) return;
+  if (state.loadingSession) {
+    flash('会话恢复中——加载完成前不能删除');
+    return;
+  }
+  if (isLiveSession(s8)) {
+    flash('该会话正在运行，暂不能删除');
+    return;
+  }
   if (!confirm(`彻底删除会话 ${s8}？（移除归档包＋对话侧车＋全部运行 journal——不可恢复！）`)) return;
+  let confirmed = false;
   try {
     const r = await deleteSession(s8);
+    confirmed = true;
     flash(r.message || `已删除 ${s8}`);
   } catch (e) {
     flash(`删除失败：${e.message}`);
   }
+  // 318 P2：已加载（绑定）会话被删除后必须解绑并停 tail——否则下一条
+  // prompt 会用旧 agent 会话把 sidecar 写回，「彻底删除」失效。
+  // 仅删除当前正在只读浏览的会话时，只退回实时，不动仍在用的绑定。
+  const wasBound = confirmed && state.boundSession8 === s8;
+  const wasViewed = viewedConversation8() === s8;
+  if (wasBound) {
+    detachBinding();
+    vm.addSystemMessage(`（会话 ${s8} 已删除：本地绑定已解绑；后续输入将创建/恢复新会话）`, false);
+  }
+  if (wasViewed) {
+    liveMode = true;
+    state.nav = { current: 'workspace://live', back: [], forward: [] };
+    state.navEpoch++;
+    state.resumeTarget = null;
+    clearTranscript();
+    vm.syncToolbar();
+  }
   state.selected = null;
   await refreshExplorerData();
+  renderAll();
 };
 
 /* 新建会话（用户令 2026-09-25「需要一个明确的新建会话按键」，工具栏
  * 居「后退」之前）：归档当前会话后由此开启下一段对话。桥为单 ACP 会话
  * 绑定，此前没有任何换会话入口——旧会话一经绑定终身跟随，归档流程无法
- * 收尾。旧 ACP 会话对象就地闲置（ACP 无 session/close，数据已留在
- * .gsa），探索器可随时回看；运行中拒绝换会话。 */
+ * 收尾。ACP 0.10.4 无 session/close（服务端会话对象随进程结束），因此
+ * 至少清本地绑定并停 tail（318 P2）；数据已留在 .gsa，探索器可随时回看；
+ * 运行中拒绝换会话。 */
 ui.newSession = async () => {
+  if (state.loadingSession) {
+    flash('会话恢复中——请等待完成或点「取消恢复」');
+    return;
+  }
   if (state.running) {
     flash('当前有运行在进行（Ctrl+Z 可取消）');
     return;
   }
-  closeTail();
-  currentRunId = null;
-  state.liveRunId = null;
+  detachBinding();
   liveMode = true;
-  acpSessionId = null;
-  state.sessionId = null;
   // 导航历史属于旧会话的浏览足迹，一并归零——「后退」不得回到旧会话回放。
   state.nav = { current: 'workspace://live', back: [], forward: [] };
+  state.navEpoch++;
   vm.syncToolbar();
-  state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
-  state.marker = [];
-  state.turnCounter = 0;
+  clearTranscript();
   // 运行态与状态栏一并复位——上一会话回放残留的「完成」不得带进新会话。
-  vm.setRunState('空闲', true);
+  vm.setRunning(false);
   renderAll();
   try {
     await ensureSession();
@@ -523,6 +950,10 @@ ui.newSession = async () => {
 };
 
 ui.navAction = async (dir) => {
+  if (state.loadingSession) {
+    flash('会话恢复中——加载完成前不能切换视图');
+    return;
+  }
   if (dir === 'back') {
     const prev = state.nav.back[state.nav.back.length - 1];
     vm.navBack();
@@ -542,6 +973,10 @@ ui.navAction = async (dir) => {
  * 工作区会话（回看）」）；探索器清单随新 cwd 即时重解析。 */
 async function switchWorkspaceTo(path) {
   if (pathNorm(path) === pathNorm(state.workspaceCwd)) return; // 已在该工作区
+  if (state.loadingSession) {
+    flash('会话恢复中——加载完成前不能切换工作区');
+    return;
+  }
   if (state.running) {
     flash('运行中禁切：等本轮结束（或 Ctrl+Z 取消）后再切换工作区');
     return;
@@ -573,6 +1008,12 @@ async function switchWorkspaceTo(path) {
 // 0br S3 新增面）、workspace://live；其余 scheme 显式给出「无投影」答复，
 // 不静默。
 ui.openUri = async (uri) => {
+  // 318 P1-B3：session/load 等待期间禁切会话/回 live（也禁开其它回放）——
+  // 否则 await 返回时绑定可能已漂移，load 结果会覆盖用户的新视图。
+  if (state.loadingSession) {
+    flash('会话恢复中——加载完成前不能切换视图（可点「取消恢复」）');
+    return;
+  }
   if (uri.startsWith('run://')) {
     vm.navGo(uri);
     await openRunReplay(uri.slice('run://'.length));
@@ -711,15 +1152,23 @@ function runSlash(cmd) {
     case '/stop':
       stopRun();
       break;
-    case '/rewind':
+    case '/rewind': {
       // 0di：撤回（编辑式重发）——对话框列会话用户消息，选择后截断并把
       // 原文回输入框。
+      // 318 P1-B1：/rewind 与 submitPrompt 共用只读/跨会话门；拒绝时返回
+      // false 让调用方保留草稿（清空必须发生在此门之后）。
       if (state.running) {
         flash('当前有运行在进行，结束或取消后才能撤回');
-      } else {
-        dialogs.openRewind();
+        return false;
       }
+      const reason = rewindGateReason();
+      if (reason) {
+        flash(reason);
+        return false;
+      }
+      dialogs.openRewind();
       break;
+    }
     case '/open':
       dialogs.openCommand('command://');
       break;
@@ -745,6 +1194,7 @@ function runSlash(cmd) {
     default:
       flash(`未知命令 ${name}（见 /help）`);
   }
+  return true;
 }
 
 dialogs.bindDialogActions({ ...actions, findInConversation: ui.findInConversation, flash });
@@ -760,8 +1210,13 @@ function submitFromInput() {
   const text = chatInput.value.trim();
   if (!text) return;
   if (text.startsWith('/')) {
-    runSlash(text);
-    chatInput.value = '';
+    if (runSlash(text)) chatInput.value = '';
+    return;
+  }
+  // 318 P1-B1：只读门在清空输入之前——拒绝时草稿原样保留。
+  const reason = promptGateReason();
+  if (reason) {
+    flash(reason);
     return;
   }
   inputHistory.push(text);
@@ -795,25 +1250,54 @@ document.getElementById('btnQuit').addEventListener('click', () => {
   }
 });
 
-// 刷新/关闭守卫（审查处理批 B2 登记）：v1 无断线重连——桥为单会话且
-// 连接关闭即结束 `orz --stdio` 子进程。有活动连接时先经浏览器确认。
+// 刷新/关闭守卫（审查处理批 B2 登记；318 P1-B7 强化）：v1 无断线重连——
+// 桥为单会话且连接关闭即结束 `orz --stdio` 子进程；排队补充与后台任务
+// 在内核态，session/load 只恢复文本/黑板/LIF，不会恢复它们。存在运行/
+// 队列/后台任务时必须提示；文案明确恢复边界。
+const UNLOAD_WARNING =
+  '刷新/关闭会结束桥接会话：仅文本上下文可经会话恢复，排队补充与后台任务不会恢复。';
+
+function unloadRiskReasons() {
+  const reasons = [];
+  if (state.running) reasons.push('运行进行中');
+  if (state.supplementQueueDepth > 0) reasons.push(`已排队 ${state.supplementQueueDepth} 条补充`);
+  if (state.backgroundTasks > 0) reasons.push(`${state.backgroundTasks} 个后台任务`);
+  return reasons;
+}
+
 window.addEventListener('beforeunload', (e) => {
-  if (acp.isConnected()) {
-    e.preventDefault();
-    e.returnValue = '';
-  }
+  if (!acp.isConnected() && unloadRiskReasons().length === 0) return;
+  e.preventDefault();
+  e.returnValue = UNLOAD_WARNING;
 });
 
 /* ── ACP 事件接线 ── */
 
 acp.on('update', (sessionId, update) => {
+  // 318 P1-B3：session/load 等待期间，目标会话的 update 不能因绑定尚未
+  // 切换而被过滤器丢弃（恢复回放/首段输出会丢字）。只接受「当前绑定」或
+  // 「本次显式恢复目标」；加载取消/过期后 pendingLoadSessionId 清空即恢复
+  // 原来的严格跨会话隔离。
+  const accepted =
+    sessionId === acpSessionId ||
+    (state.loadingSession && sessionId === pendingLoadSessionId);
+  if (!accepted) return;
+  const viewed = viewedConversation8();
+  if (!liveMode && viewed !== sessionId.slice(0, 8)) return;
   applyAcpUpdate(sessionId, update);
   scheduleRender();
 });
 acp.on('permission', (request) => dialogs.showPermission(request));
 acp.on('closed', () => {
   flash('桥接已关闭（服务退出或会话结束）');
-  state.running = false;
+  if (state.loadingSession) {
+    sessionLoadToken += 1;
+    state.loadingSession = false;
+    pendingLoadSessionId = null;
+  }
+  state.serverBusy = false;
+  currentRunSessionId = null;
+  vm.setRunning(false);
   renderStatus();
   renderToolbar();
 });
@@ -850,6 +1334,13 @@ async function boot() {
   }
   renderAll();
   await startTail();
+  // 318 P1-B7：刷新/断线恢复边界必须在 UI 里有字——不是只在 beforeunload
+  // 的浏览器原生提示里（原生文案现代浏览器不可定制，且未必显示）。
+  vm.addSystemMessage(
+    '（提示：刷新/关闭页面会结束桥接会话；仅文本上下文可经会话恢复——排队补充与后台任务不会恢复）',
+    false,
+  );
+  renderAll();
   // 每 5 秒刷新探索器数据（journal 尾为实时事实通道）。
   setInterval(async () => {
     try {

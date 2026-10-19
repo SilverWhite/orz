@@ -2306,6 +2306,15 @@ pub(crate) async fn run_agent_loop(
     // 0di（2026-10-18，ADR-0010 §14.88）：中途补充投递序数——run 内从 1 严格
     // 递增（supplement_delivered payload 契约；跨 run 不延续，随 run 复位）。
     let mut supplement_seq: u32 = 0;
+    // 318 审查 P1-C3（2026-10-19）：预算拒收/部分投递的补充**run 级延迟队列**
+    // ——drain 已把文本从宿主队列取走（LoopHost 无 requeue 面），本队列在
+    // 每个 loop-top 重新尝试投递；run 尾仍投不出去时落 `GateDecision` 事件＋
+    // tracing 警告（绝不静默蒸发）。不越硬上限（模型面 guard 线）是硬约束。
+    let mut deferred_supplements: std::collections::VecDeque<String> =
+        std::collections::VecDeque::new();
+    // 已落过 defer 事件的延迟深度（只在深度变化时落事件，防长 run 每 loop-top
+    // 重复刷同一条 GateDecision）。
+    let mut deferred_supplements_reported: usize = 0;
     // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 首轮计划轮硬门 —
     // 主车道且黑板尚无已批准计划（新会话/新 plan epoch）时触发；已有计划
     // （恢复会话或本会话后续 run）不重复触发；检索车道不触发。计划轮计入
@@ -3220,9 +3229,78 @@ pub(crate) async fn run_agent_loop(
         // 不 drain。队列跨 run 存活：空闲期排队的补充落在下一 run 首 loop-top；
         // cancel 不清队（失败/取消 run 的已投递补充随 SUCCESS-ONLY 写回语义
         // 丢弃，事件留证于该 run journal）。
+        // 318 审查 P1-C3（2026-10-19）：drain 之后的预算闸门。原实现把
+        // 队列文本直接追加进 messages（每条 ≤256KiB、深度 ≤16），而水位/
+        // 硬截断/守卫在 drain **之前**已判定——满队补充可把模型面推过
+        // 500K/700K 估算线，提供方 400 后整轮补充蒸发。现改为：
+        // ① 先按**当前真实模型面估算**判定是否还有硬上限（guard 线）余量；
+        //    无余量 ⇒ 本轮不 drain（文本留在宿主队列＝“拒绝投递并留队”）。
+        // ② 有余量 ⇒ drain，按 FIFO **只投不越线的前缀**；越线起的补充进入
+        //    run 级延迟队列，下一 loop-top（可能已因 T1/守卫截断腾出空间）
+        //    重试。`LoopHost` 无 requeue 面，故延迟队列只能 run 内携带；
+        //    run 尾仍未投出的，落 GateDecision 事件＋tracing 警告（不静默）。
+        // ③ 逐条投影用 `estimate_message_tokens`（与模型面同尺的快照估算），
+        //    全部接纳后再用 `estimate_model_face_tokens` 复验一次（分块/
+        //    状态行开销可能偏离逐条和），超线则从尾部回退。
         if profile.drain_user_supplements {
-            for text in host.drain_user_supplements() {
+            let budget = svc.context_compact.model_face_guard_tokens;
+            let mut face_tokens =
+                crate::model_face::estimate_model_face_tokens(messages, &face_params);
+            let mut candidates: std::collections::VecDeque<String> =
+                std::mem::take(&mut deferred_supplements);
+            if face_tokens < budget {
+                candidates.extend(host.drain_user_supplements());
+            }
+            let mut accepted: Vec<String> = Vec::new();
+            while let Some(text) = candidates.pop_front() {
+                let projected = face_tokens.saturating_add(estimate_message_tokens(&Message {
+                    role: Role::User,
+                    content: text.clone(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                }));
+                if projected >= budget {
+                    // 越线：本条及其后全部留在延迟队列（FIFO 保序）。
+                    candidates.push_front(text);
+                    break;
+                }
+                face_tokens = projected;
+                messages.push(Message {
+                    role: Role::User,
+                    content: text.clone(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                accepted.push(text);
+            }
+            controller.sync_status_line_message(messages);
+            // 复验：真实模型面可能因尾部/分块/状态行开销高于逐条和。
+            // 回退按**内容定位**删除刚接纳的补充消息（状态行可能已追加在
+            // 其后，不能用 `messages.pop()` 盲弹）。
+            while !accepted.is_empty()
+                && crate::model_face::estimate_model_face_tokens(messages, &face_params) >= budget
+            {
+                let Some(text) = accepted.pop() else {
+                    break;
+                };
+                if let Some(position) = messages
+                    .iter()
+                    .rposition(|m| m.role == Role::User && m.content == text)
+                {
+                    messages.remove(position);
+                }
+                candidates.push_front(text);
+            }
+            deferred_supplements = candidates;
+            for text in accepted {
                 supplement_seq = supplement_seq.saturating_add(1);
+                // 318 P1-C5：补充是真实用户输入——登记来源，写回过滤不因
+                // 其文本恰好以框架前缀开头而丢弃。
+                controller.note_user_authored_input(&text);
                 writer
                     .record(
                         EventType::SupplementDelivered,
@@ -3233,17 +3311,34 @@ pub(crate) async fn run_agent_loop(
                         }),
                     )
                     .await?;
-                messages.push(Message {
-                    role: Role::User,
-                    content: text,
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                    round: None,
-                });
             }
+            if deferred_supplements.is_empty() {
+                deferred_supplements_reported = 0;
+            } else if deferred_supplements.len() != deferred_supplements_reported {
+                deferred_supplements_reported = deferred_supplements.len();
+                let estimated_face_tokens =
+                    crate::model_face::estimate_model_face_tokens(messages, &face_params);
+                tracing::warn!(
+                    deferred = deferred_supplements.len(),
+                    budget_tokens = budget,
+                    "supplement delivery deferred: model-face hard guard would be exceeded"
+                );
+                writer
+                    .record(
+                        EventType::GateDecision,
+                        serde_json::json!({
+                            "gate": "supplement_delivery_budget",
+                            "decision": "defer",
+                            "deferred": deferred_supplements.len(),
+                            "budget_tokens": budget,
+                            "estimated_face_tokens": estimated_face_tokens,
+                        }),
+                    )
+                    .await?;
+            }
+        } else {
+            controller.sync_status_line_message(messages);
         }
-        controller.sync_status_line_message(messages);
         // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26) × 动态上下文
         // 滑块 S1（2026-09-15，设计 §3.1）：the request view comes from the
         // stateful fold point — `messages` verbatim until the first
@@ -5502,9 +5597,15 @@ pub(crate) async fn run_agent_loop(
                 order_ids,
             });
             // 询问轮为无工具轮——注入模板块（模型只回答 decision/reason）。
+            // 318 P1-C2：模板本体由 `console_mode` 单一源生成；此处加登记
+            // 前缀，使询问块可被结构化注入判据稳定识别（不写回侧车）。
             messages.push(Message {
                 role: Role::User,
-                content: crate::console_mode::inquiry_template_block(),
+                content: format!(
+                    "{} {}",
+                    crate::prompt::CONSOLE_INQUIRY_PREFIX,
+                    crate::console_mode::inquiry_template_block()
+                ),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
                 reasoning_content: None,
@@ -5626,6 +5727,32 @@ pub(crate) async fn run_agent_loop(
             });
             budget_exhausted = true;
         }
+    }
+
+    // 318 审查 P1-C3/C5（2026-10-19）：run 尾仍留在延迟队列的补充——宿主队列
+    // 已在 drain 时取走且 `LoopHost` 无 requeue 面，不能在 run 结束后继续
+    // 留存；如实落 `GateDecision` 事件＋tracing 警告，绝不静默蒸发。
+    if !deferred_supplements.is_empty() {
+        let deferred_chars: usize = deferred_supplements
+            .iter()
+            .map(|text| text.chars().count())
+            .sum();
+        tracing::warn!(
+            deferred = deferred_supplements.len(),
+            deferred_chars,
+            "supplement delivery deferred at run end: not delivered (run-scoped carry queue)"
+        );
+        writer
+            .record(
+                EventType::GateDecision,
+                serde_json::json!({
+                    "gate": "supplement_delivery_budget",
+                    "decision": "defer_run_end",
+                    "deferred": deferred_supplements.len(),
+                    "deferred_chars": deferred_chars,
+                }),
+            )
+            .await?;
     }
 
     // 0ae D3 窄边沿修复（2026-09-15）：run 尾安全网——前两条 break 路径

@@ -21,6 +21,9 @@ export const state = {
     { id: 'new', label: '新建会话', enabled: true },
     { id: 'back', label: '后退', enabled: false },
     { id: 'forward', label: '前进', enabled: false },
+    // 318 P1-B2（2026-10-19）：打开旧会话默认只读回看，不再自动 load。
+    // 只有点这个显式动作才恢复 ACP 会话并切换绑定（加载中变为「取消恢复」）。
+    { id: 'resume', label: '恢复并继续', enabled: false },
     { id: 'refresh', label: '刷新', enabled: true },
     { id: 'stop', label: '停止', enabled: false },
     { id: 'open', label: '打开', enabled: true },
@@ -44,10 +47,29 @@ export const state = {
   markerVisible: true,
 
   // ── 会话/运行 ──
+  // 运行态单一 owner（318 P1-B4）：只有 main.js 的 prompt 生命周期与
+  // 服务端 busy 重同步写 `running`；journal/projection 只产历史事实，绝不
+  // 写状态栏的「运行中/空闲」。状态栏标签由 vm.setRunning() 同源派生。
   running: false,
+  // 服务端报告「已有运行在途」但本客户端没有本地 prompt 句柄时的重同步标记
+  // （318 P1-B4：status 不得与真实 busy 分叉）。
+  serverBusy: false,
+  // 会话恢复（session/load）加载门（318 P1-B3）：加载期间禁发 prompt、
+  // 禁切会话/回 live；`navEpoch` 是导航/绑定代次，await 后必须复核。
+  loadingSession: false,
+  navEpoch: 0,
+  // 显式「恢复并继续」目标（318 P1-B2）：{ s8, sessionId }；只在只读
+  // conversation 视图且侧车带完整 ACP id 时非空。工具栏动作据此启停。
+  resumeTarget: null,
+  // 当前绑定会话 s8（main.js 维护；只读门与工具栏用；不代表可静默续接）。
+  boundSession8: null,
   turnCounter: 0,
   // 已进入当前 run 模型面的补充数；失败/取消时提示 SUCCESS-ONLY 回滚。
   deliveredSupplements: 0,
+  // 刷新/关闭风险面（318 P1-B7）：队列深度与后台任务事实。beforeunload
+  // 与启动提示据此说明「仅文本上下文恢复，后台任务/队列不恢复」。
+  supplementQueueDepth: 0,
+  backgroundTasks: 0,
   sessionId: null,
   gateBlock: null,
   pendingPermission: null, // {request, respond} 由 acp.js 注入
@@ -268,6 +290,13 @@ export const vm = {
     if (!RUN_STATES.includes(label)) return;
     for (const it of state.status) if (RUN_STATES.includes(it.label)) { it.label = label; it.ok = ok; }
   },
+  // 运行态单一写入口（318 P1-B4）：state.running 与状态栏标签同源。
+  // journal 回放/终态事件只经 addSystemMessage 给历史事实，不调用本函数。
+  setRunning(running) {
+    state.running = !!running;
+    vm.setRunState(state.running ? '运行中' : '空闲', true);
+    vm.syncToolbar();
+  },
   setModel(label) {
     for (const it of state.status) if (it.label === state.modelLabel || ['模型', 'off'].includes(it.label)) it.label = label;
     state.modelLabel = label;
@@ -279,24 +308,36 @@ export const vm = {
     state.nav.back.push(state.nav.current);
     state.nav.forward = [];
     state.nav.current = uri;
+    state.navEpoch++;
     vm.syncToolbar();
   },
   navBack() {
     if (!state.nav.back.length) return;
     state.nav.forward.push(state.nav.current);
     state.nav.current = state.nav.back.pop();
+    state.navEpoch++;
     vm.syncToolbar();
   },
   navForward() {
     if (!state.nav.forward.length) return;
     state.nav.back.push(state.nav.current);
     state.nav.current = state.nav.forward.pop();
+    state.navEpoch++;
     vm.syncToolbar();
   },
   syncToolbar() {
     const btn = (id) => state.toolbar.find((b) => b.id === id);
-    btn('back').enabled = state.nav.back.length > 0;
-    btn('forward').enabled = state.nav.forward.length > 0;
+    btn('back').enabled = state.nav.back.length > 0 && !state.loadingSession;
+    btn('forward').enabled = state.nav.forward.length > 0 && !state.loadingSession;
     btn('stop').enabled = state.running;
+    btn('new').enabled = !state.running && !state.loadingSession;
+    // 只在「查看某会话且该会话不是当前绑定」且侧车带完整 id 时可恢复。
+    const viewed = state.nav.current.startsWith('conversation://')
+      ? state.nav.current.slice('conversation://'.length)
+      : null;
+    const rt = state.resumeTarget;
+    btn('resume').enabled =
+      state.loadingSession ||
+      (!state.running && !!rt?.sessionId && rt.s8 === viewed);
   },
 };

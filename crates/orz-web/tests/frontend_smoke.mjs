@@ -75,6 +75,62 @@ function makeEl(tag) {
 }
 
 const byId = new Map();
+const windowListeners = {};
+const socketInstances = [];
+
+/* ── ACP 测试替身（318 行为化门）────────────────────────────────────────
+ * boot 的 acp.connect 走这里的 WebSocket；send() 把 JSON-RPC 交给
+ * mockAcpSend，测试可逐方法应答/挂起（session/load 代次必须可延迟）。
+ * 默认：initialize 立即成功；session/new、session/load 未装配时如实报错
+ * （避免测试之间静默创建/切换绑定）；其它方法立即成功。 */
+const acpMock = {
+  calls: [],
+  loadHandler: null,
+  newHandler: null,
+  promptHandler: null,
+  queueHandler: null,
+  recallPreviewHandler: null,
+  recallHandler: null,
+};
+
+function wsRespond(ws, id, result) {
+  ws.onmessage?.({ data: JSON.stringify({ jsonrpc: '2.0', id, result }) });
+}
+function wsRespondError(ws, id, message) {
+  ws.onmessage?.({ data: JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32603, message } }) });
+}
+
+function mockAcpSend(msg, ws) {
+  acpMock.calls.push(msg);
+  if (msg.id === undefined) return; // notification（session/cancel）
+  const fail = () => wsRespondError(ws, msg.id, `mock: ${msg.method} not armed`);
+  switch (msg.method) {
+    case 'initialize':
+      wsRespond(ws, msg.id, { protocolVersion: 1, agentCapabilities: { loadSession: true } });
+      break;
+    case 'session/new':
+      (acpMock.newHandler ?? fail)(msg, ws);
+      break;
+    case 'session/load':
+      (acpMock.loadHandler ?? fail)(msg, ws);
+      break;
+    case 'session/prompt':
+      (acpMock.promptHandler ?? ((m, w) => wsRespond(w, m.id, { stopReason: 'end_turn' })))(msg, ws);
+      break;
+    case '_orz/queue_append':
+      (acpMock.queueHandler ?? ((m, w) => wsRespond(w, m.id, { queued: true, depth: 1 })))(msg, ws);
+      break;
+    case '_orz/recall_preview':
+      (acpMock.recallPreviewHandler ?? ((m, w) => wsRespond(w, m.id, { messages: [] })))(msg, ws);
+      break;
+    case '_orz/recall':
+      (acpMock.recallHandler ?? ((m, w) => wsRespond(w, m.id, { recalled: true, recall_text: '' })))(msg, ws);
+      break;
+    default:
+      fail();
+  }
+}
+
 globalThis.document = {
   getElementById(id) {
     if (!byId.has(id)) byId.set(id, makeEl('div'));
@@ -94,7 +150,9 @@ globalThis.document = {
 };
 globalThis.window = globalThis;
 globalThis.window.marked = { parse: (s) => `<p>${s}</p>` };
-globalThis.addEventListener = () => {};
+globalThis.addEventListener = (type, fn) => {
+  (windowListeners[type] ??= []).push(fn);
+};
 globalThis.location = {
   protocol: 'http:',
   host: '127.0.0.1:21487',
@@ -106,12 +164,26 @@ globalThis.WebSocket = class {
   constructor(url) {
     this.url = url;
     this.readyState = 0;
+    this.sent = [];
+    this.onopen = null;
+    this.onmessage = null;
+    this.onclose = null;
+    socketInstances.push(this);
     queueMicrotask(() => {
       this.readyState = 1;
       this.onopen?.();
     });
   }
-  send() {}
+  send(data) {
+    let msg;
+    try {
+      msg = JSON.parse(data);
+    } catch {
+      return;
+    }
+    this.sent.push(msg);
+    if (this.url.includes('/ws/acp')) mockAcpSend(msg, this);
+  }
   close() {
     this.readyState = 3;
     this.onclose?.();
@@ -744,6 +816,442 @@ assert.equal(filledText, '第二个问题', '原文必须回输入框');
 assert.ok(flashed && flashed.includes('已撤回 3 条'), '撤回回执必须有 flash 提示');
 assert.ok(flashed.includes('1 条未投递补充'), '丢弃的未投递补充必须回显');
 console.log('ok  0di ③ 撤回对话框行为（列表/确认/原文回填/回执）');
+
+/* ── 14. 318 P1 Web/TUI 行为化门（2026-10-19）：只读回看、显式恢复、
+ *      load 代次、运行态单一 owner、RUN-CLI 实时尾、长行、删会话解绑、
+ *      刷新/关闭风险提示。 ── */
+
+const flush = async (n = 8) => {
+  for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0));
+};
+const jsonResponse = (obj) => ({ ok: true, json: async () => obj });
+async function withFetch(handler, fn) {
+  const old = globalThis.fetch;
+  globalThis.fetch = handler;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = old;
+  }
+}
+const fallbackApi = (extra = {}) => async (url) => {
+  const u = String(url);
+  for (const [key, value] of Object.entries(extra)) {
+    if (u.includes(key)) return jsonResponse(typeof value === 'function' ? value(u) : value);
+  }
+  if (u.includes('/api/run/')) return jsonResponse({ lines: [], next_offset: 0 });
+  if (u.includes('/api/runs')) return jsonResponse({ runs: [] });
+  if (u.includes('/api/conversations')) return jsonResponse({ conversations: [] });
+  if (u.includes('/api/archives')) return jsonResponse({ archives: [] });
+  return jsonResponse({});
+};
+const methodCalls = (method) => acpMock.calls.filter((c) => c.method === method);
+const runStateLabel = () =>
+  state.status.find((s) =>
+    ['空闲', '预检', '运行中', '等待审批', '完成', '失败', '已取消', '无效', '恢复中'].includes(s.label),
+  )?.label;
+const lastJournalSocket = () =>
+  socketInstances.filter((s) => s.url.includes('/ws/journal/')).at(-1);
+const resetView = () => {
+  state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
+  state.marker = [];
+  state.turnCounter = 0;
+  state.nav = { current: 'workspace://live', back: [], forward: [] };
+  state.navEpoch++;
+  state.resumeTarget = null;
+  state.selected = null;
+};
+const inputEl = globalThis.document.getElementById('chatInput');
+async function sendFromInput(text, n = 3) {
+  inputEl.value = text;
+  inputEl.dispatch('keydown', { key: 'Enter', shiftKey: false });
+  await flush(n);
+}
+
+await flush();
+const acpSocket = socketInstances.find((s) => s.url.includes('/ws/acp'));
+assert.ok(acpSocket, 'ACP WebSocket 必须已连接（测试替身）');
+// host（2026-10-19）要求 session/load 的 cwd 为绝对路径且会 canonicalize。
+state.workspaceCwd = 'D:\\CLI\\orz';
+
+/* 14.1 openConversation 默认只读：不自动 session/load、不切绑定。 */
+resetView();
+state.sessionId = null;
+state.boundSession8 = null;
+state.loadingSession = false;
+state.conversations = [
+  { session8: '6aab1234', session_id: '6aab1234-1111-2222-3333-444455556666' },
+];
+state.runs = [
+  { run_id: 'RUN-6aab1234-1', status: 'completed' },
+  { run_id: 'RUN-CLI-6aab1234', status: 'completed' },
+  { run_id: 'ARC-6aab1234-1', status: 'completed' },
+];
+const loadBefore = methodCalls('session/load').length;
+const newBefore = methodCalls('session/new').length;
+await withFetch(fallbackApi(), async () => {
+  await ui.openUri('conversation://6aab1234');
+});
+assert.equal(methodCalls('session/load').length, loadBefore, '打开旧会话不得自动 session/load');
+assert.equal(methodCalls('session/new').length, newBefore, '打开旧会话不得静默创建绑定会话');
+assert.equal(state.sessionId, null, '浏览动作不得改变活跃绑定');
+assert.equal(state.boundSession8, null, '绑定 s8 保持空');
+assert.equal(state.resumeTarget?.s8, '6aab1234', '只读视图必须留下显式恢复目标');
+assert.ok(
+  state.content.items.some((it) => it.role === '系统' && it.content.includes('只读回看')),
+  '文案必须如实说只读回看（不再谎称已可续接）',
+);
+widgets.renderToolbar();
+const resumeBtn = ui.toolbar.children.find((n) => n.textContent === '恢复并继续');
+assert.ok(resumeBtn && !resumeBtn.disabled, '只读会话必须提供可点的「恢复并继续」');
+console.log('ok  14.1 openConversation 只读回看：零 load/零绑定漂移＋显式恢复入口');
+
+/* 14.2 显式「恢复并继续」：唯一 load 入口，成功后绑定并回实时。 */
+acpMock.loadHandler = (msg, ws) => wsRespond(ws, msg.id, {});
+await withFetch(fallbackApi(), async () => {
+  await ui.resumeConversation();
+  await flush();
+});
+const loadCall = methodCalls('session/load').at(-1);
+assert.equal(loadCall?.params?.sessionId, '6aab1234-1111-2222-3333-444455556666', '恢复必须显式传完整 session id');
+assert.ok(
+  /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(loadCall?.params?.cwd || ''),
+  'session/load 必须传绝对 cwd（host 会 canonicalize）',
+);
+assert.equal(state.sessionId, '6aab1234-1111-2222-3333-444455556666', '恢复成功才切换绑定');
+assert.equal(state.boundSession8, '6aab1234');
+assert.equal(state.nav.current, 'workspace://live', '恢复成功后回到实时视图');
+assert.ok(
+  state.content.items.some((it) => it.role === '系统' && it.content.includes('下一条输入将续接')),
+  '恢复成功文案与状态一致',
+);
+console.log('ok  14.2 显式「恢复并继续」唯一执行 session/load 并切换绑定');
+
+/* 14.2b load 历史回放去重：host 在 load 返回前经 session/update 回放
+ * 整段历史；恢复成功后必须先清空，再进入实时 journal 面——同一段历史
+ * 不得渲染两遍。 */
+resetView();
+state.conversations = [
+  { session8: 'feedface', session_id: 'feedface-1111-2222-3333-444455556666' },
+];
+state.runs = [{ run_id: 'RUN-feedface-1', status: 'completed' }];
+await withFetch(fallbackApi(), async () => {
+  await ui.openUri('conversation://feedface');
+});
+acpMock.loadHandler = (msg, ws) => {
+  // ACP v1：响应前经 session/update 回放历史（host 2026-10-19 实现）。
+  ws.onmessage({
+    data: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionId: 'feedface-1111-2222-3333-444455556666',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'LOAD历史回放' },
+        },
+      },
+    }),
+  });
+  wsRespond(ws, msg.id, {});
+};
+await withFetch(fallbackApi(), async () => {
+  await ui.resumeConversation();
+  await flush();
+});
+assert.equal(
+  state.content.items.filter((it) => String(it.content || '').includes('LOAD历史回放')).length,
+  0,
+  'load 回放必须先清空，不得与实时/后续回放重复渲染',
+);
+assert.equal(state.sessionId, 'feedface-1111-2222-3333-444455556666');
+console.log('ok  14.2b load 历史回放不与实时面重复渲染（成功后清空回放面）');
+
+/* 14.3 load 代次：加载期禁 prompt/禁切视图；取消后结果过期不写绑定；
+ *       await 后运行态变化同样拒绝覆盖。 */
+resetView();
+state.conversations = [
+  { session8: '6aab1234', session_id: '6aab1234-1111-2222-3333-444455556666' },
+  { session8: 'deadbeef', session_id: 'deadbeef-aaaa-bbbb-cccc-ddddeeeeffff' },
+];
+state.runs = [{ run_id: 'RUN-deadbeef-1', status: 'completed' }];
+await withFetch(fallbackApi(), async () => {
+  await ui.openUri('conversation://deadbeef');
+});
+let pendingLoad = null;
+acpMock.loadHandler = (msg, ws) => {
+  pendingLoad = { msg, ws };
+};
+const promptBefore = methodCalls('session/prompt').length;
+const loadPromise = ui.resumeConversation();
+await flush();
+assert.equal(state.loadingSession, true, 'load 等待期必须置 loading 门');
+const chatInput0 = globalThis.document.getElementById('chatInput');
+chatInput0.value = '加载期间不得发送';
+chatInput0.dispatch('keydown', { key: 'Enter', shiftKey: false });
+await flush(3);
+assert.equal(methodCalls('session/prompt').length, promptBefore, 'load 期间禁发 prompt');
+assert.equal(chatInput0.value, '加载期间不得发送', 'load 期间拒绝输入必须保留草稿');
+assert.ok(connBanner.textContent.includes('恢复中'), 'load 期间发输入必须如实拒绝');
+await ui.openUri('workspace://live');
+assert.equal(state.nav.current, 'conversation://deadbeef', 'load 期间禁切视图/回 live');
+// 取消本次恢复：代次自增，随后到达的 load 结果不得写绑定。
+await ui.resumeConversation();
+await flush();
+assert.equal(state.loadingSession, false, '取消后 loading 门解除');
+wsRespond(pendingLoad.ws, pendingLoad.msg.id, {});
+await loadPromise;
+await flush();
+assert.equal(state.sessionId, 'feedface-1111-2222-3333-444455556666', '被取消的 load 不得覆盖绑定');
+assert.ok(
+  state.content.items.some((it) => it.role === '系统' && /取消|过期/.test(it.content)),
+  '取消/过期必须留下可见说明',
+);
+// 第二回合：await 返回时 state.running 已变化 → 同样不切换绑定。
+resetView();
+state.conversations = [
+  { session8: 'deadbeef', session_id: 'deadbeef-aaaa-bbbb-cccc-ddddeeeeffff' },
+];
+state.runs = [{ run_id: 'RUN-deadbeef-1', status: 'completed' }];
+await withFetch(fallbackApi(), async () => {
+  await ui.openUri('conversation://deadbeef');
+});
+pendingLoad = null;
+acpMock.loadHandler = (msg, ws) => {
+  pendingLoad = { msg, ws };
+};
+const loadPromise2 = ui.resumeConversation();
+await flush();
+vm.setRunning(true); // 模拟等待期间运行态变化
+wsRespond(pendingLoad.ws, pendingLoad.msg.id, {});
+await loadPromise2;
+await flush();
+assert.equal(state.sessionId, 'feedface-1111-2222-3333-444455556666', 'await 后 running 变化必须拒绝切换绑定');
+vm.setRunning(false);
+console.log('ok  14.3 load 代次：禁发/禁切＋取消过期＋await 后运行态复检');
+
+/* 14.4 只读 rewind：跨会话/归档视图拒绝；拒绝时保留草稿；不调
+ *      ensureSession；放行时显式传绑定 session_id。 */
+resetView();
+state.nav = { current: 'conversation://cafebabe', back: [], forward: [] };
+state.navEpoch++;
+const previewBefore = methodCalls('_orz/recall_preview').length;
+const chatInput = globalThis.document.getElementById('chatInput');
+chatInput.value = '/rewind';
+chatInput.dispatch('keydown', { key: 'Enter', shiftKey: false });
+assert.equal(chatInput.value, '/rewind', '只读 rewind 拒绝时必须保留草稿（不得先清空）');
+assert.equal(methodCalls('_orz/recall_preview').length, previewBefore, '只读 rewind 不得发预览请求');
+assert.ok(connBanner.textContent.includes('只读'), '只读拒绝必须有可见原因');
+await assert.rejects(() => ui.rewindPreview(), /只读|恢复并继续/, '只读视图 rewindPreview 必须抛错拒绝');
+// 归档视图同样拒绝。
+state.nav = { current: 'archive://cafebabe', back: [], forward: [] };
+state.navEpoch++;
+chatInput.value = '/rewind';
+chatInput.dispatch('keydown', { key: 'Enter', shiftKey: false });
+assert.equal(chatInput.value, '/rewind', '归档视图 rewind 拒绝时必须保留草稿');
+// 放行路径：绑定会话 + 实时视图，显式 session_id（不调用 ensureSession）。
+resetView();
+acpMock.recallPreviewHandler = (msg, ws) =>
+  wsRespond(ws, msg.id, { messages: [{ ordinal: 1, preview: '问题', character_count: 2 }] });
+const recallPreview = await ui.rewindPreview();
+assert.equal(recallPreview.messages.length, 1);
+const previewCall = methodCalls('_orz/recall_preview').at(-1);
+assert.equal(previewCall?.params?.session_id, 'feedface-1111-2222-3333-444455556666', '预览必须显式传绑定 session_id');
+acpMock.recallHandler = (msg, ws) => wsRespond(ws, msg.id, { recalled: true, recall_text: '问题' });
+await ui.rewindRecall(1);
+assert.equal(methodCalls('_orz/recall').at(-1)?.params?.session_id, 'feedface-1111-2222-3333-444455556666', '撤回必须命中同一显式会话');
+chatInput.value = '';
+console.log('ok  14.4 只读/归档 rewind 拒绝保留草稿＋显式 session_id（零静默绑定）');
+
+/* 14.5 运行态单一 owner：journal 不写状态栏；status 与 running 同源；
+ *      Ctrl+Z 与停止按钮取同一 state.running，取消正确会话。 */
+vm.setRunning(false);
+state.serverBusy = false;
+applyJournalEvent({ event_type: 'run_started', payload: {} });
+applyJournalEvent({ event_type: 'model_output', payload: { text: '历史输出' } });
+assert.equal(state.running, false, 'journal 回放不得改写 state.running');
+assert.equal(runStateLabel(), '空闲', 'journal 回放不得把状态栏写成运行中');
+applyJournalEvent({ event_type: 'run_finished', payload: { status: 'completed' } });
+assert.equal(runStateLabel(), '空闲', '回放终态不得把状态栏写成完成（单一 owner）');
+// 真实 prompt 生命周期（当前绑定＝14.2b 恢复的 feedface 会话）。
+resetView();
+let pendingPrompt = null;
+acpMock.promptHandler = (msg, ws) => {
+  pendingPrompt = { msg, ws };
+};
+const promptPromise = sendFromInput('运行态测试');
+await flush(3);
+assert.equal(state.running, true, 'prompt 发出后 running 必须为真');
+assert.equal(runStateLabel(), '运行中', '状态栏必须与 running 同源');
+widgets.renderToolbar();
+const stopBtn = ui.toolbar.children.find((n) => n.textContent === '停止');
+assert.ok(stopBtn && stopBtn.disabled === false, '运行时停止按钮不得灰');
+let cancelled = null;
+const realSend = acpSocket.send.bind(acpSocket);
+acpSocket.send = (data) => {
+  const msg = JSON.parse(data);
+  if (msg.method === 'session/cancel') cancelled = msg.params;
+  realSend(data);
+};
+handleKey({
+  key: 'z',
+  ctrlKey: true,
+  altKey: false,
+  shiftKey: false,
+  target: { tagName: 'BODY' },
+  preventDefault() {},
+});
+assert.equal(cancelled?.sessionId, 'feedface-1111-2222-3333-444455556666', 'Ctrl+Z 必须取消本 run 的会话');
+acpSocket.send = realSend;
+wsRespond(pendingPrompt.ws, pendingPrompt.msg.id, { stopReason: 'end_turn' });
+await promptPromise;
+await flush();
+assert.equal(state.running, false, 'prompt 返回后 running 复位');
+assert.equal(runStateLabel(), '空闲', '状态栏随 running 复位');
+// 服务端 busy：错误→清单重同步为运行中；终态清单到达→复位。
+acpMock.promptHandler = (msg, ws) =>
+  wsRespondError(ws, msg.id, 'prompt rejected: a run or restore is already in flight for session x');
+await withFetch(
+  fallbackApi({ '/api/runs': { runs: [{ run_id: 'RUN-feedface-9', status: 'running' }] } }),
+  async () => {
+    await sendFromInput('busy 探针');
+    await flush();
+  },
+);
+assert.equal(state.running, true, '服务端 busy 必须重同步为运行中');
+assert.equal(runStateLabel(), '运行中', 'busy 时状态栏不得留在空闲');
+assert.equal(state.serverBusy, true);
+await withFetch(
+  fallbackApi({ '/api/runs': { runs: [{ run_id: 'RUN-feedface-9', status: 'completed' }] } }),
+  async () => {
+    await ui.refresh();
+    await flush();
+  },
+);
+assert.equal(state.serverBusy, false, '终态清单到达后外部 busy 标记复位');
+assert.equal(state.running, false);
+acpMock.promptHandler = null;
+console.log('ok  14.5 运行态单一 owner＋Ctrl+Z/停止同源＋服务端 busy 重同步');
+
+/* 14.6 RUN-CLI 实时尾：精确匹配 RUN-CLI-<s8>，排除 ARC/RST；实时窗不空白。 */
+resetView();
+await withFetch(
+  fallbackApi({
+    '/api/runs': {
+      runs: [
+        { run_id: 'ARC-feedface-9', status: 'completed' },
+        { run_id: 'RST-feedface-8', status: 'completed' },
+        { run_id: 'RUN-CLI-feedface', status: 'completed' },
+        { run_id: 'RUN-6aab9999-1', status: 'completed' },
+      ],
+    },
+  }),
+  async () => {
+    await ui.openUri('workspace://live');
+    await flush();
+  },
+);
+const journalWs = lastJournalSocket();
+assert.ok(journalWs, '必须建立 journal 尾连接（CLI 侧车不得空白）');
+assert.ok(
+  journalWs.url.includes('/ws/journal/RUN-CLI-feedface?'),
+  `实时尾必须精确选 RUN-CLI-feedface（实际 ${journalWs.url}）`,
+);
+assert.ok(!journalWs.url.includes('ARC-') && !journalWs.url.includes('RST-'), '维护 journal 不得被实时尾选中');
+journalWs.onmessage({
+  data: JSON.stringify({ event_type: 'prompt_submitted', payload: { prompt: 'CLI 实时事件' } }),
+});
+await flush(2);
+assert.ok(
+  state.content.items.some((it) => it.kind === 'message' && it.content === 'CLI 实时事件'),
+  'CLI 侧车实时窗必须能渲染事件（不得空白）',
+);
+console.log('ok  14.6 RUN-CLI 实时尾行为（精确匹配＋ARC/RST 排除＋实时窗非空）');
+
+/* 14.7 长行（>64 KiB / >256 KiB）事件经尾通道到投影不截断。 */
+const journal = await import('../assets/app/journal.js');
+let longEvent = null;
+journal.tailRun('RUN-feedface-77', 0, (ev) => {
+  longEvent = ev;
+});
+const longWs = lastJournalSocket();
+const longText = '长'.repeat(100_000); // JSON 行 >256 KiB
+longWs.onmessage({
+  data: JSON.stringify({
+    event_type: 'supplement_delivered',
+    payload: { supplement_seq: 1, character_count: 100_000, text: longText },
+  }),
+});
+assert.equal(longEvent?.event_type, 'supplement_delivered', '>64 KiB 单行必须完整到达前端');
+assert.equal(longEvent.payload.text.length, 100_000, '长行文本不得被截断/丢弃');
+state.deliveredSupplements = 0;
+applyJournalEvent(longEvent);
+assert.equal(state.deliveredSupplements, 1, '长行 supplement 必须计入已投递');
+assert.equal(
+  state.content.items.filter((it) => it.kind === 'message').at(-1)?.content.length,
+  100_000,
+  '补充卡必须渲染完整长文本',
+);
+journal.closeTail();
+console.log('ok  14.7 >256 KiB 单行经实时尾/投影完整渲染（不丢/不截断）');
+
+/* 14.8 删除已加载会话清空绑定；newSession 解绑旧会话并停 tail。 */
+resetView();
+state.conversations = [];
+globalThis.confirm = () => true;
+await withFetch(fallbackApi({ '/api/sessions/': { message: 'deleted' } }), async () => {
+  await ui.deleteSession('feedface');
+  await flush();
+});
+assert.equal(state.sessionId, null, '删除已加载会话后必须清空绑定');
+assert.equal(state.boundSession8, null, '绑定 s8 必须清空（防下一条 prompt 写回 sidecar）');
+assert.equal(state.nav.current, 'workspace://live');
+// 下一条 prompt 必须新建会话，而不是复用已删除的旧 id。
+acpMock.newHandler = (msg, ws) =>
+  wsRespond(ws, msg.id, { sessionId: 'beefcafe-1111-2222-3333-444455556666' });
+const promptsBefore = methodCalls('session/prompt').length;
+await withFetch(fallbackApi(), async () => {
+  await sendFromInput('删除后的问题');
+  await flush();
+});
+assert.equal(methodCalls('session/prompt').length, promptsBefore + 1, '删除后仍应能新建会话发送');
+assert.equal(methodCalls('session/prompt').at(-1)?.params?.sessionId, 'beefcafe-1111-2222-3333-444455556666', '下一条 prompt 不得复用已删除会话');
+assert.equal(state.sessionId, 'beefcafe-1111-2222-3333-444455556666');
+// newSession：旧会话发不出 ACP close（协议无该方法），至少解绑并停 tail。
+const oldSession = state.sessionId;
+acpMock.newHandler = (msg, ws) =>
+  wsRespond(ws, msg.id, { sessionId: 'cafef00d-1111-2222-3333-444455556666' });
+const newCallsBefore = methodCalls('session/new').length;
+await ui.newSession();
+await flush();
+assert.equal(methodCalls('session/new').length, newCallsBefore + 1, 'newSession 必须显式新建会话');
+assert.equal(state.sessionId, 'cafef00d-1111-2222-3333-444455556666', 'newSession 切换绑定');
+assert.notEqual(state.sessionId, oldSession);
+console.log('ok  14.8 删除已加载会话清空绑定＋newSession 解绑/停 tail（防 sidecar 写回）');
+
+/* 14.9 刷页/关闭风险提示：running/排队/后台任务都必须拦，文案说明只恢复
+ *      文本上下文。 */
+const unloadHandlers = windowListeners.beforeunload ?? [];
+assert.ok(unloadHandlers.length, 'beforeunload 必须已注册');
+vm.setRunning(true);
+state.supplementQueueDepth = 2;
+state.backgroundTasks = 1;
+let unloadPrevented = false;
+const unloadEvent = {
+  returnValue: '',
+  preventDefault() {
+    unloadPrevented = true;
+  },
+};
+unloadHandlers.at(-1)(unloadEvent);
+assert.equal(unloadPrevented, true, '存在运行/队列/后台任务时必须拦刷新/关闭');
+const warning = String(unloadEvent.returnValue);
+assert.ok(warning.includes('仅文本上下文'), '必须说明只恢复文本上下文');
+assert.ok(warning.includes('后台任务') && warning.includes('排队补充'), '必须点名后台任务/排队补充不恢复');
+vm.setRunning(false);
+state.supplementQueueDepth = 0;
+state.backgroundTasks = 0;
+console.log('ok  14.9 beforeunload 风险面＋「仅文本上下文恢复，后台任务/队列不恢复」文案');
 
 console.log('\nfrontend smoke: 全部通过');
 process.exit(0);

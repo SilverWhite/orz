@@ -5719,6 +5719,7 @@ dependencies = [
  "dunce",
  "filetime",
  "flate2",
+ "fs2",
  "futures",
  "libc",
  "orz-assurance",

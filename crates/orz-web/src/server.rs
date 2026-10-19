@@ -47,6 +47,12 @@ const ACP_WS_MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 /// should fail visibly instead of pinning the explorer action.
 const ARCHIVE_CHILD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// 318 审查 P0-3（2026-10-19）：维护子命令能力令牌 env 键（与
+/// `orz-bin` 的集中校验同键）。桥 spawn 时注入**进程内随机不可猜串**——
+/// ACP agent 子进程不持有该 env（只有本 maint child 继承），模型经
+/// `run_terminal_cmd` 无法自造同形调用（orz-bin 侧无 ticket ⇒ exit 2）。
+const MAINTENANCE_TICKET_ENV: &str = "ORZ_MAINTENANCE_TICKET";
+
 #[derive(Clone)]
 pub struct ServerState {
     pub token: Arc<String>,
@@ -612,6 +618,9 @@ async fn run_agent_session_tool(
         .arg(subcommand)
         .arg(arg)
         .current_dir(state.cwd())
+        // 318 审查 P0-3：桥专用维护面能力令牌（orz-bin 集中校验 ≥16 位；
+        // 每次 spawn 由 OS 随机熵生成，模型进程不可见/不可复用）。
+        .env(MAINTENANCE_TICKET_ENV, security::generate_token())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);

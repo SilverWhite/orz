@@ -544,6 +544,8 @@ fn segment_has_real_redirect(seg: &[Word]) -> bool {
 /// 段是否为写段（0cq S2 规则 5 扫描局部化）：程序位 ∈ 破坏/修改集∪`dd`，
 /// 或段内含**非 nullish** 重定向词（186 批审查处置收窄）。目标扫描仅及写段
 /// ——读段（`ls`/`find`/`grep` 段）的词元不再逐个比对宿主态目标。
+/// **318 审查 P0-2（2026-10-19）**：`find` 带 `-delete`／`-exec rm` 时是写段
+/// （删除行为不再被当成只读操作——`.gsa` 直接目标由规则 5 目标扫描接住）。
 fn segment_is_write(seg: &[Word]) -> bool {
     if segment_has_real_redirect(seg) {
         return true;
@@ -551,7 +553,9 @@ fn segment_is_write(seg: &[Word]) -> bool {
     segment_prog_index(seg)
         .map(|i| {
             let prog = norm_prog(&seg[i].text);
-            prog == "dd" || DESTRUCTIVE_VERBS.contains(&prog.as_str())
+            prog == "dd"
+                || DESTRUCTIVE_VERBS.contains(&prog.as_str())
+                || (prog == "find" && find_has_destructive_action(seg, i))
         })
         .unwrap_or(false)
 }
@@ -650,43 +654,30 @@ pub fn review_command_with(
     //    `cd /` 的裸 `/`、echo 散文）不再被当作删除目标（recli 三跑误拦②
     //    ＝`echo "=== csv / json / yaml ==="` 经散文拆片伪造 `/` 词元 × 全局
     //    扫描，误报卷根删除；0cq S1 勘定）。
-    for seg in &segments {
-        let Some(pi) = segment_prog_index(seg) else {
-            continue;
-        };
-        if !CATASTROPHIC_DELETE_VERBS.contains(&norm_prog(&seg[pi].text).as_str()) {
-            continue;
-        }
-        if !seg
-            .iter()
-            .any(|w| CATASTROPHIC_RECURSIVE_FLAGS.contains(&norm_word(&w.text).as_str()))
-        {
-            continue;
-        }
-        for w in seg.iter().skip(pi + 1) {
-            for raw in path_candidates(&w.text) {
-                for form in disaster_target_forms(cwd, &raw) {
-                    if write_control::is_volume_root(&form) {
-                        return CommandReview::Block(CommandFinding {
-                            rule: "catastrophic-recursive-delete",
-                            detail: format!("recursive delete targets the volume root (`{raw}`)"),
-                        });
-                    }
-                    if let Some(root) = disaster_roots
-                        .iter()
-                        .find(|r| write_control::path_equals_root(r, &form))
-                    {
-                        return CommandReview::Block(CommandFinding {
-                            rule: "catastrophic-recursive-delete",
-                            detail: format!(
-                                "recursive delete targets a fundamental tree root \
-                                 (`{raw}` ⇒ `{}`)",
-                                root.to_string_lossy()
-                            ),
-                        });
-                    }
-                }
+    //    **318 审查 P0-2（2026-10-19）补齐**（`scan_rule_one_segments`）：
+    //    (a) `cwd` 本体（`.`／`./`／绝对 cwd）与 cwd 祖先（`..` 等）同 block；
+    //    (b) 受护根（卷根／根本树根——含 POSIX 根集，跨 shell 方言）与 cwd
+    //    的**无约束通配**（`*`／`.*`／`/*`／`/usr/*`／`C:\Windows\*`）同 block；
+    //    (c) `find -delete`／`find -exec rm`／`xargs rm -rf` 旁路补齐；
+    //    (d) `cd <受护目录> && rm -rf *` 的静态 cd 链识别（`.gsa`／`.git`
+    //    至少覆盖；`cd build && rm -rf *` 等明确子目录作用域仍放行）；
+    //    (e) `cmd /c`／`bash -c`／`powershell -Command` 内容位递归一层。
+    //    `.`／`*`／`.*`／根／祖先／受护根**不得**当用户明确范围；拿不准时
+    //    fail-closed（未知 cd 目标按 cwd 保守判定）。精确非递归删除沿用旧
+    //    语义（子目录放行，warn 留痕面不变）。
+    {
+        // 跨 shell 方言：POSIX 系统根（`/usr`／`/etc`…）在 Windows 宿主上
+        // 经 git-bash 等同样可执行，故并集进受护根集（注入集优先）。
+        let mut protected_roots: Vec<PathBuf> = disaster_roots.to_vec();
+        for root in write_control::linux_disaster_tree_roots() {
+            if !protected_roots.contains(&root) {
+                protected_roots.push(root);
             }
+        }
+        if let Some(finding) =
+            scan_rule_one_segments(cwd, &protected_roots, &segments, Some(cwd.to_path_buf()), 0)
+        {
+            return CommandReview::Block(finding);
         }
     }
 
@@ -778,6 +769,22 @@ pub fn review_command_with(
         }
     }
 
+    // ④′ 维护 CLI 鉴权（318 审查 P0-3，2026-10-19）：`orz archive|unarchive|
+    //    delete-session|trust` 与 `orz rollback restore` 是**桥专用**维护面
+    //    （orz-bin 侧要求桥注入 `ORZ_MAINTENANCE_TICKET` 能力令牌）；模型经
+    //    `run_terminal_cmd` 构造同形调用即绕过 Web 前端确认——本闸在命令面
+    //    直接 block（`carrier-write`＝宿主/载体状态写保护；规则闭集不变）。
+    //    证据：`delete_session_on_demand` 删除侧车与 journal、`trust` 改信任
+    //    基线、`rollback restore` 回退用户文件；命令原文含桥令牌 env 键同样
+    //    block（令牌不得出现在模型可构造命令里）。判定覆盖 `cmd /c` 等内容位
+    //    递归一层与 `delete-session`/`unarchive` 的 orz 同段共现形态。
+    if let Some(detail) = maintenance_cli_detail(&scan) {
+        return CommandReview::Block(CommandFinding {
+            rule: "carrier-write",
+            detail,
+        });
+    }
+
     // ⑤ carrier-write：写动词（破坏/修改集＋`dd`＋重定向）＋目标命中**宿主
     //    状态两窄目标**（`.gsa` 会话卷／ACAF keystore 根／signer manifest；
     //    恒拒面）。v2 系统树不进本闸；v3 载体面（安装目录／三件套／
@@ -830,9 +837,13 @@ pub fn review_command_with(
                     continue;
                 }
                 for raw in path_candidates(&w.text) {
-                    if let Some(detail) =
-                        carrier_target_detail(cwd, &raw, host_state, has_sweep_verb)
-                    {
+                    if let Some(detail) = carrier_target_detail(
+                        cwd,
+                        &raw,
+                        host_state,
+                        has_sweep_verb,
+                        !is_move_destination_position(seg, i),
+                    ) {
                         return CommandReview::Block(CommandFinding {
                             rule: "carrier-write",
                             detail,
@@ -906,6 +917,769 @@ pub fn review_command_with(
     CommandReview::Allow
 }
 
+// ─── 318 审查 P0-2：规则 1 目标面扩展（catastrophic-recursive-delete）────
+//
+// 审查发现（`318_FULL_PROJECT_REVIEW_PHASE1_2026-10-19.md` P0-2）：旧规则 1
+// 只在「删除动词＋递归旗＋目标**恰等于**卷根/根本树根」时 block——`rm -rf .`
+// 连 warn 都不触发（直接清空工作区）、`rm -rf /usr/*`/`C:\Windows\*` 只 warn、
+// `find -delete`/`xargs rm -rf` 完全不被扫描、`cd .gsa && rm -rf *` 清空会话
+// 卷。本扩展的判定口径（fail-closed，user 裁决「保留精准删除」）：
+// - 精确（无通配）递归删除：目标为卷根／根本树根**本体**、cwd 本体、cwd
+//   祖先 → block；明确的非受护子树（`build/`、`/usr/local`、系统树子目录）
+//   沿旧语义 allow/warn；
+// - 通配删除：`*`／`.*` 等**无字面量**模式落在 cwd（或 cwd 之上）→ block；
+//   受护根（SystemRoot/ProgramFiles/ProgramData/…＋POSIX 根集）下的任意深度
+//   通配 → block；卷根的直接子通配（`/*`、`C:\*`）→ block；
+//   `build/*`、`*.log` 等有明确字面量前缀/后缀的模式不 block（warn 留痕）；
+// - `find <受护面> -delete`／`-exec rm`、`xargs rm -rf` 同 block；
+// - `cd <受护目录>` 后同段无约束通配删除同 block（`.gsa`/`.git` 至少）；
+// - 内容位（`cmd /c "…"`／`bash -c "…"`／`powershell -Command "…"`）递归一层。
+
+/// 搬移族（源位＝被扫荡面、第 2 位置词元＝落点）：`mv x .` 的 `.` 是落点，
+/// 不是被重命名的祖先目录——`.gsa` 祖先臂只看源位；`mv . /tmp` 的 `.` 仍拦。
+const MOVE_SPLIT_VERBS: &[&str] = &[
+    "mv",
+    "move",
+    "move-item",
+    "mi",
+    "rename-item",
+    "ren",
+    "rename",
+];
+
+/// 通配模式是否**无字面量**（`*`／`.*`／`*.*`／`?` 等）：这类模式匹配面等于
+/// 「全部」，不能当用户明确范围；带字面量的 `*.log`／`build*` 不算。
+fn pattern_is_all_wildcards(name: &str) -> bool {
+    name.chars()
+        .all(|c| matches!(c, '*' | '?' | '.' | '[' | ']' | '!' | '^'))
+}
+
+fn has_glob(text: &str) -> bool {
+    text.contains('*') || text.contains('?')
+}
+
+fn component_has_glob(component: &std::path::Component<'_>) -> bool {
+    has_glob(&component.as_os_str().to_string_lossy())
+}
+
+fn form_has_glob(path: &Path) -> bool {
+    path.components().any(|c| component_has_glob(&c))
+}
+
+fn first_glob_component_index(path: &Path) -> Option<usize> {
+    path.components().position(|c| component_has_glob(&c))
+}
+
+/// 首个通配组件之前的路径前缀是否恰为 `base` 的前缀（＝通配发生在 base 本体
+/// 或 base 之上）。`../*` 归一后是父目录的直接子通配，同样命中。
+fn glob_prefix_matches(path: &Path, base: &Path) -> bool {
+    let Some(glob_idx) = first_glob_component_index(path) else {
+        return false;
+    };
+    let path_components: Vec<_> = path.components().collect();
+    let base_components: Vec<_> = base.components().collect();
+    if glob_idx > base_components.len() {
+        return false;
+    }
+    let mut path_prefix = PathBuf::new();
+    for component in &path_components[..glob_idx] {
+        path_prefix.push(component.as_os_str());
+    }
+    let mut base_prefix = PathBuf::new();
+    for component in &base_components[..glob_idx] {
+        base_prefix.push(component.as_os_str());
+    }
+    write_control::path_equals_root(&path_prefix, &base_prefix)
+}
+
+/// 首个通配组件是否无字面量（`*`／`.*` 等）——配合 [`glob_prefix_matches`]
+/// 判定「cwd/祖先层面的无约束通配」。
+fn first_glob_component_is_all_wildcards(path: &Path) -> bool {
+    let Some(glob_idx) = first_glob_component_index(path) else {
+        return false;
+    };
+    let Some(component) = path.components().nth(glob_idx) else {
+        return false;
+    };
+    pattern_is_all_wildcards(&component.as_os_str().to_string_lossy())
+}
+
+/// 规则 1 目标判定（318 P0-2）：返回 block detail（`None`＝不是灾难目标）。
+/// `workspace`＝原始 cwd（工作区根保护面）；`scope`＝`cd` 链解析后的当前
+/// 目录（相对目标按它解析；未知 cd 目标由调用方回退 workspace＝保守）。
+fn catastrophic_target_detail(
+    workspace: &Path,
+    scope: &Path,
+    raw: &str,
+    disaster_roots: &[PathBuf],
+    recursive: bool,
+) -> Option<String> {
+    for form in disaster_target_forms(scope, raw) {
+        let wildcard = form_has_glob(&form);
+        // 精确（非通配）目标仅在递归删除下沿用旧语义；非递归 `rm /usr` 不拦
+        // （`rm` 无 `-r` 删不掉目录；保留既有「精准删除」边界）。
+        if !recursive && !wildcard {
+            continue;
+        }
+        if write_control::is_volume_root(&form) {
+            return Some(format!(
+                "recursive delete targets the volume root (`{raw}`)"
+            ));
+        }
+        if let Some(root) = disaster_roots
+            .iter()
+            .find(|r| write_control::path_equals_root(r.as_path(), &form))
+        {
+            return Some(format!(
+                "recursive delete targets a fundamental tree root (`{raw}` ⇒ `{}`)",
+                root.to_string_lossy()
+            ));
+        }
+        if write_control::path_equals_root(workspace, &form) {
+            return Some(format!(
+                "recursive delete targets the workspace root (`{raw}`)"
+            ));
+        }
+        if write_control::path_hits_root(&form, workspace)
+            && !write_control::path_equals_root(&form, workspace)
+        {
+            return Some(format!(
+                "recursive delete targets an ancestor of the workspace root (`{raw}` ⇒ `{}`)",
+                form.to_string_lossy()
+            ));
+        }
+        if !wildcard {
+            continue;
+        }
+        if glob_prefix_matches(&form, workspace) && first_glob_component_is_all_wildcards(&form) {
+            return Some(format!(
+                "recursive delete uses an unconstrained wildcard at/above the workspace root (`{raw}`)"
+            ));
+        }
+        if let Some(root) = disaster_roots.iter().find(|r| {
+            form.ancestors()
+                .skip(1)
+                .any(|ancestor| write_control::path_equals_root(r.as_path(), ancestor))
+        }) {
+            return Some(format!(
+                "recursive delete uses a wildcard inside a fundamental tree root (`{raw}` ⇒ `{}`)",
+                root.to_string_lossy()
+            ));
+        }
+        if form.parent().is_some_and(write_control::is_volume_root) {
+            return Some(format!(
+                "recursive delete uses a wildcard directly under a volume root (`{raw}`)"
+            ));
+        }
+    }
+    None
+}
+
+/// `cd` 作用域是否受护（工作区根/祖先、卷根、根本树根、`.gsa`/`.git` 子树）。
+fn scope_is_protected(scope: &Path, workspace: &Path, disaster_roots: &[PathBuf]) -> bool {
+    if write_control::path_hits_root(scope, workspace) || write_control::is_volume_root(scope) {
+        return true;
+    }
+    if disaster_roots
+        .iter()
+        .any(|r| write_control::path_equals_root(r.as_path(), scope))
+    {
+        return true;
+    }
+    let gsa = workspace.join(".gsa");
+    let git = workspace.join(".git");
+    write_control::path_hits_root(&gsa, scope) || write_control::path_hits_root(&git, scope)
+}
+
+/// `cd <受护目录>` 后的同段无约束删除（318 P0-2 硬性要求）：
+/// (a) 目标恰为 cd 进入的目录本体（`cd .gsa && rm -rf .`）；
+/// (b) 目标为该目录下的无约束通配（`cd .gsa && rm -rf *`）。
+/// `cd build && rm -rf *` 等明确子目录作用域不触发（scope 非受护）。
+fn cd_scope_target_detail(
+    workspace: &Path,
+    scope: Option<&Path>,
+    raw: &str,
+    disaster_roots: &[PathBuf],
+) -> Option<String> {
+    let scope = scope?;
+    if !scope_is_protected(scope, workspace, disaster_roots) {
+        return None;
+    }
+    for form in disaster_target_forms(scope, raw) {
+        if write_control::path_equals_root(scope, &form) {
+            return Some(format!(
+                "recursive delete targets the protected directory selected by `cd` (`{raw}`)"
+            ));
+        }
+        let Ok(relative) = form.strip_prefix(scope) else {
+            continue;
+        };
+        let Some(first) = relative.components().next() else {
+            continue;
+        };
+        let name = first.as_os_str().to_string_lossy();
+        if has_glob(&name) && pattern_is_all_wildcards(&name) {
+            return Some(format!(
+                "recursive delete uses an unconstrained wildcard inside the protected \
+                 directory selected by `cd` (`{raw}`)"
+            ));
+        }
+    }
+    None
+}
+
+/// `cd` 目标解析（相对当前 scope；未知/不可解析 → `None`＝调用方按
+/// workspace 保守判定）。含未展开变量/通配的 cd 目标视为未知。
+fn resolve_scope_dir(base: &Path, raw: &str) -> Option<PathBuf> {
+    let expanded = expand_word(base, raw);
+    if expanded.is_empty()
+        || expanded.contains(|c: char| {
+            matches!(c, '$' | '%' | '`' | '*' | '?' | '(' | ')' | '!' | '{' | '}')
+        })
+    {
+        return None;
+    }
+    let path = PathBuf::from(&expanded);
+    let absolute = if path.is_absolute() || path.has_root() {
+        path
+    } else {
+        base.join(&path)
+    };
+    Some(orz_paths::normalize_lexically(&absolute))
+}
+
+/// `cd`／`chdir`／`pushd`／`Set-Location` 的目标词（跳过旗标）。
+fn segment_cd_target(seg: &[Word]) -> Option<String> {
+    let prog_index = segment_prog_index(seg)?;
+    let prog = norm_prog(&seg[prog_index].text);
+    if !matches!(
+        prog.as_str(),
+        "cd" | "chdir" | "pushd" | "set-location" | "sl"
+    ) {
+        return None;
+    }
+    for word in seg.iter().skip(prog_index + 1) {
+        let normalized = norm_word(&word.text);
+        if normalized.is_empty() {
+            continue;
+        }
+        if normalized == "/d" {
+            // cmd.exe `cd /d <drive>` 的盘符切换旗（POSIX 下裸 `/d` 是路径，
+            // 但 cd 后跟第二个词才是本形态；单独 `cd /d` 仍按路径处理）。
+            continue;
+        }
+        if normalized.starts_with('-') {
+            continue;
+        }
+        return Some(word.text.clone());
+    }
+    None
+}
+
+/// 内容位 payload（`cmd /c`／`powershell -Command`／`bash -c` 等一层递归）。
+enum ContentPayload {
+    /// 整词引用内容（`-c "rm -rf /"`）：按命令文本重新分词。
+    Text(String),
+    /// 未引用内容（`cmd /c rm -rf /`）：其余词元即内层命令。
+    Words(Vec<Word>),
+}
+
+/// 仅当内容位出现在**命令位**（前缀只有 wrapper/赋值）时返回 payload——
+/// `rg -c "rm -rf /"` 之类的普通程序旗标不递归（防误伤检索命令）。
+fn content_payload(seg: &[Word]) -> Option<ContentPayload> {
+    let mut index = 0;
+    while index < seg.len() {
+        let word = &seg[index];
+        let normalized = norm_word(&word.text);
+        if is_assignment(&word.text) {
+            index += 1;
+            continue;
+        }
+        if WRAPPER_WORDS.contains(&normalized.as_str()) {
+            if CONTENT_WORDS.contains(&normalized.as_str()) {
+                let payload = seg.get(index + 1)?;
+                if payload.fully_quoted
+                    && payload
+                        .text
+                        .contains(|c: char| c.is_whitespace() || c == ';' || c == '|')
+                {
+                    return Some(ContentPayload::Text(payload.text.clone()));
+                }
+                let words = seg[index + 1..].to_vec();
+                if words.is_empty() {
+                    return None;
+                }
+                return Some(ContentPayload::Words(words));
+            }
+            index += 1;
+            continue;
+        }
+        return None;
+    }
+    None
+}
+
+/// `xargs` 派生递归删除：管道输入提供无界路径（`... | xargs rm -rf`）。
+fn xargs_recursive_delete(seg: &[Word]) -> Option<CommandFinding> {
+    let mut index = 0;
+    let xargs_index = loop {
+        let word = seg.get(index)?;
+        let normalized = norm_word(&word.text);
+        if is_assignment(&word.text) || WRAPPER_WORDS.contains(&normalized.as_str()) {
+            if normalized == "xargs" {
+                break index;
+            }
+            if CONTENT_WORDS.contains(&normalized.as_str()) {
+                return None;
+            }
+            index += 1;
+            continue;
+        }
+        return None;
+    };
+    let rest = &seg[xargs_index + 1..];
+    // `xargs` 值型旗（`-n 1`／`-I {}`／`-d '\n'` 等）连值跳过；其余旗单跳。
+    const VALUE_FLAGS: &[&str] = &[
+        "-n",
+        "-i",
+        "-l",
+        "-p",
+        "-s",
+        "-e",
+        "-d",
+        "--max-args",
+        "--max-lines",
+        "--max-procs",
+        "--max-chars",
+        "--eof",
+        "--delimiter",
+        "--replace",
+    ];
+    let mut candidate = None;
+    let mut cursor = 0;
+    while cursor < rest.len() {
+        let normalized = norm_word(&rest[cursor].text);
+        if normalized.is_empty() {
+            cursor += 1;
+            continue;
+        }
+        if normalized.starts_with('-') {
+            if VALUE_FLAGS.contains(&normalized.as_str()) && cursor + 1 < rest.len() {
+                cursor += 2;
+            } else {
+                cursor += 1;
+            }
+            continue;
+        }
+        if normalized.chars().all(|c| c.is_ascii_digit()) {
+            cursor += 1;
+            continue;
+        }
+        candidate = Some(cursor);
+        break;
+    }
+    let candidate = candidate?;
+    let prog = prog_basename_norm(&rest[candidate].text);
+    if !CATASTROPHIC_DELETE_VERBS.contains(&prog.as_str()) {
+        // shell 包装（`xargs sh -c 'rm -rf *'`）：扫内容位的递归删除形态。
+        if matches!(prog.as_str(), "sh" | "bash" | "cmd" | "powershell" | "pwsh") {
+            if rest[candidate + 1..]
+                .iter()
+                .any(|word| text_contains_recursive_delete(&word.text))
+            {
+                return Some(CommandFinding {
+                    rule: "catastrophic-recursive-delete",
+                    detail:
+                        "`xargs` pipes unbounded paths into a shell recursive delete (`xargs … -c`)"
+                            .to_owned(),
+                });
+            }
+        }
+        return None;
+    }
+    let recursive = rest[candidate + 1..]
+        .iter()
+        .any(|word| CATASTROPHIC_RECURSIVE_FLAGS.contains(&norm_word(&word.text).as_str()));
+    if !recursive {
+        return None;
+    }
+    Some(CommandFinding {
+        rule: "catastrophic-recursive-delete",
+        detail: format!("`xargs` pipes unbounded paths into a recursive delete (`xargs … {prog}`)"),
+    })
+}
+
+fn segment_has_recursive_delete(seg: &[Word]) -> bool {
+    let Some(prog_index) = segment_prog_index(seg) else {
+        return false;
+    };
+    if !CATASTROPHIC_DELETE_VERBS.contains(&norm_prog(&seg[prog_index].text).as_str()) {
+        return false;
+    }
+    seg.iter()
+        .any(|word| CATASTROPHIC_RECURSIVE_FLAGS.contains(&norm_word(&word.text).as_str()))
+}
+
+fn text_contains_recursive_delete(text: &str) -> bool {
+    let tokens = tokenize(text);
+    let inner_segments = segments(&tokens);
+    if inner_segments
+        .iter()
+        .any(|seg| segment_has_recursive_delete(seg))
+    {
+        return true;
+    }
+    inner_segments.iter().any(|seg| {
+        content_payload(seg).is_some_and(|payload| match payload {
+            ContentPayload::Text(text) => {
+                let nested = segments(&tokenize(&text));
+                nested.iter().any(|seg| segment_has_recursive_delete(seg))
+            }
+            ContentPayload::Words(words) => segment_has_recursive_delete(&words),
+        })
+    })
+}
+
+/// `find` 段是否含删除行为（`-delete`／`-exec rm`／`-execdir rm`／`-ok rm`）。
+fn find_has_destructive_action(seg: &[Word], prog_index: usize) -> bool {
+    let words = &seg[prog_index + 1..];
+    for (index, word) in words.iter().enumerate() {
+        let normalized = norm_word(&word.text);
+        if normalized == "-delete" {
+            return true;
+        }
+        if matches!(normalized.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir")
+            && exec_command_is_delete(&words[index + 1..])
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// `-exec` 后的命令程序位是否删除动词（`-exec sh -c 'rm …'` 走内容位）。
+fn exec_command_is_delete(words: &[Word]) -> bool {
+    for word in words {
+        let normalized = norm_word(&word.text);
+        if matches!(normalized.as_str(), "+" | ";" | "\\;") {
+            return false;
+        }
+        if word.text.contains(char::is_whitespace) {
+            if text_contains_recursive_delete(&word.text) {
+                return true;
+            }
+            continue;
+        }
+        if WRAPPER_WORDS.contains(&normalized.as_str()) {
+            continue;
+        }
+        return CATASTROPHIC_DELETE_VERBS.contains(&prog_basename_norm(&word.text).as_str());
+    }
+    false
+}
+
+/// `find <受护面> -delete`／`-exec rm` 的 block 判定（start path 解析）。
+fn find_delete_finding(
+    workspace: &Path,
+    disaster_roots: &[PathBuf],
+    scope_path: &Path,
+    scope: Option<&Path>,
+    seg: &[Word],
+    prog_index: usize,
+) -> Option<CommandFinding> {
+    if !find_has_destructive_action(seg, prog_index) {
+        return None;
+    }
+    // POSIX find 允许 `-L`／`-H`／`-P`／`-D debugopts`／`-Olevel` 先于路径；
+    // 其余以 `-` 开头的词元即表达式起点。无路径＝POSIX 默认 `.`（fail-closed）。
+    let after_prog = &seg[prog_index + 1..];
+    let mut cursor = 0;
+    while cursor < after_prog.len() {
+        let normalized = norm_word(&after_prog[cursor].text);
+        if matches!(normalized.as_str(), "-l" | "-h" | "-p") {
+            cursor += 1;
+            continue;
+        }
+        if normalized == "-d" {
+            cursor = (cursor + 2).min(after_prog.len());
+            continue;
+        }
+        if normalized.starts_with("-o") && normalized.len() > 2 {
+            cursor += 1;
+            continue;
+        }
+        break;
+    }
+    let mut paths: Vec<String> = Vec::new();
+    for word in &after_prog[cursor..] {
+        let normalized = norm_word(&word.text);
+        if normalized.starts_with('-') || matches!(normalized.as_str(), "!" | "(" | ")" | ",") {
+            break;
+        }
+        paths.push(word.text.clone());
+    }
+    if paths.is_empty() {
+        paths.push(".".to_owned());
+    }
+    for raw in paths {
+        for candidate in path_candidates(&raw) {
+            if let Some(detail) =
+                catastrophic_target_detail(workspace, scope_path, &candidate, disaster_roots, true)
+            {
+                return Some(CommandFinding {
+                    rule: "catastrophic-recursive-delete",
+                    detail,
+                });
+            }
+            if let Some(detail) =
+                cd_scope_target_detail(workspace, scope, &candidate, disaster_roots)
+            {
+                return Some(CommandFinding {
+                    rule: "catastrophic-recursive-delete",
+                    detail,
+                });
+            }
+        }
+    }
+    None
+}
+
+/// 规则 1 全段扫描（顺序＝命令串语义；`cd` 状态跨段累积；内容位递归）。
+fn scan_rule_one_segments(
+    workspace: &Path,
+    disaster_roots: &[PathBuf],
+    command_segments: &[Vec<Word>],
+    mut scope: Option<PathBuf>,
+    depth: u8,
+) -> Option<CommandFinding> {
+    if depth > 3 {
+        return None;
+    }
+    for seg in command_segments {
+        if let Some(payload) = content_payload(seg) {
+            let inner = match payload {
+                ContentPayload::Text(text) => segments(&tokenize(&text)),
+                ContentPayload::Words(words) => vec![words],
+            };
+            if let Some(finding) =
+                scan_rule_one_segments(workspace, disaster_roots, &inner, scope.clone(), depth + 1)
+            {
+                return Some(finding);
+            }
+            continue;
+        }
+        if let Some(raw) = segment_cd_target(seg) {
+            scope = match scope.as_deref() {
+                Some(base) => resolve_scope_dir(base, &raw),
+                None => None,
+            };
+            continue;
+        }
+        if let Some(finding) = xargs_recursive_delete(seg) {
+            return Some(finding);
+        }
+        let Some(prog_index) = segment_prog_index(seg) else {
+            continue;
+        };
+        let scope_path = scope.as_deref().unwrap_or(workspace);
+        let prog = norm_prog(&seg[prog_index].text);
+        if prog == "find" {
+            if let Some(finding) = find_delete_finding(
+                workspace,
+                disaster_roots,
+                scope_path,
+                scope.as_deref(),
+                seg,
+                prog_index,
+            ) {
+                return Some(finding);
+            }
+            continue;
+        }
+        if !CATASTROPHIC_DELETE_VERBS.contains(&prog.as_str()) {
+            continue;
+        }
+        let recursive = seg
+            .iter()
+            .any(|word| CATASTROPHIC_RECURSIVE_FLAGS.contains(&norm_word(&word.text).as_str()));
+        for word in seg.iter().skip(prog_index + 1) {
+            for raw in path_candidates(&word.text) {
+                if let Some(detail) = catastrophic_target_detail(
+                    workspace,
+                    scope_path,
+                    &raw,
+                    disaster_roots,
+                    recursive,
+                ) {
+                    return Some(CommandFinding {
+                        rule: "catastrophic-recursive-delete",
+                        detail,
+                    });
+                }
+                if let Some(detail) =
+                    cd_scope_target_detail(workspace, scope.as_deref(), &raw, disaster_roots)
+                {
+                    return Some(CommandFinding {
+                        rule: "catastrophic-recursive-delete",
+                        detail,
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
+// ─── 318 审查 P0-3：维护 CLI 命令面 block（carrier-write）──────────────
+
+/// 维护子命令闭集（`orz archive|unarchive|delete-session|trust` 与
+/// `orz rollback restore`；`rollback list` 只读、不拦）。
+const MAINTENANCE_CLI_VERBS: &[&str] = &["archive", "unarchive", "delete-session", "trust"];
+
+/// 特征动词（连字符命名、日常语义弱）：与 `orz` **同段共现**即 block
+/// （P0-3 建议原话「`delete-session`/`unarchive` 等与 orz 同段出现」）。
+const MAINTENANCE_CLI_COOCCURRENCE_VERBS: &[&str] = &["delete-session", "unarchive"];
+
+/// 程序词元 basename（去路径、去 `.exe` 等后缀、去命令替换前缀；小写）。
+fn prog_basename_norm(text: &str) -> String {
+    let trimmed = text.trim().trim_matches('"').trim_matches('\'');
+    let basename = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
+    // 命令替换/子 shell 前缀（`` `orz ``、`$(orz` 经分词后的 `(orz`、`${orz`）。
+    let basename = basename.trim_start_matches(|c: char| matches!(c, '$' | '`' | '(' | '{'));
+    norm_prog(basename)
+}
+
+/// 318 P0-3 判定：模型可构造的维护 CLI 调用／桥令牌 env 引用 → carrier-write
+/// block（规则闭集不变；见 `review_command_with` ④′）。
+fn maintenance_cli_detail(command: &str) -> Option<String> {
+    if command
+        .to_ascii_lowercase()
+        .contains("orz_maintenance_ticket")
+    {
+        return Some(
+            "command references the bridge-only `ORZ_MAINTENANCE_TICKET` capability ticket"
+                .to_owned(),
+        );
+    }
+    maintenance_cli_scan(&segments(&tokenize(command)), 0)
+}
+
+fn maintenance_cli_scan(command_segments: &[Vec<Word>], depth: u8) -> Option<String> {
+    if depth > 3 {
+        return None;
+    }
+    for seg in command_segments {
+        if let Some(payload) = content_payload(seg) {
+            let inner = match payload {
+                ContentPayload::Text(text) => segments(&tokenize(&text)),
+                ContentPayload::Words(words) => vec![words],
+            };
+            if let Some(detail) = maintenance_cli_scan(&inner, depth + 1) {
+                return Some(detail);
+            }
+            continue;
+        }
+        // 程序位＝orz：首个非旗标词元为维护子命令（`orz file archive` 兼容
+        // 审查档描述的旧拼写；`rollback` 仅在 `restore` 时命中）。
+        if let Some(prog_index) = segment_prog_index(seg)
+            && prog_basename_norm(&seg[prog_index].text) == "orz"
+        {
+            let mut iter = seg.iter().skip(prog_index + 1).peekable();
+            while let Some(word) = iter.next() {
+                let normalized = norm_word(&word.text);
+                if normalized.is_empty() || normalized == "file" || normalized.starts_with('-') {
+                    continue;
+                }
+                if MAINTENANCE_CLI_VERBS.contains(&normalized.as_str()) {
+                    return Some(format!(
+                        "invokes the bridge-only maintenance CLI (`orz {normalized}`)"
+                    ));
+                }
+                if normalized == "rollback" {
+                    let next = iter.find(|word| {
+                        let normalized = norm_word(&word.text);
+                        !normalized.is_empty() && !normalized.starts_with('-')
+                    });
+                    if next.is_some_and(|word| norm_word(&word.text) == "restore") {
+                        return Some(
+                            "invokes the bridge-only maintenance CLI (`orz rollback restore`)"
+                                .to_owned(),
+                        );
+                    }
+                    return None;
+                }
+                return None;
+            }
+        }
+        // 特征动词与 orz 同段共现（含引号整体词：`echo "orz delete-session"`）。
+        let has_orz = seg
+            .iter()
+            .any(|word| prog_basename_norm(&word.text) == "orz");
+        if has_orz {
+            if let Some(verb) = seg
+                .iter()
+                .map(|word| norm_word(&word.text))
+                .find(|normalized| {
+                    MAINTENANCE_CLI_COOCCURRENCE_VERBS.contains(&normalized.as_str())
+                })
+            {
+                return Some(format!(
+                    "invokes the bridge-only maintenance CLI (`orz {verb}`)"
+                ));
+            }
+        }
+        // 引号整体词内的共现（`echo "orz delete-session …"`）：token 级
+        // basename 看不到词内空格，按文本保守判定（仅特征动词，避免把
+        // `rg "orz archive" docs` 一类普通检索误伤）。
+        if seg.iter().any(|word| {
+            if !word.text.contains(char::is_whitespace) {
+                return false;
+            }
+            let lower = word.text.to_ascii_lowercase();
+            lower.contains("orz")
+                && (lower.contains("delete-session") || lower.contains("unarchive"))
+        }) {
+            return Some(
+                "invokes the bridge-only maintenance CLI (`orz …` in a quoted argument)".to_owned(),
+            );
+        }
+    }
+    None
+}
+
+/// 搬移族的落点位置判定（末个位置词元；`-Destination`/`-t` 等旗值为落点）。
+/// `.gsa` 祖先臂只看源位：`mv x .` 不拦、`mv . /tmp` 拦。
+fn is_move_destination_position(seg: &[Word], position: usize) -> bool {
+    let Some(prog_index) = segment_prog_index(seg) else {
+        return false;
+    };
+    if !MOVE_SPLIT_VERBS.contains(&norm_prog(&seg[prog_index].text).as_str()) {
+        return false;
+    }
+    let mut positional: Vec<usize> = Vec::new();
+    let mut cursor = prog_index + 1;
+    while cursor < seg.len() {
+        let normalized = norm_word(&seg[cursor].text);
+        if matches!(
+            normalized.as_str(),
+            "-destination" | "-dest" | "--target-directory" | "-t"
+        ) {
+            if position == cursor + 1 {
+                return true;
+            }
+            cursor += 2;
+            continue;
+        }
+        if normalized.starts_with('-') || normalized.is_empty() {
+            cursor += 1;
+            continue;
+        }
+        positional.push(cursor);
+        cursor += 1;
+    }
+    positional.len() >= 2 && positional.last() == Some(&position)
+}
+
 /// block 面向模型的机械拒绝文案（经 `ToolError` 返回；随 tool 结果入 journal）。
 ///
 /// v2 文案（设计 §1）：规则 id＋目标＋「已越过保底硬边界」；规则 1 附「需精准
@@ -970,6 +1744,7 @@ fn carrier_target_detail(
     raw: &str,
     host_state: &write_control::HostStateTargets,
     sweep_verb: bool,
+    sweep_target: bool,
 ) -> Option<String> {
     let forms = path_forms(cwd, raw);
     let gsa = cwd.join(".gsa");
@@ -998,6 +1773,20 @@ fn carrier_target_detail(
                 hit.root
             ),
         });
+    }
+    // 318 审查 P0-2（2026-10-19）：`.gsa` 本体的**祖先链臂**——扫荡动词下
+    // 目标恰为 `.gsa` 的严格祖先目录（cwd 本体／上级目录）即连带摧毁会话
+    // 卷；入位写（cp/mkdir/install）与搬移落点（`mv x .`）不触发（与
+    // keystore 祖先臂同门控）。
+    if sweep_verb
+        && sweep_target
+        && let Some(hit) = write_control::session_volume_ancestor_hit(cwd, &forms)
+    {
+        return Some(format!(
+            "target `{raw}` is an ancestor of the `.gsa` session volume (`{}`); deleting, \
+             moving or renaming it would destroy protected session state",
+            hit.root
+        ));
     }
     if sweep_verb && let Some(hit) = host_state.hit_ancestor(&forms) {
         return Some(match hit.rule {
@@ -1118,6 +1907,11 @@ fn looks_like_path(s: &str) -> bool {
     let b = s.as_bytes();
     if b[0] == b'-' {
         return false;
+    }
+    // 318 审查 P0-2（2026-10-19）：`.`／点开头载体（`.gsa`）与通配词元也是
+    // 删除/写目标——旧实现不认 `.` 与 `*`，`rm -rf .` 连 warn 都不触发。
+    if s.starts_with('.') || s.contains('*') || s.contains('?') {
+        return true;
     }
     let has_sep = s.contains('\\') || s.contains('/');
     let drive = b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic();
@@ -1852,6 +2646,11 @@ mod tests {
         review_command_with(Path::new("/proj"), cmd, &host_state_linux(), &linux_roots())
     }
 
+    /// 318 P0-2：指定 cwd 的 Windows 形态审查（cwd/祖先用例）。
+    fn review_at(cwd: &str, cmd: &str) -> CommandReview {
+        review_command_with(Path::new(cwd), cmd, &host_state_win(), &roots())
+    }
+
     /// 0cc v3 规则 5 宿主状态两窄目标（Windows 形态注入）。
     fn host_state_win() -> write_control::HostStateTargets {
         write_control::HostStateTargets {
@@ -1913,6 +2712,10 @@ mod tests {
         assert_eq!(ELEVATION_PROGRAMS.len(), 4);
         assert_eq!(WRAPPER_WORDS.len(), 32);
         assert_eq!(CONTENT_WORDS.len(), 5);
+        // 318 审查 P0-2／P0-3 新增封闭表（规则 1 搬移源位／维护 CLI 面）。
+        assert_eq!(MOVE_SPLIT_VERBS.len(), 7);
+        assert_eq!(MAINTENANCE_CLI_VERBS.len(), 4);
+        assert_eq!(MAINTENANCE_CLI_COOCCURRENCE_VERBS.len(), 2);
         // 0cq S2 读模式值豁免闭集（186 批审查处置补钉——185 批声明闭集但
         // 漏入本防膨胀钉）。
         assert_eq!(READ_PATTERN_OPTIONS.len(), 15);
@@ -2493,7 +3296,9 @@ mod tests {
     fn warns_fire_for_broad_and_elevation_shapes() {
         for cmd in [
             "rm -rf D:\\other\\x",
-            "del /s /q *",
+            // 318 P0-2：裸 `*`（cwd 无约束通配）已升 block（见规则 1 新钉）；
+            // 明确落在非受护子树下的通配删除仍保持 warn 留痕语义。
+            "del /s /q D:\\other\\cache\\*",
             "sudo apt-get install foo",
             "Start-Process cmd -Verb RunAs",
         ] {
@@ -2590,5 +3395,465 @@ mod tests {
 
         // 读向放行不受影响（对照回归）。
         assert_eq!(review_linux("cp /proj/.gsa/x /tmp/y"), CommandReview::Allow);
+    }
+
+    // ─── 318 审查 P0-2 钉子（2026-10-19）：规则 1 灾难面补齐 ─────────────
+
+    /// P0-2 钉①：cwd 本体／cwd 祖先的通配与精确递归删除必须 block。
+    /// 旧行为：`rm -rf .` 连 warn 都没有（直接删工作区）；`..` 仅在父级恰为
+    /// 卷根时偶然命中。
+    #[test]
+    fn catastrophic_cwd_and_ancestor_delete_blocks() {
+        for cmd in [
+            "rm -rf .",
+            "rm -rf ./",
+            "rm -rf .\\",
+            "rm -rf .*",
+            "rm -rf ./*",
+            "rm -rf *",
+            "rm -rf *.*",
+            "Remove-Item . -Recurse",
+            "rd /s /q D:\\proj",
+            "rm -rf D:\\proj",
+            "rm -rf D:\\proj\\",
+            "rm -rf \"D:\\proj\"",
+            "rm -rf D:\\proj\\.\\",
+            "rm -rf D:\\proj\\..\\proj",
+        ] {
+            let r = review(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block: {cmd} -> {r:?}"
+            );
+            assert_eq!(
+                rule_of(&r),
+                Some("catastrophic-recursive-delete"),
+                "rule for {cmd}"
+            );
+        }
+        // cwd 的严格祖先（非卷根）：旧实现完全漏拦。
+        for cmd in ["rm -rf ..", "rm -rf ..\\..", "rm -rf D:\\proj"] {
+            let r = review_at(r"D:\proj\sub", cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block ancestor: {cmd} -> {r:?}"
+            );
+            assert_eq!(
+                rule_of(&r),
+                Some("catastrophic-recursive-delete"),
+                "rule for {cmd}"
+            );
+        }
+        // POSIX 方言同形。
+        for cmd in [
+            "rm -rf .",
+            "rm -rf ./",
+            "rm -rf ..",
+            "rm -rf *",
+            "rm -rf .*",
+            "rm -rf /proj",
+            "rm -rf /proj/",
+            "rm -rf /proj/src/..",
+            "rm -rf /proj/../proj",
+            "rmdir /s /q /proj",
+        ] {
+            let r = review_linux(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block (linux): {cmd} -> {r:?}"
+            );
+            assert_eq!(
+                rule_of(&r),
+                Some("catastrophic-recursive-delete"),
+                "rule for {cmd}"
+            );
+        }
+        // 反向：明确范围（有字面量前缀/后缀）且非受护目标不得 block——精准
+        // 删除边界保留（至多 broad-destructive warn）。
+        for cmd in [
+            "rm -rf build/*",
+            "rm -rf ./build/*",
+            "rm -rf target/debug/*",
+            "rm -rf src/generated",
+            "rm -rf *.log",
+            "rm -rf cache-*",
+            "Remove-Item .\\build\\* -Recurse",
+        ] {
+            let r = review(cmd);
+            assert!(
+                !matches!(r, CommandReview::Block(_)),
+                "explicit scoped delete must not block: {cmd} -> {r:?}"
+            );
+        }
+        // 非递归精确目标沿用旧语义（`rm /usr` 不带 -r 不拦）。
+        assert!(!matches!(review_linux("rm /usr"), CommandReview::Block(_)));
+    }
+
+    /// P0-2 钉②：卷根／系统根本体与其任意深度通配必须 block；非受护子树
+    /// 通配仍 allow/warn（不误杀普通清理）。
+    #[test]
+    fn catastrophic_protected_root_wildcards_block() {
+        for cmd in [
+            "rm -rf /*",
+            "rm -rf /usr/*",
+            "rm -rf /etc/*",
+            "rm -rf /usr/local/*",
+            "rm -rf C:\\Windows\\*",
+            "rm -rf c:\\windows\\*",
+            "rm -rf C:/Windows/*",
+            "rm -rf C:\\\\Windows\\\\*",
+            "rm -rf \"C:\\Windows\\*\"",
+            "rm -rf C:\\Windows\\System32\\*",
+            "Remove-Item C:\\Windows\\* -Recurse",
+            "Remove-Item C:\\Windows\\* -Recurse -Force",
+            "Remove-Item C:\\ProgramData\\* -Recurse",
+            "rm -rf \"C:\\Program Files\\*\"",
+            "del /f /s /q C:\\*",
+            "del /f /s /q C:\\Windows\\*",
+            "rmdir /s /q C:\\",
+            "rm -rf --no-preserve-root /",
+            "rm -rf --no-preserve-root /*",
+            "rm -rf -- /usr/*",
+        ] {
+            let r = review(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block protected root wildcard: {cmd} -> {r:?}"
+            );
+            assert_eq!(
+                rule_of(&r),
+                Some("catastrophic-recursive-delete"),
+                "rule for {cmd}"
+            );
+        }
+        // POSIX 根集在 Windows 宿主上也受护（git-bash 方言；精确子树仍放行）。
+        assert!(matches!(review("rm -rf /usr/*"), CommandReview::Block(_)));
+        for cmd in [
+            "rm -rf /*",
+            "rm -rf /usr/*",
+            "rm -rf /etc/*",
+            "rm -rf /usr/local/*",
+            "rm -rf /bin/*",
+            "rm -rf /var/*",
+            "rm -rf /proc/*",
+        ] {
+            let r = review_linux(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block (linux): {cmd} -> {r:?}"
+            );
+            assert_eq!(
+                rule_of(&r),
+                Some("catastrophic-recursive-delete"),
+                "rule for {cmd}"
+            );
+        }
+        // 反向：非受护子树的通配删除保持 warn（不误杀）。
+        for cmd in ["rm -rf D:\\other\\*", "rm -rf D:\\other\\cache\\*"] {
+            let r = review(cmd);
+            assert!(
+                !matches!(r, CommandReview::Block(_)),
+                "non-protected wildcard must not block: {cmd} -> {r:?}"
+            );
+            assert_eq!(rule_of(&r), Some("broad-destructive"), "warn for {cmd}");
+        }
+        for cmd in ["rm -rf /tmp/*", "rm -rf /home/proj/build/*"] {
+            let r = review_linux(cmd);
+            assert!(
+                !matches!(r, CommandReview::Block(_)),
+                "non-protected POSIX wildcard must not block: {cmd} -> {r:?}"
+            );
+        }
+    }
+
+    /// P0-2 钉③：`find -delete`／`find -exec rm` 旁路必须 block（旧规则 1
+    /// 不扫 find，`find /usr -delete` 零判定）。
+    #[test]
+    fn find_delete_and_exec_rm_blocks() {
+        for cmd in [
+            "find /usr -delete",
+            "find /etc -delete",
+            "find / -delete",
+            "find . -delete",
+            "find . -name '*.tmp' -delete",
+            "find /proj -delete",
+            "find .. -delete",
+            "find /usr/* -delete",
+            "find -name '*.tmp' -delete",
+            "find /usr -exec rm -rf {} +",
+            "find . -exec rm -rf {} +",
+            "find . -exec rm -rf {} \\;",
+            "find /etc -type f -exec rm -f {} +",
+            "find . -exec sh -c 'rm -rf *' \\;",
+            "find . -execdir rm -rf {} \\;",
+        ] {
+            let r = review_linux(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block find delete: {cmd} -> {r:?}"
+            );
+            assert_eq!(
+                rule_of(&r),
+                Some("catastrophic-recursive-delete"),
+                "rule for {cmd}"
+            );
+        }
+        for cmd in [
+            "find C:\\Windows -delete",
+            "find C:\\Windows -exec rm -rf {} +",
+            "find C:\\ -delete",
+        ] {
+            let r = review(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block find delete (windows): {cmd} -> {r:?}"
+            );
+            assert_eq!(
+                rule_of(&r),
+                Some("catastrophic-recursive-delete"),
+                "rule for {cmd}"
+            );
+        }
+        // 反向：明确非受护子树内的 find 清理不 block；纯读 find 不误伤。
+        for cmd in [
+            "find build -name '*.o' -delete",
+            "find /tmp -name '*.tmp' -delete",
+        ] {
+            let r = review_linux(cmd);
+            assert!(
+                !matches!(r, CommandReview::Block(_)),
+                "scoped find delete must not block: {cmd} -> {r:?}"
+            );
+        }
+        assert_eq!(
+            review_linux("find src -name '*.rs' -print"),
+            CommandReview::Allow
+        );
+    }
+
+    /// P0-2 钉④：`... | xargs rm -rf` 派生递归删除必须 block（管道输入提供
+    /// 无界路径，任何显式目标都不能把它当明确范围）。
+    #[test]
+    fn xargs_recursive_delete_blocks() {
+        for cmd in [
+            "ls | xargs rm -rf",
+            "find . -type f -print0 | xargs -0 rm -rf",
+            "printf '%s\\n' a b | xargs -n 1 rm -rf",
+            "printf '%s\\n' a b | xargs -n1 rm -rf",
+            "printf '%s\\n' a b | sudo xargs rm -rf",
+            "printf '%s\\n' a | xargs -I {} rm -rf {}",
+            "printf '%s\\n' a | xargs -- rm -rf",
+            "printf '%s\\n' a | xargs -P 4 sh -c 'rm -rf *'",
+        ] {
+            let r = review_linux(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block xargs delete: {cmd} -> {r:?}"
+            );
+            assert_eq!(
+                rule_of(&r),
+                Some("catastrophic-recursive-delete"),
+                "rule for {cmd}"
+            );
+        }
+        // 反向：非删除派生命令不误伤。
+        for cmd in [
+            "ls | xargs echo hi",
+            "ls | xargs rm -f",
+            "find . -type f | xargs wc -l",
+        ] {
+            let r = review_linux(cmd);
+            assert!(
+                !matches!(r, CommandReview::Block(_)),
+                "non-delete xargs must not block: {cmd} -> {r:?}"
+            );
+        }
+    }
+
+    /// P0-2 钉⑤：`cd <受护目录> && rm -rf *` 的静态 cd 链识别——`.gsa`／
+    /// `.git` 至少必须 block；`cd build && rm -rf *` 等明确子目录作用域不得
+    /// 误杀（否则等于禁掉正常构建清理）。
+    #[test]
+    fn cd_protected_directory_then_unconstrained_delete_blocks() {
+        for cmd in [
+            "cd .gsa && rm -rf *",
+            "cd .gsa/ && rm -rf *",
+            "cd .gsa; rm -rf ./*",
+            "cd .gsa && rm -rf .",
+            "cd .gsa && rm -rf ./",
+            "cd .gsa && rm -rf .*",
+            "cd .gsa && Remove-Item * -Recurse",
+            "cd .gsa && ri * -Recurse",
+            "cd D:\\proj\\.gsa && rm -rf *",
+            "cd .gsa && find . -delete",
+            "cd .git && rm -rf *",
+            "cd .git && ri * -Recurse",
+            "cd $UNKNOWN_BUILD_DIR && rm -rf *",
+        ] {
+            let r = review(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block cd-protected delete: {cmd} -> {r:?}"
+            );
+            assert_eq!(
+                rule_of(&r),
+                Some("catastrophic-recursive-delete"),
+                "rule for {cmd}"
+            );
+        }
+        for cmd in ["cd / && rm -rf *", "cd /usr && rm -rf *"] {
+            let r = review_linux(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block cd-root delete: {cmd} -> {r:?}"
+            );
+            assert_eq!(
+                rule_of(&r),
+                Some("catastrophic-recursive-delete"),
+                "rule for {cmd}"
+            );
+        }
+        // 反向：非受护子目录作用域不拦（明确范围）；`cd` 头部裸 `/` 不因
+        // 规则 1 目标扫描而误报（0cq S2 边界保持）。
+        for cmd in [
+            "cd build && rm -rf *",
+            "cd build && rm -rf ./*",
+            "cd /tmp && rm -rf *",
+            "cd / && rm -rf t3demo",
+        ] {
+            let r = review_linux(cmd);
+            assert!(
+                !matches!(r, CommandReview::Block(_)),
+                "scoped cd delete must not block: {cmd} -> {r:?}"
+            );
+        }
+        assert!(!matches!(
+            review("cd build && rm -rf *"),
+            CommandReview::Block(_)
+        ));
+    }
+
+    /// P0-2 钉⑥：Windows 盘符相对根／shell 引号／内容位递归（`cmd /c`、
+    /// `powershell -Command`）不得成为规则 1 绕过面。
+    #[test]
+    fn catastrophic_delete_shell_quoting_and_content_recursion_blocks() {
+        for cmd in [
+            "cmd /c \"rm -rf /\"",
+            "cmd /c rm -rf /",
+            "cmd.exe /c \"rm -rf C:\\Windows\\*\"",
+            "powershell -Command \"Remove-Item C:\\Windows -Recurse\"",
+            "powershell.exe -Command \"Remove-Item C:\\Windows\\* -Recurse\"",
+            "bash -c 'rm -rf /'",
+            "bash -lc \"cd .gsa && rm -rf *\"",
+            "pwsh -Command \"rm -rf /usr/*\"",
+        ] {
+            let r = review(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block content-recursive delete: {cmd} -> {r:?}"
+            );
+            assert_eq!(
+                rule_of(&r),
+                Some("catastrophic-recursive-delete"),
+                "rule for {cmd}"
+            );
+        }
+        // 反向：`rg -c "rm -rf /"` 的普通程序旗标不是命令内容（防误伤检索）。
+        assert_eq!(
+            review("rg -c \"rm -rf /\" docs"),
+            CommandReview::Allow,
+            "ordinary program flag must not recurse as command content"
+        );
+    }
+
+    // ─── 318 审查 P0-3 钉子（2026-10-19）：维护 CLI 命令面 block ─────────
+
+    /// P0-3 钉①：模型可构造的维护 CLI 调用（含内容位/引号/别名路径形态）
+    /// 与桥令牌 env 引用必须 block（规则 id＝carrier-write；维护面属宿主态写
+    /// 保护，保持 5 条 block 规则闭集不变）。
+    #[test]
+    fn maintenance_cli_invocations_are_blocked() {
+        for cmd in [
+            "orz archive abcd1234",
+            "orz unarchive abcd1234",
+            "orz delete-session abcd1234",
+            "orz trust D:\\proj",
+            "orz rollback restore .gsa/rollback/key/1.bak",
+            "orz file archive abcd1234",
+            "D:\\app\\orz\\orz.exe delete-session abcd1234",
+            "sudo orz archive abcd1234",
+            "cmd /c \"orz delete-session abcd1234\"",
+            "powershell -Command \"orz trust D:\\proj\"",
+            "bash -lc 'orz rollback restore x'",
+            "echo \"orz delete-session abcd1234\"",
+            "ORZ_MAINTENANCE_TICKET=0123456789abcdef orz archive abcd1234",
+            "export ORZ_MAINTENANCE_TICKET=0123456789abcdef",
+            "echo $env:ORZ_MAINTENANCE_TICKET",
+            "env | grep ORZ_MAINTENANCE_TICKET",
+        ] {
+            let r = review(cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "must block maintenance CLI: {cmd} -> {r:?}"
+            );
+            assert_eq!(rule_of(&r), Some("carrier-write"), "rule for {cmd}");
+            assert!(
+                match &r {
+                    CommandReview::Block(f) => {
+                        f.detail.contains("maintenance")
+                            || f.detail.contains("ORZ_MAINTENANCE_TICKET")
+                    }
+                    _ => false,
+                },
+                "detail should name the maintenance face: {r:?}"
+            );
+        }
+        // 反向：只读帮助／回滚列表／普通检索不误伤。
+        for cmd in [
+            "orz --help",
+            "orz rollback list",
+            "cargo test -p orz-tools --lib",
+            "rg \"orz archive\" docs",
+            "echo orz archive",
+            "git status --short",
+        ] {
+            let r = review(cmd);
+            assert_eq!(r, CommandReview::Allow, "must allow: {cmd} -> {r:?}");
+        }
+    }
+
+    /// P0-3 钉②（run_terminal_cmd 生产入口负向钉）：`run_terminal_cmd` 走
+    /// [`review_command`]（`bash/mod.rs` 同一调用点）——维护 CLI 调用与
+    /// `rm -rf .` 在该入口同样 Block；证明模型工具路径不可达维护面。
+    #[test]
+    fn run_terminal_cmd_path_blocks_maintenance_cli_calls() {
+        let cwd = Path::new(r"D:\proj");
+        for cmd in [
+            "orz delete-session abcd1234",
+            "orz unarchive abcd1234",
+            "orz archive abcd1234",
+            "orz trust D:\\proj",
+            "orz rollback restore x",
+            "ORZ_MAINTENANCE_TICKET=0123456789abcdef orz archive abcd1234",
+        ] {
+            let r = review_command(cwd, cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "run_terminal_cmd path must block: {cmd} -> {r:?}"
+            );
+            assert_eq!(rule_of(&r), Some("carrier-write"), "rule for {cmd}");
+        }
+        for cmd in ["rm -rf .", "rm -rf *", "cd .gsa && rm -rf *"] {
+            let r = review_command(cwd, cmd);
+            assert!(
+                matches!(r, CommandReview::Block(_)),
+                "run_terminal_cmd path must block: {cmd} -> {r:?}"
+            );
+            assert_eq!(
+                rule_of(&r),
+                Some("catastrophic-recursive-delete"),
+                "rule for {cmd}"
+            );
+        }
     }
 }

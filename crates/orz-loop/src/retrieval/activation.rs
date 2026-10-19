@@ -13,7 +13,7 @@ use orz_assurance::{EventType, sha256_hex};
 use crate::agents::SubagentRole;
 use crate::controller::{AgentLoopController, AgentLoopError, EventWriter, PendingDisposition};
 use crate::gateway::model::{Message, Role};
-use crate::prompt::{is_injected_block_text, is_restore_retained_block};
+use crate::prompt::{is_generated_injected_block, is_restore_retained_block};
 use crate::retrieval::effort::EffortTier;
 use crate::retrieval::evidence::StructuredCommittedResult;
 
@@ -145,7 +145,7 @@ impl ActivationRegistry {
                         // mechanical injected blocks stay filtered.
                         .filter(|m| {
                             !(m.role == Role::User
-                                && is_injected_block_text(&m.content)
+                                && is_generated_injected_block(&m.content)
                                 && !is_restore_retained_block(&m.content))
                         })
                         .cloned()

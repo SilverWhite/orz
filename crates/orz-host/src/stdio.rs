@@ -101,7 +101,7 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
         match request {
             ClientRequest::InitializeRequest(args) => {
                 let response = InitializeResponse::new(args.protocol_version)
-                    .agent_capabilities(AgentCapabilities::default());
+                    .agent_capabilities(AgentCapabilities::default().load_session(true));
                 Ok(AgentResponse::InitializeResponse(response))
             }
             ClientRequest::NewSessionRequest(args) => {
@@ -120,6 +120,35 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
                 Ok(AgentResponse::NewSessionResponse(NewSessionResponse::new(
                     SessionId::new(session_id),
                 )))
+            }
+            ClientRequest::LoadSessionRequest(args) => {
+                let session_id = args.session_id.0.as_ref().to_string();
+                self.server
+                    .handle_session_load_with_options(
+                        &session_id,
+                        args.cwd,
+                        self.trust_policy,
+                        Default::default(),
+                        self.retrieval_enabled,
+                    )
+                    .await
+                    .map_err(|e| match e {
+                        // Busy/validation are normal protocol conditions, not
+                        // internal faults (318 P3): keep the JSON-RPC code
+                        // meaningful so clients can retry instead of treating
+                        // it as an agent crash.
+                        crate::acp_server::AcpError::InvalidRequest(message) => {
+                            acp::Error::new(acp::ErrorCode::InvalidRequest.into(), message)
+                        }
+                        crate::acp_server::AcpError::SessionNotFound(message) => acp::Error::new(
+                            acp::ErrorCode::InvalidRequest.into(),
+                            format!("session not found: {message}"),
+                        ),
+                        other => acp::Error::into_internal_error(other),
+                    })?;
+                Ok(AgentResponse::LoadSessionResponse(
+                    acp::LoadSessionResponse::new(),
+                ))
             }
             ClientRequest::PromptRequest(args) => {
                 let session_id = args.session_id.0.as_ref().to_string();

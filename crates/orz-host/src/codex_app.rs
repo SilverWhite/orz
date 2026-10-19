@@ -51,9 +51,10 @@
 //! - `ephemeral` is accepted but informational: journals still write — the
 //!   assurance layer runs silently and completely regardless.
 //! - turn/item ids are per-thread counters (`turn_1`, `item_1`, …).
-//! - thread ids are opaque server-generated strings (`thr-{uuid}` — a random
-//!   component keeps separate runs in the same cwd from reusing run dirs,
-//!   implementation review P1-2) unless the client supplies one; a *known*
+//! - thread ids are opaque server-generated strings (8 lowercase hex chars —
+//!   a random component keeps separate runs in the same cwd from reusing run
+//!   dirs, implementation review P1-2; the full 8-char domain fixes the
+//!   318 P1-A5 `thr-` truncation/collision) unless the client supplies one; a *known*
 //!   client-supplied id is a `-32001` conflict (a second `thread/start` on a
 //!   live thread; `turn/start` is how you resume); a *retired* one is refused
 //!   — re-creating it would append onto the old journals.
@@ -228,15 +229,17 @@ impl ThreadEntry {
     }
 }
 
-/// Server-generated thread ids carry a random component (implementation
-/// review P1-2): a deterministic per-process counter would make every
-/// `orz-codex` run in the same directory reuse `thr-0` → the next run
-/// appends its journal onto the previous run's completed chain (the journal
-/// opens in append mode), corrupting the hash chain for every later verifier
-/// pass. The stdio surface avoids this with UUID session ids — the codex
-/// surface does the same.
+/// Server-generated thread ids carry a random component and use the full
+/// 8-hex session domain (implementation review P1-2 + 318 P1-A5): a
+/// deterministic per-process counter would make every `orz-codex` run in the
+/// same directory reuse `thr-0`, and a `thr-{uuid}` id truncated to its first
+/// 8 chars only ever exposed four random hex digits (`thr-` + 4), so
+/// collisions were ~65k-way and the sweep parser attributed every
+/// `RUN-thr-*` directory to the fake session `"thr"`. Eight hex characters
+/// are the same domain the sidecar/run namespace uses everywhere else.
 fn generate_thread_id() -> String {
-    format!("thr-{}", uuid::Uuid::new_v4())
+    let simple = uuid::Uuid::new_v4().simple().to_string();
+    simple[..8].to_string()
 }
 
 /// The Codex app-server handler — composes the ACP machinery

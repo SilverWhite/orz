@@ -106,6 +106,7 @@ const TOOLBAR_ACTIONS = {
   new: () => ui.newSession(),
   back: () => ui.navAction('back'),
   forward: () => ui.navAction('forward'),
+  resume: () => ui.resumeConversation(),
   refresh: () => ui.refresh(),
   stop: () => ui.stopRun(),
   open: () => ui.openCommand(),
@@ -117,7 +118,10 @@ export function renderToolbar() {
   const root = ui.toolbar;
   root.replaceChildren();
   for (const btn of state.toolbar) {
-    const b = el('button', null, btn.label);
+    // 318 P1-B2/B3：只有一个显式恢复动作；加载期间同一按钮变为「取消恢复」
+    // （再次点击＝作废本次 load 代次，不切换绑定）。
+    const label = btn.id === 'resume' && state.loadingSession ? '取消恢复' : btn.label;
+    const b = el('button', null, label);
     b.disabled = !btn.enabled;
     b.addEventListener('click', () => TOOLBAR_ACTIONS[btn.id]?.());
     root.appendChild(b);

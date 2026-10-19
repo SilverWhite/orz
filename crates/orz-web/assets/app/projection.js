@@ -44,17 +44,16 @@ export function applyJournalEvent(ev) {
   const p = ev.payload ?? {};
   switch (ev.event_type) {
     case 'run_preflight':
+      // 318 P1-B4：journal 只给历史事实，不写状态栏运行态（单一 owner 在
+      // main.js 的 prompt 生命周期；这里写「预检/运行中」会与 state.running
+      // 分叉，回放旧 run 时尤其会留下永久「运行中」）。
       vm.statusUpdate('守护', true);
-      vm.setRunState('预检', true);
       vm.addSystemMessage('预检通过', false);
       break;
 
     case 'run_started':
-      state.running = true;
       state.deliveredSupplements = 0;
       state.gateBlock = null;
-      vm.setRunState('运行中', true);
-      vm.syncToolbar();
       break;
 
     case 'prompt_submitted':
@@ -67,6 +66,7 @@ export function applyJournalEvent(ev) {
     case 'supplement_delivered':
       state.turnCounter++;
       state.deliveredSupplements++;
+      if (state.supplementQueueDepth > 0) state.supplementQueueDepth--;
       vm.addUserMessage(str(p, 'text'));
       break;
 
@@ -78,7 +78,6 @@ export function applyJournalEvent(ev) {
       break; // 与 model_output 的工具行面合并，避免双计
 
     case 'model_output': {
-      vm.setRunState('运行中', true);
       const turn = state.turnCounter;
       const calls = toolCalls(p);
       for (const tc of calls) {
@@ -119,11 +118,9 @@ export function applyJournalEvent(ev) {
       break;
 
     case 'permission_requested':
-      vm.setRunState('等待审批', true);
       break;
 
     case 'permission_decision': {
-      vm.setRunState('运行中', true);
       const tool = str(p, 'tool');
       const decision = str(p, 'decision');
       if (decision === 'deny' || decision === 'defer') vm.addSystemMessage(`[权限] ${tool}: 拒绝`, true);
@@ -150,6 +147,9 @@ export function applyJournalEvent(ev) {
       const callId = str(p, 'call_id');
       const secs = (num(p, 'wall_ms') / 1000).toFixed(0);
       const pid = p?.pid ? `，PID ${p.pid}` : '';
+      // 318 P1-B7：自动转入后台的终端命令是刷新/关闭的真实风险面——
+      // beforeunload 提示需要计数（服务端任务不随文本上下文恢复）。
+      state.backgroundTasks += 1;
       vm.addSystemMessage(
         `[工具运行中] ${tool} ${callId} 已运行 ${secs}s${pid}——命令继续运行，终态随后续工具结果返回`,
         false,
@@ -177,7 +177,6 @@ export function applyJournalEvent(ev) {
     case 'instruction_provenance_gate': {
       const decision = str(p, 'decision');
       if (decision === 'block') {
-        vm.setRunState('失败', false);
         state.gateBlock = 'IPG';
       }
       vm.addSystemMessage(`[门控] IPG: ${decision}`, decision === 'block');
@@ -188,7 +187,6 @@ export function applyJournalEvent(ev) {
       const gate = str(p, 'gate');
       const decision = str(p, 'decision');
       if (decision === 'block') {
-        vm.setRunState('失败', false);
         state.gateBlock = gate;
       }
       const reason = optStr(p, 'reason');
@@ -274,54 +272,39 @@ export function applyJournalEvent(ev) {
       break;
 
     case 'run_finished': {
-      state.running = false;
       state.deliveredSupplements = 0;
-      vm.setRunState('完成', true);
       vm.collapseNonWarnings();
       vm.anchorFinalOutput();
       vm.addSystemMessage(`运行完成（${str(p, 'status') || 'completed'}）`, false);
-      vm.syncToolbar();
       break;
     }
 
     case 'run_failed':
-      state.running = false;
-      vm.setRunState('失败', false);
       vm.collapseNonWarnings();
       vm.anchorFinalOutput();
       vm.addSystemMessage(`[错误] ${str(p, 'error')}`, true);
       discloseRolledBackSupplements();
-      vm.syncToolbar();
       break;
 
     case 'run_cancelled':
-      state.running = false;
-      vm.setRunState('已取消', true);
       vm.collapseNonWarnings();
       vm.anchorFinalOutput();
       vm.addSystemMessage(`运行已取消（${str(p, 'reason')}）`, false);
       discloseRolledBackSupplements();
-      vm.syncToolbar();
       break;
 
     case 'run_invalidated':
-      state.running = false;
-      vm.setRunState('无效', false);
       vm.collapseNonWarnings();
       vm.anchorFinalOutput();
       vm.addSystemMessage(`运行无效（${str(p, 'status')}）`, true);
       discloseRolledBackSupplements();
-      vm.syncToolbar();
       break;
 
     case 'run_terminated':
-      state.running = false;
-      vm.setRunState('失败', false);
       vm.collapseNonWarnings();
       vm.anchorFinalOutput();
       vm.addSystemMessage(`运行终止（${str(p, 'reason') || str(p, 'kind')}）`, true);
       discloseRolledBackSupplements();
-      vm.syncToolbar();
       break;
 
     default:
