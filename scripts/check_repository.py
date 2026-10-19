@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import posixpath
 from datetime import date
 from pathlib import Path, PurePosixPath
 import re
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tomllib
 from typing import Any
+from urllib.parse import unquote
 
 from jsonschema import Draft202012Validator, FormatChecker
 import yaml
@@ -822,54 +824,334 @@ def _source_visibility_fixture_errors(ledger: dict[str, Any]) -> list[str]:
     return errors
 
 
-def _check_markdown_links() -> list[str]:
+# ---------------------------------------------------------------------------
+# Markdown link check — git-tracked set is the source of truth (318 P0-1/P1-D7)
+#
+# The old check used `Path.exists()` against the working tree.  That made the
+# verdict depend on untracked local artifacts: 740 root `.tmp-*` evidence files
+# exist on the dev machine (all gitignored) so the local gate saw 0 broken
+# links, while a clean CI checkout saw 51.  Conversely, a locally created file
+# could hide a genuinely missing tracked doc link.
+#
+# New contract: a local link is valid iff its resolved repo-relative target is
+# in the `git ls-files` set (or is a directory that contains a tracked file).
+# The check never consults the working tree for target existence, so a clean
+# checkout and a dirty local tree produce the same link errors.
+#
+# Some tracked documents intentionally point at evidence that is not (and must
+# not be) in the repository: per-batch `.tmp-*` logs/scripts, frozen snapshots
+# under `存档/`, out-of-repo `tb-eval/` artifacts, and line-anchored references
+# into the independent `orz` submodule.  Those are classified explicitly below
+# and reported as warnings — no silent skip, no error-count inflation.  A link
+# to a path that is neither tracked nor one of these evidence classes remains a
+# hard error.
+# ---------------------------------------------------------------------------
+EVIDENCE_LINK_ALLOWLIST: tuple[tuple[re.Pattern[str], str, str], ...] = (
+    (
+        re.compile(r"(?:^|/)\.tmp-[^/]+"),
+        "tmp-evidence",
+        "per-batch gitignored .tmp-* evidence (kept outside the tree by design)",
+    ),
+    (
+        re.compile(r"(?:^|/)存档(?:/|$)"),
+        "archive-zone",
+        "frozen historical snapshot under 存档/ (links keep freeze-time paths)",
+    ),
+    (
+        re.compile(r"(?:^|/)tb-eval(?:/|$)"),
+        "out-of-repo-evidence",
+        "out-of-repo evaluation evidence under D:/tb-eval (never checked in)",
+    ),
+    (
+        re.compile(r"^orz/"),
+        "submodule-reference",
+        "line/evidence reference into the independent orz submodule",
+    ),
+)
+_LINE_SUFFIX_RE = re.compile(
+    r"(\.(?:rs|py|ps1|toml|json|jsonl|md|js|mjs|cjs|ts|proto|yaml|yml))"
+    r":\d+(?:-\d+)?$"
+)
+
+
+def _tracked_repository_files() -> set[str]:
+    """Repo-relative posix paths tracked by git (top level + orz submodule)."""
+    proc = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-z"],
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "cannot list tracked files (is this a git checkout?): "
+            f"{proc.stderr.decode('utf-8', 'replace').strip()}"
+        )
+    files = {
+        path
+        for path in proc.stdout.decode("utf-8", "surrogateescape").split("\0")
+        if path
+    }
+    try:
+        files.update(f"orz/{path}" for path in _tracked_orz_files())
+        files.add("orz")  # gitlink entry (submodule root)
+    except RuntimeError:
+        # Submodule not checked out: links into orz/ fall back to the
+        # `submodule-reference` evidence class below rather than crashing.
+        pass
+    return files
+
+
+def _tracked_directories(files: set[str]) -> set[str]:
+    dirs: set[str] = {"."}
+    for path in files:
+        parts = PurePosixPath(path).parts
+        for index in range(1, len(parts)):
+            dirs.add("/".join(parts[:index]))
+    return dirs
+
+
+def _strip_line_suffix(target: str) -> str:
+    """`path.rs:1439` / `path.rs:10-20` -> `path.rs` (code-reference style)."""
+    return _LINE_SUFFIX_RE.sub(r"\1", target)
+
+
+def _classify_link_evidence(
+    relative_target: str, source_relative: str
+) -> tuple[str, str] | None:
+    if "存档" in PurePosixPath(source_relative).parts:
+        return (
+            "archive-zone",
+            "source file is a frozen snapshot under 存档/",
+        )
+    for pattern, category, note in EVIDENCE_LINK_ALLOWLIST:
+        if pattern.search(relative_target):
+            return category, note
+    return None
+
+
+def _check_markdown_links(
+    root: Path | None = None,
+    tracked_files: set[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """Return (hard link errors, aggregated evidence warnings).
+
+    Only *tracked* markdown files are scanned and only the tracked set decides
+    validity; working-tree existence is deliberately not consulted.
+    """
+    root = root or ROOT
+    if tracked_files is None:
+        tracked_files = _tracked_repository_files()
+    tracked_dirs = _tracked_directories(tracked_files)
     errors: list[str] = []
+    warnings_by_category: dict[str, list[str]] = {}
     pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
-    for path in sorted(ROOT.rglob("*.md")):
-        if _is_non_repository_path(path):
+
+    for source in sorted(tracked_files):
+        if not source.endswith(".md"):
             continue
-        # `存档/` holds frozen historical snapshots (index/README full
-        # copies, pre-ADR-0010 designs): their links point at the paths as
-        # they were at freeze time — a provenance feature, not a defect.
-        # Rewriting them would falsify the archived originals (ADR-0010
-        # §7.2), so link checks skip the archive zone.
-        if "存档" in path.parts:
+        source_parts = PurePosixPath(source).parts
+        if any(
+            part in NON_REPOSITORY_PARTS
+            or any(part.startswith(prefix) for prefix in NON_REPOSITORY_PREFIXES)
+            for part in source_parts
+        ):
             continue
-        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        source_path = root / Path(*source_parts)
+        if not source_path.is_file():
+            # Tracked but absent from this working tree (dirty local delete):
+            # skip without inventing a link error.  Clean checkout has it.
+            continue
+        for line_number, line in enumerate(
+            source_path.read_text(encoding="utf-8").splitlines(), 1
+        ):
             for match in pattern.finditer(line):
-                target = match.group(1).split("#", 1)[0]
-                if not target or re.match(r"^(?:https?://|mailto:)", target):
+                raw_target = match.group(1).strip()
+                if raw_target.startswith("<") and raw_target.endswith(">"):
+                    raw_target = raw_target[1:-1]
+                if re.match(r"^(?:https?://|mailto:|tel:)", raw_target):
                     continue
+                target = unquote(raw_target.split("#", 1)[0]).strip()
+                if not target:
+                    continue
+                location = f"{source}:{line_number}"
                 # Platform-symmetric local-link grammar (RS-01, 2026-09-18):
                 # drive-letter / root-anchored / backslash targets resolve on
-                # one OS only — on the other runner they silently become
-                # broken links this gate cannot see (the 2026-09-02..09-18 CI
-                # outage: S4_PROGRESS_2026-09-02.md linked `D:/CLI/docs/...`,
-                # green on Windows, red on Linux for 16 days). Local links
-                # must be repo-relative with forward slashes; frozen
-                # outside-of-repo pointers live in `存档/` (skipped above).
-                if (
+                # one OS only.  Evidence pointers get the explicit allowlist
+                # below; everything else stays a hard error.
+                non_relative = bool(
                     re.match(r"^[A-Za-z]:[\\/]", target)
                     or target.startswith(("/", "\\"))
                     or "\\" in target
-                ):
+                )
+                normalized = _strip_line_suffix(target)
+                relative_target = normalized
+                if not non_relative:
+                    relative_target = posixpath.normpath(
+                        posixpath.join(
+                            posixpath.dirname(source), normalized
+                        )
+                    )
+                if relative_target == ".." or relative_target.startswith("../"):
+                    evidence = _classify_link_evidence(relative_target, source)
+                    if evidence is not None:
+                        category, note = evidence
+                        warnings_by_category.setdefault(category, []).append(
+                            f"{location} -> {raw_target} ({note})"
+                        )
+                        continue
                     errors.append(
-                        f"{path.relative_to(ROOT)}:{line_number}: "
-                        f"non-relative local link {target} — resolves on one "
-                        "OS only; use a repo-relative path"
+                        f"{location}: local link {raw_target} escapes the "
+                        "repository"
                     )
                     continue
-                resolved = (path.parent / target).resolve()
-                # orz/ is a nested independent repository (own git history)
-                # excluded from this repository's scan (NON_REPOSITORY_PARTS):
-                # links into it are navigation aids governed by orz's own
-                # review, so a target absent from a fresh CI checkout (which
-                # never contains orz/) is not a broken link in this repo.
-                if not resolved.exists() and not resolved.is_relative_to(ROOT / "orz"):
+                if non_relative:
+                    evidence = _classify_link_evidence(relative_target, source)
+                    if evidence is not None:
+                        category, note = evidence
+                        warnings_by_category.setdefault(category, []).append(
+                            f"{location} -> {raw_target} ({note})"
+                        )
+                        continue
                     errors.append(
-                        f"{path.relative_to(ROOT)}:{line_number}: broken local link {target}"
+                        f"{location}: non-relative local link {raw_target} — "
+                        "resolves on one OS only; use a repo-relative path"
                     )
-    return errors
+                    continue
+                if relative_target in tracked_files or relative_target in tracked_dirs:
+                    continue
+                evidence = _classify_link_evidence(relative_target, source)
+                if evidence is not None:
+                    category, note = evidence
+                    warnings_by_category.setdefault(category, []).append(
+                        f"{location} -> {raw_target} ({note})"
+                    )
+                    continue
+                errors.append(
+                    f"{location}: broken local link {raw_target} — target not "
+                    f"in the git tracked set ({relative_target})"
+                )
+
+    warnings: list[str] = []
+    for category in sorted(warnings_by_category):
+        entries = warnings_by_category[category]
+        sample = "; ".join(entries[:5])
+        if len(entries) > 5:
+            sample += f"; ... (+{len(entries) - 5} more)"
+        warnings.append(
+            f"link evidence [{category}]: {len(entries)} allowlisted "
+            f"non-repository link(s), not doc errors: {sample}"
+        )
+    return errors, warnings
+
+
+def _link_check_self_test() -> int:
+    """Self-test for the tracked-set link contract (`--self-test-links`)."""
+    checks: list[dict[str, Any]] = []
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        checks.append({"check": name, "ok": ok, "detail": detail})
+
+    tracked = _tracked_repository_files()
+    check(
+        "tracked set is non-trivial",
+        len(tracked) > 100,
+        f"{len(tracked)} tracked paths",
+    )
+    check("README.md is tracked", "README.md" in tracked)
+    check(
+        "local-only audit doc is not tracked",
+        "docs/audits/318_FULL_PROJECT_REVIEW_PHASE1_2026-10-19.md" not in tracked,
+    )
+    live_errors, live_warnings = _check_markdown_links()
+    # Informational: a dirty tree may legitimately contain links to a
+    # not-yet-committed source doc (e.g. this audit batch); the gate reports
+    # those as hard errors until the doc is tracked, which is the intended
+    # clean-checkout parity.  Engine correctness is asserted synthetically
+    # below, so the self-test does not depend on the batch's commit state.
+    check(
+        "live tree link scan executed",
+        isinstance(live_errors, list) and isinstance(live_warnings, list),
+        f"{len(live_errors)} hard error(s), {len(live_warnings)} warning "
+        f"group(s)",
+    )
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "a.md").write_text(
+            "\n".join(
+                (
+                    "[ok](ok.md)",
+                    "[missing](missing.md)",
+                    "[tmp](.tmp-evidence.log)",
+                    "[archive](存档/evidence/frozen.pdb)",
+                    "[external](../../tb-eval/run.json)",
+                    "[absolute](D:/tb-eval/run.json)",
+                    "[orz](orz/crates/ghost.rs:12)",
+                    "[bad absolute](D:/CLI/not-a-link.md)",
+                    "[code](src/main.rs:42)",
+                )
+            ),
+            encoding="utf-8",
+        )
+        synthetic_tracked = {"a.md", "ok.md", "src/main.rs"}
+        synthetic_errors, synthetic_warnings = _check_markdown_links(
+            root=root, tracked_files=synthetic_tracked
+        )
+        missing_errors = [
+            item for item in synthetic_errors if "missing.md" in item
+        ]
+        check(
+            "untracked real doc target is an error",
+            len(missing_errors) == 1,
+            f"errors={synthetic_errors}",
+        )
+        check(
+            "tracked target + line suffix are accepted",
+            not any(
+                "ok.md" in item or "main.rs" in item
+                for item in synthetic_errors
+            ),
+            f"errors={synthetic_errors}",
+        )
+        warning_text = "\n".join(synthetic_warnings)
+        for category in (
+            "tmp-evidence",
+            "archive-zone",
+            "out-of-repo-evidence",
+            "submodule-reference",
+        ):
+            check(
+                f"evidence class {category} is warned, not silently skipped",
+                category in warning_text,
+            )
+        check(
+            "non-evidence absolute local link is an error",
+            any("not-a-link.md" in item for item in synthetic_errors),
+            f"errors={synthetic_errors}",
+        )
+        check(
+            "working-tree existence does not decide validity",
+            not (root / "ok.md").exists()
+            and not any("ok.md" in item for item in synthetic_errors),
+        )
+
+    failed = [item for item in checks if not item["ok"]]
+    print(
+        json.dumps(
+            {
+                "ok": not failed,
+                "failed": len(failed),
+                "checks": checks,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0 if not failed else 1
+
 
 
 # ---------------------------------------------------------------------------
@@ -1398,11 +1680,15 @@ def _check_reference_root_anchor(errors: list[str]) -> None:
 LIMITATIONS = [
     "This is a deterministic repository-integrity check, not scientific validation.",
     "It does not establish oracle-free semantics or evaluation/holdout readiness.",
+    "Markdown links are checked against the git-tracked set; links to gitignored "
+    ".tmp-* evidence, frozen 存档/ snapshots, out-of-repo tb-eval artifacts and "
+    "the orz submodule are reported as classified warnings, not errors.",
 ]
 
 
 def check_repository() -> dict[str, Any]:
     errors: list[str] = []
+    warnings: list[str] = []
     counts: dict[str, int] = {}
 
     # 0al-review（2026-09-16，B2）：锚定判据 **fail-fast** —— reference 模块若
@@ -1419,6 +1705,8 @@ def check_repository() -> dict[str, Any]:
             "counts": counts,
             "error_count": len(errors),
             "errors": errors,
+            "warning_count": len(warnings),
+            "warnings": warnings,
             "limitations": LIMITATIONS,
         }
 
@@ -3606,7 +3894,9 @@ def check_repository() -> dict[str, Any]:
     orz_errors, orz_count = _check_orz_source_manifest()
     counts["orz_source_manifest_files"] = orz_count
     errors.extend(orz_errors)
-    errors.extend(_check_markdown_links())
+    link_errors, link_warnings = _check_markdown_links()
+    errors.extend(link_errors)
+    warnings.extend(link_warnings)
     errors.extend(_check_ledger_consistency(ROOT))
     ledger_slimming_errors, ledger_slimming_lines = _check_ledger_slimming(ROOT)
     errors.extend(ledger_slimming_errors)
@@ -3617,11 +3907,15 @@ def check_repository() -> dict[str, Any]:
         "counts": counts,
         "error_count": len(errors),
         "errors": errors,
+        "warning_count": len(warnings),
+        "warnings": warnings,
         "limitations": LIMITATIONS,
     }
 
 
 def main() -> int:
+    if "--self-test-links" in sys.argv[1:]:
+        return _link_check_self_test()
     try:
         report = check_repository()
     except Exception as exc:
@@ -3629,6 +3923,8 @@ def main() -> int:
             "valid": False,
             "error_count": 1,
             "errors": [f"repository checker failed: {type(exc).__name__}: {exc}"],
+            "warning_count": 0,
+            "warnings": [],
         }
     print(
         json.dumps(

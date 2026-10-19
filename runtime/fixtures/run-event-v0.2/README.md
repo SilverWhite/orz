@@ -83,7 +83,11 @@ Scope:
   `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
   source enum).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (**57 events** — 56 prior +
+  event in the v0.2 enum (**69 events** — 67 prior +
+  `run_usage_metered`（0df 2026-10-17，ADR-0010 §14.86 /
+  PER_TASK_METERING_DESIGN D1–D8：每个 run 终态前恰一条机械计费留痕）＋
+  `supplement_delivered`（0di 2026-10-18，ADR-0010 §14.88 / 设计稿 D3：
+  loop-top drain 时先落事件、再进当轮模型请求）; the 67 included
   `write_control_review`（0bw③ 2026-09-27，WRITE_CONTROL_MECHANICAL_DESIGN
   §3.2/D5 后续扩展）＋ `face_fingerprint`（0bz S1 2026-09-28，
   GAP-CONTEXT-FACE-TRANSIENT-FORK／110 档：模型面前缀指纹）＋ `browser_launch_result`（0t 2026-09-09, ADR-0010

@@ -36,9 +36,9 @@
 | ACP stdio server | `orz --stdio` |
 | 只读回放 journal | `orz --replay <events.jsonl>` |
 | 离线试跑（无需凭据） | `orz --fake-provider -p "hello"` |
-| 联网检索开关 | `orz --retrieval-enabled`（默认关闭；旧 `--retrieval-mode` 已废弃，仅兼容解析） |
+| 联网检索开关 | 默认开启；关闭用 `ORZ_RETRIEVAL_ENABLED=0`（`--retrieval-enabled` 保留为兼容显式开；旧 `--retrieval-mode` 已废弃，仅兼容解析） |
 
-联网检索默认关闭；需要联网的任务请显式加 `--retrieval-enabled`（独立检索启用门，fail-closed）。启用后由外部检索子代理执行：本地浏览器通道优先（引擎 SERP，Google 主序、Bing 回退），浏览器不可用时由模型自主改走原生 web 检索通道，启动结果与换道在事件链留痕（`browser_launch_result`）。
+联网检索默认开启（286 起缺省开，ADR-0010 §14.85）；确定性离线/对照场景请用 `ORZ_RETRIEVAL_ENABLED=0` 显式关（legacy `--retrieval-mode off` 兼容）。启用后由外部检索子代理执行：本地浏览器通道优先（引擎 SERP，Google 主序、Bing 回退），浏览器不可用时由模型自主改走原生 web 检索通道，启动结果与换道在事件链留痕（`browser_launch_result`）。
 
 无头与批量场景的权限开关：
 
@@ -59,17 +59,17 @@ orz 为**本地优先**、**保障优先**、**直接进入真机而非沙箱环
 
 ### Agent 层
 
-- **主 Agent**：唯一任务推进者。系统提示近零，面对冻结的固定 10 工具面：`read_file`/`grep`/`search_replace`/`run_terminal_cmd`/`web_search`/`web_fetch`，加 `blackboard_read`、`submit`、`blackboard_write`（向黑板计划/笔记区写入，单条 ≤8K）与 `context_compress`（知情发起模型参与压缩）；默认模型注册为 DeepSeek v4 flash（thinking 默认 max）（因当前 DeepSeek 会自动路由至deepseek v4.1 flash，所以暂时没有变动接口名）。任务最终经 submit 两阶段（请求 → 确认）交付，终答前有一轮机械审计与反例自查。
-- **外部检索子代理**：联网检索经外部检索子代理执行；检索启用门 fail-closed——未启用即整族关闭（`--retrieval-enabled`），主面 `web_search` 保持单一派发入口、执行体在子代理（全局并发 1）。启用后子代理工具面恒注册本地浏览器与原生 web 双族检索工具（带车道名与推荐序的静态标注，本地浏览器优先），换道由模型自主选择：本地浏览器通道走引擎 SERP（Google 主序、Bing 回退、DDG 兜底；人化输入延迟＝逐字符键入 + 提交前停顿 + Enter，对模型不可见），HTTP 分段道为自建引擎链（缺省直连 `360search,baidu`，代理链加 `duckduckgo`；TLS/HTTP2 指纹伪装，结果质量判断交检索子代理）。浏览器启动可用性以事实事件（`browser_launch_result`）在事件链留痕。内部检索 lane 保留设计，触发工具当前封存。
-- **会话与计划**：交互会话（TUI/ACP）可跨进程恢复；一次性 `-p` 不开启跨调用恢复，但同样落会话持久化，并按里程碑增量归档到 `.gsa/archives/`。`--plan` 提供机械计划状态机工作流，生产路径中 plan_first 休眠。
+- **主 Agent**：唯一任务推进者。系统提示近零，面对生产装配的固定 12 工具面——8 个保留工具 `read_file`/`grep`/`search_replace`/`run_terminal_cmd`/`web_search`/`web_fetch`/`get_task_output`/`kill_task`，加 `blackboard_read`、`blackboard_write`（向黑板计划/笔记/发现区写入，单条 ≤8K）、`context_manage`（单工具带 mode：压缩/清零/一键清理）与 `submit`；`context_compress` 已退役（0cz 方案 A，压缩通道由 `context_manage mode=compress` 承继）。默认检索门开启时 `web_fetch` 按单入口投影退出主面（主面可见 11），检索显式关闭时 12 全见；计数以 `orz-host/src/tools.rs` 保留面与 `orz-loop/src/controller.rs` 生产装配为准。默认模型注册为 DeepSeek v4 flash（thinking 默认 max）（因当前 DeepSeek 会自动路由至deepseek v4.1 flash，所以暂时没有变动接口名）。任务最终经 submit 两阶段（请求 → 确认）交付，终答前有一轮机械审计与反例自查。
+- **外部检索子代理**：联网检索经外部检索子代理执行；检索启用门默认开——显式关闭即整族关闭（`ORZ_RETRIEVAL_ENABLED=0`），主面 `web_search` 保持单一派发入口、执行体在子代理（全局并发 1）。启用后子代理工具面恒注册本地浏览器与原生 web 双族检索工具（带车道名与推荐序的静态标注，本地浏览器优先），换道由模型自主选择：本地浏览器通道走引擎 SERP（Google 主序、Bing 回退、DDG 兜底；人化输入延迟＝逐字符键入 + 提交前停顿 + Enter，对模型不可见），HTTP 分段道为自建引擎链（缺省直连 `360search,baidu`，代理链加 `duckduckgo`；TLS/HTTP2 指纹伪装，结果质量判断交检索子代理）。浏览器启动可用性以事实事件（`browser_launch_result`）在事件链留痕。内部检索 lane 保留设计，触发工具当前封存。
+- **会话与计划**：TUI 不跨进程恢复——交互会话面只做只读回看/`--replay`（`input.rs` 明确 never resumes）；ACP/Web 提供 `session/load` 附着既有侧车会话：取 `.gsa/sessions/<session_id>.lease` 跨进程 OS 锁（同会话第二进程 fail-closed）、要求绝对且可 canonicalize 的 cwd、不触发 0cy 启动侧收卷，并按 ACP v1 经 `session/update` 回放用户/助手历史（工具/系统消息不回放；文本上下文、黑板、LIF 侧车按侧车恢复；补充队列不持久化）。仍待 `0dk`：刷新/断线后后台任务与补充队列不恢复、`session/close` 状态机未完整；一次性 `-p` 不开启跨调用恢复，但同样落会话持久化，并按里程碑增量归档到 `.gsa/archives/`。`--plan` 提供机械计划状态机工作流，生产路径中 plan_first 休眠。
 
 ### 机械层
 
 - **结构**：机械层承载全部机制、门禁与守卫；其执行侧可进一步拆解为**半助理层**（命令运行、写执行与检索派发，返回有界结构化结果）与**静默机械审查层**（运行中只记录审查事实、终答前给出事实报告，不给建议）。
 - **执行**：模型直接提议工具调用，机械层按注册表路由 → 目标/契约校验 → 执行 → 验证逐层处理。命令、文件写入与联网访问（`web_fetch`/`browser_read`）先过权限与 ACAF 票据门，`web_search` 无 URL 目标不走票据；文件读写带内容锚点核证；去自身硬超时，长前台命令超阈（默认 180s）自动后台化并维持输出/CPU 活跃兜底（idle-kill）；失败由半助理层自动记录（进程/文件/环境实体登记），返回结构化错误信封（step/code/message/trace_id）。
 - **安全**：指令来源门（IPG）、权限桥、ACAF（`orz-signer` 独立进程签发一次性票据，未配置即 fail-closed）、凭据目标注册与脱敏、URL 门禁与来源加权、检索候选计数。权限默认 **yolo 自动放行**（写／命令／网络默认批准、不逐次弹窗；`ORZ_ALLOW_WRITE` 等三键切入 Benchmark 轴，`-p`/`--plan` 启动即打印 `[permission] mode=…`）；**交互审批面已实现并接线**——TUI 审批对话框经 ACP 网关弹出（允许一次／取消，300 秒无应答即 fail-closed 拒绝），Codex app-server 面走 `approval/request`→`approval/response` 通道，浏览器 download／script 属强制审批类、yolo 下同样逐次人工批准；把普通写改为逐次审批属已登记的可选扩展。安全边界＝机械层门禁＋写入管控＋journal 审计（2026-10-02 按实现实况更正旧口径）。
-- **写入管控**：写面保底（防扬盘级不可逆毁灭），工具面只拒**宿主状态两条窄目标**——`.gsa` 会话卷，以及 ACAF 密钥库根／签名器清单；`run_terminal_cmd` 命令面按封闭枚举五条规则审查——根级递归删除、块设备与卷毁写（`/dev/null` 豁免）、引导固件与安全机制翻转、注册表蜂巢删除、宿主状态写（含保护目标的宿主态祖先链：扫荡式删除／搬移）。提权（`elevation`）与其余破坏形态＝`[写入管控·提示]` 留痕不阻断。一般性写动作（装 `/usr`、编辑 `/etc`、`>/dev/null`、删过期补丁）放行，交回审批组件。此部分定位为**宿主机灾难保底**（保证／阻力／审计三档措辞），非绝对保证；不做可写根 allowlist。设计稿：[`docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md`](docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md)，对外口径见 [`orz/SECURITY.md`](orz/SECURITY.md)。
-- **审计、状态、上下文**：每次运行写入 hash-chained 事件 journal（事件 schema v0.2）并经 verifier 交叉校验；机械审计事实报告、会话黑板单包归档；上下文由机械滑窗与模型共同承接，而模型面是自控注意力窗口（主滑块＋主滑块以外的分块指针，分块内容不流出模型面），机械按阶梯收窄模型面（软提醒 → 320K 硬打断 → 500K 必定压缩，两轮压缩窗口仍不产出才机械截断兜底），语义压缩经压缩窗口由模型产出结构化摘要（可经 `context_compress` 知情发起）；压缩不覆盖本地面，全量留档、按块回放；会话可恢复、journal 可 `--replay` 只读回放。
+- **写入管控**：写面保底（防扬盘级不可逆毁灭），工具面只拒**宿主状态两族窄目标**——`.gsa` 会话卷（含其祖先目录本体）与 ACAF 密钥库根／签名器清单（含 keystore／manifest 祖先链）；`run_terminal_cmd` 命令面按封闭枚举五条规则审查——根级递归删除（319 起含工作区根／祖先／无约束通配／`find -delete`／`xargs rm`／`cd` 受护目录后 `rm -rf *`）、块设备与卷毁写（`/dev/null` 豁免）、引导固件与安全机制翻转、注册表蜂巢删除、宿主状态写（`.gsa`／keystore／manifest 及其祖先链）。维护子命令（`orz archive`／`unarchive`／`delete-session`／`trust`／`rollback restore`）已有桥注入的 `ORZ_MAINTENANCE_TICKET` 令牌门（缺失/过短 exit 2）＋命令面 block（319；TTY 双保险未落，余项见 0dl）。提权（`elevation`）与其余破坏形态＝`[写入管控·提示]` 留痕不阻断。一般性写动作（装 `/usr`、编辑 `/etc`、`>/dev/null`、删过期补丁）放行，交回审批组件。此部分定位为**宿主机灾难保底**（保证／阻力／审计三档措辞），非绝对保证；不做可写根 allowlist。已知绕过面见下方「真机安全设计」第 3 条与「已知边界」。设计稿：[`docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md`](docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md)，对外口径见 [`orz/SECURITY.md`](orz/SECURITY.md)。
+- **审计、状态、上下文**：每次运行写入 hash-chained 事件 journal（事件 schema v0.2）并经 verifier 交叉校验；机械审计事实报告、会话黑板单包归档；上下文由机械滑窗与模型共同承接，而模型面是自控注意力窗口（主滑块＋主滑块以外的分块指针，分块内容不流出模型面），机械按阶梯收窄模型面（软提醒 → 320K 硬打断 → 500K 必定压缩，两轮压缩窗口仍不产出才机械截断兜底），语义压缩经压缩窗口由模型产出结构化摘要（可经 `context_manage mode=compress` 知情发起）；压缩不覆盖本地面，全量留档、按块回放；ACP/Web 可按侧车附着恢复（历史经 `session/update` 回放；后台任务/队列跨刷新不恢复，0dk 待补），TUI 只读回看；journal 可 `--replay` 只读回放。
 - **生成期守卫与轮预算**：复读检测（滚动哈希 + 3-gram 兜底）、空响应重试链、stall 看门狗（`ORZ_STALL_TIMEOUT`，默认 360 秒无活动即收尾）与整轮墙钟上限；轮预算默认无限制（`MAX_TOOL_ROUNDS=0`，撤除默认 120 轮硬限）；问询均为软门、不禁工具：首轮动作批次结束后一次性注入开局三问（方向自校验），此后每满 50 轮触发一次简短中立三问，询问动作目标与进度。
 
 ### 黑板
@@ -78,7 +78,7 @@ orz 为**本地优先**、**保障优先**、**直接进入真机而非沙箱环
 
 ### 时间与动作域判断组件
 
-机械层维护本会话的时间性参考系（LIF）：持续计算时间、进度、错误率与“是否卡住”等特征（T̂、u_prog/u_err/u_stuck），按动作特征来做粗粒度的域区分并记录域切换（spike，随会话侧车存档）。计算与触发全在机械层完成、模型无感；模型需要时经 `blackboard_read` 的时间查询面（now/recent/history/feature）按需读取。fires 只内部留痕，不注入模型面——长任务的时间感知由框架替模型记账。
+机械层维护本会话的时间性参考系（LIF）：持续计算时间、进度、错误率与“是否卡住”等特征（T̂、u_prog/u_err/u_stuck），按动作特征来做粗粒度的域区分并记录域切换（spike，随会话侧车存档）。计算与触发全在机械层完成、模型无感；模型需要时经 `blackboard_read` 的时间查询面（now/recent/history/feature）按需读取。RLI 提醒（fire）不是“只内部留痕”：触发当刻以「RLI提醒: …」附注随当批工具回传直投模型面，并逐条落 `mechanical_audit_update{kind:"rli_notice"}` journal 行；连续特征读数不常驻注入，仍按需 PULL。长任务的时间感知由框架记账＋触发式附注共同承担。
 
 ### 载体与组件
 
@@ -86,7 +86,7 @@ orz 为**本地优先**、**保障优先**、**直接进入真机而非沙箱环
 - Rust 生产 workspace（`orz/`）：`orz-loop`（Agent loop、黑板与守卫）、`orz-host`（工具执行、权限桥、凭据、本地浏览器）、`orz-assurance`（journal、事件、ACAF、verifier）、`orz-bin`（CLI 入口）、`orz-tui`（终端工作台）、`orz-web`（Web 工作台：回环桥＋内嵌静态前端，`orz web` 入口）。
 - 支撑体系：`assurance/` 为 Python reference/conformance 参考；`runtime/` 为事件 Schema；`protocol/` 为结构化操作协议草案。
 
-一次运行的路径大致是：入口 → 会话与 journal 初始化 → 主 Agent 轮次（近零提示 + 冻结 10 工具面）→ 工具直接调用执行 → 机械层权限/票据门 → 执行与检索 → 结果与事件回流 → submit 两阶段交付 → journal 收尾。之后可以 `--replay` 回放或恢复会话复查。
+一次运行的路径大致是：入口 → 会话与 journal 初始化 → 主 Agent 轮次（近零提示 + 固定 12 工具面）→ 工具直接调用执行 → 机械层权限/票据门 → 执行与检索 → 结果与事件回流 → submit 两阶段交付 → journal 收尾。之后可以 `--replay` 回放，或经 ACP/Web 附着会话复查（TUI 只读回看）。
 
 机制的完整状态、稳定 ID 与深入入口见下方「开发者入口」；设计见 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)，当前投影在 [`architecture/current/README.md`](architecture/current/README.md)。
 
@@ -100,10 +100,10 @@ orz 直接运行在真机上是设计选择。
 
 1. **来源可信——ACAF**：每个跨越信任边界的动作都携带一枚由独立签发进程出具的一次性 HMAC 票据，密钥不进 Agent 进程；票据对模型不可见、绑定解析后的真实目标（TOCTOU 核证）、原子消费并全程留痕。在役载体默认 fail-closed：未配置即拒绝启动 run。→ 设计见 [`ACAF 设计档`](docs/AUTHENTICATED_CONTROL_AND_ACTION_FABRIC_DESIGN_2026-08-09.md)。
 2. **策略——权限桥与审批组件**：无头与批量场景按轴开关（`--allow-write`、`--allow-shell`／`--allow-network`）；普通写／命令／网络默认 **yolo 自动放行、不逐次弹窗**，而**交互审批面已实现并接线**——TUI 审批对话框（允许一次／取消，300 秒无应答即拒，走 ACP 网关；Codex app-server 面走 `approval/request` 通道），浏览器 download／script 属强制审批类、yolo 下也逐次人工批准；把普通写改为逐次审批属已登记的可选扩展。
-3. **灾难写保底——写入管控**：封闭枚举恰好五条拦截规则，只接住不可逆的毁灭形态——根级递归删除、裸设备／卷毁写、引导固件与安全机制翻转、注册表蜂巢删除、宿主状态写（`.gsa` 会话卷与 ACAF 密钥库根／签名器清单，含宿主态祖先链臂）；一般写动作照常放行、归审批组件。三道实施面＝工具面、命令词法审查、Linux Landlock 内核守卫。→ 设计见 [`写控设计档`](docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md)，对外口径见 [`orz/SECURITY.md`](orz/SECURITY.md)。
+3. **灾难写保底——写入管控**：封闭枚举恰好五条拦截规则，只接住不可逆的毁灭形态——根级递归删除、裸设备／卷毁写、引导固件与安全机制翻转、注册表蜂巢删除、宿主状态写（`.gsa` 会话卷与其祖先目录、ACAF 密钥库根／签名器清单及其祖先链）。319 修复批把规则 1 扩到工作区根／祖先／无约束通配／`find -delete`／`xargs rm`／`cd` 受护目录后 `rm -rf *`，并新增维护子命令命令面 block（最终以 319 报告为准；余项 0dl）。一般写动作照常放行、归审批组件。三道实施面＝工具面、命令词法审查、Linux Landlock 内核守卫（仅子进程写面；内核 <5.13 或不可用时 fail-open 跳过）。→ 设计见 [`写控设计档`](docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md)，对外口径见 [`orz/SECURITY.md`](orz/SECURITY.md)。
 4. **审计与恢复**：hash-chained journal（事件 schema v0.2）加 verifier 交叉校验、只读 `--replay`、编辑面回退窗口（`orz rollback list`／`orz rollback restore` 撤销 CLI）、载体完整性自检。
 
-已知边界：不防已失陷的签发器、同用户恶意进程、内核级失陷与恶意模型服务；票据证明来源与授权，不证明命令明智；命令审查是尽力而为的词法匹配。
+已知边界：不防已失陷的签发器、同用户恶意进程、内核级失陷与恶意模型服务；票据证明来源与授权，不证明命令明智；命令审查是尽力而为的词法匹配——变量拼接、别名、脚本内命令、`.NET`/解释器直调、编码混淆、Windows 短名／junction／UNC 未存在面仍不保证覆盖；维护 CLI 已有桥注入的 `ORZ_MAINTENANCE_TICKET` 令牌门＋命令面 block，TTY 确认未落（0dl 余项）；`.gsa` shell 读面为读全开放口径。真机默认无沙箱、权限 yolo 自动放行。
 
 ## 开发者入口
 

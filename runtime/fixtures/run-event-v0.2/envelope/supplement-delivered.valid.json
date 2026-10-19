@@ -10,7 +10,7 @@
   "payload_schema": "run-event-v0.2.schema.json",
   "payload": {
     "supplement_seq": 1,
-    "character_count": 12,
+    "character_count": 13,
     "text": "补充：用 UTF-8 输出"
   },
   "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",

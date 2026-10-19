@@ -38,7 +38,6 @@ Phase B v0.2 (2026-08-09, ADR-0010 §5.3.1/§11.2/§11.6) changes:
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -140,7 +139,7 @@ V02_ENVELOPE_PAYLOAD_OVERRIDES: dict[str, dict] = {
     },
 }
 
-# 33 event types in run-event-v0.1.schema.json enum order.
+# 34 event types in run-event-v0.1.schema.json enum order.
 EVENT_TYPES = [
     "run_preflight",
     "run_started",
@@ -3078,6 +3077,70 @@ CANONICAL_CLI_GOOD: dict[str, dict] = {
 }
 
 
+# ── 0df run_usage_metered + 0di supplement_delivered (2026-10-17/18) ──
+# 318 P0-1/P1-D7 (2026-10-19): these two events landed in the v0.2 enum after
+# the 0z/0ac block above, but their payload/envelope fixtures were hand-added
+# without registering them here.  Because `main()` used to rmtree the v0.2
+# payload/envelope trees before regenerating, re-running the generator deleted
+# the six committed fixtures and never recreated them (the drift the 318 audit
+# caught).  They are now first-class generator entries: registry v02 views,
+# payload dicts, envelope identity, and the generated-set completeness check in
+# `_write_generated_tree` all agree.
+_SUPPLEMENT_TEXT = "补充：用 UTF-8 输出"
+# character_count is the text char count (Unicode scalar values) — computed,
+# never copied from a fixture (305 R15 envelope drift was exactly a stale 12).
+V02_EVENT_TYPES += ["run_usage_metered", "supplement_delivered"]
+V02_PAYLOAD_EVENTS += ["run_usage_metered", "supplement_delivered"]
+SLUGS_V02.update({
+    "run_usage_metered": "run-usage-metered",
+    "supplement_delivered": "supplement-delivered",
+})
+V02_ENVELOPE_IDENTITY_OVERRIDES.update({
+    # Committed envelopes predate the generator entry; pin the identities so a
+    # regeneration stays byte-identical.
+    "run_usage_metered": ("RUN-CONF-USAGE-METERED", None, None),
+    "supplement_delivered": ("RUN-CONF-SUPPLEMENT", None, None),
+})
+
+PAYLOAD_GOOD_V02["run_usage_metered"] = {
+    "model": "deepseek-chat",
+    "model_calls": 2,
+    "prompt_tokens": 200,
+    "cache_hit_tokens": 150,
+    "cache_miss_tokens": 50,
+    "completion_tokens": 80,
+    "reasoning_tokens": 40,
+    "effort_tier": "max",
+    "usage_incomplete": False,
+}
+
+PAYLOAD_BAD_V02["run_usage_metered"] = {
+    # violates exactly one constraint: effort_tier outside the closed enum.
+    "model": "deepseek-chat",
+    "model_calls": 2,
+    "prompt_tokens": 200,
+    "cache_hit_tokens": 150,
+    "cache_miss_tokens": 50,
+    "completion_tokens": 80,
+    "reasoning_tokens": 40,
+    "effort_tier": "ultra",
+    "usage_incomplete": False,
+}
+
+PAYLOAD_GOOD_V02["supplement_delivered"] = {
+    "supplement_seq": 1,
+    "character_count": len(_SUPPLEMENT_TEXT),
+    "text": _SUPPLEMENT_TEXT,
+}
+
+PAYLOAD_BAD_V02["supplement_delivered"] = {
+    # violates exactly one constraint: text must be non-empty (minLength 1).
+    "supplement_seq": 1,
+    "character_count": 1,
+    "text": "",
+}
+
+
 def _envelope(event_type: str, payload: dict, sequence: int, previous: str | None) -> dict:
     return {
         "schema_version": "0.1.0-draft",
@@ -3322,7 +3385,11 @@ Scope:
   `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
   source enum).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (**57 events** — 56 prior +
+  event in the v0.2 enum (**69 events** — 67 prior +
+  `run_usage_metered`（0df 2026-10-17，ADR-0010 §14.86 /
+  PER_TASK_METERING_DESIGN D1–D8：每个 run 终态前恰一条机械计费留痕）＋
+  `supplement_delivered`（0di 2026-10-18，ADR-0010 §14.88 / 设计稿 D3：
+  loop-top drain 时先落事件、再进当轮模型请求）; the 67 included
   `write_control_review`（0bw③ 2026-09-27，WRITE_CONTROL_MECHANICAL_DESIGN
   §3.2/D5 后续扩展）＋ `face_fingerprint`（0bz S1 2026-09-28，
   GAP-CONTEXT-FACE-TRANSIENT-FORK／110 档：模型面前缀指纹）＋ `browser_launch_result`（0t 2026-09-09, ADR-0010
@@ -3464,89 +3531,180 @@ def write_json(path: Path, data: dict) -> None:
     )
 
 
+def _assert_generator_tables_match_sources() -> None:
+    """Fail before writing if an event was added to the schema/registry but not
+    to the generator tables.
+
+    318 P0-1/P1-D7: the missing `run_usage_metered` / `supplement_delivered`
+    entries were invisible until a regeneration deleted their fixtures.  This
+    guard runs at the very start of `main()` (before any file is touched), so
+    adding an event to the single-source schema/registry and forgetting the
+    generator is a loud, non-destructive failure.
+    """
+    schema_v01 = json.loads(
+        (ROOT / "runtime/run-event-v0.1.schema.json").read_text(encoding="utf-8")
+    )
+    schema_v02 = json.loads(
+        (ROOT / "runtime/run-event-v0.2.schema.json").read_text(encoding="utf-8")
+    )
+    registry = json.loads(
+        (ROOT / "runtime/run-event-payload-registry-v0.1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    enum_v01 = set(schema_v01["properties"]["event_type"]["enum"])
+    enum_v02 = set(schema_v02["properties"]["event_type"]["enum"])
+    payload_v01 = set(registry["tracks"]["v01"])
+    payload_v02 = set(registry["tracks"]["v02"])
+    problems: list[str] = []
+    for label, generator_set, source_set in (
+        ("v0.1 enum", set(EVENT_TYPES), enum_v01),
+        ("v0.2 enum", set(V02_EVENT_TYPES), enum_v02),
+        ("v0.1 payload registry", set(PAYLOAD_GOOD), payload_v01),
+        ("v0.2 payload registry", set(V02_PAYLOAD_EVENTS), payload_v02),
+    ):
+        if generator_set != source_set:
+            problems.append(
+                f"{label}: generator missing={sorted(source_set - generator_set)} "
+                f"extra={sorted(generator_set - source_set)}"
+            )
+    for label, values in (
+        ("EVENT_TYPES", EVENT_TYPES),
+        ("V02_EVENT_TYPES", V02_EVENT_TYPES),
+        ("V02_PAYLOAD_EVENTS", V02_PAYLOAD_EVENTS),
+    ):
+        if len(values) != len(set(values)):
+            problems.append(f"{label} contains duplicate entries")
+    for label, payload_map, event_list in (
+        ("PAYLOAD_GOOD", PAYLOAD_GOOD, EVENT_TYPES),
+        ("PAYLOAD_BAD", PAYLOAD_BAD, EVENT_TYPES),
+        ("PAYLOAD_GOOD_V02", PAYLOAD_GOOD_V02, V02_PAYLOAD_EVENTS),
+        ("PAYLOAD_BAD_V02", PAYLOAD_BAD_V02, V02_PAYLOAD_EVENTS),
+    ):
+        if set(payload_map) != set(event_list):
+            problems.append(
+                f"{label} keys vs generator event list: "
+                f"missing={sorted(set(event_list) - set(payload_map))} "
+                f"extra={sorted(set(payload_map) - set(event_list))}"
+            )
+    if problems:
+        raise SystemExit(
+            "generator tables are out of sync with the schema/registry "
+            "(fix before regenerating; no files were written): "
+            + "; ".join(problems)
+        )
+
+
+def _write_generated_tree(directory: Path, expected: dict[str, dict]) -> None:
+    """Synchronise one generated fixture directory without a pre-delete gap.
+
+    318 P0-1/P1-D7 (2026-10-19): `main()` used to `rmtree()` each fixture
+    directory and then regenerate from the event tables.  Two events
+    (`run_usage_metered`, `supplement_delivered`) were absent from those
+    tables, so a regeneration deleted their committed fixtures and never
+    recreated them.  Write every expected file first, prove the output set is
+    complete, and only then remove stale files — a partial failure leaves the
+    previous tree intact and raises instead of silently shipping a hole.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, payload in expected.items():
+        write_json(directory / name, payload)
+    present = {path.name for path in directory.iterdir() if path.is_file()}
+    missing = sorted(set(expected) - present)
+    if missing:
+        raise RuntimeError(
+            "fixture generation incomplete: "
+            f"{len(missing)} expected file(s) missing under "
+            f"{directory.relative_to(ROOT)}: {missing[:5]}"
+        )
+    stale = sorted(present - set(expected))
+    for name in stale:
+        (directory / name).unlink()
+    if stale:
+        print(
+            f"removed {len(stale)} stale generated fixture(s) under "
+            f"{directory.relative_to(ROOT)}: {stale[:5]}"
+        )
+
+
 def main() -> None:
+    _assert_generator_tables_match_sources()
     fixture_root = ROOT / "runtime/fixtures/run-event-v0.1"
     payloads_dir = fixture_root / "payloads"
     envelope_dir = fixture_root / "envelope"
     canonical_cli_dir = ROOT / "assurance/fixtures/canonical_cli"
-    for directory in (payloads_dir, envelope_dir, canonical_cli_dir):
-        shutil.rmtree(directory, ignore_errors=True)
-        directory.mkdir(parents=True, exist_ok=True)
 
+    payloads: dict[str, dict] = {}
+    envelopes: dict[str, dict] = {}
     for event_type in EVENT_TYPES:
         slug = SLUGS[event_type]
-        write_json(payloads_dir / f"{slug}.minimal.valid.json", PAYLOAD_GOOD[event_type])
-        write_json(payloads_dir / f"{slug}.constraint.invalid.json", PAYLOAD_BAD[event_type])
-        write_json(
-            envelope_dir / f"{slug}.valid.json",
-            _envelope(event_type, PAYLOAD_GOOD[event_type], 0, None),
+        payloads[f"{slug}.minimal.valid.json"] = PAYLOAD_GOOD[event_type]
+        payloads[f"{slug}.constraint.invalid.json"] = PAYLOAD_BAD[event_type]
+        envelopes[f"{slug}.valid.json"] = _envelope(
+            event_type, PAYLOAD_GOOD[event_type], 0, None
         )
-    write_json(
-        envelope_dir / "chained-run-finished.valid.json",
-        _envelope("run_finished", PAYLOAD_GOOD["run_finished"], 1, DUMMY_HASH),
+    envelopes["chained-run-finished.valid.json"] = _envelope(
+        "run_finished", PAYLOAD_GOOD["run_finished"], 1, DUMMY_HASH
     )
     for name, payload in ENVELOPE_BAD.items():
-        write_json(envelope_dir / f"{name}.invalid.json", payload)
-
-    for name, payload in CANONICAL_CLI_GOOD.items():
-        write_json(canonical_cli_dir / f"{name}.minimal.valid.json", payload)
+        envelopes[f"{name}.invalid.json"] = payload
+    canonical_cli = {
+        f"{name}.minimal.valid.json": payload
+        for name, payload in CANONICAL_CLI_GOOD.items()
+    }
+    _write_generated_tree(payloads_dir, payloads)
+    _write_generated_tree(envelope_dir, envelopes)
+    _write_generated_tree(canonical_cli_dir, canonical_cli)
 
     fixture_root.joinpath("README.md").write_text(
         FIXTURES_README, encoding="utf-8", newline="\n"
     )
 
-    # v0.2 tree (Phase B): payload fixtures for the five v0.2-payload events;
+    # v0.2 tree (Phase B): payload fixtures for the v0.2-payload events;
     # envelope fixtures for every event in the v0.2 enum.
     v02_root = ROOT / "runtime/fixtures/run-event-v0.2"
     v02_payloads_dir = v02_root / "payloads"
     v02_envelope_dir = v02_root / "envelope"
     v02_journals_dir = v02_root / "journals"
-    for directory in (v02_payloads_dir, v02_envelope_dir):
-        shutil.rmtree(directory, ignore_errors=True)
-        directory.mkdir(parents=True, exist_ok=True)
     v02_journals_dir.mkdir(parents=True, exist_ok=True)
 
+    v02_payloads: dict[str, dict] = {}
     for event_type in V02_PAYLOAD_EVENTS:
         slug = SLUGS_V02.get(event_type) or SLUGS[event_type]
-        write_json(
-            v02_payloads_dir / f"{slug}.minimal.valid.json",
-            PAYLOAD_GOOD_V02[event_type],
-        )
-        write_json(
-            v02_payloads_dir / f"{slug}.constraint.invalid.json",
-            PAYLOAD_BAD_V02[event_type],
-        )
+        v02_payloads[f"{slug}.minimal.valid.json"] = PAYLOAD_GOOD_V02[event_type]
+        v02_payloads[f"{slug}.constraint.invalid.json"] = PAYLOAD_BAD_V02[event_type]
     for name, payload in EXTRA_V02_PAYLOAD_POSITIVES.items():
-        write_json(v02_payloads_dir / f"{name}.json", payload)
+        v02_payloads[f"{name}.json"] = payload
     for name, payload in EXTRA_V02_PAYLOAD_BADS.items():
-        write_json(v02_payloads_dir / f"{name}.json", payload)
+        v02_payloads[f"{name}.json"] = payload
+
+    v02_envelopes: dict[str, dict] = {}
     for event_type in V02_EVENT_TYPES:
         slug = SLUGS_V02.get(event_type) or SLUGS[event_type]
         payload = V02_ENVELOPE_PAYLOAD_OVERRIDES.get(event_type)
         if payload is None:
             payload = PAYLOAD_GOOD_V02.get(event_type) or PAYLOAD_GOOD[event_type]
-        write_json(
-            v02_envelope_dir / f"{slug}.valid.json",
-            _envelope_v02(event_type, payload, 0, None),
+        v02_envelopes[f"{slug}.valid.json"] = _envelope_v02(
+            event_type, payload, 0, None
         )
-    write_json(
-        v02_envelope_dir / "chained-run-finished.valid.json",
-        _envelope_v02("run_finished", PAYLOAD_GOOD["run_finished"], 1, DUMMY_HASH),
+    v02_envelopes["chained-run-finished.valid.json"] = _envelope_v02(
+        "run_finished", PAYLOAD_GOOD["run_finished"], 1, DUMMY_HASH
     )
     for name, payload in V02_ENVELOPE_BAD.items():
-        write_json(v02_envelope_dir / f"{name}.invalid.json", payload)
+        v02_envelopes[f"{name}.invalid.json"] = payload
+    _write_generated_tree(v02_payloads_dir, v02_payloads)
+    _write_generated_tree(v02_envelope_dir, v02_envelopes)
 
     v02_root.joinpath("README.md").write_text(
         FIXTURES_README_V02, encoding="utf-8", newline="\n"
     )
 
     print(
-        f"payloads: {len(PAYLOAD_GOOD) * 2} files, "
-        f"envelope: {len(EVENT_TYPES) + 1 + len(ENVELOPE_BAD)} files, "
-        f"canonical_cli: {len(CANONICAL_CLI_GOOD)} files, "
-        f"v0.2 payloads: "
-        f"{len(PAYLOAD_GOOD_V02) * 2 + len(EXTRA_V02_PAYLOAD_POSITIVES) + len(EXTRA_V02_PAYLOAD_BADS)} files, "
-        f"v0.2 envelope: {len(V02_EVENT_TYPES) + 1 + len(V02_ENVELOPE_BAD)} files"
+        f"payloads: {len(payloads)} files, "
+        f"envelope: {len(envelopes)} files, "
+        f"canonical_cli: {len(canonical_cli)} files, "
+        f"v0.2 payloads: {len(v02_payloads)} files, "
+        f"v0.2 envelope: {len(v02_envelopes)} files"
     )
 
 

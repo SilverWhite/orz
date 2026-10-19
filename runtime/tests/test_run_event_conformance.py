@@ -171,7 +171,16 @@ class RunEventEnvelopeContractTests(unittest.TestCase):
                 self.assertTrue(errors_for(instance_path, schema_path))
 
     def test_all_34_event_types_covered(self) -> None:
-        """The good envelope fixtures cover exactly the run-event enum."""
+        """The good envelope fixtures cover exactly the run-event enum.
+
+        318 P0-1/P1-D7 (2026-10-19): the event set and its size are derived
+        from the single registry authority (`_PAYLOAD_SCHEMAS`, itself an
+        import-time view of `runtime/run-event-payload-registry-v0.1.json`)
+        plus the envelope schema enum.  Hardcoded counts (34/55/65/67) drifted
+        twice without anyone noticing because CI was red; deriving both sides
+        makes a registry/enum mismatch fail here instead of passing on a stale
+        pin.
+        """
         schema = load_json(RUN_EVENT_SCHEMA)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {
@@ -179,8 +188,10 @@ class RunEventEnvelopeContractTests(unittest.TestCase):
             for path, _ in ENVELOPE_POSITIVE_CONTRACTS.items()
             if path.name != "chained-run-finished.valid.json"
         }
+        registry_events = set(_PAYLOAD_SCHEMAS)
+        self.assertEqual(registry_events, enum_events)
         self.assertEqual(fixture_events, enum_events)
-        self.assertEqual(len(enum_events), 34)
+        self.assertEqual(len(fixture_events), len(enum_events))
 
 
 PAYLOAD_POSITIVE_CONTRACTS_V02: dict[Path, Path] = {
@@ -341,10 +352,17 @@ class RunEventV02ContractTests(unittest.TestCase):
         0z 真机资源安全边界与崩溃收尾批: +host_resource_snapshot /
         +host_resource_denied / +resource_limit_hit / +resource_exhausted /
         +reclaim_performed / +process_tree_reaped / +run_terminated.
-        两批合计 55 → 65. (RS-01 处置注记 2026-09-18: 两批落事件面时父仓
-        CI 已断流〔09-02..09-18，S4_PROGRESS 链接平台不对称〕，本契约测试
-        钉值漂移 9 天未被拦截；恢复绿灯批随批校准，测试名去计数尾缀
-        〔「51」自 55 钉起即已漂移〕.)"""
+        两批合计 55 → 65.
+        0bw③ write_control_review（094 批）与 0bz S1 face_fingerprint（110 批）
+        各 +1：65 → 67（历史硬编码钉值至此漂移两次）。
+        0df 任务级计费（2026-10-17，ADR-0010 §14.86）：+run_usage_metered。
+        0di 中途补充投递（2026-10-18，ADR-0010 §14.88）：+supplement_delivered。
+        67 → 69。
+        318 P0-1/P1-D7 修复（2026-10-19）：事件集合与数量改为从 registry
+        （`_PAYLOAD_SCHEMAS` / `_PAYLOAD_SCHEMAS_V02`，单源
+        `runtime/run-event-payload-registry-v0.1.json`）与 envelope schema
+        enum 派生，不再硬编码计数；registry 与 enum 任何一侧漂移都会在此
+        失败，而不是靠人工记得改钉值。"""
         schema = load_json(RUN_EVENT_SCHEMA_V02)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {
@@ -352,15 +370,46 @@ class RunEventV02ContractTests(unittest.TestCase):
             for path, _ in ENVELOPE_POSITIVE_CONTRACTS_V02.items()
             if path.name != "chained-run-finished.valid.json"
         }
+        registry_events_v02 = set(_PAYLOAD_SCHEMAS_V02)
+        expected_events = registry_events_v02 | (
+            set(_PAYLOAD_SCHEMAS) - _V02_RETIRED_EVENT_TYPES - registry_events_v02
+        )
+        self.assertEqual(enum_events, expected_events)
         self.assertEqual(fixture_events, enum_events)
-        # 钉值校准（0bz S1，2026-09-28）：65 → 67——0bw③（094 批）加
-        # `write_control_review` 时漏校准（66 已漂移未被拦截，同批勘误）；
-        # 0bz S1（110 批）加 `face_fingerprint` 再 +1。
-        self.assertEqual(len(enum_events), 67)
+        self.assertEqual(len(fixture_events), len(enum_events))
+        self.assertEqual(len(V02_ENUM_SLUGS), len(set(V02_ENUM_SLUGS)))
         self.assertNotIn("neutral_inquiry", enum_events)
         self.assertNotIn("retrieval_completion_check", enum_events)
         self.assertNotIn("diagnostic_coverage_checkpoint", enum_events)
         self.assertNotIn("checkpoint_response", enum_events)
+
+    def test_v02_supplement_character_count_matches_text(self) -> None:
+        """0di D3: `character_count` is the text char count (Unicode scalar
+        values), not the UTF-8 byte count.
+
+        Python `len(str)` counts Unicode code points; Rust `chars().count()`
+        counts Unicode scalar values — identical for every valid UTF-8 string
+        (surrogates cannot appear in UTF-8).  The schema states
+        `character_count=text chars`; this regression test pins the envelope
+        fixture (305 R15 fixed only the payload minimal copy) and every
+        supplemental payload fixture to that contract.
+        """
+        fixtures = [
+            ENVELOPE_DIR_V02 / "supplement-delivered.valid.json",
+            PAYLOAD_DIR_V02 / "supplement-delivered.minimal.valid.json",
+        ]
+        for path in fixtures:
+            with self.subTest(fixture=path.name):
+                payload = (
+                    load_json(path)["payload"]
+                    if path.parent.name == "envelope"
+                    else load_json(path)
+                )
+                self.assertEqual(
+                    payload["character_count"],
+                    len(payload["text"]),
+                    f"{path.name}: character_count must equal len(text)",
+                )
 
     def test_v02_payload_schema_file_convention(self) -> None:
         """Every v0.2-payload event maps to a v0.2 schema file in runtime/.

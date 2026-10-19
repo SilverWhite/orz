@@ -8,6 +8,14 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  # 318 P0-1: protoc is downloaded from the pinned upstream release and
+  # verified against the GitHub-published sha256 before use.  Keep the digest
+  # next to the URL so a version bump cannot silently drop the check.
+  PROTOC_VERSION: "35.1"
+  PROTOC_WIN64_SHA256: "5d3ff218d7d91eea95f7569bcb5a98f3030f8996d44151279d9772edcff76082"
+
 jobs:
   validate:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
@@ -37,6 +45,10 @@ jobs:
       - name: Check repository contracts
         run: python scripts/check_repository.py
 
+      - name: Self-test tracked-set link checker
+        if: always()
+        run: python scripts/check_repository.py --self-test-links
+
       - name: Compile Python sources
         run: python -m compileall -q assurance scripts
 
@@ -60,19 +72,27 @@ jobs:
             throw "PowerShell syntax errors: $($parseErrors.Count)"
           }
 
+      # 318 P0-1: every test step runs even when an earlier step failed
+      # (`if: always()`); the job still fails if any step failed, but one red
+      # suite can no longer hide the rest of the evidence.
       - name: Run Grok integration fixture tests
+        if: always()
         run: python -m unittest discover -s integration/grok/tests -v
 
       - name: Run runtime control-plane fixture tests
+        if: always()
         run: python -m unittest discover -s runtime/tests -v
 
       - name: Run General Assurance Kernel P0-P5 tests
+        if: always()
         run: python -m unittest discover -s assurance/tests -v
 
   rust-tests:
     name: Rust tests (orz workspace / windows)
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -84,27 +104,146 @@ jobs:
         with:
           toolchain: "1.97.1"
 
-      - name: Install protoc 35.1 (pinned; mirrors dev-machine orz/bin/protoc)
+      - name: Install protoc (pinned + sha256 verified)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $zip = Join-Path $env:RUNNER_TEMP 'protoc-35.1-win64.zip'
+          $zip = Join-Path $env:RUNNER_TEMP "protoc-${env:PROTOC_VERSION}-win64.zip"
           $dest = Join-Path $env:RUNNER_TEMP 'protoc'
-          Invoke-WebRequest -Uri 'https://github.com/protocolbuffers/protobuf/releases/download/v35.1/protoc-35.1-win64.zip' -OutFile $zip
+          Invoke-WebRequest -Uri "https://github.com/protocolbuffers/protobuf/releases/download/v${env:PROTOC_VERSION}/protoc-${env:PROTOC_VERSION}-win64.zip" -OutFile $zip
+          $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = "$env:PROTOC_WIN64_SHA256".ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "protoc sha256 mismatch: expected $expected, got $actual"
+          }
           Expand-Archive -Path $zip -DestinationPath $dest -Force
           Add-Content $env:GITHUB_PATH (Join-Path $dest 'bin')
 
       - name: Install jsonschema (orz-assurance crosscheck tests shell out to python)
         run: python -m pip install jsonschema
 
+      # 318 P0-1: the two cancel tests used fixed sleeps and raced the
+      # loop-top work under parallel execution; they now wait on explicit
+      # host-entered signals, so the suite is deterministic in parallel.
       - name: Run orz-loop lib tests
+        if: always()
         working-directory: orz
-        run: cargo test --locked -p orz-loop --lib
+        run: cargo test --locked --no-fail-fast -p orz-loop --lib
 
       - name: Run orz-assurance lib tests
+        if: always()
         working-directory: orz
-        run: cargo test --locked -p orz-assurance --lib
+        run: cargo test --locked --no-fail-fast -p orz-assurance --lib
 
       - name: Run orz-host lib tests (serial — load-sensitive process/timing tests)
+        if: always()
         working-directory: orz
-        run: cargo test --locked -p orz-host --lib -- --test-threads=1
+        run: cargo test --locked --no-fail-fast -p orz-host --lib -- --test-threads=1
+
+  orz-web:
+    name: orz-web (lib tests + frontend smoke)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Rust toolchain (pinned by orz/rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install protoc (pinned + sha256 verified)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:RUNNER_TEMP "protoc-${env:PROTOC_VERSION}-win64.zip"
+          $dest = Join-Path $env:RUNNER_TEMP 'protoc'
+          Invoke-WebRequest -Uri "https://github.com/protocolbuffers/protobuf/releases/download/v${env:PROTOC_VERSION}/protoc-${env:PROTOC_VERSION}-win64.zip" -OutFile $zip
+          $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = "$env:PROTOC_WIN64_SHA256".ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "protoc sha256 mismatch: expected $expected, got $actual"
+          }
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          Add-Content $env:GITHUB_PATH (Join-Path $dest 'bin')
+
+      - name: Run orz-web lib tests
+        if: always()
+        working-directory: orz
+        run: cargo test --locked --no-fail-fast -p orz-web --lib
+
+      - name: Run orz-web frontend smoke
+        if: always()
+        working-directory: orz
+        run: node crates/orz-web/tests/frontend_smoke.mjs
+
+  orz-aux:
+    name: orz-tui / orz-bin compile + orz-tui tests
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Rust toolchain (pinned by orz/rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+
+      - name: Install protoc (pinned + sha256 verified)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:RUNNER_TEMP "protoc-${env:PROTOC_VERSION}-win64.zip"
+          $dest = Join-Path $env:RUNNER_TEMP 'protoc'
+          Invoke-WebRequest -Uri "https://github.com/protocolbuffers/protobuf/releases/download/v${env:PROTOC_VERSION}/protoc-${env:PROTOC_VERSION}-win64.zip" -OutFile $zip
+          $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = "$env:PROTOC_WIN64_SHA256".ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "protoc sha256 mismatch: expected $expected, got $actual"
+          }
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          Add-Content $env:GITHUB_PATH (Join-Path $dest 'bin')
+
+      # orz-bin has only binary targets (no lib), so compile every target
+      # instead of pretending `--lib` runs its unit tests.  orz-tui lib tests
+      # are executable in CI; orz-bin runtime/ACAF tests remain a known gap
+      # (documented in the 318 final report).
+      - name: Check orz-tui and orz-bin all targets
+        if: always()
+        working-directory: orz
+        run: cargo check --locked -p orz-tui -p orz-bin --all-targets
+
+      - name: Run orz-tui lib tests
+        if: always()
+        working-directory: orz
+        run: cargo test --locked --no-fail-fast -p orz-tui --lib
+
+  release:
+    name: Release gate (main only; publishing remains manual)
+    # 318 P0-1: a release may only proceed from main and only after every
+    # required test job is green.  The actual dual-platform carrier build /
+    # GitHub Release publish stays the documented manual batch; this job is
+    # the machine-enforced precondition that used to be missing.
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    needs: [validate, rust-tests, orz-web, orz-aux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm all required jobs succeeded
+        run: |
+          echo "validate, rust-tests, orz-web and orz-aux all succeeded."
+          echo "Release gate satisfied (main push, all green)."
