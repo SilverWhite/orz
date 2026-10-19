@@ -786,6 +786,7 @@ dialogs.bindDialogActions({
       { ordinal: 1, preview: '第一个问题', character_count: 5 },
       { ordinal: 2, preview: '第二个问题', character_count: 5 },
     ],
+    queue_depth: 3,
   }),
   rewindRecall: async (ordinal) => {
     recallOrdinal = ordinal;
@@ -802,6 +803,13 @@ dialogs.openRewind();
 for (let i = 0; i < 5; i++) await Promise.resolve();
 const modalRoot = globalThis.document.getElementById('modalLayer');
 assert.equal(modalRoot.classList.contains('open'), true, 'openRewind 必须打开弹窗');
+const queueNotice = registry
+  .filter((e) => e.tagName === 'DIV' && (e.textContent || '').includes('未投递补充'))
+  .at(-1);
+assert.ok(
+  queueNotice && queueNotice.textContent.includes('3 条未投递补充'),
+  '撤回预览必须显示 queue_depth（将一并丢弃的补充条数）',
+);
 // stub DOM 的 textContent 不聚合子节点——行断言走 registry 的行元素。
 const rewindRows = registry.filter((e) => e.className === 'rewind-row');
 assert.equal(rewindRows.length, 2, '列表必须渲染两行');
