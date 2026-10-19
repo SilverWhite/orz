@@ -120,7 +120,11 @@ disabled；测试 fake 可覆写）。run 尾读值即设计值（降级链是 p
 降级。**与观测 `reasoning_tokens` 分列**——r4 实证档位恒定 ≠ 推理量恒定（全轮一档
 下推理占 completion 76%、逐题 28%–90%），两值并存各有口径。〔288 批勘注：trait
 形态实落为 `usage_meter_labels(&self) -> (String, String)`（model id＋tier 一次
-单读；default `("unknown", "unknown")`），语义同本节，见 §4 勘注①〕
+单读；default `("unknown", "unknown")`），语义同本节，见 §4 勘注①〕〔315 批勘注
+（2026-10-19，粒度标注勘正）：本句「逐题 28%–90%」实为**逐会话（run）**粒度——194 份官方
+会话逐份 28%–90%（均值 75.5%）；**逐题聚合（36 题）实为 67%–85%**（均值 76.2%、σ≈4pp），
+下界 28% 出自一次调用的桩会话（rejector ckpt4）。语义结论不变（档位恒定 ≠ 推理量恒定），
+读数与方差分解（档级题内 61%／题间 39%）见 [`315 批档`](audits/315_REDDIT_REASONING_SHARE_DISAGGREGATION_2026-10-19.md) §2〕
 
 ### D6 折算点＝`run_agent_loop` 的 ModelResponse 到达点；宿主 `SharedLoopServices`
 
