@@ -1220,7 +1220,7 @@ a2b30a50202cf56338f26b18ecfeee468f192fb9a577bedd6d3050bd050d6115  crates/orz-web
 2d84d3e4d238228a866effab76087e6d7602e9af101ab1654e3bc2aba7af46d4  crates/orz-web/src/lib.rs
 6b8a576bf94015017ba6786385ea2e4e15c8eb0184b25c0f984c100a730db3fa  crates/orz-web/src/runs.rs
 fb354a14e8d01bd58fba90385736828a051c1a3d4d646a9f3e31894057283c07  crates/orz-web/src/security.rs
-5c9625bb3d99f12c14a072157aac36ffb335f5a02323abddd3d9d1ba2314ec7d  crates/orz-web/src/server.rs
+56c5b25ac35083c316a973967cb5c0d1ad3a34cff3de74679a8191558966a764  crates/orz-web/src/server.rs
 3e2cf3f1d97cb3aab93adb2a77f9d66b549028ec7070d7105488e88d91952201  crates/orz-web/src/trust.rs
 aef9ad555cfe361a48e5ef14c22ee0baec281ab5020111672262a247f19e2f14  crates/orz-web/tests/frontend_smoke.mjs
 9dd0bb28b67db54d84283d60c86ecf195bb2656aabcbd40e392d44d0e878e4b3  prod/mc/cli-chat-proxy-types/Cargo.toml
