@@ -1273,7 +1273,12 @@ mod tests {
     }
 
     fn tempfile_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        // 318 CI: GitHub Windows temp paths can contain 8.3 short names
+        // (`RUNNER~1`); canonicalize the parent first so `std::fs::canonicalize`
+        // of the child is byte-identical to the plain spelling under test.
+        let base = dunce::canonicalize(std::env::temp_dir())
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let dir = base.join(format!(
             "orz-web-path-eq-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
