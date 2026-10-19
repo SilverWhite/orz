@@ -1,4 +1,4 @@
-# 绝对一对一远程形态——需求转录、业界检索与可行性判定（调研底稿）（2026-10-19）
+# 绝对一对一远程形态——需求转录、业界检索与可行性判定（调研底稿 v1.1）（2026-10-19；v1.1＝311 批第二轮裁决录）
 
 > **性质**：调研底稿（零源码零跑批；310 批）。**立项待用户裁决**——其中第 5 件
 > 「勒索病毒式锁定机器」**调研结论为拒绝原案、给替代方案**（§4），需用户裁决后才可入设计。
@@ -66,6 +66,38 @@
   设备远程**用 orz**（对话/审批/状态），不远程**用整台电脑**；工程量最小，与现有
   0di/web 桥基建同构，先落地再演进。
 - **选项 C＝全自研远程桌面**：含画面流/输入注入/设备锁——不推荐（§2/§4 依据）。
+
+## §7 第二轮裁决（2026-10-19，用户；311 批录）
+
+1. **路线定向＝优先借鉴成熟设计**（「我们自己踩坑和打磨太费劲」）——选项 A 定向
+   （orz 做鉴权守卫层，传输/画面借成熟件）；选项 B（远程指令面）可作为 A 的首个增量
+   先落地。选项 C 退役。
+2. **「用 Win 安全中心做文件锁定」查证＝拆两半**：事件式锁机**不可行**——Defender
+   篡改保护（Tamper Protection）拦截一切程序化修改（`Set-MpPreference` 含 Controlled
+   Folder Access），管理员同样被拒、无纯 PowerShell 旁路（须交互 UI 或 Intune/GPO
+   预配置）〔检索：[MS Learn Troubleshooting mode](https://learn.microsoft.com/en-us/defender-endpoint/troubleshooting-mode-scenarios)／
+   [cloudbrothers 篡改保护边界](https://cloudbrothers.info/current-limits-defender-av-tamper-protection)／
+   [Superuser 实证](https://superuser.com/questions/1858090/pausing-windows-tamper-protection-and-defender-not-possible-anymore)〕；
+   **安装时基线加固可行且采纳**＝provision 时一次性配 CFA 保护文件夹＋核 BitLocker
+   状态，文件层防护由 OS 常驻承载（BitLocker 即真·文件层静态锁定）。
+3. **锁形态采纳「外部接口一视同仁全锁＋已知设备白名单」**——用户直觉「全锁比单独锁
+   鼠标键盘省事」在 OS 原生机制上成立：**设备安装限制策略**（Device Installation
+   Restrictions，注册表 `HKLM\SOFTWARE\Policies\Microsoft\Windows\DeviceInstall\Restrictions`，
+   `DenyUnspecified`＋`AllowDeviceIDs`）＝「禁一切新设备安装、白名单例外」恰一开关一表；
+   被拦安装落安全日志 **Event 6423**（天然审计面进风险事件）〔检索：[MS Learn Manage Device Installation](https://learn.microsoft.com/en-us/windows/client-management/client-tools/manage-device-installation-with-group-policy)／
+   [Superuser 注册表控制](https://superuser.com/questions/1189380/is-there-any-way-to-control-device-installation-restrictions-via-the-registry)／
+   [Petri 分层评估](https://petri.com/microsoft-improves-windows-10-device-installation-control-with-new-apply-layered-group-policy-setting)／
+   [Event 6423](https://www.ultimatewindowssecurity.com/securitylog/encyclopedia/event.aspx?eventid=6423)〕。
+   白名单用**设备实例 ID**（物理件唯一；硬件 ID 同型号共享）——与 ① 配对注册制合流，
+   配对时登记用户键盘/鼠标实例 ID。**边界如实记四条**：①新装阻断≠已装设备失活（已插
+   非白名单外设需 PnP 枚举 `Disable-PnpDevice` 一把扫，或用新版「apply to already
+   installed」）；②核心类豁免（网络适配器锁了远程会话自断／系统盘／显示）——「一视同
+   仁」在外部设备类范围内成立；③改策略需管理员；④笔记本内置键盘不可拔＝天然逃生面
+   的一部分。锁耳机＝音频端点同表管理零额外工作量。
+4. **鉴权根＝ACAF 绑定密码（否 Windows PIN）**——用户裁「PIN 不是隐私物、不足为凭」
+   ＝同意：Hello PIN 系设备本地 TPM 绑定、设备属主可重置，不作此场景信任根；安装时
+   采集独立密码经 Argon2id 派生入 ACAF keystore（与签名密钥同库同备份纪律），解锁
+   远程锁／设备变更必须过它＋rate-limit。
 
 ## §6 关键词
 
