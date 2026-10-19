@@ -136,6 +136,19 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.257 2026-10-19 320 批 0.9.4 双平台载体重建——319 修复进体（**重建批**，源冻结 orz `5ee818d3`，计数 62 不变）
+
+- **由来**：用户令「请进行重建吧，不过目前D盘又红了，估计还是要先清理一波」；319 修复批源码已提交（`41534aee` 起）但 0.9.3 载体不含，需 0.9.4 重建后才可开 0dh/0di S4。
+- **磁盘**：D: 6.3 GB free（2.3%）→ 删 `target/debug/incremental`（15.81 GB，纯增量缓存）＋`target/release-dist`（7.57 GB，旧 profile 产物）＋`.tmp-*` 残件（10.8 MB）→ **26.99 GB free**；保留 `target/release` 暖缓存与 `D:/tb-eval/orz-target`。
+- **版本**：0.9.3→0.9.4（`crates/orz-bin/Cargo.toml`＋`Cargo.lock` 恰两行，`cargo metadata --locked` exit 0，orz `5ee818d3`；父仓 pin＋manifest `c244495c`，1488 条）。
+- **WIN**：`cargo build -p orz-bin --release -j 2` exit 0（4m56s）；三件换装 MATCH 3/3（`f0bb5d92…` 58,703,360 B／`c7f5aa2f…` Δ0／`478fcce7…` Δ0），`.0.9.3-bak` 预建、ACAF 重 provision exit 0（旧 manifest 留 `bak-20261019-320`）、清单 v0.9.4、`--build-info` 0.9.4。
+- **LIN**：docker `rust:1.97-slim`＋trixie 脚本 exit 0（cargo `Finished` 20m28s）；三件直写（`aaa68d4b…` 117,597,120 B／`fdc3273e…`／`95523f60…`），static-pie×3（DYN、无 PT_INTERP、未 strip）；alpine 3.20／bookworm-slim 双冒烟 `0.9.4 os=linux` rc0；清单 v0.9.4；Linux 不重 provision（容器内 /tmp 临时 provision 仅冒烟）。
+- **进体**：319 十项新面双侧全进体（`ORZ_MAINTENANCE_TICKET` 0→3、维护子命令文案 0→1、`carrier:session-volume-ancestor` 0→1、xargs 文案 0→1、维护 CLI 拦截 0→3、租约冲突 0→1、`session/load history replayed` 0→1、cwd 门 0→2/0→1、补充延迟 0→14、`run-scoped carry queue` 0→7）；九项保留面逐项持平；`0.9.4` 双侧 0→1、`0.9.3` 残留 7→6/8→7（版本字面替换，非回归）。
+- **冒烟/活体**：WIN 三轮＋LIN 四轮 rc0；journal 11 events（`funnel-v1`＋`run-v1` 双锚＋`run_usage_metered` index 9 恰在 `run_finished` 前＋哈希链连续）；0cy 收卷链 WIN `6ad62f5b→60→ffe`、LIN `6ad63513→1d→25→29`（归档 3299/3308/3306 B＋ARC 回执三份）；0dl 活体门＝无令牌 `delete-session` exit 2（门先于存在性检查）／16 字符令牌越门后 exit 1。
+- **身份门**：`run_r0_heavy_official.py` `4d7917c3…`→`aaa68d4b…`（py_compile＋`--help` rc0）。
+- **台账**：[`320 批档`](audits/320_CARRIER_REBUILD_V094_319_FIX_2026-10-19.md)；BACKLOG 指针/计数行；TODO 计数行；索引 v4.290 → v4.291；未推送未发行（发布面停 v0.9.3、装机位未换装）；门禁 valid: true（error_count 0）。
+- 关键词：320 批、0.9.4、319 修复进体、D 盘清理 20.72 GB、MATCH 3/3、ACAF `c7f5aa2f…`、`aaa68d4b…` 身份门、static-pie×3、alpine/bookworm 双冒烟、0dl 维护令牌活体门、计数 62 不变、v4.291。
+
 ### 1.256 2026-10-19 317 批 Reddit 再追评——core/strict/iso 优势不对称回复登记＋「需好开局」假说（**回复翻译落账批**，零源码零跑批，计数 60 不变）
 
 - **由来**：用户开场定性「这不是一个很明显的问题吗，之前也都已经探究过了」＝core（checkpoint solve）优势相较 strict/iso 优势不对称（V4 报告既有）；评论者追评后用户自撰回复，令翻译并登记。
