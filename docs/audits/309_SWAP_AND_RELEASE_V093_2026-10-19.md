@@ -43,11 +43,17 @@
 - **回读核证**：发行后 `gh release view` 资产 digest 对账＋回下载逐位比对（282 式），
   见 §4。
 
-## §4 回读核证（发行后）
+## §4 回读核证（发行后补记，2026-10-19）
 
-- `gh release view v0.9.3`：`isDraft=false`／`isPrerelease=false`／**Latest**；三资产
-  服务端 digest ↔ 本地逐位一致；tag `v0.9.3` → 本批提交；`targetCommitish=main`。
-- 回下载三件与 `rel-309-stage` 本地件逐字节比对一致。
+- `gh release view v0.9.3`：`isDraft=false`／`isPrerelease=false`／**Latest**（`gh
+  release view --json tagName` 无参返回 `v0.9.3`）；`targetCommitish=main`；tag
+  `v0.9.3` → 本批提交 `9b9d5b98`。
+- **三资产服务端 digest ↔ 本地逐位一致**：zip `170c23f1…`（28,360,494 B）／
+  tar.gz `dce90f47…`（37,887,053 B）／SHA256SUMS `b83b903b…`（191 B）。
+- **回下载逐位比对（282 式）＝三件全 `BYTE-IDENTICAL`**。核证注记（如实记）：直连
+  下载路由过慢（zip 两轮 240s/540s 仅 4.9/10.1 MB）——SHA256SUMS 与 tar.gz 直连完成、
+  zip 经本地代理 `127.0.0.1:7890` 断点续传完成；同因 git 推送曾 TLS 瞬断，改
+  `-c http.proxy=` 直连成功（本机 Clash 代理波动，环境面不入账）。
 
 ## §5 启动网址远程连接核答（用户问询，随批如实记）
 
