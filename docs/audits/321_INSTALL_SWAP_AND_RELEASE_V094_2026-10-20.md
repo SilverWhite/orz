@@ -42,9 +42,16 @@
 - **回读核证**：发行后 `gh release view` 资产 digest 对账＋回下载逐位比对（282/309 式），
   见 §4。
 
-## §4 回读核证（发行后补记）
+## §4 回读核证（发行后补记，2026-10-20）
 
-（待回读：`gh release view` 状态／tag→提交／三资产 digest↔本地／回下载逐位比对。）
+- `gh release view v0.9.4`：`isDraft=false`／`isPrerelease=false`／**Latest**（`gh release view`
+  无参返回 `v0.9.4`）；`targetCommitish=main`；tag `v0.9.4` → 本批提交 `69703963`
+  （`git ls-remote origin refs/tags/v0.9.4` 同值）。
+- **三资产服务端 digest ↔ 本地逐位一致**：zip `2a9a747e…`（28,557,864 B）／
+  tar.gz `855bd1ec…`（37,866,976 B）／SHA256SUMS `558f2d8e…`（191 B）。
+- **回下载逐位比对（`gh release download v0.9.4`）＝三件全 `BYTE-IDENTICAL`**；
+  下载态 `SHA256SUMS` 复算 **2/2 OK**。
+- 本批直连下载 37.9 MB＋28.6 MB 均一次完成（无 309 的代理断点场景），如实记。
 
 ## §5 台账
 
