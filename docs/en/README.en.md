@@ -3,7 +3,7 @@
 # orz — English README (expanded edition)
 
 > LLM-assisted translation; the Chinese originals are authoritative. Corrections welcome.
-> Source: [`/README.md`](../../README.md) (Chinese, authoritative), v0.9.3 face, 2026-10-19.
+> Source: [`/README.md`](../../README.md) (Chinese, authoritative), v0.9.4 face, 2026-10-20.
 > **Expanded edition** (user adjudication 2026-10-02): the two editions mirror each other in
 > content; this one is expanded in *role*, not in coverage — it doubles as the English-language
 > umbrella stand-in for the project's design authorities
@@ -29,13 +29,13 @@ Configure Windows and Linux as follows:
 
 | Step | Windows (PowerShell) | Linux (sh) |
 |---|---|---|
-| 1. Unpack | Put `orz.exe`, `orz-signer.exe`, `orz-acaf-provision.exe` into one directory (e.g. `C:\orz`). | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.3-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
+| 1. Unpack | Put `orz.exe`, `orz-signer.exe`, `orz-acaf-provision.exe` into one directory (e.g. `C:\orz`). | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.4-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
 | 2. Configure the API key | Store it in Windows Credential Manager (Generic, target name `orz-deepseek/agent`; once only):<br>`cmdkey /generic:orz-deepseek/agent /user:agent /pass:YOUR_DEEPSEEK_API_KEY` | Use an environment variable (the explicit exception to the Windows Credential Manager channel):<br>`export ORZ_DEEPSEEK_API_KEY=YOUR_DEEPSEEK_API_KEY` |
 | 3. Initialize security signing (one-time) | `.\orz-acaf-provision.exe "$env:USERPROFILE\.orz-acaf\keystore" "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br><br>ACAF is fail-closed by default: unconfigured, it refuses to run (the process starts; runs are refused). | `./orz-acaf-provision "$HOME/.orz-acaf/keystore" "$HOME/.orz-acaf/signer-manifest.json"` |
 | 4. Set startup environment | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
 | 5. Run | `.\orz.exe` (interactive TUI)<br>`.\orz.exe -p "your task" --real` (headless)<br>`.\orz.exe web` (Web workbench; prints the local token-bearing URL) | `./orz` (interactive TUI)<br>`./orz -p "your task" --real` (headless)<br>`./orz web` (Web workbench; prints the local token-bearing URL) |
 
-Release notes and integrity verification live on GitHub Releases (latest [v0.9.3](https://github.com/SilverWhite/orz/releases/tag/v0.9.3), dual-platform packages + `SHA256SUMS`); the 0.1.0–0.5.1 trial packages are under [`releases/`](../../releases/).
+Release notes and integrity verification live on GitHub Releases (latest [v0.9.4](https://github.com/SilverWhite/orz/releases/tag/v0.9.4), dual-platform packages + `SHA256SUMS`); the 0.1.0–0.5.1 trial packages are under [`releases/`](../../releases/).
 
 ### Common entry points
 
