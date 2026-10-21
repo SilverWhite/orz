@@ -138,9 +138,15 @@ mod tests {
             journal,
             tool_result: None,
         };
-        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec![
-            "草稿",
-            "结论 [来源: SRC-999]",
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            // 0dm：用一次拒绝的 self_check 提供本 run 工具轮，保持旧门序列。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "self_check".to_string(),
+                arguments: serde_json::json!({}),
+                call_id: "call-cite-self".to_string(),
+            }]),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("结论 [来源: SRC-999]"),
         ]));
         // 0bi ⑩（ADR-0010 §14.76）：纯文本短答不再触发门——以未完成 plan
         // 作为执行事实，保持「草稿 → 门 → 终答」序列（本钉子要验证的是
@@ -176,6 +182,62 @@ mod tests {
             "{types:?}"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0dm：`submit` 退役后，即使模型幻觉调用也不得执行交付/推进计划——
+    /// handler 必须按 `submit_retired` 拒绝，且无 `delivery_phase` 事件。
+    #[tokio::test]
+    async fn retired_submit_is_refused_without_delivery_phase() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "submit".to_string(),
+                arguments: serde_json::json!({}),
+                call_id: "call-retired-submit".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_console_default_enabled(true);
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-SUBMIT-RETIRED",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let events = events(&dir);
+        let completion = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("submit")
+            })
+            .expect("submit completion/refusal event");
+        assert_eq!(
+            completion.payload.get("error").and_then(|v| v.as_str()),
+            Some("submit_retired")
+        );
+        assert!(
+            events.iter().all(|e| {
+                !matches!(e.event_type, EventType::ToolCompleted)
+                    || e.payload.get("tool").and_then(|v| v.as_str()) != Some("submit")
+                    || e.payload.get("delivery_phase").is_none()
+            }),
+            "retired submit must not emit delivery_phase"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -330,8 +392,10 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         // 生产路径形态：plan_first 关闭（默认）+ console_default 启用——
         // 会话无 plan 在册。
-        let controller =
-            AgentLoopController::with_gateway(gateway).with_console_default_enabled(true);
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_console_default_enabled(true)
+            // 0dm：submit 已退役；本用例验证旧 console 两阶段兼容路径。
+            .with_legacy_submit_tool(true);
         controller
             .run_turn(
                 &host,

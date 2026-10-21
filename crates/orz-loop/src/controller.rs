@@ -1807,8 +1807,19 @@ impl AgentLoopController {
         self.terminal_declaration_required
     }
 
-    pub(crate) fn legacy_submit_tool(&self) -> bool {
+    /// 0dm：`submit` 是否允许出现在模型面/处理器。默认退役；仅 builder
+    /// 或 `ORZ_SUBMIT_TOOL=1` 的旧 console 兼容路径恢复。
+    pub(crate) fn submit_tool_enabled(&self) -> bool {
         self.legacy_submit_tool
+            || std::env::var("ORZ_SUBMIT_TOOL")
+                .map(|v| v.trim() == "1")
+                .unwrap_or(false)
+    }
+
+    /// 0dm：`self_check` 是主车道能力——生产 console 面与终态声明车道都
+    /// 需要它；不再单独绑定 console（`--plan` 生产路径也要可用）。
+    pub(crate) fn self_check_enabled(&self) -> bool {
+        self.console_default_enabled || self.terminal_declaration_required
     }
 
     /// 0p S1 / W2 D-2 (2026-09-07, ADR-0010 §14.61 设计 D)：注入真实会话
@@ -4140,9 +4151,9 @@ impl AgentLoopController {
                      orders in order — a step marked done means its orders \
                      executed, not that its goal is achieved (the delivery \
                      gate arbitrates the goal). The LAST step must be the fixed \
-                     terminal step (递交/完成) with id `deliver` or `submit`; \
-                     it never auto-advances on ordinary orders and is advanced \
-                     only via the `submit` delivery action. On the FIRST round \
+                     terminal step (递交/完成) with id `deliver`; it never \
+                     auto-advances on ordinary orders and is completed by a \
+                     `[RUN_END]` declaration with reason `completed`. On the FIRST round \
                      of a run this is the only write tool available; an invalid \
                      plan is rejected with mechanical validation errors (one \
                      refill opportunity, then degrade)."
@@ -4239,10 +4250,7 @@ impl AgentLoopController {
         // 0dm（2026-10-21）：`submit` 从模型面退役——交付状态由机械/UI 按需
         // 查询，模型不再为机械信息付两轮。旧 console 车道经显式开关
         // （builder 或 `ORZ_SUBMIT_TOOL=1`）临时保留；handler 仍为休眠路径。
-        let legacy_submit = self.legacy_submit_tool()
-            || std::env::var("ORZ_SUBMIT_TOOL")
-                .map(|v| v.trim() == "1")
-                .unwrap_or(false);
+        let legacy_submit = self.submit_tool_enabled();
         if self.console_default_enabled
             && legacy_submit
             && !tool_defs.iter().any(|t| t.name == "submit")
@@ -4263,7 +4271,7 @@ impl AgentLoopController {
         }
         // 0dm（2026-10-21）：反例自查 PULL 工具——无参，返回三问模板；不
         // 阻断、不判定，只把检查交还模型。主车道（console 默认态）声明。
-        if self.console_default_enabled && !tool_defs.iter().any(|t| t.name == "self_check") {
+        if self.self_check_enabled() && !tool_defs.iter().any(|t| t.name == "self_check") {
             tool_defs.push(ToolDef {
                 name: "self_check".to_string(),
                 description: "Run the counterexample self-check before ending a \
@@ -4515,7 +4523,9 @@ impl AgentLoopController {
             tool_rounds,
             terminal_source,
             terminal_nudged,
+            terminal_nudge_count,
             self_check_called,
+            terminal_declaration,
             ..
         } = outcome;
 
@@ -4568,11 +4578,15 @@ impl AgentLoopController {
             // 0dm（2026-10-21）：终态来源与自查事实（新增字段；旧键语义不变）。
             "terminal_source": terminal_source,
             "terminal_nudged": terminal_nudged,
+            "terminal_nudge_count": terminal_nudge_count,
             "self_check_called": self_check_called,
         });
-        if let Some(decl) = last_text
-            .as_deref()
-            .and_then(crate::model_stop::extract_model_stop)
+        let declaration = terminal_declaration.or_else(|| {
+            last_text
+                .as_deref()
+                .and_then(crate::model_stop::extract_model_stop)
+        });
+        if let Some(decl) = declaration
             && let Some(obj) = terminal_payload.as_object_mut()
         {
             use crate::model_stop::{StopIntent, model_stop_await_enabled};
@@ -5531,11 +5545,18 @@ mod tests {
             tool_result: None,
         };
 
-        // 0dm：首轮纯文本无 [RUN_END] → 注入一次 [TERMINAL_NOTICE]；第二轮
-        // 带声明 → 终答。plan 提供执行事实，确保声明要求生效。
-        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec![
-            "草稿进度",
-            "结果：完成\n[RUN_END]\nintent: conclude\nreason: completed\nsummary: 完成\n[/RUN_END]",
+        // 0dm：工具轮提供执行事实；随后无声明文本 → 一次 [TERMINAL_NOTICE]；
+        // 再下一轮带声明 → 终答（正文剥离声明块）。
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "self_check".to_string(),
+                arguments: serde_json::json!({}),
+                call_id: "call-self-1".to_string(),
+            }]),
+            ScriptedResponse::text("草稿进度"),
+            ScriptedResponse::text(
+                "结果：完成\n[RUN_END]\nintent: conclude\nreason: completed\nsummary: 完成\n[/RUN_END]",
+            ),
         ]));
         let controller = AgentLoopController::with_gateway(gateway)
             .with_terminal_declaration_required(true)
@@ -5559,10 +5580,7 @@ mod tests {
             .await;
 
         assert!(result.is_ok(), "{result:?}");
-        assert_eq!(
-            result.unwrap().0,
-            "结果：完成\n[RUN_END]\nintent: conclude\nreason: completed\nsummary: 完成\n[/RUN_END]"
-        );
+        assert_eq!(result.unwrap().0, "结果：完成");
 
         let replay =
             orz_assurance::replay_journal(&dir.join("events.jsonl"), Some("RUN-SEQ"), None, true);
@@ -5594,7 +5612,13 @@ mod tests {
                 // before its model_output.
                 EventType::FaceFingerprint,
                 EventType::ModelOutput,
+                EventType::PermissionRequested,
+                EventType::PermissionDecision,
+                EventType::ToolStarted,
+                EventType::ToolCompleted,
                 // 0dm：无声明 → 一次终态提示（不是 gate）。
+                EventType::FaceFingerprint,
+                EventType::ModelOutput,
                 EventType::GateDecision,
                 EventType::FaceFingerprint,
                 EventType::ModelOutput,
@@ -5615,6 +5639,294 @@ mod tests {
     /// ②run_started 带 `usage_metering: "run-v1"` grandfather 锚；
     /// ③`usage_metering` 法官族对两 run 全绿（fake 无 usage ⇒ 行按实况
     /// `usage_incomplete: true`，非法外完整）。
+    /// 0dm（2026-10-21）：nudge 预算按「候选 episode」重置——工具轮后有
+    /// 新动作可再提示一次；用尽 `TERMINAL_NUDGE_MAX` 后 fail-open 接受，
+    /// 不再无限加轮。
+    #[tokio::test]
+    async fn terminal_nudge_rearms_after_tool_work_and_caps() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("self_check", "call-n1")]),
+            ScriptedResponse::text("进度一"),
+            ScriptedResponse::tool_calls(vec![tool_call("self_check", "call-n2")]),
+            ScriptedResponse::text("进度二"),
+            ScriptedResponse::tool_calls(vec![tool_call("self_check", "call-n3")]),
+            ScriptedResponse::text("进度三"),
+        ]));
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_terminal_declaration_required(true);
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-NUDGE-CAP",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, "进度三");
+        let finished = events(&dir)
+            .into_iter()
+            .find(|e| e.event_type == EventType::RunFinished)
+            .expect("run_finished");
+        assert_eq!(
+            finished.payload["terminal_source"],
+            serde_json::json!("text_without_terminal")
+        );
+        assert_eq!(
+            finished.payload["terminal_nudge_count"],
+            serde_json::json!(2)
+        );
+        assert_eq!(finished.payload["terminal_nudged"], serde_json::json!(true));
+        assert_eq!(
+            finished.payload["self_check_called"],
+            serde_json::json!(true)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0dm：会话级旧编辑/旧 plan 不再算本 run 执行事实——恢复会话后的
+    /// 纯寒暄应走 short_text，不 nudge。
+    #[tokio::test]
+    async fn pre_existing_blackboard_work_is_not_this_run_substance() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> =
+            Arc::new(FakeProvider::from_texts(vec!["你好，有什么可以帮你？"]));
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_terminal_declaration_required(true)
+            .with_plan(
+                "PLAN-OLD".to_string(),
+                1,
+                "旧任务".to_string(),
+                vec!["步骤一".to_string()],
+            );
+        controller
+            .blackboard()
+            .write()
+            .edits
+            .push(crate::blackboard::EditRecord {
+                file: "old.rs".to_string(),
+                old_lines: 1,
+                new_lines: 2,
+                timestamp: "2026-10-21T00:00:00Z".to_string(),
+                round: 1,
+                domain: None,
+                run: "RUN-OLD".to_string(),
+            });
+        let (response, _, _) = controller
+            .run_turn(&host, "你好", "RUN-NEW", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(response, "你好，有什么可以帮你？");
+        let finished = events(&dir)
+            .into_iter()
+            .find(|e| e.event_type == EventType::RunFinished)
+            .expect("run_finished");
+        assert_eq!(
+            finished.payload["terminal_source"],
+            serde_json::json!("short_text")
+        );
+        assert_eq!(
+            finished.payload["terminal_nudge_count"],
+            serde_json::json!(0)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0dm：nudge 的机械提示不得写回会话侧车；草稿入 assistant 轮后，
+    /// 声明-only 的下一轮应复用草稿作为终答，而不是再写一份全文。
+    #[tokio::test]
+    async fn terminal_notice_is_not_persisted_and_draft_is_reused() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("self_check", "call-draft")]),
+            ScriptedResponse::text("这是草稿终答"),
+            ScriptedResponse::text(
+                "[RUN_END]\nintent: conclude\nreason: completed\nsummary: done\n[/RUN_END]",
+            ),
+        ]));
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_terminal_declaration_required(true);
+        let mut conversation = Vec::new();
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-DRAFT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, "这是草稿终答");
+        assert!(
+            !conversation
+                .iter()
+                .any(|m| m.content.contains("[TERMINAL_NOTICE]")),
+            "mechanical notice must not enter the sidecar: {conversation:?}"
+        );
+        assert!(
+            conversation
+                .iter()
+                .any(|m| m.role == Role::Assistant && m.content == "这是草稿终答"),
+            "draft must be committed once: {conversation:?}"
+        );
+        let finished = events(&dir)
+            .into_iter()
+            .find(|e| e.event_type == EventType::RunFinished)
+            .expect("run_finished");
+        assert_eq!(
+            finished.payload["terminal_source"],
+            serde_json::json!("run_end")
+        );
+        assert_eq!(
+            finished.payload["terminal_nudge_count"],
+            serde_json::json!(1)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0dm：`submit` 退役后，`deliver` 末步由 run_end(completed) 机械完成。
+    #[tokio::test]
+    async fn run_end_completes_deliver_terminal_step() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("self_check", "call-deliver")]),
+            ScriptedResponse::text(
+                "完成\n[RUN_END]\nintent: conclude\nreason: completed\nsummary: done\n[/RUN_END]",
+            ),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_terminal_declaration_required(true)
+            .with_plan(
+                "PLAN-DELIVER".to_string(),
+                1,
+                "任务".to_string(),
+                vec!["交付".to_string()],
+            );
+        controller.blackboard().write().plan.steps[0].id = "deliver".to_string();
+        let (response, _, _) = controller
+            .run_turn(&host, "任务", "RUN-DELIVER", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(response, "完成");
+        assert!(
+            controller.blackboard().read().plan.steps[0]
+                .status
+                .is_done(),
+            "deliver step must be Done after run_end(completed)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0dm：被拒绝的 self_check 不算「调用过」——self_check_called 必须由
+    /// 成功完成的 tool_completed 派生。
+    #[tokio::test]
+    async fn refused_self_check_is_not_counted_as_called() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("self_check", "call-refused")]),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-SELF-REFUSED",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, "完成");
+        let finished = events(&dir)
+            .into_iter()
+            .find(|e| e.event_type == EventType::RunFinished)
+            .expect("run_finished");
+        assert_eq!(
+            finished.payload["self_check_called"],
+            serde_json::json!(false)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0dm：一条真实主车道 run 的 journal 必须整体通过 runtime schema/
+    /// chain 判官（896 单测只验事件序列，不能替代此项）。
+    #[tokio::test]
+    async fn zero_dm_run_journal_passes_conformance() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("self_check", "call-conf")]),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text(
+                "完成\n[RUN_END]\nintent: conclude\nreason: completed\nsummary: done\n[/RUN_END]",
+            ),
+        ]));
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_terminal_declaration_required(true);
+        let manifest = "0".repeat(64);
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-CONF-0DM",
+                &manifest,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let report = orz_assurance::journal::conformance::validate_journal_file(
+            &dir.join("events.jsonl"),
+            &repo_root,
+        );
+        assert!(
+            report.valid,
+            "journal conformance errors: {:?}",
+            report.errors
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn run_usage_metered_lands_once_per_run_and_resets() {
         // 一 run 一本 journal（终态后不可追加）——同 controller 跨两个独立
@@ -5674,8 +5986,8 @@ mod tests {
                 .unwrap();
             assert!(meter_pos < terminal_pos, "meter row must precede terminal");
             let payload = &rows[0]["payload"];
-            // 兼容门路径（测试默认）＝两轮：gate + 终答。
-            assert_eq!(payload["model_calls"], 2, "run {run} folded rounds");
+            // 无工具轮、无本 run 编辑/新 plan → 短聊直接终答，恰一轮。
+            assert_eq!(payload["model_calls"], 1, "run {run} folded rounds");
             // fake 无 usage ⇒ 如实 incomplete（不装完整）。
             assert_eq!(payload["usage_incomplete"], true);
             assert_eq!(payload["effort_tier"], "unknown");

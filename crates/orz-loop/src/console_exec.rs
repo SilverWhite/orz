@@ -1074,13 +1074,12 @@ impl AgentLoopController {
             let mut w = self.blackboard.write();
             if let Some(idx) = w.plan.steps.iter().position(|s| s.id == step_id) {
                 if ok {
-                    // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the final
-                    // (terminal) step never auto-advances on an ordinary
-                    // order receipt — only the explicit `submit` delivery
-                    // path marks it done (杜绝 echo done 式虚假递交). The
-                    // predicate is ID-keyed (last step id ∈ {deliver,
-                    // submit}) — legacy/restored plans with a plain final
-                    // step id keep the pre-S1 auto-advance semantics.
+                    // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2；0dm 收窄):
+                    // the final (terminal) step never auto-advances on an
+                    // ordinary order receipt — it is completed by a
+                    // run_end(completed) declaration (legacy `submit` path
+                    // remains for restored plans). The predicate is ID-keyed
+                    // (last step id ∈ {deliver, submit}).
                     let is_terminal_step = crate::planning::is_terminal_step(&w.plan.steps, idx);
                     if !is_terminal_step
                         && crate::planning::mark_step_done(

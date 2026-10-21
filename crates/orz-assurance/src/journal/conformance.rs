@@ -641,6 +641,60 @@ mod tests {
         );
     }
 
+    /// 0dm（2026-10-21）：`run_finished` 的新终态字段与 nudge 事件必须与
+    /// runtime payload schema 同步；本测试直接走判官同一 schema 构建路径，
+    /// 防止生产写出 schema 外事件（896 单测未覆盖此面）。
+    #[test]
+    fn zero_dm_run_finished_and_nudge_payloads_match_runtime_schema() {
+        fn repo_root() -> std::path::PathBuf {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+            assert!(root.join("runtime").is_dir());
+            root
+        }
+        let root = repo_root();
+        let build = |schema_rel: &str| {
+            let schema = load_json(&root.join(schema_rel)).unwrap();
+            jsonschema::options()
+                .with_draft(jsonschema::Draft::Draft202012)
+                .should_validate_formats(false)
+                .build(&schema)
+                .unwrap()
+        };
+        let run_finished = build("runtime/run-finished-event-payload-v0.1.schema.json");
+        for payload in [
+            serde_json::json!({
+                "status": "completed",
+                "terminal_source": "run_end",
+                "terminal_nudged": false,
+                "terminal_nudge_count": 0,
+                "self_check_called": false,
+            }),
+            serde_json::json!({
+                "status": "completed",
+                "turn_count": 2,
+                "tool_rounds": 4,
+                "terminal_source": "text_without_terminal",
+                "terminal_nudged": true,
+                "terminal_nudge_count": 2,
+                "self_check_called": true,
+            }),
+        ] {
+            assert!(
+                run_finished.validate(&payload).is_ok(),
+                "run_finished payload must match runtime schema: {payload}"
+            );
+        }
+        let gate = build("runtime/gate-decision-event-payload-v0.1.schema.json");
+        assert!(
+            gate.validate(&serde_json::json!({
+                "gate": "terminal_declaration",
+                "decision": "nudge",
+            }))
+            .is_ok(),
+            "terminal nudge must be a declared gate_decision value"
+        );
+    }
+
     /// 0z S2 §4.3 item 6 / 判据 7（2026-09-12）：降级卷判 `degraded_complete`
     /// ——链骨架完整 + 盘上降级证据；不得与 `invalid` 混判；历史卷（无标记）
     /// 分类不变（`degraded_complete: false`）。

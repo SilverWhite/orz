@@ -39,9 +39,10 @@ pub(crate) const MAX_EVIDENCE_ITEMS_PER_STEP: usize = 16;
 /// mechanical ceiling, not a quality target).
 pub(crate) const MAX_PLAN_TOTAL_CHARS: usize = 32768;
 pub(crate) const ACTION_NAME_MAX_CHARS: usize = 128;
-/// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the final plan step must be
-/// a fixed terminal step (递交/完成) — it never auto-advances on ordinary
-/// order receipts; only the explicit `submit` delivery path marks it done.
+/// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2；0dm 2026-10-21 收窄):
+/// the final plan step must be the fixed `deliver` terminal step — it never
+/// auto-advances on ordinary order receipts; a `[RUN_END]` declaration with
+/// reason `completed` marks it done. Legacy plans may still carry `submit`.
 pub(crate) const TERMINAL_STEP_IDS: &[&str] = &["deliver"];
 /// 0dm（2026-10-21）：`submit` 从模型工具面退役；旧计划/旧 journal 的
 /// `submit` 末步仍按 terminal 解释（回放兼容），新计划只接受 `deliver`。
@@ -182,9 +183,9 @@ pub(crate) fn parse_and_validate_plan(arguments: &Value) -> PlanVerdict {
         Some(_) => errors.push("steps must be an array".to_string()),
         None => errors.push("missing required field: steps".to_string()),
     }
-    // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the plan's LAST step must
-    // be a fixed terminal step — the model writes the plan in the template
-    // shape (…, deliver/submit) and the delivery gate owns the final step.
+    // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2；0dm 2026-10-21 收窄):
+    // the plan's LAST step must be the fixed `deliver` terminal step;
+    // `submit` is retired and no longer accepted for new plans.
     // An empty-id last step already carries its own validation error; skip
     // the extra noise.
     if let Some(last) = steps.last()
@@ -193,7 +194,8 @@ pub(crate) fn parse_and_validate_plan(arguments: &Value) -> PlanVerdict {
     {
         errors.push(format!(
             "the final step id must be a terminal step ({}); the last step is \
-             the fixed 递交/完成 step and advances only via the submit delivery action",
+             the fixed 递交/完成 step, completed by a [RUN_END] declaration with \
+             reason `completed`",
             TERMINAL_STEP_IDS.join(" / ")
         ));
     }

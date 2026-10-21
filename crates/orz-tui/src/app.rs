@@ -87,6 +87,8 @@ pub enum KeyOutcome {
     Prompt(String),
     /// The user asked to stop the running session.
     CancelRun,
+    /// 0dm：the user asked for the counterexample self-check PULL action.
+    SelfCheck,
 }
 
 /// The workbench compositor.

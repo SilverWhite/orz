@@ -303,6 +303,8 @@ impl AgentLoopController {
             .filter(|t| {
                 t.name != "compaction_whitelist_add"
                     && t.name != "retrieval_disposition"
+                    // 0dm（2026-10-21）：自查是主车道 PULL 能力，子代理不装配。
+                    && t.name != "self_check"
                     // 0ap（2026-09-18，设计 §0「常驻主面」）：压缩交互第九
                     // 工具 main-lane only——D3 压缩窗口是主车道结构（DP-7；
                     // H1 开窗点与请求位消费点均 gate Main role），且 controller
@@ -796,6 +798,8 @@ mod tests {
             "blackboard_action_write",
             "plan_write",
             "retrieve_project_docs",
+            // 0dm：主车道自查不得进入子代理声明面。
+            "self_check",
         ]
         .iter()
         .map(|n| ToolDef {

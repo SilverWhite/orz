@@ -3589,7 +3589,7 @@ impl AgentLoopController {
         // 0dm（2026-10-21）：反例自查 PULL——无参工具只返回三问模板，无
         // 文件/网络/外部副作用；不阻断、不判定，由模型据此修订或确认终答。
         if tc.name == "self_check" {
-            if !self.console_default_enabled {
+            if !self.self_check_enabled() {
                 return Ok((
                     self.refuse_console_tool(
                         writer,
@@ -3597,7 +3597,21 @@ impl AgentLoopController {
                         &tc.name,
                         &tc.call_id,
                         "self_check_disabled",
-                        "self_check refused — the console dual-mode is disabled",
+                        "self_check refused — the self-check lane is disabled",
+                    )
+                    .await?,
+                    None,
+                ));
+            }
+            if activation_id.is_some() {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "self_check_lane_denied",
+                        "self_check refused — main-lane only",
                     )
                     .await?,
                     None,
@@ -3647,15 +3661,15 @@ impl AgentLoopController {
         // 确认并置末步 done（进入最终回答流程）。普通订单绑定末步不产生
         // done；console_step_done 对末步同样拒绝（见下），杜绝绕过递交门。
         if tc.name == "submit" {
-            if !self.console_default_enabled {
+            if !self.console_default_enabled || !self.submit_tool_enabled() {
                 return Ok((
                     self.refuse_console_tool(
                         writer,
                         messages,
                         &tc.name,
                         &tc.call_id,
-                        "submit_disabled",
-                        "submit refused — the console dual-mode is disabled",
+                        "submit_retired",
+                        "submit refused — retired from the model face (enable ORZ_SUBMIT_TOOL=1 for the legacy console path)",
                     )
                     .await?,
                     None,
@@ -4935,10 +4949,20 @@ mod tests {
         };
         // CJK chunks across both gate rounds — the first text is intercepted
         // by the counterexample gate, the second is the final answer.
-        // 0bi ⑩（ADR-0010 §14.76）：answer 门收窄后，纯文本短答需有执行
-        // 事实或未完成 plan 才触发——本测试以未完成 plan 保持两轮门序列。
-        let gateway: Arc<dyn ModelGateway> =
-            Arc::new(FakeProvider::from_texts(vec!["你好世界", "你好世界"]).with_chunk_size(2));
+        // 0dm：用一次拒绝的 self_check 提供本 run 工具轮（旧的未完成 plan
+        // 不再算本 run 执行事实）。
+        let gateway: Arc<dyn ModelGateway> = Arc::new(
+            FakeProvider::new(vec![
+                ScriptedResponse::tool_calls(vec![ToolCall {
+                    name: "self_check".to_string(),
+                    arguments: serde_json::json!({}),
+                    call_id: "call-delta-self".to_string(),
+                }]),
+                ScriptedResponse::text("你好世界"),
+                ScriptedResponse::text("你好世界"),
+            ])
+            .with_chunk_size(2),
+        );
         let controller = AgentLoopController::with_gateway(gateway).with_plan(
             "PLAN-DELTA".to_string(),
             1,
@@ -4988,6 +5012,12 @@ mod tests {
                 // 0bz S1 (2026-09-28): the per-request model-face prefix
                 // fingerprint rides every main-lane request, immediately
                 // before its model_output.
+                EventType::FaceFingerprint,
+                EventType::ModelOutput,
+                EventType::PermissionRequested,
+                EventType::PermissionDecision,
+                EventType::ToolStarted,
+                EventType::ToolCompleted,
                 EventType::FaceFingerprint,
                 EventType::ModelOutput,
                 EventType::CounterexampleGate,

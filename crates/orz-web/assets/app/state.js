@@ -25,8 +25,8 @@ export const state = {
     // 只有点这个显式动作才恢复 ACP 会话并切换绑定（加载中变为「取消恢复」）。
     { id: 'resume', label: '恢复并继续', enabled: false },
     // 0dm（2026-10-21）：反例自查 PULL 入口——运行中经补充队列投递三问；
-    // 空闲时按钮仍在，点击只提示「先发起任务」。
-    { id: 'selfcheck', label: '反例自查', enabled: true },
+    // 空闲禁用（由 syncToolbar 按 state.running 同步）。
+    { id: 'selfcheck', label: '反例自查', enabled: false },
     { id: 'refresh', label: '刷新', enabled: true },
     { id: 'stop', label: '停止', enabled: false },
     { id: 'open', label: '打开', enabled: true },
@@ -337,6 +337,7 @@ export const vm = {
     btn('back').enabled = state.nav.back.length > 0 && !state.loadingSession;
     btn('forward').enabled = state.nav.forward.length > 0 && !state.loadingSession;
     btn('stop').enabled = state.running;
+    btn('selfcheck').enabled = state.running;
     btn('new').enabled = !state.running && !state.loadingSession;
     // 只在「查看某会话且该会话不是当前绑定」且侧车带完整 id 时可恢复。
     const viewed = state.nav.current.startsWith('conversation://')

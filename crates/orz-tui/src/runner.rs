@@ -368,6 +368,22 @@ async fn run_loop(
                             KeyOutcome::CancelRun => {
                                 do_cancel(client, app).await;
                             }
+                            KeyOutcome::SelfCheck => {
+                                if app.running && !app.restoring && !app.grill_active {
+                                    client.spawn_queue_append(
+                                        orz_loop::prompt::SELF_CHECK_SUPPLEMENT.to_string(),
+                                    );
+                                    app.content.add_system_message(
+                                        "已排队反例自查（三问）——将在下一次模型调用边界投递",
+                                        false,
+                                    );
+                                } else {
+                                    app.content.add_system_message(
+                                        "反例自查只在任务运行中可用；先发起任务",
+                                        false,
+                                    );
+                                }
+                            }
                             KeyOutcome::Prompt(text) => {
                                 // Running guard (review P1-2): a second prompt
                                 // while a turn is in flight would collide on

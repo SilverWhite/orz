@@ -275,6 +275,9 @@ widgets.renderToolbar();
 const toolbarBtns = ui.toolbar.children.filter((n) => n.tagName === 'BUTTON').map((n) => n.textContent);
 assert.equal(toolbarBtns[0], '新建会话', '「新建会话」必须居工具栏首位');
 assert.equal(toolbarBtns[1], '后退', '「后退」必须紧随「新建会话」之后（用户令「放在后退的前面」）');
+const selfcheckBtn = ui.toolbar.children.find((n) => n.textContent === '反例自查');
+assert.ok(selfcheckBtn, '工具栏必须常驻「反例自查」入口');
+assert.equal(selfcheckBtn.disabled, true, '空闲时「反例自查」必须禁用（0dm）');
 assert.equal(typeof ui.newSession, 'function', '新建会话动作已接线');
 console.log('ok  工具栏「新建会话」居「后退」之前');
 

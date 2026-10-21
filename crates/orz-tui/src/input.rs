@@ -22,6 +22,10 @@ pub fn handle_key(app: &mut TuiApp, key: KeyEvent) -> KeyOutcome {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('z') {
         return KeyOutcome::CancelRun;
     }
+    // 0dm：Ctrl+G = 反例自查 PULL（与 Web 工具栏同义；仅运行中可用）。
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
+        return KeyOutcome::SelfCheck;
+    }
     // Global modal triggers (slice #9): Ctrl+F find; Alt+H / F1 help.
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('f') {
         app.open_find();
@@ -400,6 +404,16 @@ mod tests {
         assert_eq!(
             handle_key(&mut a, key(KeyCode::Char('z'), M::CONTROL)),
             KeyOutcome::CancelRun
+        );
+    }
+
+    /// 0dm：Ctrl+G 是反例自查 PULL 的同义快捷键。
+    #[test]
+    fn ctrl_g_requests_self_check() {
+        let mut a = TuiApp::new();
+        assert_eq!(
+            handle_key(&mut a, key(KeyCode::Char('g'), M::CONTROL)),
+            KeyOutcome::SelfCheck
         );
     }
 

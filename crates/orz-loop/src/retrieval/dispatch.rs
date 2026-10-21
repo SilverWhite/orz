@@ -533,9 +533,11 @@ impl AgentLoopController {
                         retrieval_calls: retrieval_calls.load(std::sync::atomic::Ordering::Relaxed),
                         // 0dm：检索车道不参与主终态契约；字段仅为 LoopOutcome
                         // 形状完整，值由主车道覆盖。
-                        terminal_source: "run_end",
+                        terminal_source: "unspecified",
                         terminal_nudged: false,
+                        terminal_nudge_count: 0,
                         self_check_called: false,
+                        terminal_declaration: None,
                     })
                 }
             },

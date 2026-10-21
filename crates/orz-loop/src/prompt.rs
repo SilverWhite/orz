@@ -14,14 +14,14 @@
 /// 裁决)：**全空**。模型可见面 = 任务指令（用户消息）+ 工具列表 + 注入
 /// 块；契约全部由工具描述 / 结果信封 / 机械门承载：
 /// read_file 信封与 offset 续读、search_replace 内容锚点、
-/// blackboard_read 分区简定义、submit 两阶段、写锚点校验与拒绝信封。
-/// 机械门（预算 / 反例门 / orientation / 审计报告）走消息层，与 system
+/// blackboard_read 分区简定义、写锚点校验与拒绝信封。
+/// 机械门（预算 / 终态提示 / orientation / 审计报告）走消息层，与 system
 /// prompt 无关。P6：对模型极简 ≠ 对框架极简——减法只作用于模型可见面，
 /// 框架机械层（HA 助理层 / 审计 / 门禁）承重不变。
 ///
 /// 历史（已删除的提示词段落及其去向）："工具按需使用，一次一个"行为行与
-/// "完成后用 submit 提交"引导行随 2026-08-29 置空一并消失（submit 两阶段
-/// 契约下沉到 submit 工具描述）；更早的 D-1 引用纪律 / 读取纪律 / 会话
+/// "完成后用 submit 提交"引导行随 2026-08-29 置空一并消失（submit 已从
+/// 模型面退役，0dm）。更早的 D-1 引用纪律 / 读取纪律 / 会话
 /// 数据边界 / 压缩白名单 / plan-first 文本 / 检索分区拉取行见 R1 审计。
 pub const BASE_SYSTEM_PROMPT: &str = "";
 
@@ -38,28 +38,37 @@ pub const COUNTEREXAMPLE_GATE_BLOCK: &str = "[COUNTEREXAMPLE_GATE v0.1]\n\
 [/COUNTEREXAMPLE_GATE]";
 
 /// 0dm（2026-10-21）：反例自查 PULL 化后的模型工具结果块。三问与旧
-/// `COUNTEREXAMPLE_GATE_BLOCK` 同源文案，但改为**模型主动调用**时返回；
-/// 不再由机械层在终答前自动注入。
+/// `COUNTEREXAMPLE_GATE_BLOCK` 同文（由 `self_check_and_gate_share_questions`
+/// 测试钉住），但改为**模型主动调用**时返回；不再由机械层在终答前自动注入。
 pub const SELF_CHECK_PREFIX: &str = "[SELF_CHECK";
+
+/// 三问正文（两份块共用；测试钉住同文，避免再次漂移）。
+pub const SELF_CHECK_QUESTIONS: &str = "1. 是否存在未验证的前提？\n\
+2. 是否存在可推翻结论的已知证据？\n\
+3. 结论强度是否超出证据支持？";
 
 pub const SELF_CHECK_BLOCK: &str = "[SELF_CHECK]\n\
 请对即将输出的结论做最后一次反例自查：\n\
 1. 是否存在未验证的前提？\n\
 2. 是否存在可推翻结论的已知证据？\n\
 3. 结论强度是否超出证据支持？\n\
-这不是硬门。请据此修订或确认终答，然后按终态声明输出 [RUN_END]。\n\
+这不是硬门。请据此修订或确认终答，然后按 §4.1 输出 [RUN_END]。\n\
 [/SELF_CHECK]";
 
 /// 0dm：主车道常驻软提示（用户 2026-10-21 指定文案，逐字）。
 pub const SELF_CHECK_RESIDENT_LINE: &str = "请对非日常聊天类的任务调用反例自查。";
 
-/// 0dm：终态声明缺失时的一次性机械提示（不是门；第二次无声明即
-/// fail-open 接受）。
+/// 0dm：Web/TUI 工具栏「反例自查」投递的补充消息（用户面入口）。
+pub const SELF_CHECK_SUPPLEMENT: &str =
+    "请对当前结论执行反例自查（三问），然后按需继续或输出 [RUN_END]。";
+
+/// 0dm：终态声明缺失时的一次性机械提示（不是门；工具轮后有新动作可再
+/// 提示一次，最多 2 次；之后 fail-open 接受）。
 pub const TERMINAL_NOTICE_PREFIX: &str = "[TERMINAL_NOTICE";
 
 pub const TERMINAL_NOTICE_BLOCK: &str = "[TERMINAL_NOTICE]\n\
-当前回复未声明结束。若任务已完成，请输出 [RUN_END]（intent/reason/summary）；\
-若未完成，请继续调用工具。\n\
+上文是你的草稿。若任务已完成，请只输出 [RUN_END] 声明（intent/reason/summary），\
+不要重复正文；若未完成，请继续调用工具。\n\
 [/TERMINAL_NOTICE]";
 
 /// GAP-INQUIRY-SPLIT (2026-08-09): prefix of the injected orientation block
@@ -200,7 +209,10 @@ pub const INJECTED_BLOCK_PREFIXES: &[&str] = &[
 /// 从 `/rewind` 菜单隐藏（侧车本身仍保留，P1-C5 的剩余面）。
 pub fn is_generated_injected_block(content: &str) -> bool {
     let content = content.trim();
-    if content == COUNTEREXAMPLE_GATE_BLOCK {
+    if content == COUNTEREXAMPLE_GATE_BLOCK
+        || content == SELF_CHECK_BLOCK
+        || content == TERMINAL_NOTICE_BLOCK
+    {
         return true;
     }
     if content.starts_with(COUNTEREXAMPLE_GATE_PREFIX) {
@@ -904,6 +916,8 @@ mod tests {
         let status = build_status_line(Some("目标"), &[]);
         let blocks: Vec<(&str, String)> = vec![
             ("counterexample", COUNTEREXAMPLE_GATE_BLOCK.to_string()),
+            ("self-check", SELF_CHECK_BLOCK.to_string()),
+            ("terminal-notice", TERMINAL_NOTICE_BLOCK.to_string()),
             (
                 "orientation",
                 orz_assurance::orientation::checkpoint::ORIENTATION_BLOCK.to_string(),
@@ -999,6 +1013,16 @@ mod tests {
                 is_generated_injected_block(&block),
                 "{name}: structured generated-form predicate missed the block"
             );
+        }
+    }
+
+    /// 0dm：SELF_CHECK 与旧 gate 的三问必须同文（两份字面量由本测试钉住，
+    /// 防止后续只改一边造成漂移）。
+    #[test]
+    fn self_check_and_gate_share_questions() {
+        for question in SELF_CHECK_QUESTIONS.lines() {
+            assert!(COUNTEREXAMPLE_GATE_BLOCK.contains(question), "{question}");
+            assert!(SELF_CHECK_BLOCK.contains(question), "{question}");
         }
     }
 

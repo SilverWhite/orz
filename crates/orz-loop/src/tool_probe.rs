@@ -1259,7 +1259,13 @@ mod tests {
             runner: runner.clone(),
             terminal: terminal.clone(),
         };
-        let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+        let fake = Arc::new(FakeProvider::new(vec![
+            // 0dm：用一次拒绝的 self_check 提供本 run 工具轮，让 loop-top
+            // 探针有第二次执行机会（旧的未完成 plan 不再算本 run 事实）。
+            ScriptedResponse::tool_calls(vec![tool_call("self_check", "call-flip-self")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
         let gateway: Arc<dyn ModelGateway> = Arc::new(FlipRunnerAfterFirstRound {
             inner: fake.clone(),
             runner,

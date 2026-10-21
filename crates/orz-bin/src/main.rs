@@ -1018,6 +1018,9 @@ fn run_plan(prompt: &str, wallclock: Option<Duration>, stall_timeout: Option<Dur
             // (plan artifacts are mechanically derived today; model-generated
             // plans later keep the same ingestion point).
             let controller = orz_loop::AgentLoopController::with_gateway(gateway)
+                // 0dm（2026-10-21）：plan-approved CLI 也是主车道生产入口，
+                // 同样要求终态声明并暴露 self_check（不启用 console 面）。
+                .with_terminal_declaration_required(true)
                 .with_snapshot_store(Some(handle.snapshot_store.clone()))
                 .with_blackboard_archive_dir(Some(blackboard_archive_dir))
                 .with_plan(

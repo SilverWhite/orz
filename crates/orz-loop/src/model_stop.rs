@@ -18,6 +18,8 @@
 
 /// 声明块前缀（模型面单一来源；guide 与解析共用）。
 pub const MODEL_STOP_PREFIX: &str = "[RUN_END";
+/// 声明块的完整开标记（行级解析用；`[RUN_END]` 必须独占一行）。
+pub const MODEL_STOP_OPEN: &str = "[RUN_END]";
 /// 声明块后缀。
 pub const MODEL_STOP_END: &str = "[/RUN_END]";
 
@@ -99,16 +101,59 @@ pub fn terminal_declaration_required() -> bool {
 }
 
 /// 从模型收束文本里提取**最后一段**声明块（旧在前；取最后一段＝最终意图）。
+///
+/// 0dm 修订（2026-10-21）：改为**行级、fence 感知**解析——只有独占一行的
+/// `[RUN_END]` 开标记与 `[/RUN_END]` 闭标记才计入；代码块/引用中的示例不
+/// 再被误判，后文出现未闭合的 `[RUN_END` 也不会吞掉前面已闭合的声明。
 pub fn extract_model_stop(text: &str) -> Option<ModelStopDeclaration> {
-    let start = text.rfind(MODEL_STOP_PREFIX)?;
-    let tail = &text[start..];
-    let end = tail.find(MODEL_STOP_END)?;
-    let block = &tail[..end];
+    find_model_stop_block(text).map(|(_, _, declaration)| declaration)
+}
+
+/// 0dm 修订：从终答正文里剥离最后一个合法声明块（用于对用户/返回面交付
+/// 干净正文；`run_finished` 的 intent/reason/summary 另由
+/// [`extract_model_stop`] 落账）。没有声明块时原样返回（仅去掉尾随空白）。
+pub fn strip_model_stop(text: &str) -> String {
+    let Some((start, end, _)) = find_model_stop_block(text) else {
+        return text.trim_end().to_string();
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let mut kept: Vec<&str> = Vec::with_capacity(lines.len());
+    kept.extend_from_slice(&lines[..start]);
+    kept.extend_from_slice(&lines[end + 1..]);
+    kept.join("\n").trim_end().to_string()
+}
+
+/// 行级扫描：返回最后一个**完整闭合**声明块的行区间与解析结果。
+fn find_model_stop_block(text: &str) -> Option<(usize, usize, ModelStopDeclaration)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut in_fence = false;
+    let mut open: Option<usize> = None;
+    let mut blocks: Vec<(usize, usize)> = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        if trimmed == MODEL_STOP_OPEN {
+            open = Some(index);
+        } else if trimmed == MODEL_STOP_END {
+            if let Some(start) = open.take()
+                && start < index
+            {
+                blocks.push((start, index));
+            }
+        }
+    }
+    let (start, end) = *blocks.last()?;
     let mut intent: Option<StopIntent> = None;
     let mut reason: Option<StopReason> = None;
     let mut summary: Option<String> = None;
     let mut unrecognized: Vec<String> = Vec::new();
-    for line in block.lines().skip(1) {
+    for line in &lines[start + 1..end] {
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -145,12 +190,16 @@ pub fn extract_model_stop(text: &str) -> Option<ModelStopDeclaration> {
             _ => unrecognized.push(line.to_string()),
         }
     }
-    Some(ModelStopDeclaration {
-        intent: intent.unwrap_or(StopIntent::Conclude),
-        reason: reason.unwrap_or(StopReason::Completed),
-        summary: summary.unwrap_or_default(),
-        raw_unrecognized: unrecognized.join("; "),
-    })
+    Some((
+        start,
+        end,
+        ModelStopDeclaration {
+            intent: intent.unwrap_or(StopIntent::Conclude),
+            reason: reason.unwrap_or(StopReason::Completed),
+            summary: summary.unwrap_or_default(),
+            raw_unrecognized: unrecognized.join("; "),
+        },
+    ))
 }
 
 /// 声明语法（guide 与软提醒共用的单一来源；不含判断与建议话术——只述通道）。
@@ -237,6 +286,36 @@ mod tests {
             extract_model_stop("[RUN_END]\nintent: pause").is_none(),
             "未闭合不认"
         );
+    }
+
+    #[test]
+    fn fenced_examples_and_inline_mentions_are_not_terminal() {
+        let fenced = "示例：\n```text\n[RUN_END]\nintent: conclude\n[/RUN_END]\n```\n";
+        assert!(extract_model_stop(fenced).is_none());
+        assert!(
+            extract_model_stop("提到 [RUN_END] 但没有闭合").is_none(),
+            "行内提及不是声明"
+        );
+        assert!(
+            extract_model_stop("[RUN_END] intent: conclude [/RUN_END]").is_none(),
+            "标记必须独占一行"
+        );
+    }
+
+    #[test]
+    fn unclosed_later_mention_does_not_hide_earlier_block() {
+        let text = "结论\n[RUN_END]\nintent: conclude\n[/RUN_END]\n后文提到 [RUN_END 未闭合";
+        let decl = extract_model_stop(text).expect("earlier valid block survives");
+        assert_eq!(decl.intent, StopIntent::Conclude);
+        assert_eq!(strip_model_stop(text), "结论\n后文提到 [RUN_END 未闭合");
+    }
+
+    #[test]
+    fn strip_removes_only_the_declaration_block() {
+        let text = "正文第一行\n正文第二行\n[RUN_END]\nintent: pause\nreason: awaiting_response\nsummary: 等确认\n[/RUN_END]\n";
+        assert_eq!(strip_model_stop(text), "正文第一行\n正文第二行");
+        assert_eq!(strip_model_stop("只有正文"), "只有正文");
+        assert_eq!(strip_model_stop("[RUN_END]\n[/RUN_END]"), "");
     }
 
     #[test]

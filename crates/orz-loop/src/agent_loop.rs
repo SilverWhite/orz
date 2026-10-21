@@ -546,6 +546,12 @@ pub(crate) struct LoopProfile {
     /// blackboard plan summary in the compaction marker, live text-delta
     /// forwarding).
     pub role: AgentRole,
+    /// 0dm（2026-10-21）：本车道是否参与主终态声明契约（`[RUN_END]` +
+    /// nudge）。主车道 true；grill/检索 false——车道能力位，不再用
+    /// `role == Main` 判断（grill 的 role 也是 Main）。
+    pub terminal_declaration: bool,
+    /// 0dm：本车道是否注入常驻反例自查软提示 / 暴露 `self_check` 语义。
+    pub self_check_prompt: bool,
     /// §4.5: legacy counterexample gate (only when
     /// `ORZ_TERMINAL_DECLARATION=off` compatibility mode is in force; the
     /// production 0dm path retires it). Grill turns false.
@@ -605,6 +611,8 @@ impl LoopProfile {
     pub(crate) fn main(max_tool_rounds: u32) -> Self {
         Self {
             role: AgentRole::Main,
+            terminal_declaration: true,
+            self_check_prompt: true,
             counterexample_gate: true,
             drain_user_supplements: true,
             orientation_role: Some(AgentRole::Main),
@@ -628,6 +636,8 @@ impl LoopProfile {
     pub(crate) fn grill(max_tool_rounds: u32) -> Self {
         Self {
             role: AgentRole::Main,
+            terminal_declaration: false,
+            self_check_prompt: false,
             counterexample_gate: false,
             drain_user_supplements: false,
             orientation_role: Some(AgentRole::Main),
@@ -672,6 +682,8 @@ impl LoopProfile {
         };
         Self {
             role: agent_role,
+            terminal_declaration: false,
+            self_check_prompt: false,
             counterexample_gate: false,
             drain_user_supplements: false,
             orientation_role: Some(agent_role),
@@ -811,12 +823,19 @@ pub(crate) struct LoopOutcome {
     /// `SharedLoopServices` 的 AtomicU64）。
     pub retrieval_calls: u64,
     /// 0dm（2026-10-21）：主车道终态来源（`run_end` / `text_without_terminal`
-    /// / `short_text` / `budget_exhausted` / `gate_block` / `close_round`）。
+    /// / `short_text` / `budget_exhausted` / `gate_block` / `close_round` /
+    /// `unspecified`）。
     pub terminal_source: &'static str,
-    /// 0dm：是否注入过 `[TERMINAL_NOTICE]`。
+    /// 0dm：是否注入过 `[TERMINAL_NOTICE]`（`terminal_nudge_count > 0`）。
     pub terminal_nudged: bool,
-    /// 0dm：本 run 是否调用过 `self_check`。
+    /// 0dm：本 run 注入 `[TERMINAL_NOTICE]` 的次数（工具轮后有新动作可再
+    /// 提示一次，最多 [`TERMINAL_NUDGE_MAX`] 次）。
+    pub terminal_nudge_count: u32,
+    /// 0dm：本 run 成功完成的 `self_check` 调用（由 tool_completed 派生）。
     pub self_check_called: bool,
+    /// 0dm：本 run 最终落账的结束声明（`run_end` 时 Some；其余 None）。
+    /// 终答正文已剥离声明块，intent/reason/summary 从这里取。
+    pub terminal_declaration: Option<crate::model_stop::ModelStopDeclaration>,
 }
 
 /// Outcome of one template-summary attempt.
@@ -2134,22 +2153,109 @@ fn semantic_compression_reason(kind: Option<CompressionWindowKind>) -> &'static 
 }
 
 /// 0dm（2026-10-21）：主车道终态声明的「执行事实」判据——本 run 有工具轮、
-/// 黑板编辑记录，或 plan 存在且未完成。纯文本短聊不要求 `[RUN_END]`。
-/// 纯机械判据，不判内容、不需模型参与。
-fn run_has_substance(svc: &SharedLoopServices<'_>, tool_rounds: u32) -> bool {
+/// 本 run 产生过黑板编辑，或本 run 新产生/变更了未完成的 plan。纯文本短聊
+/// 不要求 `[RUN_END]`。纯机械判据，不判内容、不需模型参与。
+///
+/// 0dm 修订（2026-10-21 审查）：edits 按写时 run 章归属，plan 用 run 起点
+/// 快照比较——恢复会话里上一 run 的编辑/遗留 plan 不再把后续寒暄误判成
+/// 「有执行事实」。
+fn run_has_substance(
+    svc: &SharedLoopServices<'_>,
+    tool_rounds: u32,
+    run_id: &str,
+    baseline: &PlanBaseline,
+) -> bool {
     if tool_rounds > 0 {
         return true;
     }
     let bb = svc.blackboard.read();
-    if !bb.edits.is_empty() {
+    if bb.edits.iter().any(|edit| edit.run == run_id) || bb.edits.len() > baseline.edits_len {
         return true;
     }
-    bb.plan.plan_id.is_some()
+    baseline.plan_changed(&bb)
         && bb
             .plan
             .steps
             .iter()
             .any(|step| !matches!(step.status, StepStatus::Done(_) | StepStatus::Failed(_)))
+}
+
+/// 0dm：run 起点 plan 快照（只用于判断本 run 是否新产生/变更了未完成 plan）。
+struct PlanBaseline {
+    edits_len: usize,
+    plan_id: Option<String>,
+    steps: Vec<StepStatus>,
+}
+
+impl PlanBaseline {
+    fn capture(svc: &SharedLoopServices<'_>) -> Self {
+        let bb = svc.blackboard.read();
+        Self {
+            edits_len: bb.edits.len(),
+            plan_id: bb.plan.plan_id.clone(),
+            steps: bb
+                .plan
+                .steps
+                .iter()
+                .map(|step| step.status.clone())
+                .collect(),
+        }
+    }
+
+    fn plan_changed(&self, bb: &crate::blackboard::Blackboard) -> bool {
+        if bb.plan.plan_id != self.plan_id || bb.plan.steps.len() != self.steps.len() {
+            return bb.plan.plan_id.is_some();
+        }
+        bb.plan
+            .steps
+            .iter()
+            .zip(self.steps.iter())
+            .any(|(current, previous)| &current.status != previous)
+    }
+}
+
+/// 0dm：本 run 最多注入几次 `[TERMINAL_NOTICE]`。每次工具轮后出现新动作
+/// 才允许再提示一次；用尽后 fail-open 接受（不再无限加轮）。
+pub(crate) const TERMINAL_NUDGE_MAX: u32 = 2;
+
+/// 0dm：终态声明是否生效＝controller 车道位 && env 开关。两者必须同时为
+/// 真；任一关闭都退回旧反例门，避免「既不要求声明也不注入旧门」的弱化。
+fn declaration_required_for(controller_required: bool, env_required: bool) -> bool {
+    controller_required && env_required
+}
+
+/// 0dm：终答来源的纯映射（声明 > 有执行事实 > 短聊）。`declaration_required`
+/// 关闭时仍按「是否有本 run 执行事实」区分 `text_without_terminal` 与
+/// `short_text`，不再一律落 short_text。
+fn terminal_source_for(declared: bool, substantive: bool) -> &'static str {
+    if declared {
+        "run_end"
+    } else if substantive {
+        "text_without_terminal"
+    } else {
+        "short_text"
+    }
+}
+
+/// 0dm：模型以 `[RUN_END]`（conclude/completed）结束且 plan 末步是新的
+/// `deliver` 时，机械地把末步记为 Done——`submit` 退役后这是 `deliver` 的
+/// 唯一完成源；其他 reason（partial/blocked/pause）不推进。
+fn mark_deliver_done(svc: &SharedLoopServices<'_>, run_id: &str) {
+    let mut bb = svc.blackboard.write();
+    let Some(index) = bb.plan.steps.len().checked_sub(1) else {
+        return;
+    };
+    if bb.plan.steps[index].id != "deliver" || bb.plan.steps[index].status.is_done() {
+        return;
+    }
+    if crate::planning::mark_step_done(
+        &mut bb.plan.steps,
+        index,
+        &format!("run_end:{run_id}"),
+        None,
+    ) {
+        bb.bump_plan();
+    }
 }
 
 /// 0dm 兼容门（`ORZ_TERMINAL_DECLARATION=off`）：候选已自带反例自查段时
@@ -2314,10 +2420,18 @@ pub(crate) async fn run_agent_loop(
     // 生产新路径不触发（见终答候选分支）。
     let mut counterexample_fired = false;
     // 0dm（2026-10-21）：终态声明状态。`terminal_source` 在各类出口赋值；
-    // `terminal_nudged` 保证只提示一次；`self_check_called` 由工具调用派生。
+    // `terminal_nudge_count` 限制 nudge 次数，工具轮后有新动作才允许再提示；
+    // `self_check_called` 由**成功完成**的工具调用派生；`terminal_declaration`
+    // 保存最终声明（终答正文会剥离声明块）。
+    let current_run_id = writer.run_id().to_string();
+    let plan_baseline = PlanBaseline::capture(svc);
     #[allow(unused_assignments)] // 所有出口都会赋值；初值仅为类型/防御
-    let mut terminal_source: &'static str = "run_end";
+    let mut terminal_source: &'static str = "unspecified";
     let mut terminal_nudged = false;
+    let mut terminal_nudge_count: u32 = 0;
+    let mut last_nudge_tool_rounds: u32 = 0;
+    let mut pending_draft: Option<String> = None;
+    let mut terminal_declaration: Option<crate::model_stop::ModelStopDeclaration> = None;
     let mut self_check_called = false;
     // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): a
     // checkpoint fire whose block was injected but whose forced-template
@@ -3159,7 +3273,7 @@ pub(crate) async fn run_agent_loop(
         };
         // 0dm（2026-10-21）：主车道常驻软提示（用户指定文案，逐字）＋终态
         // 语法短行。放系统提示（不进对话侧车、不增加模型面消息条数）。
-        let system = if profile.role == AgentRole::Main {
+        let system = if profile.self_check_prompt {
             format!(
                 "{}\n\n{}\n结束前输出 [RUN_END]（intent/reason/summary）。",
                 system,
@@ -4088,16 +4202,17 @@ pub(crate) async fn run_agent_loop(
             break;
         }
 
-        if response.tool_calls.iter().any(|tc| tc.name == "self_check") {
-            self_check_called = true;
-        }
         if response.tool_calls.is_empty() {
-            // 0dm 兼容路径：`ORZ_TERMINAL_DECLARATION=off` 时保留旧反例门
-            // （生产 required 路径不走这里；旧测试/旧客户端行为不变）。
-            if !controller.terminal_declaration_required()
+            let declaration_required = declaration_required_for(
+                controller.terminal_declaration_required(),
+                crate::model_stop::terminal_declaration_required(),
+            );
+            // 0dm 兼容路径：`ORZ_TERMINAL_DECLARATION=off`（或 controller 未
+            // 启用终态声明）时保留旧反例门；生产 required 路径不走这里。
+            if !declaration_required
                 && profile.counterexample_gate
                 && !counterexample_fired
-                && run_has_substance(svc, tool_rounds)
+                && run_has_substance(svc, tool_rounds, &current_run_id, &plan_baseline)
                 && !response
                     .text
                     .as_deref()
@@ -4135,15 +4250,35 @@ pub(crate) async fn run_agent_loop(
                 continue;
             }
             // 0dm（2026-10-21）：终态声明契约——不再在终答前自动注入反例门。
-            // 主车道有执行事实时，纯文本必须带 [RUN_END]；否则先 nudge 一次，
-            // 第二次仍无声明则 fail-open 接受（terminal_source 如实落账）。
+            // 主车道有执行事实时，纯文本必须带 [RUN_END]；否则在**新的实质
+            // 动作**之后可再 nudge（最多 TERMINAL_NUDGE_MAX 次），用尽后
+            // fail-open 接受并如实落账。没有新动作的第二次候选直接接受。
             let candidate_text = response.text.as_deref().unwrap_or("");
-            let declared = crate::model_stop::extract_model_stop(candidate_text).is_some();
-            let require_declaration = profile.role == AgentRole::Main
-                && controller.terminal_declaration_required()
-                && crate::model_stop::terminal_declaration_required()
-                && run_has_substance(svc, tool_rounds);
-            if require_declaration && !declared && !terminal_nudged {
+            let candidate_declaration = crate::model_stop::extract_model_stop(candidate_text);
+            let declared = candidate_declaration.is_some();
+            let require_declaration = profile.terminal_declaration
+                && declaration_required
+                && run_has_substance(svc, tool_rounds, &current_run_id, &plan_baseline);
+            let new_work_since_nudge =
+                terminal_nudge_count == 0 || tool_rounds > last_nudge_tool_rounds;
+            if require_declaration
+                && !declared
+                && terminal_nudge_count < TERMINAL_NUDGE_MAX
+                && new_work_since_nudge
+            {
+                // 草稿先入 assistant 轮：模型下一轮能看到自己刚写的内容，
+                // 只需补声明或继续工具；不再凭空重写整份终答。
+                if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
+                    messages.push(Message {
+                        role: Role::Assistant,
+                        content: text.clone(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: response.reasoning_content.clone(),
+                        round: None,
+                    });
+                    pending_draft = Some(text);
+                }
                 writer
                     .record(
                         EventType::GateDecision,
@@ -4161,18 +4296,53 @@ pub(crate) async fn run_agent_loop(
                     reasoning_content: None,
                     round: None,
                 });
+                terminal_nudge_count += 1;
                 terminal_nudged = true;
+                last_nudge_tool_rounds = tool_rounds;
                 // 候选里的语义摘要留到 run 尾消费：下一轮必须与草稿同上下文。
                 defer_semantic_once = true;
                 continue;
             }
             if declared {
                 terminal_source = "run_end";
-            } else if require_declaration {
-                terminal_source = "text_without_terminal";
-            } else {
-                terminal_source = "short_text";
+                terminal_declaration = candidate_declaration.clone();
+                let stripped = crate::model_stop::strip_model_stop(candidate_text);
+                let from_draft = stripped.trim().is_empty() && pending_draft.is_some();
+                let final_text = if from_draft {
+                    pending_draft.take().unwrap_or_default()
+                } else {
+                    stripped
+                };
+                if !from_draft && !final_text.is_empty() {
+                    messages.push(Message {
+                        role: Role::Assistant,
+                        content: final_text.clone(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: response.reasoning_content.clone(),
+                        round: None,
+                    });
+                }
+                last_text = if final_text.is_empty() {
+                    None
+                } else {
+                    Some(final_text)
+                };
+                if let Some(decl) = &candidate_declaration
+                    && decl.intent == crate::model_stop::StopIntent::Conclude
+                    && decl.reason == crate::model_stop::StopReason::Completed
+                {
+                    mark_deliver_done(svc, &current_run_id);
+                }
+                break;
             }
+            // 未声明：接受当前文本（fail-open）；有草稿时也不再用旧草稿
+            // 覆盖最新候选。
+            terminal_declaration = None;
+            terminal_source = terminal_source_for(
+                false,
+                run_has_substance(svc, tool_rounds, &current_run_id, &plan_baseline),
+            );
             // 0ac S3①-b M1（2026-09-15，设计 §4.1「句号边界分段续写」的
             // 收尾注入形态）：本轮已是纯文本终答候选而队列仍有未投递事实
             // 时，保留该轮 assistant 文本（含 reasoning_content）、注入
@@ -4249,8 +4419,7 @@ pub(crate) async fn run_agent_loop(
             }
             // Include the final assistant message in the conversation so
             // the rebuilt dialogue matches what a real transport would have
-            // received
-            // (2026-08-04 review P2-2).
+            // received (2026-08-04 review P2-2).
             if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
                 messages.push(Message {
                     role: Role::Assistant,
@@ -4264,6 +4433,10 @@ pub(crate) async fn run_agent_loop(
             last_text = response.text;
             break;
         }
+
+        // A post-nudge tool round means the draft is no longer the immediate
+        // pre-declaration answer; clear it before dispatching tools.
+        pending_draft = None;
 
         // IP3a: instruction provenance gate — evaluated once per tool
         // phase. A block stops every tool and ends the phase without
@@ -4588,6 +4761,9 @@ pub(crate) async fn run_agent_loop(
                         );
                     }
                     // 静默机械审查（主车道专属，与串行同构）。
+                    if tc.name == "self_check" && result.exit_code == Some(0) {
+                        self_check_called = true;
+                    }
                     if profile.role == AgentRole::Main {
                         crate::mechanical_audit::record_tool_result(
                             &mut mechanical_audit,
@@ -5233,6 +5409,9 @@ pub(crate) async fn run_agent_loop(
             // 检索派发带激活候选计数（候选/上限）。
             // 主车道专属：检索子代理车道不记（事件面留痕仅主面，检索面
             // 事件序列保持既有形态）。
+            if tc.name == "self_check" && result.exit_code == Some(0) {
+                self_check_called = true;
+            }
             if profile.role == AgentRole::Main {
                 crate::mechanical_audit::record_tool_result(
                     &mut mechanical_audit,
@@ -5926,7 +6105,9 @@ pub(crate) async fn run_agent_loop(
             .unwrap_or(0),
         terminal_source,
         terminal_nudged,
+        terminal_nudge_count,
         self_check_called,
+        terminal_declaration,
     })
 }
 
@@ -6191,6 +6372,25 @@ mod tests {
     use crate::gateway::fake::{FakeProvider, ScriptedResponse};
     use crate::host::{PermitDecision, PermitError, ToolError};
     use async_trait::async_trait;
+
+    /// 0dm：终态声明开关是 controller 车道位与 env 的 AND；grill/检索车道
+    /// 不参与，主车道参与；常驻软提示只跟车道位走。
+    #[test]
+    fn zero_dm_lane_capabilities_and_switch_matrix() {
+        let main = LoopProfile::main(10);
+        assert!(main.terminal_declaration);
+        assert!(main.self_check_prompt);
+        let grill = LoopProfile::grill(10);
+        assert!(!grill.terminal_declaration);
+        assert!(!grill.self_check_prompt);
+        assert!(declaration_required_for(true, true));
+        assert!(!declaration_required_for(true, false));
+        assert!(!declaration_required_for(false, true));
+        assert!(!declaration_required_for(false, false));
+        assert_eq!(terminal_source_for(true, true), "run_end");
+        assert_eq!(terminal_source_for(false, true), "text_without_terminal");
+        assert_eq!(terminal_source_for(false, false), "short_text");
+    }
 
     /// The retrieval-lane write-domain gate classifies the three refusal
     /// classes distinctly (ADR-0010 §3.2 deny-only domain; review F6,
@@ -9707,8 +9907,8 @@ mod tests {
                 summary_block.to_string()
             };
             async move {
-                // 首轮带工具轮（门实质判定 `answer_gate_has_substance` 需执行
-                // 事实）——次轮文本即终答候选 ⇒ 反例门 fire ⇒ 下一 loop-top
+                // 首轮带工具轮（终态判据 `run_has_substance` 需本 run 执行
+                // 事实）——次轮文本即终答候选 ⇒ 旧门 fire ⇒ 下一 loop-top
                 // 消费摘要（事发同形）。
                 let fake = Arc::new(FakeProvider::new(vec![
                     ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
