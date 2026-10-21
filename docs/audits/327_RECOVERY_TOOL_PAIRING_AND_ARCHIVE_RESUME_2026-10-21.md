@@ -21,7 +21,7 @@
 | Web 标记栏 | 恢复后 `turnCounter` 从 0 重排，`RUN-…-18` 标成 T1 | `prompt_submitted` 取 run 后缀 `n+1` 作绝对 turn |
 | 归档视图恢复按钮 | `resumeTarget` 只认 `conversation://`，归档视图按钮不可点 | `archive://` 同权；归档详情带 `session_id` 即可「恢复并继续」 |
 | 计数 | 63 | 63（本批为缺陷修复，不新增待办） |
-| 提交/推送 | — | orz `0aaac9d3`＋`d98667be` → `cli/feat/fusion-architecture`；父仓 `a9240804`＋`64a85651`＋`711164ff` → `origin/main` |
+| 提交/推送 | — | orz `0aaac9d3`＋`d98667be` → `cli/feat/fusion-architecture`；父仓 327 文档链 `a9240804`→`aafc01ea` → `origin/main` |
 | Windows 构建 | 0.9.6 | `cargo build -p orz-bin --release -j 2` **exit 0（最终构建 1m39s）**；`orz.exe` 58,833,408 `ae8b12d0…`／signer 6,740,480 `d02bb021…`／provision 6,640,128 `3a3a6ae9…` |
 | 换装 | 装机位/载体位 0.9.6 | 三件 MATCH 3/3；两侧 `.0.9.6-bak`；运行中旧文件 `.swap-old` 仍为 0.9.6；`--build-info` 双点 `0.9.7` |
 | ACAF | manifest `0bf55ac8…` | 备份 `signer-manifest.json.bak-20261021-327`／`-327b`／`-327c`；re-provision exit 0；`binary_sha256=d02bb021…` ↔ signer |
