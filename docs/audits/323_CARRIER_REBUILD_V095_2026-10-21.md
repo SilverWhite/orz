@@ -4,7 +4,8 @@
 > **本批**＝0.9.4→0.9.5 代窗口双平台重建（Windows release＋Linux musl）→ 载体位换装 →
 > 装机位换装 → ACAF 重 provision → 载体清单 → 双平台冒烟 → 身份门 → 落账。
 > **源冻结**＝orz **`974d0345`**（322 摩擦修复 10 文件＋版本 bump 两行，`+420/−56`；
-> `cargo metadata --locked` exit 0）。**未推送、未发行、未打包**。
+> `cargo metadata --locked` exit 0）。**已推送 `origin main`＋tag `v0.9.5`；
+> GitHub Release `v0.9.5` Latest（三资产）**。
 
 ## §0 结论速览
 
@@ -21,6 +22,8 @@
 | 字节判据 | 322 新面 WIN：`recent_workspaces` 0→**3**、`本次会话打开过` 0→**1**、`（未持久授信）` 0→**1** |
 | Web 实机探针 | 0.9.5 桥：boot 出 `recent_workspaces`；切到 `D:\CLI` 200；**删掉 smoke 根的 TrustStore 授予后仍可 visited-only 切回** 200；旧根 `/api/conversations?root=` 200 |
 | 门禁 | `orz_source_manifest.sha256` 重算 **1488 条**（12 行差异＝本批 12 文件）；`check_repository.py` 见 §6 |
+| 发行 | tag `v0.9.5`→`9cd7c8da`；Release `v0.9.5` **Latest**；zip 28,419,431 `a04284f1…`／tar.gz 37,590,833 `b0a35233…`／`SHA256SUMS` 193 B `e72bb068…`；回下载 **BYTE-IDENTICAL×3**＋下载态 2/2 OK |
+| 发布面 | 中文 README／英文 README 对齐 v0.9.5（解包名＋Release 链接；英文 face 2026-10-21） |
 | 计数 | 62 不变；索引 v4.292→**v4.293** |
 
 ## §1 源冻结
@@ -125,7 +128,7 @@ orz-acaf-provision.exe D:/tb-eval/orz-windows/acaf/keystore D:/tb-eval/orz-windo
 
 ## §7 边界与如实记
 
-1. **未推送、未发行、未打包**：不建 GitHub Release、不做 rel-stage、不更新 README 发布面；发布面仍停 v0.9.4。
+1. **已推送、已发行、已打包**：`origin main` `bf743a3a..9cd7c8da`、tag `v0.9.5`→`9cd7c8da`；Release `v0.9.5` 为 Latest，三资产 zip／tar.gz／`SHA256SUMS`；包内 README 为 0.9.5 派生版（89,966 B，CRLF，含 0.9.5 更新节＋0.9.5 边界）。发布面已从 v0.9.4 切到 v0.9.5。
 2. **装机位只换 Windows 三件**（`C:\Users\1\AppData\Local\orz\bin`）；Linux 载体位为 `D:/tb-eval/orz-linux`，无 Windows 式「安装位」面。
 3. **`orz.exe` 尺寸下降 29,184 B**：322 修复删除/收紧了部分代码路径（含重复门分支与未截断台账渲染），非功能缺失；进体判据以新面字符串与单测承载。
 4. **signer/provision 哈希变化但尺寸 Δ0**：0.9.5 版本串链接传播（155/170/180 同形）；已重 provision 并逐位绑定。
@@ -133,3 +136,16 @@ orz-acaf-provision.exe D:/tb-eval/orz-windows/acaf/keystore D:/tb-eval/orz-windo
 6. **实验下半部分未正常进行**：本批开始前确认无 python/orz 进程；重建使用空闲 CPU，未触碰 `D:\AGI` 实验数据。
 7. **D 盘余量**：构建前后约 24 GB free；未 `cargo clean`，未删除任何 bak 链或评测数据。
 8. **Windows 构建告警 1 条**（`permission.rs` unused imports）与 Linux 告警（`orz-assurance` 4／`orz-host` 3 等 musl cfg 预存 lint）均非本批引入，不入处置。
+
+## §8 发行面回读（发行后补记）
+
+- **tag**：`v0.9.5` 轻量 tag → `9cd7c8da`（README 发布面对齐提交）；远端 `refs/tags/v0.9.5` 同值。
+- **Release**：`gh release view v0.9.5` → `isDraft=false`／`isPrerelease=false`；`gh release list` 首行标 **Latest**；`targetCommitish=main`。
+- **三资产服务端 digest ↔ 本地逐位一致**：
+  - zip `a04284f1bfa65f3af5f535e489e6053bc1a051cb4142e18c60550f7a15cc80ad`（28,419,431 B）；
+  - tar.gz `b0a35233f6b32eba57c4c0fd8575d97a8c424291ea73ddab6969bd7959e8871a`（37,590,833 B）；
+  - `SHA256SUMS` `e72bb068554da891ccdd7e5be00095fbce1019931c621ae9af3be7670b2a3702`（193 B）。
+- **回下载逐位比对**（`gh release download v0.9.5`）＝三件全 `BYTE-IDENTICAL`；下载态 `SHA256SUMS` 复算 **2/2 OK**。
+- **包核证**：zip 解包 6 entries、侧 `SHA256SUMS` **4/4 OK**、`--build-info 0.9.5 os=windows`；tar.gz 在 alpine 3.20（`coreutils` 提供 GNU `sha256sum`）与 bookworm-slim 均 **4/4 OK**、`chmod +x` 后 `0.9.5 os=linux` rc0；两侧 `carrier-manifest` 5 entries 逐件 OK。
+- **发布面**：中文 README 解包名 `orz-0.9.5-linux-x86_64.tar.gz`＋最新 release 链接 `v0.9.5`；英文 README `v0.9.5 face, 2026-10-21` 同步。
+- **源码**：orz `974d0345` 已推 `cli/feat/fusion-architecture`；父仓 `9cd7c8da` 已推 `origin/main`。
