@@ -176,6 +176,15 @@ impl SlotState {
     }
 }
 
+/// 333（2026-10-21）：保活窗口到期被回收的会话事实。桥在 grace 回收时记下
+/// 它，下一次同区 attach 的前置帧据此发「未恢复」的显式提示——否则刷新后
+/// 只会看到一个新 child，用户无从知道上一会话已过窗口。
+#[derive(Debug, Clone)]
+struct ExpiredSession {
+    session_id: String,
+    at: Instant,
+}
+
 /// One workspace's agent child. Cloned as `Arc`; the reader task and the
 /// bridge both hold it.
 struct AgentHandle {
@@ -360,6 +369,7 @@ async fn claim_attachment(
     conn: u64,
     reused: bool,
     cwd: &Path,
+    expired: Option<&ExpiredSession>,
 ) -> Option<Attached> {
     let mut state = handle.state.lock().await;
     if state.sink.is_some() {
@@ -380,6 +390,11 @@ async fn claim_attachment(
             "prompt_in_flight": state.prompt_in_flight.is_some(),
             "grace_secs": grace.as_secs(),
             "connection": conn,
+            // 333：保活窗口到期回收过（且尚未被新会话覆盖）——前端必须显式
+            // 说明「上一会话未恢复」，不得让用户以为重连成功。
+            "keepalive_expired": expired.is_some(),
+            "expired_session_id": expired.map(|e| e.session_id.clone()),
+            "expired_secs_ago": expired.map(|e| e.at.elapsed().as_secs()),
             // 绑定根的真相面：刷新后的新页面还没拉到 /api/boot 时，
             // 也要能把会话根设对（否则旧工作区会话的 tail 会按新 cwd 找）。
             "cwd": cwd.display().to_string(),
@@ -410,6 +425,8 @@ pub struct AgentBridge {
 
 struct BridgeInner {
     slots: Mutex<HashMap<String, Arc<AgentHandle>>>,
+    /// 333：key → 最近一次因保活到期被回收的会话（下一次 attach 消费）。
+    expired: Mutex<HashMap<String, ExpiredSession>>,
     agent_binary: PathBuf,
     grace: Duration,
     next_conn: AtomicU64,
@@ -422,6 +439,7 @@ impl AgentBridge {
         Self {
             inner: Arc::new(BridgeInner {
                 slots: Mutex::new(HashMap::new()),
+                expired: Mutex::new(HashMap::new()),
                 agent_binary,
                 grace,
                 next_conn: AtomicU64::new(0),
@@ -448,6 +466,7 @@ impl AgentBridge {
 
     async fn reap_once(&self) {
         let mut victims: Vec<String> = Vec::new();
+        let mut expired: Vec<(String, String)> = Vec::new();
         {
             let slots = self.inner.slots.lock().await;
             for (key, handle) in slots.iter() {
@@ -460,8 +479,25 @@ impl AgentBridge {
                     && let Some(at) = state.detached_at
                     && at.elapsed() >= self.inner.grace
                 {
+                    // 333：只有「曾绑定过会话」的槽才留过期事实；空槽回收
+                    // 不该在下次 attach 谎报「上一会话未恢复」。
+                    if let Some(session_id) = state.session_id.clone() {
+                        expired.push((key.clone(), session_id));
+                    }
                     victims.push(key.clone());
                 }
+            }
+        }
+        if !expired.is_empty() {
+            let mut map = self.inner.expired.lock().await;
+            for (key, session_id) in expired {
+                map.insert(
+                    key,
+                    ExpiredSession {
+                        session_id,
+                        at: Instant::now(),
+                    },
+                );
             }
         }
         for key in victims {
@@ -509,7 +545,22 @@ impl AgentBridge {
         };
 
         let conn = self.inner.next_conn.fetch_add(1, Ordering::Relaxed) + 1;
-        let attached = claim_attachment(&handle, self.inner.grace, conn, reused, cwd).await;
+        // 333：过期事实只在「新建 child」的 attach 上消费；复用保活 child
+        // 时它仍是同一个会话，不得谎报上一会话已回收。
+        let expired = if reused {
+            None
+        } else {
+            self.inner.expired.lock().await.remove(key)
+        };
+        let attached = claim_attachment(
+            &handle,
+            self.inner.grace,
+            conn,
+            reused,
+            cwd,
+            expired.as_ref(),
+        )
+        .await;
         drop(slots);
         match attached {
             Some(attached) => {
@@ -783,7 +834,7 @@ mod tests {
         let cwd = Path::new("C:/workspace");
         let grace = Duration::from_secs(60);
 
-        let first = claim_attachment(&handle, grace, 1, true, cwd)
+        let first = claim_attachment(&handle, grace, 1, true, cwd, None)
             .await
             .expect("first attach must win the sink");
         assert!(first.preamble.contains("\"_orz/bridge_attached\""));
@@ -791,7 +842,7 @@ mod tests {
         assert!(first.preamble.contains("\"reused\":true"));
 
         assert!(
-            claim_attachment(&handle, grace, 2, true, cwd)
+            claim_attachment(&handle, grace, 2, true, cwd, None)
                 .await
                 .is_none(),
             "a second WS must be refused while one is attached (409)"
@@ -809,7 +860,7 @@ mod tests {
             assert_eq!(state.backlog.len(), 1);
         }
 
-        let second = claim_attachment(&handle, grace, 3, true, cwd)
+        let second = claim_attachment(&handle, grace, 3, true, cwd, None)
             .await
             .expect("same workspace must reattach (keepalive)");
         assert_eq!(second.backlog.len(), 1);
@@ -842,6 +893,65 @@ mod tests {
             .observe_agent_frame(r#"{"jsonrpc":"2.0","id":9,"result":{"stopReason":"end_turn"}}"#)
             .await;
         assert_eq!(handle.state.lock().await.prompt_in_flight, None);
+    }
+
+    /// 333 钉：保活窗口到期回收后，下一次 attach 的前置帧必须显式报告
+    /// 「上一会话未恢复」——不能只给一个干净的新 child 让用户误以为重连成功。
+    #[tokio::test]
+    async fn keepalive_expiry_is_reported_on_next_attach() {
+        let bridge = AgentBridge::new(PathBuf::from("orz"), Duration::from_secs(1));
+        let handle = fake_handle();
+        {
+            let mut state = handle.state.lock().await;
+            state.session_id = Some("sess-expired".into());
+            state.detached_at = Some(Instant::now() - Duration::from_secs(2));
+        }
+        bridge
+            .inner
+            .slots
+            .lock()
+            .await
+            .insert("C:/workspace".into(), handle);
+        bridge.reap_once().await;
+        assert!(
+            bridge.inner.slots.lock().await.is_empty(),
+            "grace-expired slot must be reclaimed"
+        );
+        let expired = bridge
+            .inner
+            .expired
+            .lock()
+            .await
+            .remove("C:/workspace")
+            .expect("expiry fact retained for the next attach");
+        assert_eq!(expired.session_id, "sess-expired");
+
+        let fresh = fake_handle();
+        let attached = claim_attachment(
+            &fresh,
+            bridge.grace(),
+            9,
+            false,
+            Path::new("C:/workspace"),
+            Some(&expired),
+        )
+        .await
+        .expect("fresh attach");
+        assert!(
+            attached.preamble.contains("\"keepalive_expired\":true"),
+            "{}",
+            attached.preamble
+        );
+        assert!(
+            attached.preamble.contains("sess-expired"),
+            "{}",
+            attached.preamble
+        );
+        assert!(
+            attached.preamble.contains("\"expired_secs_ago\""),
+            "{}",
+            attached.preamble
+        );
     }
 
     fn fake_handle() -> Arc<AgentHandle> {

@@ -921,8 +921,9 @@ fn session_lease_held_elsewhere(base_dir: &Path, session_id: &str) -> bool {
 
 /// Sessions currently leased by any process, keyed by their 8-char display
 /// prefix. Scans the lease directory because the lease filename uses the full
-/// session id while the sweep only knows the prefix.
-fn leased_sessions(base_dir: &Path) -> Vec<String> {
+/// session id while the sweep only knows the prefix. Public since 333:
+/// `orz doctor` reports live leases without opening a second implementation.
+pub fn leased_sessions(base_dir: &Path) -> Vec<String> {
     let dir = base_dir.join(".gsa").join("sessions");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Vec::new();
@@ -5344,9 +5345,18 @@ impl AcpServer {
             ))
         })?;
         drop(runs);
+        let depth = queue.depth();
+        // 333：额度与作用域随响应返回（前端不再硬编码 16）——remaining 是
+        // 「还能再排几条」，scope 明示队列只活在**本会话进程**，刷新/换页/
+        // 子进程回收都不保留。
         Ok(serde_json::json!({
             "queued": true,
-            "depth": queue.depth(),
+            "depth": depth,
+            "capacity": crate::SUPPLEMENT_QUEUE_MAX_DEPTH,
+            "remaining": crate::SUPPLEMENT_QUEUE_MAX_DEPTH.saturating_sub(depth),
+            "per_message_cap": crate::SUPPLEMENT_MAX_BYTES,
+            "scope": "session_process",
+            "persists_across_pages": false,
         }))
     }
 

@@ -121,7 +121,17 @@ function mockAcpSend(msg, ws) {
       (acpMock.promptHandler ?? ((m, w) => wsRespond(w, m.id, { stopReason: 'end_turn' })))(msg, ws);
       break;
     case '_orz/queue_append':
-      (acpMock.queueHandler ?? ((m, w) => wsRespond(w, m.id, { queued: true, depth: 1 })))(msg, ws);
+      (acpMock.queueHandler ??
+        ((m, w) =>
+          wsRespond(w, m.id, {
+            queued: true,
+            depth: 1,
+            capacity: 16,
+            remaining: 15,
+            per_message_cap: 262144,
+            scope: 'session_process',
+            persists_across_pages: false,
+          })))(msg, ws);
       break;
     case '_orz/recall_preview':
       (acpMock.recallPreviewHandler ?? ((m, w) => wsRespond(w, m.id, { messages: [] })))(msg, ws);
@@ -1387,6 +1397,217 @@ vm.setRunning(false);
 state.supplementQueueDepth = 0;
 state.backgroundTasks = 0;
 console.log('ok  14.9 beforeunload 风险面＋「保活窗口/排队补充＋后台任务不恢复」文案');
+
+/* ── 14.10 333a（2026-10-21）：Web 细节四项 ────────────────────────────── */
+
+// ① 保活窗口外不恢复：attach 前置帧带 keepalive_expired 时必须显式上屏。
+acpSocket.onmessage({
+  data: JSON.stringify({
+    jsonrpc: '2.0',
+    method: '_orz/bridge_attached',
+    params: {
+      session_id: null,
+      reused: false,
+      keepalive_expired: true,
+      expired_session_id: 'deadbeef-1111-2222-3333-444455556666',
+      expired_secs_ago: 42,
+      cwd: 'D:\\CLI\\orz',
+    },
+  }),
+});
+await flush();
+assert.ok(
+  state.content.items.some(
+    (it) => it.kind === 'message' && String(it.content).includes('保活窗口已过期'),
+  ),
+  '保活到期后必须显式提示「上一会话未恢复」',
+);
+assert.ok(
+  state.content.items.some((it) => String(it.content).includes('deadbeef')),
+  '提示必须带被回收的会话标识（证据）',
+);
+console.log('ok  14.10a 保活窗口过期：attach 前置帧触发显式「未恢复」提示');
+
+// ② 队列剩余额度/不跨进程：入队回执必须带 depth/capacity/remaining 与作用域。
+state.running = true;
+await ui.runSelfCheck();
+await flush();
+assert.ok(
+  state.content.items.some(
+    (it) => String(it.content).includes('1/16') && String(it.content).includes('剩余 15'),
+  ),
+  '入队回执必须显示第 N/上限 与剩余额度',
+);
+assert.ok(
+  state.content.items.some((it) => String(it.content).includes('仅本会话进程')),
+  '入队回执必须说明队列不跨进程/刷新不保留',
+);
+state.running = false;
+
+// ③ 审批并发可见：第二个请求顶掉第一个时，新弹窗必须提示旧请求已取消。
+assert.ok(
+  registry.some((e) => String(e.textContent).includes('上一条权限请求已被本次请求顶掉')),
+  '并发审批顶掉旧请求必须在新弹窗里可见',
+);
+
+// ④ 上下文读数：工具栏入口＋弹窗读数非空（估算/最近压缩/存档）。
+widgets.renderToolbar();
+assert.ok(
+  ui.toolbar.children.some((n) => n.textContent === '上下文'),
+  '工具栏必须有「上下文」读数入口',
+);
+resetView();
+state.sessionId = 'cafef00d-1111-2222-3333-444455556666';
+state.boundSession8 = 'cafef00d';
+state.sessionRoot = 'D:\\CLI\\orz';
+state.navEpoch = 7;
+await withFetch(
+  fallbackApi({
+    '/api/context': {
+      session8: 'cafef00d',
+      messages: 3,
+      chars: 1200,
+      estimated_tokens: 600,
+      estimate_method: 'chars/2',
+      watermarks: ['500K'],
+      last_compaction: {
+        run_id: 'RUN-cafef00d-2',
+        trigger_tokens: 900000,
+        estimated_tokens_after: 420000,
+        mode: 'mechanical',
+        reason: 'context_scale_window',
+      },
+      compaction_archives: 2,
+      notes: ['只读投影'],
+    },
+  }),
+  async () => {
+    await ui.openContext();
+    await flush();
+  },
+);
+assert.ok(
+  registry.some((e) => String(e.textContent).includes('600 tokens')),
+  '上下文读数必须显示估算占用',
+);
+assert.ok(
+  registry.some((e) => String(e.textContent).includes('RUN-cafef00d-2')),
+  '上下文读数必须显示最近一次压缩的 run/前后读数',
+);
+assert.ok(
+  registry.some((e) => String(e.textContent).includes('500K')),
+  '上下文读数必须显示水位提醒',
+);
+console.log('ok  14.10b 333a：队列额度/审批顶掉/上下文读数（估算＋最近压缩）');
+
+/* ── 14.11 333b（2026-10-21）：后台可见/交付空态/版本偏斜/错误四要素 ──── */
+
+// ⑤ 后台任务：属性弹窗必须明确「仅模型可见」，队列深度带额度。
+resetView();
+state.supplementQueueDepth = 3;
+state.queueCapacity = 16;
+state.backgroundTasks = 2;
+ui.openProperties();
+assert.ok(
+  registry.some((e) => String(e.textContent).includes('仅模型可见')),
+  '属性面板必须说明后台任务仅模型可见（不虚构读不到的任务表）',
+);
+assert.ok(
+  registry.some((e) => String(e.textContent).includes('3/16')),
+  '属性面板必须显示队列深度/上限',
+);
+
+// ⑥ 交付面板：空态显式文案；有 terminal_source 时必须原样可见。
+state.boundSession8 = 'cafef00d';
+state.sessionId = 'cafef00d-1111-2222-3333-444455556666';
+state.sessionRoot = 'D:\\CLI\\orz';
+state.navEpoch += 1;
+await withFetch(
+  fallbackApi({
+    '/api/delivery': {
+      session8: 'cafef00d',
+      session_id: state.sessionId,
+      root: 'D:\\CLI\\orz',
+      messages: null,
+      plan: { steps: [] },
+      last_run: null,
+      recall: { count: 0 },
+      notes: ['只读投影'],
+    },
+  }),
+  async () => {
+    await ui.openDeliveryStatus();
+    await flush();
+  },
+);
+assert.ok(
+  registry.some((e) => String(e.textContent).includes('尚无可展示的交付事实')),
+  '交付面板空态必须有显式文案',
+);
+dialogs.closeModal();
+const deliveryWithRun = {
+  session8: 'cafef00d',
+  session_id: state.sessionId,
+  root: 'D:\\CLI\\orz',
+  messages: 2,
+  plan: { steps: [], terminal_step: null, terminal_state: null },
+  last_run: {
+    run_id: 'RUN-cafef00d-2',
+    status: 'completed',
+    terminal_source: 'run_end',
+    terminal_nudged: false,
+    terminal_nudge_count: 0,
+    self_check_called: true,
+    self_check_tool_rounds: 1,
+  },
+  recall: { count: 0 },
+  notes: [],
+};
+await withFetch(
+  fallbackApi({ '/api/delivery': deliveryWithRun }),
+  async () => {
+    await ui.openDeliveryStatus();
+    await flush();
+  },
+);
+assert.ok(
+  registry.some((e) => String(e.textContent).includes('run_end（模型 [RUN_END] 声明）')),
+  '交付面板必须显示 terminal_source 原码与中文标注',
+);
+dialogs.closeModal();
+
+// ⑧ 版本偏斜：boot 事实落地时横幅与系统行都必须显式。
+ui.applyBootFacts({
+  cwd: 'D:\\CLI\\orz',
+  bridge_version: '0.9.8',
+  child_version: '0.9.7',
+  version_skew: true,
+});
+assert.ok(connBanner.textContent.includes('版本偏斜'), '版本偏斜必须上连接横幅');
+assert.ok(
+  connBanner.textContent.includes('0.9.8') && connBanner.textContent.includes('0.9.7'),
+  '版本偏斜必须给出两侧版本号（证据）',
+);
+assert.ok(
+  state.content.items.some((it) => String(it.content).includes('版本偏斜')),
+  '版本偏斜必须同时进系统行',
+);
+connBanner.hidden = true;
+
+// ⑨ 错误四要素：copy.js 合成「发生了什么＋分类＋下一步＋证据」。
+const copy = await import('../assets/app/copy.js');
+const four = copy.describeError({
+  code: 'session_busy',
+  class: 'session',
+  hint: '等本轮结束',
+  evidence: 'RUN-cafef00d-2',
+});
+assert.ok(four.includes('会话正忙'), '四要素缺「发生了什么」');
+assert.ok(four.includes('session'), '四要素缺「分类」');
+assert.ok(four.includes('等本轮结束'), '四要素缺「下一步」');
+assert.ok(four.includes('RUN-cafef00d-2'), '四要素缺「证据」');
+assert.ok(copy.describeError({ code: 'unknown_code' }).includes('internal'), '未知码必须 internal 兜底');
+console.log('ok  14.11 333b：后台仅模型可见/交付空态＋terminal_source/版本偏斜/错误四要素');
 
 /* ── 15. 329（2026-10-21）：/rewind 本地投影截断＋同文重发＋重放水位过滤 ──
  * 0.9.7 真机问题：撤回后标记栏显示/定位均错、旧消息无法再定位。服务端

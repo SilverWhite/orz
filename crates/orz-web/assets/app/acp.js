@@ -6,6 +6,8 @@
  * 桥为单会话（409 时如实提示）。
  */
 
+import { describeError } from './copy.js';
+
 let ws = null;
 let nextId = 1;
 const pending = new Map(); // id -> {resolve, reject}
@@ -44,9 +46,13 @@ function notify(method, params) {
 
 /* 错误细节透出（批七 2026-09-25）：agent 侧把真实原因放在 error.data
  * （如 ACAF fail-closed 的拒绝理由），只读 message 会把一切吞成
- * 「Internal error」。 */
+ * 「Internal error」。333 起 `data.code` 走 copy.js 四要素（发生了什么＋
+ * 分类＋下一步＋证据），其余 data 仍原样 JSON 化。 */
 function errorMessage(err) {
   const base = err.message || `JSON-RPC ${err.code}`;
+  if (err.data && typeof err.data === 'object' && err.data.code) {
+    return describeError(err.data);
+  }
   const data =
     typeof err.data === 'string' ? err.data : err.data != null ? JSON.stringify(err.data) : '';
   return data ? `${base}：${data}` : base;

@@ -58,6 +58,12 @@ export function fetchDelivery(session8, root) {
   return getJson(`/api/delivery?session8=${encodeURIComponent(session8)}${rootParam(root)}`);
 }
 
+/* 333（2026-10-21，S9）：上下文占用/最近压缩只读读数——侧车消息估算＋
+ * 最近 run 的 context_compressed/context_compacted 事件；不触发模型。 */
+export function fetchContext(session8, root) {
+  return getJson(`/api/context?session8=${encodeURIComponent(session8)}${rootParam(root)}`);
+}
+
 /* 会话归档只读投影（0br S3 新增面，用户令 2026-09-25）。 */
 export function fetchArchives(root) {
   return getJson('/api/archives' + rootParam(root));

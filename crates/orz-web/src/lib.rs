@@ -12,6 +12,7 @@
 pub mod acp_pump;
 pub mod archives;
 pub mod assets;
+pub mod context;
 pub mod delivery;
 pub mod journal_tail;
 pub mod runs;

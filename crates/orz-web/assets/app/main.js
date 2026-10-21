@@ -210,8 +210,14 @@ async function queueSupplement(text) {
     }
     const r = await acp.sessionQueueAppend(sessionId, text);
     state.supplementQueueDepth = Math.max(state.supplementQueueDepth, r.depth || 0);
+    if (Number.isFinite(r.capacity)) state.queueCapacity = r.capacity;
+    // 333：剩余额度与作用域一并说明——队列只在本会话进程内，刷新/换页/
+    // 子进程回收都不保留（此前只报“第 N 条”，用户无从知道上限与生命周期）。
+    const quota = Number.isFinite(r.capacity)
+      ? `第 ${r.depth}/${r.capacity} 条，剩余 ${r.remaining ?? r.capacity - r.depth} 个额度`
+      : `第 ${r.depth} 条`;
     vm.addSystemMessage(
-      `已排队（第 ${r.depth} 条）——将在可用的下一次模型调用边界投递`,
+      `已排队（${quota}）——将在可用的下一次模型调用边界投递；仅本会话进程，刷新/换页不保留`,
       false,
     );
     renderAll();
@@ -943,6 +949,8 @@ ui.openHelp = (tab) => dialogs.openHelp(tab);
 ui.openProperties = () => dialogs.openProperties();
 // 0dm S2（2026-10-21）：交付状态按需查询（只读投影，不触发模型）。
 ui.openDeliveryStatus = () => dialogs.openDeliveryStatus();
+// 333（2026-10-21，S9）：上下文占用/最近压缩只读读数（/api/context）。
+ui.openContext = () => dialogs.openContext();
 ui.openCommand = (initial) => dialogs.openCommand(initial);
 ui.openFind = () => dialogs.openFind();
 ui.focusExplorer = () => {
@@ -971,6 +979,8 @@ ui.runSelfCheck = async () => {
   );
 };
 ui.flashStatus = () => flash(`当前模型: ${state.modelLabel}`);
+// 333（S12）：boot 事实落地（工作区/版本偏斜）——冒烟可直接注入载荷。
+ui.applyBootFacts = applyBootFacts;
 
 /* 0di：撤回面动作（dialogs.openRewind 经 actions 调用）。
  * 318 P1-B1：不再用 ensureSession() 静默绑定另一个会话——只对当前绑定
@@ -1652,6 +1662,18 @@ acp.on('state', (params) => {
 
 async function onBridgeAttached(params) {
   const sid = params?.session_id;
+  // 333：保活窗口到期回收的显式事实——刷新/重开页面后必须先说「上一会话
+  // 没恢复」，不能让用户把新 child 误当重连成功（排队补充/后台任务已失效）。
+  if (params?.keepalive_expired) {
+    const old = params.expired_session_id
+      ? params.expired_session_id.slice(0, 8)
+      : '（未知）';
+    vm.addSystemMessage(
+      `（保活窗口已过期：上一会话 ${old} 已随子进程回收，未自动恢复；排队补充与后台任务已失效。下一条输入将新建会话；历史可从探索器回看，或点「恢复并继续」显式恢复。）`,
+      true,
+    );
+    renderAll();
+  }
   if (!sid || sid === acpSessionId) return;
   const root = params.cwd || state.workspaceCwd;
   if (params.prompt_in_flight) {
@@ -1678,6 +1700,29 @@ async function onBridgeAttached(params) {
 
 /* ── 启动 ── */
 
+/* 333（2026-10-21，S12）：boot 事实落地——工作区清单＋桥/child 版本偏斜。
+ * 独立函数便于单测/冒烟直接注入 boot 载荷（不重跑整条连接链）。 */
+function applyBootFacts(b) {
+  const facts = b || {};
+  state.workspaceCwd = facts.cwd || '';
+  state.trustedWorkspaces = facts.trusted_workspaces || [];
+  state.recentWorkspaces = facts.recent_workspaces || [];
+  state.bridgeVersion = facts.bridge_version ?? null;
+  state.childVersion = facts.child_version ?? null;
+  state.versionSkew = facts.version_skew ?? null;
+  if (facts.version_skew === true) {
+    connBanner.hidden = false;
+    connBanner.textContent =
+      `版本偏斜：桥 ${facts.bridge_version || '未知'} ≠ agent 子进程 ${facts.child_version || '未知'}。` +
+      '→ 用同一版本重新换装后重启 orz web；混跑可能造成协议/字段不一致（证据：/api/boot version_skew）。';
+    vm.addSystemMessage(
+      `（版本偏斜：桥 ${facts.bridge_version || '?'}，agent ${facts.child_version || '?'}；建议重装同版本后再用）`,
+      true,
+    );
+  }
+  renderExplorer();
+}
+
 async function boot() {
   // 令牌来自启动控制台打印的 URL fragment（#token=…，lib.rs 打印同格式）。
   const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
@@ -1693,10 +1738,7 @@ async function boot() {
   // 组的数据源，不等首次会话创建。
   try {
     const b = await fetchBoot();
-    state.workspaceCwd = b.cwd || '';
-    state.trustedWorkspaces = b.trusted_workspaces || [];
-    state.recentWorkspaces = b.recent_workspaces || [];
-    renderExplorer();
+    applyBootFacts(b);
   } catch {
     /* boot 不可达：探索器仍显示 nav 当前值 */
   }

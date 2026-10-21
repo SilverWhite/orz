@@ -106,6 +106,13 @@ pub static ASSETS: &[Asset] = &[
         "application/javascript; charset=utf-8",
         "app/delivery.js"
     ),
+    // 333（2026-10-21，S4/S11）：错误四要素文案表——acp.js 静态 import，
+    // 缺此条目会让 acp.js 整块 404（连接/错误面全失效）。
+    asset!(
+        "/assets/app/copy.js",
+        "application/javascript; charset=utf-8",
+        "app/copy.js"
+    ),
     asset!(
         "/assets/app/dialogs.js",
         "application/javascript; charset=utf-8",
@@ -144,6 +151,10 @@ mod tests {
         assert!(
             lookup("/assets/app/delivery.js").is_some(),
             "0dm S2 交付状态面板渲染件必须随包提供"
+        );
+        assert!(
+            lookup("/assets/app/copy.js").is_some(),
+            "333 错误四要素文案表必须随包提供（acp.js 静态 import）"
         );
         assert!(lookup("/assets/vendor/98.css").is_some());
         assert!(lookup("/assets/vendor/marked.umd.js").is_some());

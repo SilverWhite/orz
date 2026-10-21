@@ -9,7 +9,7 @@
 import { state, vm } from './state.js';
 /* 329（2026-10-21，0dm S2）：交付状态只读投影——请求走 api.js，渲染在
  * delivery.js（纯函数）；本文件只管弹窗生命周期（加载/错误/空态）。 */
-import { fetchDelivery } from './api.js';
+import { fetchDelivery, fetchContext } from './api.js';
 import { renderDeliveryStatus } from './delivery.js';
 
 const SLASH_COMMANDS = [
@@ -64,12 +64,16 @@ function modalTitle(text) {
  * 回传 agent；选项按钮的显式选择优先于该兜底。 */
 
 let activePermission = null; // showPermission 的 resolve
+/// 333：被并发请求顶掉的历史计数（本页生命周期内）；新弹窗据此显示
+/// 「上一条已取消」，不再让旧请求静默消失。
+let permissionDisplaced = 0;
 
 function settlePermissionCancelled() {
-  if (!activePermission) return;
+  if (!activePermission) return false;
   const resolve = activePermission;
   activePermission = null;
   resolve({ outcome: { outcome: 'cancelled' } });
+  return true;
 }
 
 function finishPermission(result) {
@@ -118,11 +122,26 @@ export function showPermission(request) {
   return new Promise((resolve) => {
     // 并发第二个权限请求：前一个结算为 cancelled（被顶掉，如实回传），
     // 再挂载本请求——不排队（v1 语义：一次只呈现一个，见 S2 §2 偏差 2）。
-    settlePermissionCancelled();
+    const displaced = settlePermissionCancelled();
+    if (displaced) permissionDisplaced += 1;
     activePermission = resolve;
     openModal((win, body) => {
       const title = modalTitle('权限请求');
       win.appendChild(title);
+
+      // 333：顶掉上一条必须在**新弹窗里**可见——用户可能正要点旧选项，
+      // 旧请求已被 cancelled，不能让它无声消失。
+      if (displaced) {
+        const warn = document.createElement('div');
+        warn.className = 'perm-displaced';
+        warn.style.background = 'rgba(255, 196, 0, 0.25)';
+        warn.style.padding = '3px 5px';
+        warn.style.margin = '2px 0 6px';
+        warn.textContent =
+          '注意：上一条权限请求已被本次请求顶掉（已回 cancelled）；请确认正在审批的是最新工具。' +
+          `本页累计顶掉 ${permissionDisplaced} 次。`;
+        body.appendChild(warn);
+      }
 
       const tool = request?.toolCall?.title || request?.toolCall?.toolCallId || '未知工具';
       const info = document.createElement('div');
@@ -326,6 +345,22 @@ export function openProperties() {
       ['运行态', state.running ? '运行中' : '空闲'],
       ['轮数', String(state.turnCounter)],
       ['内容条目', String(state.content.items.length)],
+      // 333（S5）：队列深度与剩余额度显式化——上限随 `_orz/queue_append`
+      // 响应回填，作用域只在本会话进程（刷新/换页不保留）。
+      [
+        '补充队列',
+        `${state.supplementQueueDepth}/${state.queueCapacity ?? 16} 条（剩余 ${
+          (state.queueCapacity ?? 16) - state.supplementQueueDepth
+        }；仅本会话进程，刷新/换页不保留）`,
+      ],
+      // 333（S7）：后台任务明确「仅模型可见」——本页不提供任务表，且刷新/
+      // 关闭/子进程回收后不恢复（不虚构一个读不到的列表）。
+      [
+        '后台任务',
+        state.backgroundTasks > 0
+          ? `${state.backgroundTasks} 个（仅模型可见；本页不提供任务表，刷新/关闭不恢复）`
+          : '仅模型可见（本页不提供任务表；刷新/关闭不恢复）',
+      ],
       ['会话（conversation）', 'conversation://{session8}（侧车由宿主管理）'],
     ];
     const table = document.createElement('table');
@@ -492,8 +527,112 @@ export function openDeliveryStatus() {
       status.textContent = '会话绑定已变化——本次查询结果作废；请重新打开交付状态。';
       return;
     }
-    status.remove();
+    // 浏览器有 Element.remove；smoke 的 DOM stub 没有——两种形态都收。
+    if (typeof status.remove === 'function') status.remove();
+    else body.removeChild(status);
     renderDeliveryStatus(body, data);
+
+    const actionsRow = document.createElement('div');
+    actionsRow.className = 'modal-actions';
+    const close = document.createElement('button');
+    close.textContent = '关闭';
+    close.addEventListener('click', closeModal);
+    actionsRow.appendChild(close);
+    body.appendChild(actionsRow);
+    close.focus();
+  });
+}
+
+/* 333（2026-10-21，S9）：上下文占用与最近压缩读数。只读投影（`/api/context`
+ * → 侧车消息估算＋最近 run 的 context_compressed 事件），不触发模型；切会话
+ * 或切视图后迟到的结果作废（同 openDeliveryStatus）。 */
+export function openContext() {
+  openModal(async (win, body) => {
+    const title = modalTitle('上下文');
+    win.appendChild(title);
+    const status = document.createElement('div');
+    status.style.margin = '6px 0';
+    body.appendChild(status);
+
+    const s8 = state.boundSession8;
+    if (!s8) {
+      status.textContent =
+        '尚未绑定会话——先打开或恢复一个会话，再查看上下文读数（只读投影，不触发模型）。';
+      return;
+    }
+    status.textContent = `正在读取会话 ${s8} 的上下文读数…`;
+    const epoch = state.navEpoch;
+    const root = state.sessionRoot || state.workspaceCwd || '';
+    let data;
+    try {
+      data = await fetchContext(s8, root);
+    } catch (e) {
+      status.textContent = `上下文读数读取失败：${e.message}（只读投影，未触发模型）`;
+      return;
+    }
+    if (state.boundSession8 !== s8 || state.navEpoch !== epoch) {
+      status.textContent = '会话绑定已变化——本次读数作废；请重新打开上下文。';
+      return;
+    }
+    // 浏览器有 Element.remove；smoke 的 DOM stub 没有——两种形态都收。
+    if (typeof status.remove === 'function') status.remove();
+    else body.removeChild(status);
+
+    const heading = document.createElement('div');
+    heading.style.fontWeight = 'bold';
+    heading.style.margin = '2px 0 6px';
+    heading.textContent = '上下文与压缩（只读读数）';
+    body.appendChild(heading);
+
+    const compaction = data.last_compaction;
+    const watermarks = Array.isArray(data.watermarks) ? data.watermarks : [];
+    const rows = [
+      [
+        '估算占用',
+        `${data.estimated_tokens ?? 0} tokens（${data.chars ?? 0} 字符，` +
+          `${data.estimate_method || 'chars/2'} 近似；非模型 tokenizer 计数）`,
+      ],
+      ['消息数', data.messages === null || data.messages === undefined ? '—' : String(data.messages)],
+      ['水位提醒', watermarks.length ? watermarks.join('、') : '无（会话内未触发刻度提醒）'],
+      [
+        '最近压缩',
+        compaction
+          ? `${compaction.run_id}：trigger ${compaction.trigger_tokens ?? '—'} → after ${
+              compaction.estimated_tokens_after ?? '—'
+            }（${compaction.mode || '—'}/${compaction.reason || '—'}）`
+          : '无（未压缩，或事件早于扫描窗口）',
+      ],
+      ['压缩存档', `${data.compaction_archives ?? 0} 件（含 blocks 回放档）`],
+    ];
+    const table = document.createElement('table');
+    table.className = 'props-table';
+    for (const [k, v] of rows) {
+      const tr = document.createElement('tr');
+      const tdKey = document.createElement('td');
+      tdKey.textContent = k;
+      const tdVal = document.createElement('td');
+      tdVal.textContent = v;
+      tr.appendChild(tdKey);
+      tr.appendChild(tdVal);
+      table.appendChild(tr);
+    }
+    body.appendChild(table);
+
+    const notes = Array.isArray(data.notes) ? data.notes : [];
+    if (notes.length) {
+      const caption = document.createElement('div');
+      caption.className = 'muted';
+      caption.style.margin = '8px 0 2px';
+      caption.textContent = '边界与说明';
+      body.appendChild(caption);
+      for (const note of notes) {
+        const line = document.createElement('div');
+        line.className = 'muted';
+        line.style.margin = '2px 0';
+        line.textContent = `· ${note}`;
+        body.appendChild(line);
+      }
+    }
 
     const actionsRow = document.createElement('div');
     actionsRow.className = 'modal-actions';

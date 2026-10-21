@@ -160,6 +160,23 @@ fn main_inner() {
         println!("{}", build_info_line());
         return;
     }
+    // 333（2026-10-21，S12）：`--version` / `-V` —— 桥/child 版本一致性探针
+    // 的稳定线格式（`orz <version> (<os>/<arch>/<profile>)`）。与
+    // `--build-info` 一样在 home 重定向与任何装配之前退出（纯 stdout）。
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!(
+            "orz {} ({}/{}/{})",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            }
+        );
+        return;
+    }
     // F4 / 0as (2026-09-19): put the host console into UTF-8 mode on Windows
     // so orz's UTF-8 output (receipts, tool-output echo) is not rendered as
     // mojibake on GBK-codepage consoles, and child processes that follow the
@@ -330,6 +347,12 @@ fn main_inner() {
     // propagate to the child.
     if args.get(1).map(String::as_str) == Some("web") {
         run_web(&args[2..]);
+        return;
+    }
+    // 333（2026-10-21，S11）：`orz doctor` —— 报告式诊断，不自动修复。
+    // 放在 web 之前：doctor 只读 cwd/.gsa，不装配会话/网络。
+    if args.get(1).map(String::as_str) == Some("doctor") {
+        run_doctor(&args[2..]);
         return;
     }
     // 0br S3 (`orz archive <session8>`): on-demand session archive for the
@@ -696,6 +719,198 @@ fn run_stdio() {
     });
     if let Err(e) = result {
         eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+}
+
+/// 333（2026-10-21，S11）：`orz doctor` 的报告件。只做事实检查与分级，
+/// **不自动修复**——每个 `[fail]` 都交给用户动作（与 Codex `doctor` 同姿态）。
+struct DoctorReport {
+    lines: Vec<String>,
+    ok: usize,
+    warn: usize,
+    fail: usize,
+}
+
+impl DoctorReport {
+    fn new() -> Self {
+        Self {
+            lines: Vec::new(),
+            ok: 0,
+            warn: 0,
+            fail: 0,
+        }
+    }
+
+    fn push(&mut self, level: &str, section: &str, detail: String) {
+        match level {
+            "ok" => self.ok += 1,
+            "warn" => self.warn += 1,
+            _ => self.fail += 1,
+        }
+        self.lines.push(format!("[{level}] {section}: {detail}"));
+    }
+
+    fn ok(&mut self, section: &str, detail: String) {
+        self.push("ok", section, detail);
+    }
+
+    fn warn(&mut self, section: &str, detail: String) {
+        self.push("warn", section, detail);
+    }
+
+    fn fail(&mut self, section: &str, detail: String) {
+        self.push("fail", section, detail);
+    }
+}
+
+/// `.gsa` 可写探针：建目录（会话本来也会建）＋写删临时文件；不修复任何
+/// 既有文件。
+fn probe_gsa_writable(gsa: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(gsa).map_err(|e| format!("不能创建 {}: {e}", gsa.display()))?;
+    let probe = gsa.join(format!(".doctor-probe-{}", std::process::id()));
+    std::fs::write(&probe, b"ok").map_err(|e| format!("不能写 {}: {e}", probe.display()))?;
+    std::fs::remove_file(&probe).map_err(|e| format!("不能删 {}: {e}", probe.display()))?;
+    Ok(())
+}
+
+fn count_files_with_ext(dir: &Path, ext: &str) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|e| {
+            e.path().is_file() && e.path().extension().and_then(|x| x.to_str()) == Some(ext)
+        })
+        .count()
+}
+
+/// 333：诊断报告（纯函数，测试不触碰网络/模型）。`cwd` 由调用方给出。
+fn doctor_report(cwd: &Path) -> DoctorReport {
+    let mut r = DoctorReport::new();
+    r.ok(
+        "version",
+        format!("{}（{}）", env!("CARGO_PKG_VERSION"), build_info_line()),
+    );
+    if cwd.is_dir() {
+        r.ok("cwd", format!("{}（目录可读）", cwd.display()));
+    } else {
+        r.fail(
+            "cwd",
+            format!(
+                "{} 不是可读目录（检查工作区是否被移动/删除）",
+                cwd.display()
+            ),
+        );
+    }
+
+    let gsa = cwd.join(".gsa");
+    match probe_gsa_writable(&gsa) {
+        Ok(()) => r.ok("gsa", format!("{} 可写（探针已清理）", gsa.display())),
+        Err(e) => r.fail(
+            "gsa",
+            format!("{e}——会话侧车/journal 将无法落盘；检查目录权限/磁盘"),
+        ),
+    }
+
+    let sessions = gsa.join("sessions");
+    let leases = count_files_with_ext(&sessions, "lease");
+    let held = orz_host::acp_server::leased_sessions(cwd).len();
+    if held > 0 {
+        r.warn(
+            "sessions",
+            format!(
+                "{leases} 个 lease 文件；{held} 个会话正被其他 orz 进程持有（桌面/桥运行中属正常；异常占用请关闭对应进程）"
+            ),
+        );
+    } else {
+        r.ok(
+            "sessions",
+            format!("{leases} 个 lease 文件；无其他进程持有会话"),
+        );
+    }
+
+    let runs_dir = gsa.join("runs");
+    let mut run_ids: Vec<String> = std::fs::read_dir(&runs_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().is_dir() && e.path().join("events.jsonl").is_file())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    run_ids.sort();
+    if let Some(latest) = run_ids.last() {
+        let journal = runs_dir.join(latest).join("events.jsonl");
+        match std::fs::File::open(&journal) {
+            Ok(_) => r.ok(
+                "runs",
+                format!("{} 个 run journal；最新 {latest} 可读", run_ids.len()),
+            ),
+            Err(e) => r.fail(
+                "runs",
+                format!("最新 journal 不可读（{}）: {e}", journal.display()),
+            ),
+        }
+    } else {
+        r.warn(
+            "runs",
+            "尚无 run journal（新工作区属正常；若已有对话却为空，检查 .gsa/runs 权限）".to_string(),
+        );
+    }
+
+    let conversations = count_files_with_ext(&gsa.join("conversations"), "json");
+    r.ok("conversations", format!("{conversations} 个会话侧车"));
+
+    let compaction_dir = gsa.join("compaction");
+    let archives = count_files_with_ext(&compaction_dir, "md");
+    let blocks = count_files_with_ext(&compaction_dir.join("blocks"), "md");
+    r.ok(
+        "compaction",
+        format!("{archives} 个压缩存档＋{blocks} 个回放块档"),
+    );
+
+    match orz_host::carrier_integrity::verify_at_startup() {
+        orz_host::carrier_integrity::IntegrityReport::Clean { checked } => {
+            r.ok("carrier", format!("载体清单复验通过（{checked} 件）"));
+        }
+        orz_host::carrier_integrity::IntegrityReport::Violated { findings } => {
+            r.fail(
+                "carrier",
+                format!(
+                    "载体完整性失配（{} 件）：{}；重装/重新打包后再运行",
+                    findings.len(),
+                    findings.first().map(String::as_str).unwrap_or("见启动横幅")
+                ),
+            );
+        }
+        orz_host::carrier_integrity::IntegrityReport::NoManifest => {
+            r.warn(
+                "carrier",
+                "无 carrier-manifest.json（开发树形态；发布包应带清单）".to_string(),
+            );
+        }
+    }
+
+    r
+}
+
+/// 333：`orz doctor` 入口——报告式，不自动修复；有 fail ⇒ exit 1。
+fn run_doctor(rest: &[String]) {
+    let _ = rest;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let report = doctor_report(&cwd);
+    println!("orz doctor（report-only；不自动修复）");
+    for line in &report.lines {
+        println!("{line}");
+    }
+    println!(
+        "summary: ok={} warn={} fail={}",
+        report.ok, report.warn, report.fail
+    );
+    if report.fail > 0 {
         std::process::exit(1);
     }
 }
@@ -1929,6 +2144,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// 333（S11）：doctor 在健康工作区不得报 fail；缺 cwd 必须 fail。
+    #[test]
+    fn doctor_report_healthy_workspace_has_no_fail() {
+        let dir = test_dir();
+        let run = dir.join(".gsa").join("runs").join("RUN-abc12345-1");
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join("events.jsonl"), "{}\n").unwrap();
+        std::fs::create_dir_all(dir.join(".gsa").join("conversations")).unwrap();
+        std::fs::write(
+            dir.join(".gsa").join("conversations").join("abc12345.json"),
+            "{}",
+        )
+        .unwrap();
+        let report = doctor_report(&dir);
+        assert!(
+            report.lines.iter().any(|l| l.starts_with("[ok] gsa:")),
+            "{:?}",
+            report.lines
+        );
+        assert!(
+            report.lines.iter().any(|l| l.starts_with("[ok] runs:")),
+            "{:?}",
+            report.lines
+        );
+        assert_eq!(report.fail, 0, "{:?}", report.lines);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn doctor_report_missing_cwd_fails() {
+        let missing = test_dir().join("gone");
+        let report = doctor_report(&missing);
+        assert!(
+            report.lines.iter().any(|l| l.starts_with("[fail] cwd:")),
+            "{:?}",
+            report.lines
+        );
+        assert!(report.fail >= 1);
+        let _ = std::fs::remove_dir_all(missing.parent().unwrap());
     }
 
     /// P0-2 (2026-08-08 stall guards): the budget parser is fail-closed —

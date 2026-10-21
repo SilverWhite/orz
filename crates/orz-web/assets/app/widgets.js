@@ -112,6 +112,8 @@ const TOOLBAR_ACTIONS = {
   selfcheck: () => ui.runSelfCheck(),
   // 0dm S2（2026-10-21）：交付状态只读投影面板（/api/delivery）。
   delivery: () => ui.openDeliveryStatus(),
+  // 333（2026-10-21，S9）：上下文占用/最近压缩只读读数（/api/context）。
+  context: () => ui.openContext(),
   refresh: () => ui.refresh(),
   stop: () => ui.stopRun(),
   open: () => ui.openCommand(),

@@ -563,6 +563,32 @@ async fn api_delivery(
     }
 }
 
+/// 333（2026-10-21）：S9 上下文占用／最近压缩只读读数（`GET /api/context`
+/// → [`crate::context::context_summary`]）。只读侧车与 journal 尾部，不写
+/// 文件、不触发模型；`session8` 口径与 delivery 相同（8 位小写 hex）。
+async fn api_context(
+    State(state): State<ServerState>,
+    Query(q): Query<DeliveryQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
+        return resp;
+    }
+    let Some(cwd) = state.resolve_root(q.root.as_deref()) else {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "工作区根不可用（须为当前或已信任工作区）",
+        );
+    };
+    let Some(session8) = q.session8.as_deref() else {
+        return error_response(StatusCode::BAD_REQUEST, "缺少 session8");
+    };
+    match crate::context::context_summary(&cwd, session8) {
+        Ok(summary) => Json(summary).into_response(),
+        Err(e) => error_response(StatusCode::BAD_REQUEST, &e),
+    }
+}
+
 /// Session-archive listing (0br S3 新增面): `.gsa/archives/{s8}.json.gz`
 /// packages with best-effort milestone facts.
 async fn api_archives(
@@ -773,6 +799,28 @@ async fn run_agent_session_tool(
 /// Session bootstrap facts (token-gated): the workspace cwd the frontend
 /// must pass to `session/new` (the browser cannot know it), plus the
 /// bridge's agent binary identity.
+/// 333（2026-10-21，S12）：从 `orz --version` 的单行输出取版本号
+/// （`orz 0.9.8 (windows/x86_64/release)` → `0.9.8`）。
+fn parse_version_output(stdout: &str) -> Option<String> {
+    let first = stdout.lines().next()?.trim();
+    let rest = first.strip_prefix("orz ")?;
+    rest.split_whitespace().next().map(str::to_string)
+}
+
+/// 执行 `<binary> --version`（纯 stdout，无 home 重定向/会话装配）。失败
+/// 一律 `None`——调用方把 `null` 如实呈现，不猜版本。
+fn binary_version(path: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new(path)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_version_output(&String::from_utf8_lossy(&output.stdout))
+}
+
 async fn api_boot(
     State(state): State<ServerState>,
     Query(q): Query<TokenQuery>,
@@ -781,9 +829,23 @@ async fn api_boot(
     if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
         return resp;
     }
+    // 333（S12）：桥/child 版本一致性——两者都是同一 `orz` 二进制的不同
+    // 入口（`orz web` vs `orz --stdio`）；安装位半换装/开发树混跑时给出
+    // 显式偏斜事实。无 `--version` 的旧载体返回 null（不妄判）。
+    let bridge_version = std::env::current_exe()
+        .ok()
+        .and_then(|p| binary_version(&p));
+    let child_version = binary_version(&state.agent_binary);
+    let version_skew = match (&bridge_version, &child_version) {
+        (Some(a), Some(b)) => Some(a != b),
+        _ => None,
+    };
     Json(json!({
         "cwd": state.cwd().display().to_string(),
         "agent": state.agent_binary.display().to_string(),
+        "bridge_version": bridge_version,
+        "child_version": child_version,
+        "version_skew": version_skew,
         // 用户全局信任存储（~/.grok/trusted_folders.toml）的授予清单——
         // 探索器「工作区 → 已信任工作区」子级的数据源（0br S3）。
         "trusted_workspaces": crate::trust::list_trusted_workspaces(),
@@ -865,6 +927,8 @@ pub fn router(state: ServerState) -> Router {
         // 329（2026-10-21）：/rewind 撤回水位 ＋ 0dm S2 交付状态只读投影。
         .route("/api/recall", get(api_recall))
         .route("/api/delivery", get(api_delivery))
+        // 333（2026-10-21）：S9 上下文占用/最近压缩只读读数。
+        .route("/api/context", get(api_context))
         .route("/api/archives", get(api_archives))
         .route(
             "/api/archives/{session8}",
@@ -914,6 +978,19 @@ mod tests {
             agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
             bridge: AgentBridge::new(PathBuf::from("orz-test-binary"), std::time::Duration::ZERO),
         }
+    }
+
+    /// 333（S12）：`--version` 单行输出的解析必须稳定；坏格式返回 None
+    /// （不猜版本，桥据此把 child_version 呈现为 null）。
+    #[test]
+    fn version_output_is_parsed_strictly() {
+        assert_eq!(
+            parse_version_output("orz 0.9.8 (windows/x86_64/release)\n"),
+            Some("0.9.8".to_string())
+        );
+        assert_eq!(parse_version_output("orz 1.2.3"), Some("1.2.3".to_string()));
+        assert_eq!(parse_version_output("unknown"), None);
+        assert_eq!(parse_version_output(""), None);
     }
 
     #[tokio::test]

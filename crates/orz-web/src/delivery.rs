@@ -123,7 +123,7 @@ fn session8_ok(session8: &str) -> bool {
 
 /// 读会话侧车（全量）。缺失/超限/不可读/坏 JSON 都只是降级：写入 `notes`
 /// 并返回 `None`——交付面板照常展示 run 面事实，不因侧车损坏而整体失败。
-fn read_sidecar(cwd: &Path, session8: &str, notes: &mut Vec<String>) -> Option<Value> {
+pub(crate) fn read_sidecar(cwd: &Path, session8: &str, notes: &mut Vec<String>) -> Option<Value> {
     let path = conversations_dir(cwd).join(format!("{session8}.json"));
     let meta = match std::fs::metadata(&path) {
         Ok(meta) => meta,

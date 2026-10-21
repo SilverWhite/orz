@@ -30,6 +30,8 @@ export const state = {
     // 0dm S2（2026-10-21）：交付状态只读投影——按需查询侧车 plan 与最近
     // run 的终态/自查事实（不重算变更清单、不触发模型）。
     { id: 'delivery', label: '交付状态', enabled: true },
+    // 333（S9）：上下文占用/最近压缩只读读数（不提供手动压缩/滑块）。
+    { id: 'context', label: '上下文', enabled: true },
     { id: 'refresh', label: '刷新', enabled: true },
     { id: 'stop', label: '停止', enabled: false },
     // 0dk S2（332）：显式关闭当前会话（私有扩展 `_orz/session_close`）。
@@ -79,6 +81,9 @@ export const state = {
   // 刷新/关闭风险面（318 P1-B7）：队列深度与后台任务事实。beforeunload
   // 与启动提示据此说明「仅文本上下文恢复，后台任务/队列不恢复」。
   supplementQueueDepth: 0,
+  // 333：本会话补充队列上限（服务端 `_orz/queue_append` 响应回填；初值＝
+  // orz-host `SUPPLEMENT_QUEUE_MAX_DEPTH` 的镜像，仅用于未入队前的显示）。
+  queueCapacity: 16,
   backgroundTasks: 0,
   sessionId: null,
   gateBlock: null,
@@ -90,6 +95,10 @@ export const state = {
   // 工作区事实（/api/boot）：当前 cwd＋用户全局信任存储的授予清单。
   workspaceCwd: '',
   trustedWorkspaces: [],
+  // 333（S12）：桥/child 版本一致性（/api/boot 的 version_skew）。
+  bridgeVersion: null,
+  childVersion: null,
+  versionSkew: null,
   // 2026-10-21：本桥会话内打开过的工作区（含启动 cwd 与切换历史）。
   // 不是持久授信；用于「切出去还能切回来」与旧工作区会话回看。
   recentWorkspaces: [],
