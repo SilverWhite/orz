@@ -2424,6 +2424,8 @@ fn reconstruct_conversation_from_journal(
     let mut any_success = false;
     let mut started_at: Option<f64> = None;
     let mut context_scale_notified: Vec<String> = Vec::new();
+    let mut previous_run_prompt: Option<String> = None;
+    let mut previous_run_finished = false;
     for run_id in &ids {
         let Ok(text) = std::fs::read_to_string(runs_dir.join(run_id).join("events.jsonl")) else {
             continue;
@@ -2443,7 +2445,8 @@ fn reconstruct_conversation_from_journal(
         let run_finished = events.iter().any(|ev| {
             ev.get("event_type").and_then(serde_json::Value::as_str) == Some("run_finished")
         });
-        let mut run_messages: Vec<Message> = Vec::new();
+        let mut run_users: Vec<Message> = Vec::new();
+        let mut run_assistants: Vec<Message> = Vec::new();
         let mut run_assistant_rounds = 0u64;
         let mut run_context_scale: Vec<String> = Vec::new();
         for ev in &events {
@@ -2455,7 +2458,7 @@ fn reconstruct_conversation_from_journal(
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or_default();
                     if !prompt.trim().is_empty() {
-                        run_messages.push(Message {
+                        run_users.push(Message {
                             role: Role::User,
                             content: prompt.to_string(),
                             tool_call_id: None,
@@ -2483,7 +2486,7 @@ fn reconstruct_conversation_from_journal(
                     // 工具声明不重放（journal 没有结果正文，重放必成孤立声明）；
                     // 只有正文进入重构对话。
                     if has_text {
-                        run_messages.push(Message {
+                        run_assistants.push(Message {
                             role: Role::Assistant,
                             content,
                             tool_call_id: None,
@@ -2515,24 +2518,16 @@ fn reconstruct_conversation_from_journal(
                 _ => {}
             }
         }
-        if run_finished {
-            any_success = true;
-            assistant_rounds += run_assistant_rounds;
-            messages.extend(run_messages);
-            for key in run_context_scale {
-                if !context_scale_notified.iter().any(|seen| seen == &key) {
-                    context_scale_notified.push(key);
-                }
-            }
-        } else if ids.last().is_some_and(|last| last == run_id) {
-            // 最后一个 run 未完成（用户发出后模型/传输失败）：保留用户输入
-            // 本身，丢掉未完成的助手输出。否则恢复后模型看不到用户最后
-            // 一次请求，「继续」会答非所问；保留又不会把失败 run 的中间
-            // 产物混进成功历史。与上一条用户消息重复则跳过（重试同问）。
-            for message in run_messages {
-                if message.role != Role::User {
-                    continue;
-                }
+        let first_prompt = run_users.first().map(|message| message.content.clone());
+        // 失败 run 若是成功 run 的“同问重试”（prompt 与前一个已成功 run
+        // 相同），不再把重复 user 塞进历史；其余失败 run 的**用户输入**保留
+        // （它是用户事实，且丢失会让“继续”答非所问），但**助手输出**一律
+        // 丢弃（SUCCESS-ONLY）。
+        let retry_of_success = !run_finished
+            && previous_run_finished
+            && previous_run_prompt.as_deref() == first_prompt.as_deref();
+        if !retry_of_success {
+            for message in run_users {
                 if messages.last().is_some_and(|previous| {
                     previous.role == Role::User && previous.content == message.content
                 }) {
@@ -2541,6 +2536,18 @@ fn reconstruct_conversation_from_journal(
                 messages.push(message);
             }
         }
+        if run_finished {
+            any_success = true;
+            assistant_rounds += run_assistant_rounds;
+            messages.extend(run_assistants);
+            for key in run_context_scale {
+                if !context_scale_notified.iter().any(|seen| seen == &key) {
+                    context_scale_notified.push(key);
+                }
+            }
+        }
+        previous_run_prompt = first_prompt;
+        previous_run_finished = run_finished;
     }
     if messages.is_empty() {
         return None;
