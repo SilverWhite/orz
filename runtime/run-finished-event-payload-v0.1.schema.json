@@ -11,6 +11,31 @@
     "status": { "enum": ["completed"] },
     "turn_count": { "type": "integer", "minimum": 0 },
     "tool_rounds": { "type": "integer", "minimum": 0 },
+    "terminal_source": {
+      "enum": [
+        "run_end",
+        "text_without_terminal",
+        "short_text",
+        "budget_exhausted",
+        "gate_block",
+        "close_round",
+        "unspecified"
+      ],
+      "description": "0dm (2026-10-21): the mechanical exit that produced this run_finished. `run_end` = the model declared [RUN_END]; `text_without_terminal` = substantive run accepted without a declaration (nudge exhausted or compatibility mode); `short_text` = no execution fact, no declaration required; `budget_exhausted` / `gate_block` / `close_round` = forced mechanical exits; `unspecified` = defensive default (must not be produced by a normal path). Cancellation and journal degradation use run_cancelled / run_terminated instead and do not carry this field."
+    },
+    "terminal_nudged": {
+      "type": "boolean",
+      "description": "0dm: whether at least one [TERMINAL_NOTICE] nudge was injected in this run."
+    },
+    "terminal_nudge_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "0dm: number of [TERMINAL_NOTICE] nudges injected in this run (0..=2)."
+    },
+    "self_check_called": {
+      "type": "boolean",
+      "description": "0dm: whether a self_check tool call actually completed successfully in this run (derived from tool_completed, not from a refused/blocked request)."
+    },
     "intent": {
       "enum": ["conclude", "pause", "other"],
       "description": "FUS-NEUTRAL-TERMINAL (2026-09-22, 0bh ⑯): 模型侧结束自述的意向——pause＝暂停（结束的一个意向取值，非新通道）；other＝未识别取值（不驳回，原文入 unrecognized）。无声明时字段缺省（旧形不变）。"

@@ -16,6 +16,8 @@ import json
 from pathlib import Path
 import unittest
 
+from jsonschema import Draft202012Validator
+
 from assurance.run_event_journal_validation import (
     GSA_PREFLIGHT_FRAGMENT,
     PAYLOAD_SCHEMA_BY_EVENT_TYPE,
@@ -6009,6 +6011,32 @@ class StructuredAuditFieldConsumptionTests(unittest.TestCase):
             [],
             f"exit_code=400 is a valid non-zero structured number: {errors}",
         )
+
+
+class ZeroDmPayloadSchemaTests(unittest.TestCase):
+    """0dm（2026-10-21）：终态字段与 nudge 事件必须在 runtime schema 内。"""
+
+    def _validator(self, name: str) -> Draft202012Validator:
+        schema = json.loads((ROOT / "runtime" / name).read_text(encoding="utf-8"))
+        return Draft202012Validator(schema)
+
+    def test_run_finished_new_fields(self) -> None:
+        validator = self._validator("run-finished-event-payload-v0.1.schema.json")
+        payload = {
+            "status": "completed",
+            "turn_count": 1,
+            "tool_rounds": 3,
+            "terminal_source": "text_without_terminal",
+            "terminal_nudged": True,
+            "terminal_nudge_count": 2,
+            "self_check_called": True,
+        }
+        self.assertEqual(list(validator.iter_errors(payload)), [])
+
+    def test_terminal_nudge_is_a_declared_gate_decision(self) -> None:
+        validator = self._validator("gate-decision-event-payload-v0.1.schema.json")
+        payload = {"gate": "terminal_declaration", "decision": "nudge"}
+        self.assertEqual(list(validator.iter_errors(payload)), [])
 
 
 if __name__ == "__main__":

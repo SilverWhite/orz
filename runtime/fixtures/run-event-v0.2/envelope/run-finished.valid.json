@@ -11,7 +11,11 @@
   "payload": {
     "status": "completed",
     "turn_count": 1,
-    "tool_rounds": 0
+    "tool_rounds": 0,
+    "terminal_source": "short_text",
+    "terminal_nudged": false,
+    "terminal_nudge_count": 0,
+    "self_check_called": false
   },
   "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "redaction": "none",

@@ -11,7 +11,7 @@
   "properties": {
     "gate": { "type": "string" },
     "decision": {
-      "enum": ["pass", "warn", "block", "defer", "not_applicable", "stop"]
+      "enum": ["pass", "warn", "block", "defer", "not_applicable", "stop", "nudge"]
     },
     "tools": { "type": "array", "items": { "type": "string" } },
     "reason": { "type": "string" },
