@@ -21,6 +21,7 @@
 | Web 标记栏 | 恢复后 `turnCounter` 从 0 重排，`RUN-…-18` 标成 T1 | `prompt_submitted` 取 run 后缀 `n+1` 作绝对 turn |
 | 归档视图恢复按钮 | `resumeTarget` 只认 `conversation://`，归档视图按钮不可点 | `archive://` 同权；归档详情带 `session_id` 即可「恢复并继续」 |
 | 计数 | 63 | 63（本批为缺陷修复，不新增待办） |
+| 提交/推送 | — | orz `0aaac9d3` → `cli/feat/fusion-architecture`；父仓 `a9240804`＋`64a85651` → `origin/main` |
 | Windows 构建 | 0.9.6 | `cargo build -p orz-bin --release -j 2` **exit 0（最终构建 1m58s）**；`orz.exe` 58,832,896 `29f2d765…`／signer 6,740,480 `ad147ea1…`／provision 6,640,128 `71c455bb…` |
 | 换装 | 装机位/载体位 0.9.6 | 三件 MATCH 3/3；两侧 `.0.9.6-bak`；运行中旧文件 `.swap-old` 仍为 0.9.6；`--build-info` 双点 `0.9.7` |
 | ACAF | manifest `0bf55ac8…` | 备份 `signer-manifest.json.bak-20261021-327`／`-327b`；re-provision exit 0；`binary_sha256=ad147ea1…` ↔ signer |
@@ -81,6 +82,7 @@
 | Windows 装机位/载体位 | 三件 MATCH 3/3；`--build-info` 双点 `0.9.7 os=windows arch=x86_64`；两侧 `.0.9.6-bak` 在位；`carrier-manifest.json` 刷新为 0.9.7（3 entries，启动校验无告警） |
 | ACAF | 备份后 re-provision exit 0；manifest `ad147ea1…` ↔ carrier signer 逐位一致 |
 | 冒烟 | `RUN-CLI-6ad8879b` rc0，11 events，`run_finished` 四字段正常 |
+| `python scripts/check_repository.py` | **valid=true / error_count=0**（重算 `orz_source_manifest.sha256`：1489 entries） |
 | 真机只读探针 | 见 §1；未写入用户 `.gsa` |
 
 ## §5 边界与未决
