@@ -77,7 +77,7 @@
 | `cargo test -p orz-host --lib session_load` | **2/2**（含归档自动回档＋配对修复） |
 | `cargo test -p orz-host --lib new_server_resumes_conversation_from_sidecar` | 1/1 |
 | `cargo test -p orz-host --lib dangling_tool_calls_from_sidecar_never_reach_the_provider` | 1/1（请求面断言无孤立声明） |
-| `cargo test -p orz-host --lib` | **405 tests：393 passed / 6 failed / 6 ignored**；6 failed 中 5 条为既有环境失败（`call_tool_timeout_kills_process_tree`、`run_tests_timeout_kills_process_tree`、`call_tool_with_timeout_override_is_honored`、`run_terminal_cmd_truncation_carries_output_object`、`session_volume_symlink_windows_end_to_end`），另 1 条 `run_tests_records_workspace_delta` 在并发全跑下偶发、**单独复跑 1/1 通过** |
+| `cargo test -p orz-host --lib` | **405 tests：394 passed / 5 failed / 6 ignored**；5 failed 均为既有环境失败（`call_tool_timeout_kills_process_tree`、`run_tests_timeout_kills_process_tree`、`call_tool_with_timeout_override_is_honored`、`run_terminal_cmd_truncation_carries_output_object`、`session_volume_symlink_windows_end_to_end`） |
 | `cargo test -p orz-web --lib` | **52/52** |
 | `node crates/orz-web/tests/frontend_smoke.mjs` | **全部通过**（含新增 2 条） |
 | `cargo build -p orz-bin --release -j 2` | **exit 0（最终构建 1m39s；首轮 2m58s）**；唯一警告＝`orz-host/permission.rs` unused imports（预存） |
