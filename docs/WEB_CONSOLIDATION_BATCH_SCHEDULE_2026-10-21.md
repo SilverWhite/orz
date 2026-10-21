@@ -11,7 +11,7 @@
 ```text
 331（已完成）0dk S1 设计＋TUI frozen＋契约页口径
   → 332（已完成 2026-10-21）会话生命周期实现（close/有界/删除不复活/占用者提示）
-  → 333 Web 细节（必闭 3–10，可能拆 333a/333b）
+  → 333（已完成 2026-10-21）Web 细节（必闭 3–10，拆 333a/333b）
   → 0.9.8 双平台重建＋Windows 换装＋ACAF 重 provision
   → 0dn S2 真机十条场景
   → S4 真机收口（0dk/0di/0dm）
@@ -55,7 +55,9 @@
 
 ---
 
-## §4 333 Web 细节（0.9.8 必闭 3–10）
+## §4 333 Web 细节（0.9.8 必闭 3–10；已完成 2026-10-21）
+
+> 读数：[`333 档`](audits/333_WEB_DETAILS_MUST_CLOSE_3_TO_10_2026-10-21.md)——orz-web 68/0、orz-host 421/0、orz-bin 19/0、smoke 47 ok；doctor `ok=7 warn=1 fail=0`；未重建。333a（1–4）与 333b（5–9）同批完成，未拆提交。
 
 | # | 细节 | 面 | 参照 | 验收 |
 |---|---|---|---|---|
@@ -88,7 +90,7 @@
 |---|---|
 | 332 碰会话路径，可能扰动 329 保活 | 单测＋`--fake-provider` 端到端；保活测试全量回归 |
 | close 与 recall/restore 竞态 | `closing` 状态＋三方互斥（0di 既有 `RestoreInflightGuard`） |
-| 333 UI 改动引入前端死加载 | `frontend_smoke.mjs` 全量（当前 43 ok） |
+| 333 UI 改动引入前端死加载 | `frontend_smoke.mjs` 全量（当前 47 ok） |
 | 训练期内存紧张 | 只做增量 `cargo check/test -j 1`，不跑 release、不跑 docker |
 
 ---

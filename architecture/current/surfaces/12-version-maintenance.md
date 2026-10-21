@@ -40,15 +40,14 @@
 | 项 | 现状 | 证据 | 等级 |
 |---|---|---|---|
 | `--build-info` | 有 | `main.rs:159` | 接受 |
-| 清单校验 | 告警不拒绝 | `main.rs:177-181` | 接受 |
-| `--version` | 无 | — | 应修 |
-| 版本偏斜 | 无 | — | 阻塞 |
+| `--version` | **333 落码**：`orz --version`/`-V` 稳定单行（home 重定向前退出） | `orz-bin/src/main.rs` | 已落 |
+| 版本偏斜 | **333 落码**：`/api/boot` 带 `bridge_version/child_version/version_skew`；偏斜横幅＋系统行 | `server.rs`／`main.js` | 已落（真机待 S4） |
 | 更新/回滚 | 无 | — | 可延 |
 | TTY 双保险 | 未实现 | 0dl | 应修 |
 
 ## 6. 0.9.8 判决
 
-- **必闭**：`--version` 别名；web 启动时校验桥与 child 的 `--build-info` 一致并提示；`orz doctor` 输出载体哈希。
+- **必闭**：`--version` 别名（333 已落）；web 启动时校验桥与 child 的版本一致并提示（333 已落）；`orz doctor` 输出载体完整性（333 已落清单复验，非逐文件哈希列表）。
 - **可延**：更新入口、二进制回滚。
 - **不做**：自动更新。
 

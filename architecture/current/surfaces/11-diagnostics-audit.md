@@ -40,13 +40,13 @@ run 运行 → .gsa/runs/<RUN-*>/events.jsonl 追加（hash 链）
 |---|---|---|---|
 | journal 投影 | runs/events/tail 三通道 | `server.rs:853` | 接受 |
 | 路径校验 | run id 白名单 | `runs.rs:3-4` | 接受 |
-| doctor | 无 | — | 阻塞 |
-| 版本/配置诊断 | 无 CLI 入口（`orz-config` 是继承件，未接） | `orz-config` | 应修 |
+| doctor | **333 落码**：`orz doctor` 报告式（版本/cwd/.gsa 可写/lease/run/侧车/压缩/载体清单），有 fail ⇒ exit 1；不自动修 | `orz-bin/src/main.rs` `doctor_report` | 已落（真机待 S4） |
+| 版本/配置诊断 | `--version`＋桥/child 版本偏斜（333）；配置分层仍未接 doctor | `orz-bin`／`server.rs` `/api/boot` | 部分落 |
 | 截断提示 | 无「还有更多」 | `runs.rs` | 可延 |
 
 ## 6. 0.9.8 判决
 
-- **必闭**：`orz doctor`（版本/载体哈希、配置分层、`.gsa` 健康、端口/令牌、retrieval/CDP 可用性、最近 run 终态）。
+- **必闭**：`orz doctor`（版本/载体清单、`.gsa` 健康、lease、最近 run 终态——333 已落；配置分层/端口令牌/retrieval/CDP 可用性未纳入）。
 - **可延**：日志面板、截断提示。
 - **不做**：外部锚定。
 

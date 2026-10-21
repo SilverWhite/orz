@@ -136,6 +136,16 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.264 2026-10-21 333 批 Web 细节必闭 3–10（**实现/验证批**，计数 64 不变；**未重建**）
+
+- **由来**：用户令「请进333档吧」；按 [`332–333 计划`](WEB_CONSOLIDATION_BATCH_SCHEDULE_2026-10-21.md) §4 完成 330 契约基线「0.9.8 必闭十条」中的 3–10。
+- **落码**：①保活窗口外显式提示——桥 `BridgeInner.expired` 记 grace 回收的会话，下次 attach 前置帧带 `keepalive_expired/expired_session_id/expired_secs_ago`，Web 显式「上一会话未恢复」；②队列剩余额度/作用域——`_orz/queue_append` 回 `capacity/remaining/per_message_cap/scope/persists_across_pages`，回执/属性面板显示深度与「仅本会话进程」；③审批并发——第二个请求顶掉第一个时新弹窗提示「上一条已回 cancelled」＋累计次数；④上下文读数——新 `orz-web/src/context.rs`＋`GET /api/context`（侧车 chars/2 估算＋最近 8 run 压缩事件＋存档计数）＋工具栏「上下文」；⑤后台任务「仅模型可见」边界（属性面板）；⑥交付空态＋`terminal_source` 冒烟；⑦`orz doctor` 报告式 8 节＋`summary`＋fail⇒exit 1；⑧`orz --version`＋`/api/boot` 的 `bridge_version/child_version/version_skew` 与偏斜横幅；⑨`assets/app/copy.js` 四要素（未知码 internal）。
+- **读数**：`cargo test -p orz-web --lib` **68/0**（+5：context 3、pump 1、server 1）；`orz-host` **421/0**；`orz-bin --bin orz` **19/0**（含 doctor 2）；frontend smoke **47 ok**；`orz doctor` 实跑 `ok=7 warn=1 fail=0` exit 0；`--version` 输出 `orz 0.9.7 (windows/x86_64/debug)`；fmt clean。
+- **偏差/边界**：保活过期事实只在桥进程内存（桥重启后不再点名）；上下文为 chars/2 近似、只扫最近 8 run 的 256 KiB 尾窗；后台任务选「仅模型可见」分支（未做实时任务表）；版本探针每次 boot spawn 两次 `--version`（旧载体无该旗标则字段 null）；doctor 不做 ACAF/授信深度探测、不自动修。
+- **台账**：本卷；[`333 档`](audits/333_WEB_DETAILS_MUST_CLOSE_3_TO_10_2026-10-21.md)；主 BACKLOG 指针/计数/0dn 节；TODO 计数/0dn 节；索引 v4.302 → v4.303＋`AUTH-333-WEB-DETAILS`；S3/S4/S5/S7/S9/S10/S11/S12 契约页；`orz_source_manifest.sha256` 重生成。
+- **下一步**：0.9.8 双平台重建＋换装＋ACAF re-provision → 0dn S2 真机十条 → S3 三级状态回填。
+- 关键词：333 批、必闭 3–10、keepalive_expired、queue capacity、审批顶掉、/api/context、仅模型可见、orz doctor、--version、version_skew、copy.js、四要素、68/421/19/47、计数 64、索引 v4.303。
+
 ### 1.263 2026-10-21 332 批 0dk S2 会话生命周期落码（**实现批**，S2 落码＋11 单测＋smoke，计数 64 不变；**未重建**）
 
 - **由来**：用户令「请开始进行 0dk 落码部分吧」；按 331 补记批次序 §3（332＝会话生命周期实现）。

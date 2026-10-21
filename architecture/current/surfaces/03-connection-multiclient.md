@@ -43,6 +43,7 @@ agent:   spawning → running → exited
 | 项 | 现状 | 证据 | 等级 |
 |---|---|---|---|
 | 保活 | 1800s，可配；329 落码未进装机位 | `acp_pump.rs:108-124` | 阻塞（需发行） |
+| 窗口外提示 | **333 落码**：grace 回收的会话事实进下次 attach 前置帧（`keepalive_expired/expired_session_id/expired_secs_ago`）；Web 显式提示「上一会话未恢复」 | `acp_pump.rs` `reap_once`／`main.js` `onBridgeAttached` | 已落（真机观感待 S4） |
 | 心跳 | 无；半开连接只能等 OS | 无实现 | 应修或显式接受 |
 | 第二客户端文案 | **332 落码**：409 带 `workspace_occupied`＋`class/hint/evidence`；前端连接失败文案给可行动步骤（原生 WS 读不到 body） | `server.rs` `ws_acp`／`acp.js` | 已落（真机观感待 S4） |
 | 附着协议 | 私有 `_orz/bridge_attached`，非 ACP `session/resume` | `acp.js:92` | 应修（并入 ACP v1 对齐） |
@@ -50,7 +51,7 @@ agent:   spawning → running → exited
 
 ## 6. 0.9.8 判决
 
-- **必闭**：把「窗口外不恢复」做成显式事件/文案；第二客户端占用者提示（332 已落）；`_orz/bridge_attached` 与 ACP `resume` 的关系写清（短期兼容层）。
+- **必闭**：把「窗口外不恢复」做成显式事件/文案（333 已落 attach 前置帧＋Web 文案）；第二客户端占用者提示（332 已落）；`_orz/bridge_attached` 与 ACP `resume` 的关系写清（短期兼容层）。
 - **可延**：心跳、跨进程恢复。
 - **不做**：多写者。
 

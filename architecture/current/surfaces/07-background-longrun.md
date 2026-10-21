@@ -43,11 +43,11 @@ session 结束 → 随会话域终止
 | lifetime | `session` 登记＋finalize 豁除 | `resource_job.rs:379` | 接受 |
 | 30h 兜底 | 已落码，S4 未真机 | 0dh 档 | 应修（验证） |
 | 死 session 清理 | 登记行留盘 | 0dh 余项 | 可延 |
-| Web 可见面 | 仅 `tool_running` 行＋`backgroundTasks` 计数 | `projection.js:164` | 应修（无详情/无 kill 按钮） |
+| Web 可见面 | 仅 `tool_running` 行＋`backgroundTasks` 计数；**333**：属性面板明确「仅模型可见；本页不提供任务表，刷新/关闭不恢复」 | `projection.js:164`／`dialogs.js` | 已落（实时面板仍未做） |
 
 ## 6. 0.9.8 判决
 
-- **必闭**：Web 端后台任务可见面（任务列表、状态、增量输出入口或明确「仅模型可见」）；窗口外不恢复的显式提示。
+- **必闭**：Web 端后台任务可见面（任务列表、状态、增量输出入口或明确「仅模型可见」——333 选了「明确仅模型可见」分支）；窗口外不恢复的显式提示（333 已落 attach 前置帧）。
 - **可延**：死 session 清理。
 - **不做**：主动唤醒。
 

@@ -42,12 +42,12 @@ terminal: run_finished | run_failed | run_cancelled | run_invalidated
 | 排队 | 运行中提交入队并提示深度 | `main.js:204-214` | 接受 |
 | 停止 | `stopRun` → `session/cancel` | `main.js:350-363` | 接受 |
 | 取消终态 | 依赖 agent 回 `cancelled`；无超时兜底 | `acp.js:152` | 应修 |
-| 错误面 | 仅 `[错误]` 文本，无下一步 | `projection.js:294` | 应修 |
+| 错误面 | **333 落码**：`copy.js` 四要素（发生了什么＋分类＋下一步＋证据），未知码 internal 兜底；工具失败仍留在对话里 | `copy.js`／`acp.js` | 已落（取消超时兜底仍未做） |
 | partial output | 已产生内容保留 | 事件流 | 接受 |
 
 ## 6. 0.9.8 判决
 
-- **必闭**：取消后 30s 未收敛的兜底（前端复位＋提示）；错误面给可执行下一步（重发/查看 journal）。
+- **必闭**：取消后 30s 未收敛的兜底（前端复位＋提示）；错误面给可执行下一步（333 已落四要素文案；取消超时兜底仍未做）。
 - **可延**：自动重试。
 - **不做**：steering。
 
