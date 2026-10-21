@@ -136,6 +136,31 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.260 2026-10-21 329 批 0.9.7 五问题修复＋0dm S2 交付状态面板（**修复批**，S1 落码＋S2 测试，计数 63 不变；**未重建**）
+
+- **由来**：用户令「329就按照你的裁决来吧，0dm S2同车即可。做完以后暂时不重建，目前后台有训练进程，优先给h=128的训练进程，避免重建抢占CPU和内存」。按 328 §8 排序落地 P0（/rewind＋会话保活）与 P1（CDP＋session/new sweep），0dm S2 同车。
+- **① `/rewind` 投影截断（0di）**：撤回后本地 `items`/`marker`/`turnCounter` 同步截断；`vm.rebuildMarkers()` 按 `item.anchor` 重建下标；内存裁剪删越界锚＋`droppedUserCards` 对齐 ordinal 轴；`openConversation` 重放按 `recall_log` 过滤被撤 tail（多 recall 级联；>20 万事件放弃过滤并如实提示）；实时尾不重放撤回前已结束 run；`scrollToItem` 越界显式提示。新增 `GET /api/recall`（`runs.rs`＋`server.rs`）。smoke §15 十条钉子。
+- **② 会话保活/重连（0dk）**：`orz-web/src/acp_pump.rs` 重写为 `AgentBridge` supervisor——每工作区持 child；WS 断开＝detach（默认保活 1800s，`ORZ_WEB_KEEPALIVE_SECS` 可配/0＝旧行为/硬顶 6h；stdout 进 8 MiB 有界 backlog，溢出丢最旧并告知）；同区重连 attach 先发 `_orz/bridge_attached`（session_id/reused/prompt_in_flight/cwd）再补发 backlog；已 attach 时第二 WS 仍 409；reaper 15s 回收 grace 到期/child 退出槽。前端 `onBridgeAttached` 绑定仍在跑的会话并复位运行态；刷新/断线不再杀 run，队列/后台任务随 child 存活（桥退出/超窗口仍不恢复）。`beforeunload`/boot/README 口径同步。
+- **③ 交互式 `session/new` 不收卷（0cy 口径）**：`handle_session_new_with_options_no_sweep`，ACP stdio 改走该入口；sweep 只留启动侧扫描/显式维护。新钉：兄弟会话侧车/run 目录不被收卷。
+- **④ CDP 就绪重试（EVIDENCE-LOCAL-BROWSER）**：`launch` 以 `discovery_deadline` 为唯一预算，`/json/version` 有界重试（100ms 起、翻倍、上限 200ms）；仅 `connect:`/`write:`/`read:`/`http GET` 超时重试，确定性错误立即失败并保留真实 cause。最坏尾巴＝剩余排期＋单次在途请求（≤5s）。
+- **⑤ 0dm S2 交付状态面板**：新增 `GET /api/delivery`（`delivery.rs` 只读投影：侧车 plan/末步/recall ＋最近 run 的 `run_finished`/`self_check`；不重算 loop 运行时变更基线）＋`delivery.js` 纯渲染＋`dialogs.openDeliveryStatus()`＋工具栏「交付状态」＋`assets.rs` 内嵌。7 单测。
+- **读数**：`cargo check` orz-web／orz-host 均 exit 0（host 唯一 warning 为既有 `permission.rs` unused imports）；`cargo test -p orz-web --lib` **63 passed**；CDP 重试 **3/3**（首跑 1 例断言 `<2s` 与实际 connect ~2.02s 冲突，改 6s 上界后复跑全过）；session 收卷 **2/2**；frontend smoke **43 ok**；`rustfmt --check` 触碰 9 文件净。
+- **未做（用户令/顺延）**：0.9.8 双平台重建/换装/发行、S4 真机五场景、0dh S4、ZCode 式浏览器项目、时间溯源护栏；保活心跳未实现（半开 WS 依赖 OS 断开，登记残留）。
+- **台账**：[`329 档`](audits/329_FIVE_ISSUE_FIX_REWIND_KEEPALIVE_CDP_SWEEP_AND_0DM_S2_2026-10-21.md)；索引 v4.298 → v4.299＋AUTH-329-FIX-BATCH；TODO/ BACKLOG 指针与 0di/0dk/0cy/0dm/EVIDENCE 节；README；orz 与父仓提交（含 328 台账补提交）。**未重建、未发行**。
+- 关键词：329 批、/rewind 截断、recall_log、会话保活、AgentBridge、bridge_attached、ORZ_WEB_KEEPALIVE_SECS、session/new 不收卷、CDP 重试、0dm S2、/api/delivery、计数 63 不变、未重建、v4.299。
+
+### 1.259 2026-10-21 328 批 0.9.7 五问题复核与 54d12bcc 恢复取证（**只读复核批**，零源码零跑批，计数 63 不变）
+
+- **由来**：用户确认五问题全部发生在 0.9.7；新增「模型认错时间」与「54d12bcc 又能继续」两条观察；要求按工作区纪律落审计并接回路由/TODO/BACKLOG。
+- **版本核证**：`orz.exe` 17:43:11 写入；`orz web --real` PID 30168 启动 17:53:17；`--stdio` PID 7700 启动 20:14:52——确认 0.9.7 在役，327 档「待重启 web」边界不再成立。
+- **54d12bcc**：130 events；9/9 ticket；17 `tool_started`/16 `tool_completed`；悬空 `call_00_z0tym...`；无 `run_finished`；侧车/归档各 1 条 user、0 assistant/tool。结论＝0.9.7 失败 run 过滤使其可继续，不是票据补全，也不是原现场恢复。
+- **时间误判**：R140 2026-06-14 vs ROUND232 2026-10-20＝128 天；ROUND232 L85/L152/L186 三次「六年前」；索引 I-R140 条目无日期。用户裁决 index 保持精简、不加时间戳；本批不改研究区文档。
+- **五问题根因**：`/rewind` 前端未截断 items/marker＋同文去重＋journal 全量重放；进程 call-scoped＋默认 600s；CDP 单次 `/json/version`；切会话 WS 断即 `start_kill`；`session/new` 固定 `sweep_enabled=true`。0.9.7/327 只修恢复路径，未修根因。
+- **ZCode**：Apache-2.0 可复用；桌面 Electron `WebContentsView`＋CDP，Web 不能直接嵌；结论＝借设计/协议，先做 CDP screencast＋真实窗口接管。
+- **处置**：只读；计数 63 不变；归属 0dk／0di／0dh／0cy／EVIDENCE-LOCAL-BROWSER；修复顺序待裁决（P0 会话保活＋/rewind；P1 CDP＋sweep；P2 进程＋日期）。
+- **台账**：[`328 档`](audits/328_0_9_7_FIVE_ISSUE_REVIEW_AND_54D12BCC_RECOVERY_2026-10-21.md)；索引 v4.297 → v4.298＋AUTH-0.9.7-FIVE-ISSUE-REVIEW；TODO 328 复核行；BACKLOG 本批指针；本卷 §1.259。**未改源码、未提交、未推送**。
+- 关键词：328 批、0.9.7 复核、54d12bcc、票据不完全、/rewind 标记栏、CDP discovery、会话保活、session/new sweep、ZCode、计数 63 不变、v4.298。
+
 ### 1.258 2026-10-20 321 批 0.9.4 装机位换装＋GitHub Release `v0.9.4` 安装包发行（**换装＋发行批**，零源码零跑批，计数 62 不变）
 
 - **由来**：用户令「请推送0.9.4的安装包吧」；320 重建批后评测载体位已 0.9.4，装机位与发行面仍停 0.9.3。
