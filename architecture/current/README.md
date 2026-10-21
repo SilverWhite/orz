@@ -58,3 +58,26 @@ flowchart TD
 ### 2.4 审计与完整性：Hash-Chained Journal
 - 每次运行写入事件 journal（schema v0.2），每条记录计算单向哈希链（SHA-256）。
 - 离线可通过 `--replay` 交叉校验完整性与检测损坏。**口径＝完整性/损坏检测**：链断／篡改**可被检出**，但 hash 链不提供外部锚定的「防篡改保证」（receipt 链／外部 digest 锚不立项——083 审查裁决③、0bv D-6，2026-09-27）。
+
+---
+
+## 3. 用户面契约基线（2026-10-21 330 批建立）
+
+12 个用户可见面，每页写**状态机 / 不变量 / 失败模式 / 明确不做 / 差距 / 测试映射 / 0.9.8 判决**；设计语义仍以 ADR-0010 为准，本组只做用户面投影。
+
+| 面 | 契约页 | 归属项 |
+|---|---|---|
+| S1 启动与工作区 | [`surfaces/01-startup-workspace.md`](surfaces/01-startup-workspace.md) | 0br/0dk |
+| S2 会话生命周期 | [`surfaces/02-session-lifecycle.md`](surfaces/02-session-lifecycle.md) | 0dk |
+| S3 连接与多端 | [`surfaces/03-connection-multiclient.md`](surfaces/03-connection-multiclient.md) | 0dk/329 |
+| S4 发送与回合 | [`surfaces/04-turn-send-cancel.md`](surfaces/04-turn-send-cancel.md) | 0di/0dk |
+| S5 中途补充与排队 | [`surfaces/05-supplement-queue.md`](surfaces/05-supplement-queue.md) | 0di |
+| S6 撤回与编辑重发 | [`surfaces/06-recall-rewind.md`](surfaces/06-recall-rewind.md) | 0di/329 |
+| S7 长任务与后台 | [`surfaces/07-background-longrun.md`](surfaces/07-background-longrun.md) | 0dh/0dk |
+| S8 权限与审批 | [`surfaces/08-permission-approval.md`](surfaces/08-permission-approval.md) | 0dk/0dl |
+| S9 上下文与压缩 | [`surfaces/09-context-compaction.md`](surfaces/09-context-compaction.md) | 0cz/0da |
+| S10 交付与终态 | [`surfaces/10-delivery-terminal.md`](surfaces/10-delivery-terminal.md) | 0dm |
+| S11 诊断与审计 | [`surfaces/11-diagnostics-audit.md`](surfaces/11-diagnostics-audit.md) | 0dk/新建 |
+| S12 版本与维护 | [`surfaces/12-version-maintenance.md`](surfaces/12-version-maintenance.md) | 0dl/新建 |
+
+基线审计与 0.9.8 必闭清单：[`330 批档`](../../docs/audits/330_SURFACE_CONTRACT_BASELINE_2026-10-21.md)。

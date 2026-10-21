@@ -136,6 +136,18 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.261 2026-10-21 330 批 产品面契约基线（12 面 × 六家业界对照）＋0dn 立项（**调研/立项批**，零源码零跑批，计数 63 → 64）
+
+- **由来**：用户问「怎么这么多不成熟和缺失的细节……orz 明明借鉴了很多成熟项目和机制，还直接使用了 grok 作为成熟底座，是否考虑再查一遍业界实现和 orz 的当前情况？」；随后裁决「12 面全量契约」「0dn 三件全立」。
+- **诊断六条（带读数）**：①底座被删掉的正是出事那半——2026-08-02 从 Grok Build 分叉、08-03 删约 92 万行 shell/pager；仓内 66 万行 Rust 中自研 7 crate 仅 17.7 万（loop 8.6 万／host 3.6 万／assurance 3 万／tui 1.25 万／web 0.46 万），近五天四批真机问题全部落在自研面；②12,251 个 `#[test]` 挡不住涌现型（loop 911／host 410／assurance 306／web 63；前端 1,605 行 smoke 用 DOM stub，零浏览器自动化）；③借鉴停在机制、未落成不变量（329 实质是补 CC 的 checkpoint/单一日志不变量）；④根项 0dk 无设计稿，只有 318 验收清单；⑤验证靠人（至少 8 项卡 S4；10-11→10-21 七个 Release，最近 48h 四次构建/换装）；⑥台账无 shipped 维度（329 修复未进装机位却写「落码」）。
+- **业界实查（2026-10-21）**：CC 2.1.306／Codex 0.163.0／Gemini 0.65.0／opencode 1.19.3／aider 0.86.0／OpenHands 1.56.0／ACP v1。关键结论＝①六家全是单进程本地写、**无跨进程租约**（orz 319 的 OS lease 领先）；②第二客户端 CC 独占／Codex 多订阅，orz 409＋busy 重同步＝CC 同侧；③撤回无人回滚全部（CC 只回 Edit/Write、Gemini 不回手改与 shell、OpenHands 共享工作区、opencode `revert` 返回 true 却不还原），orz「只回会话、git 兜底」＝业界主流；④取消只保证不再发起调用；⑤四家均无机械完成判定（orz `[RUN_END]` 超前，故更需自建契约）；⑥CC/Codex 有 doctor，orz 无。
+- **ACP 代差（本批最重要发现）**：ACP v1 明文有 `session/resume`（MUST NOT replay）／`session/close`（MUST 先 cancel 再释放）／`session/list`（无结果 MUST 空数组）；orz vendored `xai-acp-lib` 停在 0.10.4，无 close/resume/list，`session/load` 只回放 user/assistant，329 用私有 `_orz/bridge_attached` 实质重造 `resume`。规范留白（并发 prompt、客户端断开、心跳、load 期间收 prompt、持久化格式）须自定并写成契约。
+- **产出**：12 页用户面契约（[`architecture/current/surfaces/`](../architecture/current/surfaces/)，S1–S12，各含状态机/不变量/失败模式/明确不做/差距/测试映射/0.9.8 判决）＋[`330 档`](audits/330_SURFACE_CONTRACT_BASELINE_2026-10-21.md)（含 12 面矩阵与 0.9.8 必闭十条）＋0dn 立项。必闭十条＝①0dk 状态机＋ACP v1 对齐 ②close 先行 cancel／删除不复活／sessions 有界 ③回放口径与 `tool_call_id` 幂等 ④保活边界诚实化＋占用者提示 ⑤心跳或显式接受 ⑥撤回降级提示＋UI「不回文件」＋ordinal 复核 ⑦交付面板空态＋前端钉 ⑧`orz doctor`＋`--version`＋版本偏斜 ⑨Web 上下文读数 ⑩后台可见面。
+- **0dn（63 → 64）**：三件＝契约基线（S1 本批达成）＋真机场景套件 10 条（S2，CDP 驱动真 Chrome＋`--fake-provider`，不引 Playwright）＋台账三级状态 `landed/shipped/verified`（S3）。
+- **边界**：零源码、零跑批、零载体重建、零装机位改动；明确不做六项（文件级撤回、多写者、手动压缩滑块、自动更新/二进制回滚、机械完成判定、跨机共享）。
+- **台账**：本卷；[`330 档`](audits/330_SURFACE_CONTRACT_BASELINE_2026-10-21.md)；主 BACKLOG 指针行（64）＋计数行＋P1 总览行＋`0dn` 专节＋P1 开放项；TODO 计数行＋P1 路由行＋`P1-0dn` 节；索引 v4.299 → v4.300＋`AUTH-SURFACE-CONTRACT-BASELINE` 条目；`architecture/current/README.md` §3 增 12 面索引。
+- 关键词：330 批、用户面契约、12 面、surfaces、ACP v1、resume、close、list、0dk 无设计稿、12,251 测试、涌现型 bug、doctor、版本偏斜、shipped、0dn、计数 64、索引 v4.300。
+
 ### 1.260 2026-10-21 329 批 0.9.7 五问题修复＋0dm S2 交付状态面板（**修复批**，S1 落码＋S2 测试，计数 63 不变；**未重建**）
 
 - **由来**：用户令「329就按照你的裁决来吧，0dm S2同车即可。做完以后暂时不重建，目前后台有训练进程，优先给h=128的训练进程，避免重建抢占CPU和内存」。按 328 §8 排序落地 P0（/rewind＋会话保活）与 P1（CDP＋session/new sweep），0dm S2 同车。
