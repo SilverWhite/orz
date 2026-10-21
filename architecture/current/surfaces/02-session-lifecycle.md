@@ -1,6 +1,6 @@
 # S2 会话生命周期（surface-session）
 
-> 状态：`current-design`（2026-10-21 330 批建立）。设计权威 [ADR-0010](../../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；本页只写**用户可见面**的机械契约，不是实现说明。
+> 状态：`current-design`（2026-10-21 330 批建立）。设计权威 [ADR-0010](../../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；**S1 状态机设计见 [`0dk S1`](../../../docs/SESSION_LIFECYCLE_OWNERSHIP_AND_CLOSE_DESIGN_2026-10-21.md)（331 批）**；本页只写**用户可见面**的机械契约，不是实现说明。
 > 代码：`orz/crates/orz-host/src/acp_server.rs`（new/load/prompt/cancel/lease）、`orz/crates/orz-host/src/stdio.rs`、`orz/crates/orz-web/src/{server.rs,acp_pump.rs}`、`orz/crates/orz-web/assets/app/main.js`。
 > 审计：[330 批档](../../../docs/audits/330_SURFACE_CONTRACT_BASELINE_2026-10-21.md)；归属项：0dk（余项）、0cy（收卷口径）。
 
@@ -45,7 +45,7 @@
 
 | 项 | 现状 | 证据 | 等级 |
 |---|---|---|---|
-| close 状态机 | 无 `session/close`；web 无「关闭会话」入口，关页面＝断开 WS | `acp_server.rs:4931` | 阻塞 |
+| close 状态机 | **设计完成（331，`_orz/session_close`：先 cancel 再释放、幂等、10s 上限）**；实现待 S2 | [`0dk S1`](../../../docs/SESSION_LIFECYCLE_OWNERSHIP_AND_CLOSE_DESIGN_2026-10-21.md) | 阻塞 |
 | `sessions` 有界 | map 无上限，长期运行只增不减 | `acp_server.rs` sessions map | 应修 |
 | 删除后复活 | 删除绑定未清，prompt 写回侧车 | 318 §3 P2、0dk 验收⑦ | 应修 |
 | load 回放工具面 | 只回放 user/assistant | `acp_server.rs:3822` 起 | 接受（须 UI 标注） |

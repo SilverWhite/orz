@@ -136,6 +136,16 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.262 2026-10-21 331 批 0dk S1 会话生命周期状态机设计（**设计批**，零源码零跑批，计数 64 不变）
+
+- **由来**：330 批诊断「0dk 无设计稿」；用户裁决三件——①**Web 唯一交互面，TUI 冻结**（只修崩溃/安全，不删代码）；②**close 走私有扩展**（避免强绑 grok）；③**ACP 不降级、不追 v1**，但扩展层与传输解耦以保底座可换。
+- **设计稿**：[`0dk S1`](SESSION_LIFECYCLE_OWNERSHIP_AND_CLOSE_DESIGN_2026-10-21.md)（13 节）——**七状态**（created/idle/active/closing/closed/archived/deleted）＋**九动词**（new/load/attach/prompt/cancel/close/archive/restore/delete/evict）转移表与 mermaid；**唯一 owner**＝持 `.gsa/sessions/<s8>.lease` 的 agent 进程，bridge 只做传输不持真相；**`_orz/session_close`**（先 cancel 再释放、10s 上限、超时返回 `session_busy` 不半关、幂等 `already`）；**删除不复活**（prompt 只查表禁隐式物化＋`.deleted` tombstone）；**会话表有界 32**（LRU 驱逐 idle、active 不驱逐）；**错误码 -32010..-32014**；**失败文案四要素/六类**（工具类不上浮）；**底座可迁移**（orz 自有 `SessionCommand`／`session_ops`，ACP 仅 <300 行适配器，不 import vendored 类型）。
+- **契约页同步**：S2 加设计入口并把 close 行改为「设计完成、实现待 S2」；S3 写明 attach（传输层）与 close（会话层）分离；S4/S11 指向文案四要素；S10 标注 TUI `frozen`；`architecture/current/README.md` 入口图改为「Web 唯一交互面；TUI frozen；-p/--stdio 保留」并增 §2.5。
+- **边界**：不做跨进程恢复、多写者、force kill、ACP v1 升级、TUI 可写恢复；不改 loop/工具/上下文/写控语义。
+- **下一步**：S2 实现（10 条单测：close idle/active/timeout/idempotent、删除不复活、delete active 拒、LRU、lease 冲突、状态通知、未知私有方法）→ 0.9.8 重建 → 0dn S2 真机五场景。
+- **台账**：本卷；主 BACKLOG 指针/计数/P1 行/0dk 节（`pending`→`partial`）；TODO 计数/P1 路由/P1-0dk 三处；索引 v4.300 → v4.301＋`AUTH-0DK-SESSION-LIFECYCLE-DESIGN`。
+- 关键词：331 批、0dk S1、会话状态机、唯一 owner、lease、`_orz/session_close`、删除不复活、tombstone、LRU 32、-32010、文案四要素、SessionCommand、底座可迁移、TUI frozen、计数 64、索引 v4.301。
+
 ### 1.261 2026-10-21 330 批 产品面契约基线（12 面 × 六家业界对照）＋0dn 立项（**调研/立项批**，零源码零跑批，计数 63 → 64）
 
 - **由来**：用户问「怎么这么多不成熟和缺失的细节……orz 明明借鉴了很多成熟项目和机制，还直接使用了 grok 作为成熟底座，是否考虑再查一遍业界实现和 orz 的当前情况？」；随后裁决「12 面全量契约」「0dn 三件全立」。

@@ -51,6 +51,8 @@ terminal: run_finished | run_failed | run_cancelled | run_invalidated
 - **可延**：自动重试。
 - **不做**：steering。
 
+> 错误文案四要素（发生了什么/为什么/下一步/证据）与六类分法见 [`0dk S1 §9`](../../../docs/SESSION_LIFECYCLE_OWNERSHIP_AND_CLOSE_DESIGN_2026-10-21.md)。
+
 ## 7. 测试映射
 
 | 不变量 | 现有测试 | 缺口 |

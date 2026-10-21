@@ -50,6 +50,8 @@ run 运行 → .gsa/runs/<RUN-*>/events.jsonl 追加（hash 链）
 - **可延**：日志面板、截断提示。
 - **不做**：外部锚定。
 
+> 错误分类与四要素文案（`code/class/hint/evidence`）见 [`0dk S1 §9`](../../../docs/SESSION_LIFECYCLE_OWNERSHIP_AND_CLOSE_DESIGN_2026-10-21.md)。
+
 ## 7. 测试映射
 
 | 不变量 | 现有测试 | 缺口 |

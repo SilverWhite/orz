@@ -12,7 +12,7 @@
 
 ```mermaid
 flowchart TD
-    User["用户入口 (TUI / -p 无头 / --stdio ACP)"] --> Loop["主 Agent 循环 (orz-loop)"]
+    User["用户入口（Web 工作台＝唯一交互面；TUI frozen；-p 无头 / --stdio ACP 保留）"] --> Loop["主 Agent 循环 (orz-loop)"]
     Loop --> Prompt["近零系统提示 + 冻结 10 工具面"]
     Prompt --> Model["DeepSeek 模型推理 (thinking 默认开启)"]
 
@@ -58,6 +58,14 @@ flowchart TD
 ### 2.4 审计与完整性：Hash-Chained Journal
 - 每次运行写入事件 journal（schema v0.2），每条记录计算单向哈希链（SHA-256）。
 - 离线可通过 `--replay` 交叉校验完整性与检测损坏。**口径＝完整性/损坏检测**：链断／篡改**可被检出**，但 hash 链不提供外部锚定的「防篡改保证」（receipt 链／外部 digest 锚不立项——083 审查裁决③、0bv D-6，2026-09-27）。
+
+### 2.5 会话所有权与交互面（2026-10-21 331 批）
+
+- **交互面收敛**：Web 工作台为唯一交互面；TUI `frozen`（维护只修崩溃/安全，不再扩展，不删代码）；`-p` 无头与 `--stdio` ACP 保留为无头/集成入口。
+- **会话 owner 唯一**：持 `.gsa/sessions/<s8>.lease` 的 agent 进程；`orz-web` 桥只做传输（WS↔child），不持会话真相。
+- **关闭语义**：私有扩展 `_orz/session_close`——先 cancel 在途 run（10s 上限）再释放 lease，幂等；不追 ACP v1。
+- **扩展层与传输解耦**：orz 自有 `SessionCommand`／`session_ops`，ACP 仅薄适配器，换底座时不重写会话逻辑。
+- 设计：[`0dk S1`](../../docs/SESSION_LIFECYCLE_OWNERSHIP_AND_CLOSE_DESIGN_2026-10-21.md)。
 
 ---
 

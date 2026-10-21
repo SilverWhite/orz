@@ -1,6 +1,6 @@
 # S3 连接与多端（surface-connection）
 
-> 状态：`current-design`（2026-10-21 330 批建立）。设计权威 [ADR-0010](../../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
+> 状态：`current-design`（2026-10-21 330 批建立）。设计权威 [ADR-0010](../../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；**会话层 close/驱逐见 [`0dk S1`](../../../docs/SESSION_LIFECYCLE_OWNERSHIP_AND_CLOSE_DESIGN_2026-10-21.md)**：attach 是传输层，close 是会话层，两者不混。
 > 代码：`orz/crates/orz-web/src/acp_pump.rs`（`AgentBridge`）、`server.rs`（`/ws/acp`）、`assets/app/acp.js`、`main.js`（`onBridgeAttached`）。
 > 审计：[330 批档](../../../docs/audits/330_SURFACE_CONTRACT_BASELINE_2026-10-21.md)；归属项：0dk、329。
 

@@ -41,7 +41,7 @@ self_check：模型主动调用（无参，三问）→ run_finished.self_check_
 | 项 | 现状 | 证据 | 等级 |
 |---|---|---|---|
 | 终态声明 | 落码，S4 未真机 | `model_stop.rs:20-24` | 应修（验证） |
-| 自查 PULL | 工具栏按钮＋TUI Ctrl+G | `state.js:29` | 接受 |
+| 自查 PULL | 工具栏按钮＋TUI Ctrl+G（TUI 已 `frozen`，该键保留但不再扩展） | `state.js:29` | 接受 |
 | 交付面板 | 7 单测，前端 0 测试 | `delivery.rs:57` | 应修（前端钉） |
 | 空态文案 | 未说明「无记录」 | `delivery.rs:5-7` | 应修 |
 | RST 前缀 | 不识别 | 329 档 | 可延 |
