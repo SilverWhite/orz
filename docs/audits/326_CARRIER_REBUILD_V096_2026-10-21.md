@@ -77,8 +77,10 @@
   - `orz-0.9.6-linux-x86_64.tar.gz` **37,871,329 B** `4bb38820…`；
   - `SHA256SUMS` **191 B** `93495e9a…`。
 - 包内 6 entries（三件套＋README＋SHA256SUMS＋carrier-manifest）；WIN 侧 4/4 OK、Linux 容器 4/4 OK、双平台 `--build-info` 均 0.9.6。
-- README 发布面：解包名／Release 链接／0.9.6 更新节；英文 README 同步 v0.9.6 face。
-- 回下载逐位核证与 `gh release view` 服务端 digest 见发行后补记（本档 §8 后续回执）。
+- 服务端回读（`gh release view v0.9.6 --json`）：`isDraft=false`／`isPrerelease=false`／`gh release list` 首行 **Latest**；`targetCommitish=main`；三资产 digest 与本地逐位一致（zip `sha256:4a11f55f…`／tar.gz `sha256:4bb38820…`／`SHA256SUMS` `sha256:93495e9a…`）。
+- 回下载（`D:\tb-eval\rel-326-readback`）：zip／tar.gz／`SHA256SUMS` 三件 **BYTE-IDENTICAL 3/3**；下载态顶层 `SHA256SUMS` 复算 **2/2 OK**。
+- tag `v0.9.6` **轻量 tag** → 父仓 `be51fa9b`（README 发布面＋本档所在发行提交）；`refs/tags/v0.9.6` 已推。
+- README 发布面：解包名 `orz-0.9.6-linux-x86_64.tar.gz`、最新 Release 链接 `v0.9.6`、0.9.6 更新节；英文 README 同步 `v0.9.6 face, 2026-10-21`。
 
 ## §7 关键词
 
