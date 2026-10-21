@@ -17,13 +17,13 @@
 
 | 步骤 | Windows（PowerShell） | Linux（sh） |
 |---|---|---|
-| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.5-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
+| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.6-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
 | 2. 配置 API Key | 存入 Windows 凭据管理器（Generic，目标名 `orz-deepseek/agent`；一次即可）：<br>`cmdkey /generic:orz-deepseek/agent /user:agent /pass:你的DeepSeek_API_Key` | 用环境变量（Windows 凭据管理器通道的显式例外）：<br>`export ORZ_DEEPSEEK_API_KEY=你的DeepSeek_API_Key` |
 | 3. 初始化安全签发（一次性） | `.\orz-acaf-provision.exe "$env:USERPROFILE\.orz-acaf\keystore" "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br><br>ACAF 默认 fail-closed，未配置会拒绝启动 run（进程可用、run 拒绝执行）。 | `./orz-acaf-provision "$HOME/.orz-acaf/keystore" "$HOME/.orz-acaf/signer-manifest.json"` |
 | 4. 设置启动环境 | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
 | 5. 运行 | `.\orz.exe`（交互 TUI）<br>`.\orz.exe -p "你的任务" --real`（无头模式）<br>`.\orz.exe web`（Web 工作台，打印本地带令牌地址） | `./orz`（交互 TUI）<br>`./orz -p "你的任务" --real`（无头模式）<br>`./orz web`（Web 工作台，打印本地带令牌地址） |
 
-发布包说明与完整性校验见 GitHub Release（最新 [v0.9.5](https://github.com/SilverWhite/orz/releases/tag/v0.9.5)，双平台包＋`SHA256SUMS`）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
+发布包说明与完整性校验见 GitHub Release（最新 [v0.9.6](https://github.com/SilverWhite/orz/releases/tag/v0.9.6)，双平台包＋`SHA256SUMS`）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
 
 ### 常用入口
 
@@ -104,6 +104,14 @@ orz 直接运行在真机上是设计选择。
 4. **审计与恢复**：hash-chained journal（事件 schema v0.2）加 verifier 交叉校验、只读 `--replay`、编辑面回退窗口（`orz rollback list`／`orz rollback restore` 撤销 CLI）、载体完整性自检。
 
 已知边界：不防已失陷的签发器、同用户恶意进程、内核级失陷与恶意模型服务；票据证明来源与授权，不证明命令明智；命令审查是尽力而为的词法匹配——变量拼接、别名、脚本内命令、`.NET`/解释器直调、编码混淆、Windows 短名／junction／UNC 未存在面仍不保证覆盖；维护 CLI 已有桥注入的 `ORZ_MAINTENANCE_TICKET` 令牌门＋命令面 block，TTY 确认未落（0dl 余项）；`.gsa` shell 读面为读全开放口径。真机默认无沙箱、权限 yolo 自动放行。
+
+## 0.9.6 更新（2026-10-21）
+
+- **终态声明**：主车道有本 run 执行事实时，终答以 `[RUN_END]`（intent/reason/summary）结束；无声明按工具轮 episode 最多 2 次 `[TERMINAL_NOTICE]`，之后 fail-open 并落 `terminal_source`。短聊豁免；恢复会话的旧编辑/旧 plan 不再误触发。
+- **反例自查 PULL**：新增无参 `self_check` 工具与 Web 工具栏「反例自查」、TUI `Ctrl+G`；返回三问模板，不再自动注入 gate。常驻软提示逐字为「请对非日常聊天类的任务调用反例自查。」。
+- **submit 退役**：`submit` 从模型工具面移除，交付状态改由 Web/TUI 按需展示；`deliver` 末步由 `run_end(completed)` 机械完成。
+- **契约**：`run_finished` 新增 `terminal_source`／`terminal_nudged`／`terminal_nudge_count`／`self_check_called`；`gate_decision` 支持 `nudge`；schema/fixture/Python/Rust 法官同步。
+- **重建**：0.9.6 双平台载体；Windows 装机位换装、ACAF 重 provision；Linux static-pie 三件。
 
 ## 开发者入口
 

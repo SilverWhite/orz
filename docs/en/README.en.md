@@ -3,7 +3,7 @@
 # orz — English README (expanded edition)
 
 > LLM-assisted translation; the Chinese originals are authoritative. Corrections welcome.
-> Source: [`/README.md`](../../README.md) (Chinese, authoritative), v0.9.5 face, 2026-10-21.
+> Source: [`/README.md`](../../README.md) (Chinese, authoritative), v0.9.6 face, 2026-10-21.
 > **Expanded edition** (user adjudication 2026-10-02): the two editions mirror each other in
 > content; this one is expanded in *role*, not in coverage — it doubles as the English-language
 > umbrella stand-in for the project's design authorities
@@ -29,13 +29,13 @@ Configure Windows and Linux as follows:
 
 | Step | Windows (PowerShell) | Linux (sh) |
 |---|---|---|
-| 1. Unpack | Put `orz.exe`, `orz-signer.exe`, `orz-acaf-provision.exe` into one directory (e.g. `C:\orz`). | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.5-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
+| 1. Unpack | Put `orz.exe`, `orz-signer.exe`, `orz-acaf-provision.exe` into one directory (e.g. `C:\orz`). | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.6-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
 | 2. Configure the API key | Store it in Windows Credential Manager (Generic, target name `orz-deepseek/agent`; once only):<br>`cmdkey /generic:orz-deepseek/agent /user:agent /pass:YOUR_DEEPSEEK_API_KEY` | Use an environment variable (the explicit exception to the Windows Credential Manager channel):<br>`export ORZ_DEEPSEEK_API_KEY=YOUR_DEEPSEEK_API_KEY` |
 | 3. Initialize security signing (one-time) | `.\orz-acaf-provision.exe "$env:USERPROFILE\.orz-acaf\keystore" "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br><br>ACAF is fail-closed by default: unconfigured, it refuses to run (the process starts; runs are refused). | `./orz-acaf-provision "$HOME/.orz-acaf/keystore" "$HOME/.orz-acaf/signer-manifest.json"` |
 | 4. Set startup environment | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
 | 5. Run | `.\orz.exe` (interactive TUI)<br>`.\orz.exe -p "your task" --real` (headless)<br>`.\orz.exe web` (Web workbench; prints the local token-bearing URL) | `./orz` (interactive TUI)<br>`./orz -p "your task" --real` (headless)<br>`./orz web` (Web workbench; prints the local token-bearing URL) |
 
-Release notes and integrity verification live on GitHub Releases (latest [v0.9.5](https://github.com/SilverWhite/orz/releases/tag/v0.9.5), dual-platform packages + `SHA256SUMS`); the 0.1.0–0.5.1 trial packages are under [`releases/`](../../releases/).
+Release notes and integrity verification live on GitHub Releases (latest [v0.9.6](https://github.com/SilverWhite/orz/releases/tag/v0.9.6), dual-platform packages + `SHA256SUMS`); the 0.1.0–0.5.1 trial packages are under [`releases/`](../../releases/).
 
 ### Common entry points
 
@@ -115,6 +115,14 @@ There is no sandbox between the model and the host by default, and deliberately 
 4. **Audit and recovery**: a hash-chained journal with verifier cross-check, read-only `--replay`, an edit-face rollback window, the `orz rollback` undo CLI, and a carrier integrity self-check.
 
 Known boundaries: no defense against a compromised signer, same-user malicious processes, kernel-level compromise, or a malicious model service; a ticket proves provenance, not that a command is wise; command review is best-effort lexical matching — variable expansion, aliases, in-script commands, `.NET`/interpreter calls, encoded payloads, and Windows 8.3 short names / junctions / UNC uncreated faces are still not guaranteed; the maintenance CLI now has the bridge-injected `ORZ_MAINTENANCE_TICKET` gate plus the command-surface block, while a TTY confirmation is not implemented (`0dl` remaining); the `.gsa` shell read surface follows the read-open policy. The real machine runs without a sandbox and permissions default to yolo auto-approval.
+
+## 0.9.6 update (2026-10-21)
+
+- **Terminal declaration**: when this run has execution facts, the final answer ends with `[RUN_END]` (intent/reason/summary); without a declaration the harness nudges at most twice per tool-round episode, then fails open and records `terminal_source`. Short chat is exempt; restored sessions' old edits/plans no longer trigger it.
+- **Counterexample self-check PULL**: new no-argument `self_check` tool, Web toolbar "反例自查", and TUI `Ctrl+G`; returns the three-question template and no longer auto-injects the gate. The resident line is verbatim "请对非日常聊天类的任务调用反例自查。".
+- **submit retired**: removed from the model tool face; delivery status is shown on demand by Web/TUI; the `deliver` terminal step is completed mechanically by `run_end(completed)`.
+- **Contract**: `run_finished` adds `terminal_source`/`terminal_nudged`/`terminal_nudge_count`/`self_check_called`; `gate_decision` accepts `nudge`; schema/fixture/Python/Rust judge synchronized.
+- **Rebuild**: dual-platform 0.9.6 carriers; Windows install swap + ACAF re-provision; Linux static-pie trio.
 
 ## Developer entry points
 

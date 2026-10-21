@@ -4,7 +4,7 @@
 > **本批**＝0.9.5→0.9.6 代窗口：源码推送 → Windows release 重建 → 载体位/装机位换装 →
 > ACAF 重 provision → Linux musl 重建 → 双平台冒烟 → 身份门/清单 → 落账。
 > **源**＝orz `6d98fbab`（325 审查修复批）＋版本 bump `875303bd`（`0.9.5 → 0.9.6`）。
-> **不发 Release、不打 tag**：本批只做重装/换装；GitHub Release 仍为 `v0.9.5`。
+> **已推送** `cli/feat/fusion-architecture`＋`origin/main`；**已发行 GitHub Release `v0.9.6`（Latest）**。
 
 ## §0 结论速览
 
@@ -22,6 +22,7 @@
 | Linux 冒烟 | alpine `RUN-CLI-6ad8725d` rc0；bookworm `RUN-CLI-6ad87262` rc0；两侧 journal 11 events，终态字段同上 |
 | 身份门 | `EXPECTED_CARRIER_SHA256` → **`7416d397…`**；`py_compile` 过、`--help` rc0 |
 | 载体清单 | `D:/tb-eval/orz-windows/carrier-manifest.json`、`D:/tb-eval/orz-linux/carrier-manifest.json` 均 `version=0.9.6`、3 entries |
+| 发行 | GitHub Release `v0.9.6` **Latest**；zip 28,576,979 `4a11f55f…`／tar.gz 37,871,329 `4bb38820…`／顶层 `SHA256SUMS` 191 B `93495e9a…` |
 | 计数 | 63 不变；索引 v4.295→**v4.296** |
 
 ## §1 源与推送
@@ -63,11 +64,21 @@
 
 ## §6 边界
 
-1. **未发行、未打 tag**：GitHub Release 仍 `v0.9.5`；README 发布面保持 0.9.5，避免指向不存在资产。
+1. **已发行**：GitHub Release `v0.9.6`（Latest）；tag 指向发行提交；README 发布面已对齐 0.9.6。
 2. **只换 Windows 装机位**；Linux 为载体位，无 Windows 式安装位。
 3. **Linux `.0.9.5-bak` 缺失**（见 §3）；Windows 备份完整。
 4. 未 `cargo clean`，未删除任何 bak 链或评测数据。
 5. S4 三场景真机（短聊/进度文本/显式自查）仍未跑；S2 交付状态面板仍在待办。
+
+## §8 发行
+
+- GitHub Release：`v0.9.6`，Latest；三资产：
+  - `orz-0.9.6-windows-x86_64.zip` **28,576,979 B** `4a11f55f…`；
+  - `orz-0.9.6-linux-x86_64.tar.gz` **37,871,329 B** `4bb38820…`；
+  - `SHA256SUMS` **191 B** `93495e9a…`。
+- 包内 6 entries（三件套＋README＋SHA256SUMS＋carrier-manifest）；WIN 侧 4/4 OK、Linux 容器 4/4 OK、双平台 `--build-info` 均 0.9.6。
+- README 发布面：解包名／Release 链接／0.9.6 更新节；英文 README 同步 v0.9.6 face。
+- 回下载逐位核证与 `gh release view` 服务端 digest 见发行后补记（本档 §8 后续回执）。
 
 ## §7 关键词
 
