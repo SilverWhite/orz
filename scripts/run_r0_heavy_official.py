@@ -85,8 +85,10 @@ PULL_TRIES = 4
 # 0.9.3 = 4d7917c335c10b11b0cd1cee67a624514ae4509f6e4a97780743ee1d284ec4e3〔0dh/0di 代窗口〕）
 # 0.9.4 代窗口重建源冻结 orz `5ee818d3`（320 批；进件＝319 审查修复批 `41534aee`＋
 # Web `/rewind` 命令表 `995a7345`＋smoke queue_depth `c1d3bd53`＋Windows 8.3 测试 `7516e160`）
+# 0.9.5 代窗口重建源冻结 orz `974d0345`（323 批；进件＝322 摩擦修复批：H1 闩位恢复／
+# 反例门自查跳过＋门后延迟压缩／台账块行上限／visited 工作区与跨根恢复）
 EXPECTED_CARRIER_SHA256 = (
-    'aaa68d4b529bee8417f18f388319f9466e2175189138b84a9c9ecfb3aec012bc'
+    'a409e8733f134e07eadd0bed415fa2c5c6531ee8f95b5e33ffaad37de4911d41'
 )
 # 适配器锁定值（现行 tb_agents/orz.py，含 F1 试次隔离＋0ax ORZ_WEB_SEARCH_LOCAL 透传；
 # 旧值 2737cfadc5c43603b73164b51343e58a671c0efeee8d9ab7a626dda8dae51490）
