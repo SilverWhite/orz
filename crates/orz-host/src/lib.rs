@@ -13,6 +13,7 @@ pub mod browser_serp;
 pub mod carrier_integrity;
 pub mod codex_app;
 pub mod codex_permission;
+mod conversation_repair;
 pub mod credentials;
 mod env_snapshot;
 pub mod grok_home;

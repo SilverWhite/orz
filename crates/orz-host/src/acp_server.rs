@@ -19,7 +19,7 @@ use orz_loop::AgentLoopController;
 use orz_loop::acaf::AcafClient;
 use orz_loop::blackboard::{Blackboard, ExternalRetSection, InternalRetSection};
 use orz_loop::controller::RetrievalMode;
-use orz_loop::gateway::model::{Message, Role, ToolCall};
+use orz_loop::gateway::model::{Message, Role};
 use orz_loop::orientation::OrientationSessionState;
 use orz_loop::prompt::{STATUS_LINE_PREFIX, is_generated_injected_block};
 use orz_workspace::permission::PermissionHookTransport;
@@ -512,6 +512,16 @@ struct StoredConversation {
     /// evidence chain，recall 不建 RST run）。serde default＝旧侧车零迁移。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     recall_log: Vec<RecallRecord>,
+    /// 2026-10-21 恢复修复：本对话源自 journal 机械重构（归档回退/无侧车
+    /// 会话），不是原始侧车的零变换拷贝。装载时据此按当前重构规则重放一次
+    /// journal——修正旧版本按字符串序排 run、保留无结果 tool_calls 的历史
+    /// 产物；journal 已随归档删除时退化为就地配对修复。
+    #[serde(default, skip_serializing_if = "is_false")]
+    reconstructed_from_journal: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// 0di：单次撤回的审计行（设计稿 D4）。
@@ -544,6 +554,7 @@ impl StoredConversation {
             burden_tiers_notified: Vec::new(),
             context_scale_notified: Vec::new(),
             recall_log: Vec::new(),
+            reconstructed_from_journal: false,
         }
     }
 
@@ -576,6 +587,7 @@ impl StoredConversation {
             //（full 构造只装 messages/lif/blackboard，recall_log 由调用方
             // 从被截断的 continuation 转移）。
             recall_log: Vec::new(),
+            reconstructed_from_journal: false,
         }
     }
 }
@@ -2370,9 +2382,20 @@ fn require_session8(session8: &str) -> Result<(), String> {
 /// 从 run journal 机械重构会话对话（0br S3 批三，仅按需归档的无侧车
 /// 回退路径）：`prompt_submitted` → 用户消息、`model_output`（有正文或
 /// 工具调用）→ 助手消息。run 面＝`RUN-{s8}-*` 前缀 ∪ `RUN-CLI-{s8}` 精确
-/// （与三键段 journal 键同一口径），按 run id 排序、run 内 sequence 序。
-/// 零对话事实 ⇒ `None`。产出即「重构事实」，非零变换侧车拷贝——调用方
-/// 在包内保留 `reconstructed_from_journal` 标记。
+/// （与三键段 journal 键同一口径），按 **run 序号数值**排序、run 内 sequence
+/// 序。零对话事实 ⇒ `None`。产出即「重构事实」，非零变换侧车拷贝。
+///
+/// 2026-10-21 恢复修复（两个真机 P0）：
+/// 1. 旧实现按字符串排序 run id，`RUN-…-10` 排在 `RUN-…-2` 之前——十轮以上
+///    的会话被拼成时间乱序（真机 `RUN-c23e0aaa-*` 实测）。现按末尾序号数值
+///    排序，无序号形态（`RUN-CLI-<s8>`）稳定置后。
+/// 2. 旧实现把 `model_output.tool_calls` 原样写入重构对话，但 journal 的
+///    `tool_completed` **不携带工具结果正文**——重构产物必然是一串没有
+///    `tool` 回应的 assistant 声明，下一次 prompt 被 provider 以
+///    “tool_calls must be followed by tool messages” 拒绝。重构面不再保留
+///    调用声明，只保留有正文的助手消息；工具事实仍在 journal，模型需要时
+///    重新调用。调用方在包内保留 `reconstructed_from_journal` 标记，装载
+///    路径据此可重放修正。
 fn reconstruct_conversation_from_journal(
     base_dir: &Path,
     session8: &str,
@@ -2391,7 +2414,7 @@ fn reconstruct_conversation_from_journal(
                 }),
         );
     }
-    ids.sort();
+    ids.sort_by_key(|id| run_sort_key(id));
     if ids.is_empty() {
         return None;
     }
@@ -2400,23 +2423,31 @@ fn reconstruct_conversation_from_journal(
     let mut assistant_rounds = 0u64;
     let mut any_success = false;
     let mut started_at: Option<f64> = None;
+    let mut context_scale_notified: Vec<String> = Vec::new();
     for run_id in &ids {
         let Ok(text) = std::fs::read_to_string(runs_dir.join(run_id).join("events.jsonl")) else {
             continue;
         };
-        for line in text.lines() {
-            let Ok(ev) = serde_json::from_str::<serde_json::Value>(line) else {
-                continue;
-            };
-            if started_at.is_none() {
-                started_at = ev
-                    .get("timestamp")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-                    .map(|t| t.timestamp() as f64);
-            }
+        let events: Vec<serde_json::Value> = text
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .collect();
+        if started_at.is_none() {
+            started_at = events
+                .first()
+                .and_then(|ev| ev.get("timestamp"))
+                .and_then(serde_json::Value::as_str)
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .map(|t| t.timestamp() as f64);
+        }
+        let run_finished = events.iter().any(|ev| {
+            ev.get("event_type").and_then(serde_json::Value::as_str) == Some("run_finished")
+        });
+        let mut run_messages: Vec<Message> = Vec::new();
+        let mut run_assistant_rounds = 0u64;
+        let mut run_context_scale: Vec<String> = Vec::new();
+        for ev in &events {
             match ev.get("event_type").and_then(serde_json::Value::as_str) {
-                Some("run_finished") => any_success = true,
                 Some("prompt_submitted") => {
                     let prompt = ev
                         .get("payload")
@@ -2424,7 +2455,7 @@ fn reconstruct_conversation_from_journal(
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or_default();
                     if !prompt.trim().is_empty() {
-                        messages.push(Message {
+                        run_messages.push(Message {
                             role: Role::User,
                             content: prompt.to_string(),
                             tool_call_id: None,
@@ -2441,39 +2472,73 @@ fn reconstruct_conversation_from_journal(
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or_default()
                         .to_string();
-                    let tool_calls: Vec<ToolCall> = payload
+                    let has_text = !content.trim().is_empty();
+                    let has_calls = payload
                         .and_then(|p| p.get("tool_calls"))
                         .and_then(serde_json::Value::as_array)
-                        .map(|calls| {
-                            calls
-                                .iter()
-                                .filter_map(|c| {
-                                    Some(ToolCall {
-                                        name: c.get("name")?.as_str()?.to_string(),
-                                        arguments: c.get("arguments").cloned().unwrap_or_default(),
-                                        call_id: c
-                                            .get("call_id")
-                                            .and_then(serde_json::Value::as_str)
-                                            .unwrap_or_default()
-                                            .to_string(),
-                                    })
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    if !content.trim().is_empty() || !tool_calls.is_empty() {
-                        assistant_rounds += 1;
-                        messages.push(Message {
+                        .is_some_and(|calls| !calls.is_empty());
+                    if has_text || has_calls {
+                        run_assistant_rounds += 1;
+                    }
+                    // 工具声明不重放（journal 没有结果正文，重放必成孤立声明）；
+                    // 只有正文进入重构对话。
+                    if has_text {
+                        run_messages.push(Message {
                             role: Role::Assistant,
                             content,
                             tool_call_id: None,
-                            tool_calls,
+                            tool_calls: Vec::new(),
                             reasoning_content: None,
                             round: None,
                         });
                     }
                 }
+                // v7 会话级水位：成功 run 的机械审查事实里带已 fire 的
+                // `context_scale:<key>`。旧重构丢失水位 ⇒ 恢复后同一档位
+                // 重发（真机 RUN-c23e0aaa-18 的 192k/256k 重发即此）。
+                Some("mechanical_audit_update") => {
+                    let payload = ev.get("payload");
+                    if payload
+                        .and_then(|p| p.get("kind"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("context_scale")
+                        && let Some(key) = payload
+                            .and_then(|p| p.get("payload"))
+                            .and_then(|p| p.get("key"))
+                            .and_then(serde_json::Value::as_str)
+                            .and_then(|key| key.strip_prefix("context_scale:"))
+                        && !run_context_scale.iter().any(|seen| seen == key)
+                    {
+                        run_context_scale.push(key.to_string());
+                    }
+                }
                 _ => {}
+            }
+        }
+        if run_finished {
+            any_success = true;
+            assistant_rounds += run_assistant_rounds;
+            messages.extend(run_messages);
+            for key in run_context_scale {
+                if !context_scale_notified.iter().any(|seen| seen == &key) {
+                    context_scale_notified.push(key);
+                }
+            }
+        } else if ids.last().is_some_and(|last| last == run_id) {
+            // 最后一个 run 未完成（用户发出后模型/传输失败）：保留用户输入
+            // 本身，丢掉未完成的助手输出。否则恢复后模型看不到用户最后
+            // 一次请求，「继续」会答非所问；保留又不会把失败 run 的中间
+            // 产物混进成功历史。与上一条用户消息重复则跳过（重试同问）。
+            for message in run_messages {
+                if message.role != Role::User {
+                    continue;
+                }
+                if messages.last().is_some_and(|previous| {
+                    previous.role == Role::User && previous.content == message.content
+                }) {
+                    continue;
+                }
+                messages.push(message);
             }
         }
     }
@@ -2496,7 +2561,60 @@ fn reconstruct_conversation_from_journal(
         &Blackboard::default(),
     );
     conversation.blackboard = None; // 重构面无黑板事实，不落默认空黑板
+    conversation.context_scale_notified = context_scale_notified;
+    conversation.reconstructed_from_journal = true;
     Some((conversation, ids))
+}
+
+/// Run-id 排序键：`RUN-{s8}-{n}` / `RST-{s8}-{n}` 按末尾序号**数值**排；
+/// `RUN-CLI-{s8}` 等无序号形态稳定置后（同前缀内按字符串序）。
+fn run_sort_key(run_id: &str) -> (u8, u64, String) {
+    match run_id.rsplit_once('-') {
+        Some((_, suffix)) if suffix.bytes().all(|b| b.is_ascii_digit()) && !suffix.is_empty() => (
+            0,
+            suffix.parse::<u64>().unwrap_or(u64::MAX),
+            run_id.to_string(),
+        ),
+        _ => (1, 0, run_id.to_string()),
+    }
+}
+
+/// `RUN-{s8}-{n}` 序号是否从 0 开始**连续无缺口**（含无头 CLI 单 run）。
+/// 装载侧只在覆盖完整会话时用 journal 重放覆盖侧车——retention 清掉早期
+/// run 后重放只剩后半段，拿它覆盖会丢历史。缺口即拒绝重放、退化为就地
+/// 配对修复。
+fn journal_covers_session(base_dir: &Path, session8: &str) -> bool {
+    let runs = base_dir.join(".gsa").join("runs");
+    let Ok(entries) = std::fs::read_dir(runs) else {
+        return false;
+    };
+    let prefix = format!("RUN-{session8}-");
+    let mut ordinals: Vec<u64> = Vec::new();
+    let mut cli_run = false;
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if name == format!("RUN-CLI-{session8}") {
+            cli_run = true;
+            continue;
+        }
+        let Some(suffix) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if let Ok(ordinal) = suffix.parse::<u64>() {
+            ordinals.push(ordinal);
+        }
+    }
+    if ordinals.is_empty() {
+        return cli_run;
+    }
+    ordinals.sort_unstable();
+    ordinals.dedup();
+    ordinals.first() == Some(&0)
+        && ordinals
+            .windows(2)
+            .all(|pair| pair[1] == pair[0].saturating_add(1))
 }
 
 /// 同步打包阶段：校验原始 sidecar 字节 → gzip → digest（tmp + rename）。
@@ -2782,7 +2900,7 @@ fn journal_key_facts(runs_dir: &Path, suffix: &str, explicit_runs: &[String]) ->
             ids.push(run_id.clone());
         }
     }
-    ids.sort();
+    ids.sort_by_key(|id| run_sort_key(id));
     let mut runs: Vec<serde_json::Value> = Vec::new();
     for run_id in ids {
         let events_path = runs_dir.join(&run_id).join("events.jsonl");
@@ -3462,6 +3580,81 @@ impl AcpServer {
         let restore_count = next_restore_count(&base, session_id).map_err(AcpError::Host)?;
         let mut continuation =
             persisted_continuation.unwrap_or_else(|| StoredConversation::empty(session_id, None));
+        // 2026-10-21 恢复修复：重构侧车（`reconstructed_from_journal`）按当前
+        // 规则重放一次 journal——旧产物可能按字符串序拼 run、且保留没有
+        // 工具结果的 `tool_calls`。重放失败（runs 已随归档删除）时退化为
+        // 就地配对修复；两者都作用于装载内存态并回写侧车，下一次 prompt
+        // 不再把坏形状送进 provider。
+        let suffix: String = session_id.chars().take(8).collect();
+        let mut reloaded_from_journal = false;
+        if continuation.reconstructed_from_journal
+            && let Some((rebuilt, _)) = reconstruct_conversation_from_journal(&base, &suffix)
+        {
+            // 只接受覆盖全部 prompt 的重放：journal 可能已被 retention 清掉
+            // 早期 run，此时重放会比侧车少——不拿残缺历史覆盖现有侧车。
+            let current_users: Vec<&str> = continuation
+                .messages
+                .iter()
+                .filter(|message| message.role == Role::User)
+                .map(|message| message.content.as_str())
+                .collect();
+            let rebuilt_users: Vec<&str> = rebuilt
+                .messages
+                .iter()
+                .filter(|message| message.role == Role::User)
+                .map(|message| message.content.as_str())
+                .collect();
+            // 旧重构会把失败 run 的重复 prompt 拼进来（真机 c23e0aaa：首问
+            // 出现两次），所以重建面 prompt 数可能更少。只有同时满足：
+            // ① journal 序号 0..max 连续；② 侧车确有重复 prompt（污染证据）；
+            // ③ 侧车每个 prompt 都能在重建面找到（不丢任何独有输入）——
+            // 才允许用更少的重建面覆盖。否则保留侧车、只做配对修复。
+            let has_duplicate_prompt = current_users
+                .iter()
+                .enumerate()
+                .any(|(index, prompt)| current_users[..index].contains(prompt));
+            let covers_all_prompts = current_users
+                .iter()
+                .all(|prompt| rebuilt_users.contains(prompt));
+            if rebuilt_users.len() >= current_users.len()
+                || (journal_covers_session(&base, &suffix)
+                    && has_duplicate_prompt
+                    && covers_all_prompts)
+            {
+                continuation.messages = rebuilt.messages;
+                continuation.lif = rebuilt.lif;
+                continuation.temporal_spikes = rebuilt.temporal_spikes;
+                if continuation.session_started_at.is_none() {
+                    continuation.session_started_at = rebuilt.session_started_at;
+                }
+                for key in rebuilt.context_scale_notified {
+                    if !continuation.context_scale_notified.contains(&key) {
+                        continuation.context_scale_notified.push(key);
+                    }
+                }
+                reloaded_from_journal = true;
+            } else {
+                tracing::warn!(
+                    session_id,
+                    current_prompts = current_users.len(),
+                    rebuilt_prompts = rebuilt_users.len(),
+                    has_duplicate_prompt,
+                    covers_all_prompts,
+                    "journal rebuild does not safely cover the sidecar — repairing in place"
+                );
+            }
+        }
+        let tool_pairing =
+            crate::conversation_repair::repair_tool_pairing(&mut continuation.messages);
+        if reloaded_from_journal || tool_pairing.changed() {
+            tracing::warn!(
+                session_id,
+                reloaded_from_journal,
+                ?tool_pairing,
+                "conversation repaired on attach (journal rebuild / tool pairing)"
+            );
+            let _ = persist_conversation_sidecar(&base, &continuation);
+        }
         if continuation.session_started_at.is_none() {
             continuation.session_started_at = Some(now_epoch_secs());
         }
@@ -3507,9 +3700,13 @@ impl AcpServer {
     /// 真实浏览器，属 S4 宿主机实测载体，P9）。
     /// Attach an existing durable conversation to this host process.
     ///
-    /// Loading requires an absolute canonical cwd and an existing sidecar. It
-    /// never runs the 0cy hygiene sweep, and ACP v1 history is replayed via
-    /// `session/update` before the response when a gateway exists.
+    /// Loading requires an absolute canonical cwd and a durable conversation.
+    /// A closed/archived session has no live sidecar (0cy moved it into the
+    /// archive package): load materializes the package's missing pieces
+    /// (the same `unarchive` semantics) so the user does not have to run
+    /// 「存档 → 回档」first. It never runs the 0cy hygiene sweep, and ACP v1
+    /// history is replayed via `session/update` before the response when a
+    /// gateway exists.
     pub async fn handle_session_load_with_options(
         &self,
         session_id: &str,
@@ -3555,6 +3752,23 @@ impl AcpServer {
                 "session_id": session_id,
                 "status": "loaded",
             }));
+        }
+        // 2026-10-21 恢复修复：0cy 收卷后侧车随包移出活区，旧 load 直接
+        // 报 `session not found`——真机只能「存档再回档」才恢复。load 本身
+        // 就是显式恢复动作，按回档语义把包内缺件补回活区（只补缺、绝不
+        // 覆盖），随后走同一条 attach/修复路径。包不存在才报 not found。
+        let suffix: String = session_id.chars().take(8).collect();
+        if load_conversation_sidecar(&base, session_id).is_none() {
+            let package = on_demand_archives_dir(&base).join(format!("{suffix}.json.gz"));
+            if package.is_file() {
+                unarchive_session_on_demand(&base, &suffix)
+                    .await
+                    .map_err(AcpError::Host)?;
+                tracing::info!(
+                    session_id,
+                    "session/load materialized an archived conversation"
+                );
+            }
         }
         if load_conversation_sidecar(&base, session_id).is_none() {
             return Err(AcpError::SessionNotFound(session_id.to_string()));
@@ -3784,6 +3998,18 @@ impl AcpServer {
         let restored_lif = continuation.lif.clone();
         let restored_blackboard = continuation.blackboard.take();
         let mut conversation = std::mem::take(&mut continuation.messages);
+        // 2026-10-21 恢复修复：在装载路径之外再做一次防御性配对修复——
+        // 侧车可能由旧进程/旧归档写入，或 `session/new` 直接复用了坏侧车。
+        // 修正在成功 run 后随 continuation 一并回写；失败 run 保持原侧车，
+        // 下一轮再修（不丢事实）。
+        let tool_pairing = crate::conversation_repair::repair_tool_pairing(&mut conversation);
+        if tool_pairing.changed() {
+            tracing::warn!(
+                session_id,
+                ?tool_pairing,
+                "conversation repaired before prompt (tool pairing)"
+            );
+        }
         let restored_legacy_spikes = continuation.temporal_spikes.clone().unwrap_or_default();
         // 0bf ③（2026-09-22）：会话级负担档位元数据随续接包跨 prompt 延续
         // （SUCCESS-ONLY 纪律：失败 run 不更新；总值＝水位＋繁杂度增益，
@@ -6212,6 +6438,19 @@ mod tests {
             ),
             event(
                 4,
+                "mechanical_audit_update",
+                serde_json::json!({
+                    "kind": "context_scale",
+                    "payload": {
+                        "key": "context_scale:192k",
+                        "round": 1,
+                        "summary": "milestone_tokens=192000",
+                        "anomaly": null
+                    }
+                }),
+            ),
+            event(
+                5,
                 "run_finished",
                 serde_json::json!({"status": "completed"}),
             ),
@@ -6243,12 +6482,30 @@ mod tests {
             "重构标记必须在包内"
         );
         let messages = conversation["messages"].as_array().unwrap();
-        assert_eq!(messages.len(), 3, "用户＋工具轮助手＋正文助手");
+        assert_eq!(
+            messages.len(),
+            2,
+            "用户＋正文助手；无工具结果正文的 tool_calls 声明不得重放"
+        );
         assert_eq!(messages[0]["role"], "user");
         assert_eq!(messages[0]["content"], "处理摩擦项");
         assert_eq!(messages[1]["role"], "assistant");
-        assert_eq!(messages[1]["tool_calls"][0]["name"], "read_file");
-        assert_eq!(messages[2]["content"], "完成报告");
+        assert_eq!(messages[1]["content"], "完成报告");
+        assert!(
+            conversation["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|m| m["tool_calls"]
+                    .as_array()
+                    .is_none_or(|calls| calls.is_empty())),
+            "重构对话不得含孤立 tool_calls"
+        );
+        assert_eq!(
+            conversation["context_scale_notified"],
+            serde_json::json!(["192k"]),
+            "成功 run 的机械审查水位随重构恢复，避免恢复后同档重发"
+        );
         // 三键段 journal 键显式纳入无头 run（前缀扫描不中）。
         let runs = envelope["archive_keys"]["journal"]["runs"]
             .as_array()
@@ -6264,6 +6521,148 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("无可重构"), "{err}");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 恢复修复钉子：重构按 run 末尾序号**数值**排序，不能按字符串序
+    /// （`-10` 会排到 `-2` 前，十轮以上会话时间乱序）。
+    #[tokio::test]
+    async fn archive_reconstruction_orders_run_ordinals_numerically() {
+        use std::io::Write as _;
+        let base = test_dir();
+        let session8 = "6aabf5ec";
+        let runs = base.join(".gsa").join("runs");
+        for (ordinal, prompt, answer) in [(2u64, "第二问", "第二答"), (10, "第十问", "第十答")]
+        {
+            let run_dir = runs.join(format!("RUN-{session8}-{ordinal}"));
+            std::fs::create_dir_all(&run_dir).unwrap();
+            let event = |seq: u64, ty: &str, payload: serde_json::Value| {
+                serde_json::json!({
+                    "schema_version": "0.2.0-draft",
+                    "run_id": format!("RUN-{session8}-{ordinal}"),
+                    "sequence": seq,
+                    "timestamp": "2026-10-21T09:00:00.000000000+00:00",
+                    "event_type": ty,
+                    "payload": payload,
+                })
+            };
+            let mut file = std::fs::File::create(run_dir.join("events.jsonl")).unwrap();
+            for ev in [
+                event(
+                    0,
+                    "prompt_submitted",
+                    serde_json::json!({"prompt": prompt, "character_count": prompt.len()}),
+                ),
+                event(
+                    1,
+                    "model_output",
+                    serde_json::json!({"text": answer, "tool_calls": []}),
+                ),
+                event(
+                    2,
+                    "run_finished",
+                    serde_json::json!({"status": "completed"}),
+                ),
+            ] {
+                writeln!(file, "{ev}").unwrap();
+            }
+        }
+
+        archive_session_on_demand(&base, session8)
+            .await
+            .expect("reconstructed archive");
+        let gz = base
+            .join(".gsa")
+            .join("archives")
+            .join(format!("{session8}.json.gz"));
+        let mut decoder = flate2::read::GzDecoder::new(std::fs::File::open(&gz).unwrap());
+        let mut decoded = Vec::new();
+        std::io::Read::read_to_end(&mut decoder, &mut decoded).unwrap();
+        let envelope: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+        let contents: Vec<&str> = envelope["conversation"]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["content"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            contents,
+            vec!["第二问", "第二答", "第十问", "第十答"],
+            "run 必须按序号数值序拼接"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 恢复修复钉子：重构只收成功 run；最后一个失败 run 只保留用户输入
+    /// （不把失败 run 的中间输出混进成功历史，也不丢用户最后一次请求）。
+    #[test]
+    fn reconstruction_keeps_success_runs_and_trailing_failed_prompt() {
+        use std::io::Write as _;
+        let base = test_dir();
+        let session8 = "6aabf5ed";
+        let runs = base.join(".gsa").join("runs");
+        let write_run = |ordinal: u64, prompt: &str, answer: Option<&str>| {
+            let run_dir = runs.join(format!("RUN-{session8}-{ordinal}"));
+            std::fs::create_dir_all(&run_dir).unwrap();
+            let event = |seq: u64, ty: &str, payload: serde_json::Value| {
+                serde_json::json!({
+                    "schema_version": "0.2.0-draft",
+                    "run_id": format!("RUN-{session8}-{ordinal}"),
+                    "sequence": seq,
+                    "timestamp": "2026-10-21T09:00:00.000000000+00:00",
+                    "event_type": ty,
+                    "payload": payload,
+                })
+            };
+            let mut file = std::fs::File::create(run_dir.join("events.jsonl")).unwrap();
+            let mut seq = 0u64;
+            let mut push = |ty: &str, payload: serde_json::Value| {
+                writeln!(file, "{}", event(seq, ty, payload)).unwrap();
+                seq += 1;
+            };
+            push(
+                "prompt_submitted",
+                serde_json::json!({"prompt": prompt, "character_count": prompt.len()}),
+            );
+            if let Some(answer) = answer {
+                push(
+                    "model_output",
+                    serde_json::json!({"text": answer, "tool_calls": []}),
+                );
+            }
+            if ordinal == 0 {
+                push("run_finished", serde_json::json!({"status": "completed"}));
+            }
+        };
+        write_run(0, "第一问", Some("第一答"));
+        write_run(1, "第一问", Some("失败中间输出"));
+        write_run(2, "最后一问", Some("未完成输出"));
+
+        let (conversation, _) = reconstruct_conversation_from_journal(&base, session8)
+            .expect("successful run reconstructs");
+        let contents: Vec<&str> = conversation
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect();
+        assert_eq!(
+            contents,
+            vec!["第一问", "第一答", "最后一问"],
+            "成功 run 全收；失败 run 的重复问与中间输出丢弃；最后失败 run 保留用户输入"
+        );
+        assert_eq!(
+            conversation.lif.expect("lif").round,
+            1,
+            "LIF 轮数只计成功 run 的模型轮"
+        );
+        assert!(journal_covers_session(&base, session8), "0,1,2 连续覆盖");
+        std::fs::remove_dir_all(runs.join(format!("RUN-{session8}-1"))).unwrap();
+        assert!(
+            !journal_covers_session(&base, session8),
+            "中间缺 run 1 时不得用残缺 journal 覆盖侧车"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -8309,6 +8708,85 @@ mod tests {
             .await;
     }
 
+    /// 恢复修复钉子（真机 P0）：坏侧车里的 assistant tool_calls 没有
+    /// `tool` 回应时，下一次 prompt 绝不能再把它送进 provider——装载时
+    /// 剥离空声明，请求里的历史保持 provider-valid。
+    #[tokio::test]
+    async fn dangling_tool_calls_from_sidecar_never_reach_the_provider() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let mut conversation = StoredConversation::empty("sess-dangle", None);
+                conversation.messages = vec![
+                    Message {
+                        role: Role::User,
+                        content: "旧问题".to_string(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    },
+                    Message {
+                        role: Role::Assistant,
+                        content: String::new(),
+                        tool_call_id: None,
+                        tool_calls: vec![ToolCall {
+                            name: "read_file".to_string(),
+                            arguments: serde_json::json!({"target_file": "a.md"}),
+                            call_id: "c1".to_string(),
+                        }],
+                        reasoning_content: None,
+                        round: None,
+                    },
+                    Message {
+                        role: Role::Assistant,
+                        content: "旧答".to_string(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    },
+                ];
+                persist_conversation_sidecar(&base, &conversation).unwrap();
+
+                let fake = Arc::new(FakeProvider::new(vec![ScriptedResponse::text("新答")]));
+                let server = shadow_server_with_gateway(fake.clone());
+                server
+                    .handle_session_new(
+                        "sess-dangle",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                server
+                    .handle_session_prompt("sess-dangle", "新问题")
+                    .await
+                    .expect("prompt after repair");
+
+                let requests = fake.received_requests();
+                assert_eq!(requests.len(), 1);
+                assert!(
+                    requests[0].messages.iter().all(|m| m.tool_calls.is_empty()),
+                    "provider 请求不得含无回应的 tool_calls: {:?}",
+                    requests[0].messages
+                );
+                let stored = load_conversation_sidecar(&base, "sess-dangle").expect("sidecar");
+                assert_eq!(
+                    stored.messages.len(),
+                    4,
+                    "旧问答（声明已剥离）＋新问答共四条"
+                );
+                assert!(
+                    stored.messages.iter().all(|m| m.tool_calls.is_empty()),
+                    "空声明在装载/成功回写后不得复活"
+                );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
+    }
+
     /// A failed prompt keeps the pre-run conversation — the sidecar is not
     /// overwritten by a failed run's partial messages.
     #[tokio::test]
@@ -9380,6 +9858,83 @@ mod tests {
         assert_eq!(loaded.prompt_count, 1);
         assert_eq!(loaded.restore_count, 1);
         drop(sessions);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 恢复修复钉子：归档会话（活区无侧车）的 `session/load` 自动按回档
+    /// 语义补回侧车，且装载时把旧重构产物里的孤立 tool_calls 修掉——不再
+    /// 要求用户先「存档」再「回档」，也不再让下一条 prompt 撞 provider 的
+    /// “tool_calls must be followed by tool messages”。
+    #[tokio::test]
+    async fn session_load_materializes_archive_and_repairs_tool_pairing() {
+        let base = test_dir();
+        let session = "cccccccc-1111-2222-3333-444455556666";
+        let session8 = &session[..8];
+        let mut conversation = StoredConversation::empty(session, Some(1_700_000_000.0));
+        conversation.messages = vec![
+            Message {
+                role: Role::User,
+                content: "历史问题".to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            },
+            Message {
+                role: Role::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: vec![ToolCall {
+                    name: "read_file".to_string(),
+                    arguments: serde_json::json!({"target_file": "a.md"}),
+                    call_id: "c1".to_string(),
+                }],
+                reasoning_content: None,
+                round: None,
+            },
+            Message {
+                role: Role::Assistant,
+                content: "历史回答".to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            },
+        ];
+        let raw = serde_json::to_vec(&conversation).unwrap();
+        let envelope =
+            build_archive_envelope(Some(&raw), &serde_json::json!({}), None).expect("envelope");
+        let archives = base.join(".gsa").join("archives");
+        std::fs::create_dir_all(&archives).unwrap();
+        let package = archives.join(format!("{session8}.json.gz"));
+        let mut encoder = GzEncoder::new(
+            std::fs::File::create(&package).unwrap(),
+            Compression::default(),
+        );
+        encoder.write_all(&envelope).unwrap();
+        encoder.finish().unwrap();
+
+        let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![])));
+        let response = server
+            .handle_session_load_with_options(
+                session,
+                base.clone(),
+                crate::session::TrustPolicy::Skip,
+                Default::default(),
+                false,
+            )
+            .await
+            .expect("archived session loads");
+        assert_eq!(response["status"], "loaded");
+        assert!(!package.exists(), "load 自动回档后归档包应移除");
+        let stored = load_conversation_sidecar(&base, session).expect("materialized sidecar");
+        assert_eq!(stored.messages.len(), 2, "空声明被剥离");
+        assert!(
+            stored.messages.iter().all(|m| m.tool_calls.is_empty()),
+            "装载修复后不得再有孤立 tool_calls"
+        );
+        assert_eq!(stored.messages[1].content, "历史回答");
+
         let _ = std::fs::remove_dir_all(&base);
     }
 

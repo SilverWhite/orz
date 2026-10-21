@@ -339,10 +339,13 @@ export const vm = {
     btn('stop').enabled = state.running;
     btn('selfcheck').enabled = state.running;
     btn('new').enabled = !state.running && !state.loadingSession;
-    // 只在「查看某会话且该会话不是当前绑定」且侧车带完整 id 时可恢复。
+    // 只在「查看某会话且该会话不是当前绑定」且侧车/归档带完整 id 时可恢复。
+    // 2026-10-21 恢复修复：archive:// 视图同样可恢复（host 侧 load 自动回档）。
     const viewed = state.nav.current.startsWith('conversation://')
       ? state.nav.current.slice('conversation://'.length)
-      : null;
+      : state.nav.current.startsWith('archive://')
+        ? state.nav.current.slice('archive://'.length)
+        : null;
     const rt = state.resumeTarget;
     btn('resume').enabled =
       state.loadingSession ||

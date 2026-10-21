@@ -103,10 +103,18 @@ async function resolveLoadCwd(target) {
   return cwd;
 }
 
-const viewedConversation8 = () =>
-  state.nav.current.startsWith('conversation://')
-    ? state.nav.current.slice('conversation://'.length)
-    : null;
+const viewedConversation8 = () => {
+  const current = state.nav.current;
+  if (current.startsWith('conversation://')) {
+    return current.slice('conversation://'.length);
+  }
+  // 2026-10-21 恢复修复：归档视图本身就是「可恢复的只读会话」——不再要求
+  // 用户先手动回档；工具栏「恢复并继续」据此可用（host 侧 load 自动回档）。
+  if (current.startsWith('archive://')) {
+    return current.slice('archive://'.length);
+  }
+  return null;
+};
 const boundSession8 = () => (acpSessionId ? acpSessionId.slice(0, 8) : null);
 
 /* 只读视图门（318 P1-B1）：归档/运行回放/跨会话回看都是只读历史面。
@@ -754,13 +762,24 @@ async function openArchive(s8) {
     renderAll();
     return;
   }
+  // 2026-10-21 恢复修复：归档详情携带原会话 id 时留下显式恢复目标——
+  // 「恢复并继续」由 host 自动回档（只补缺、不覆盖），不必先手动回档。
+  if (d.session_id && s8 !== boundSession8() && !state.running) {
+    state.resumeTarget = { s8, sessionId: d.session_id, root: state.workspaceCwd };
+  }
+  vm.syncToolbar();
   vm.addSystemMessage(archiveFactsLine(d), false);
   renderArchiveTranscript(d);
   // 归档转写的「最终输出」锚（批四 2026-09-25：标记栏在归档浏览同样可用
   // ——用户锚在转写装填时逐条产生，输出锚按实时视图同规则只定正式输出）。
   vm.anchorFinalOutput();
+  const resumeHint = state.resumeTarget
+    ? '；点「恢复并继续」回档并续接'
+    : state.running
+      ? '（当前有运行在进行；结束后才能恢复）'
+      : '（缺少完整会话标识，不能续接）';
   vm.addSystemMessage(
-    `（归档浏览 ${s8} —— 只读${d.transcript_truncated ? `；转写超上限已截断（${d.messages_shown}/${d.messages_total} 条）` : ''}；点「后退」返回）`,
+    `（归档浏览 ${s8} —— 只读${d.transcript_truncated ? `；转写超上限已截断（${d.messages_shown}/${d.messages_total} 条）` : ''}${resumeHint}；点「后退」返回）`,
     false,
   );
   renderAll();

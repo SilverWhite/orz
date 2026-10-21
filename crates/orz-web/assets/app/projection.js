@@ -29,6 +29,16 @@ function toolCalls(p) {
   }));
 }
 
+/* 2026-10-21 恢复修复：会话恢复后标记栏的 turn 号必须用 run 的会话序号，
+ * 不能从本地 0 重新累加——恢复后 tail 会重放“最新一个 run”，若从 0 起算，
+ * 该 run 的用户输入会被标成 T1（真机 RUN-c23e0aaa-18 实际是 T19）。
+ * run id 是会话级事实：`RUN-{s8}-{n}` 的 n 即 prompt_number，turn = n+1。
+ * `RUN-CLI-{s8}` 等无序号形态回退本地累加（保持旧语义）。 */
+function runTurn(ev) {
+  const m = /^RUN-[0-9a-fA-F]{8}-(\d+)$/.exec(ev?.run_id || '');
+  return m ? Number(m[1]) + 1 : null;
+}
+
 function discloseRolledBackSupplements() {
   const count = state.deliveredSupplements;
   state.deliveredSupplements = 0;
@@ -56,10 +66,12 @@ export function applyJournalEvent(ev) {
       state.gateBlock = null;
       break;
 
-    case 'prompt_submitted':
-      state.turnCounter++;
+    case 'prompt_submitted': {
+      const turn = runTurn(ev);
+      state.turnCounter = turn ?? state.turnCounter + 1;
       vm.addUserMessage(str(p, 'prompt'));
       break;
+    }
 
     /* 0di：中途补充投递——运行中排队的用户输入在主车道 loop-top 生效；
      * 渲染为用户卡（与 prompt_submitted 同面，投递即可见确认）。 */

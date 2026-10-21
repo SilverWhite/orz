@@ -377,6 +377,21 @@ assert.equal(state.marker.some((m) => m.kind === 'hit'), false, '命中已清');
 assert.equal(state.marker.filter((m) => m.kind === 'user' || m.kind === 'model').length, state.marker.length, '锚点必须保留');
 console.log('ok  空白卡根除＋输入/最终输出锚点＋clearHits 保留锚点');
 
+// 2026-10-21 恢复修复：会话恢复后 tail 重放最新 run，turn 号必须取 run
+// 后缀（prompt_number+1），不能从本地 0 重新累加——否则 RUN-…-18 会被
+// 标成 T1，新输入也整体错位。
+state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
+state.marker = [];
+state.turnCounter = 0;
+applyJournalEvent({
+  run_id: 'RUN-abcdef12-17',
+  event_type: 'prompt_submitted',
+  payload: { prompt: '恢复后的续接问题' },
+});
+assert.equal(state.turnCounter, 18, 'turn 必须取 run 序号 17＋1');
+assert.match(state.marker[0]?.label || '', /T18 输入/, '恢复后标记栏不得从 T1 重排');
+console.log('ok  恢复后 turn 号按 run 序号锚定（标记栏）');
+
 /* ── 8. 归档投影钉子（0br S3 新增面 2026-09-25）：API 面／只读转写／
  *    探索器三组重构＋归档动作键＋进行中/未完成语义 ── */
 
@@ -937,6 +952,41 @@ assert.ok(
   '恢复成功文案与状态一致',
 );
 console.log('ok  14.2 显式「恢复并继续」唯一执行 session/load 并切换绑定');
+
+/* 14.2a 归档视图直接恢复：不再要求先手动「回档」——归档详情带 session_id
+ * 时工具栏即可恢复，host 侧 load 自动回档。 */
+resetView();
+state.sessionId = null;
+state.boundSession8 = null;
+state.running = false;
+state.loadingSession = false;
+state.workspaceCwd = 'D:\\CLI\\orz';
+const archiveDoc = {
+  session8: 'cafebabe',
+  session_id: 'cafebabe-1111-2222-3333-444455556666',
+  archived_at: '2026-10-21T09:00:00Z',
+  message_count: 1,
+  messages: [{ role: 'user', content: '归档里的问题' }],
+  archive_keys: {},
+};
+acpMock.loadHandler = (msg, ws) =>
+  wsRespond(ws, msg.id, { session_id: archiveDoc.session_id, status: 'loaded' });
+await withFetch(fallbackApi({ '/api/archives/cafebabe': archiveDoc }), async () => {
+  await ui.openUri('archive://cafebabe');
+  assert.equal(state.resumeTarget?.s8, 'cafebabe', '归档视图必须留下恢复目标');
+  assert.equal(
+    state.toolbar.find((b) => b.id === 'resume')?.enabled,
+    true,
+    '归档视图的「恢复并继续」必须可点（不再要求先回档）',
+  );
+  const before = methodCalls('session/load').length;
+  await ui.resumeConversation();
+  await flush();
+  assert.equal(methodCalls('session/load').length, before + 1, '归档恢复必须走唯一 load 入口');
+});
+assert.equal(state.sessionId, archiveDoc.session_id, '归档恢复成功后切换绑定');
+assert.equal(state.nav.current, 'workspace://live', '归档恢复成功后回到实时视图');
+console.log('ok  14.2a 归档视图直接「恢复并继续」（host 自动回档）');
 
 /* 14.2b load 历史回放去重：host 在 load 返回前经 session/update 回放
  * 整段历史；恢复成功后必须先清空，再进入实时 journal 面——同一段历史
