@@ -27,6 +27,9 @@ export const state = {
     // 0dm（2026-10-21）：反例自查 PULL 入口——运行中经补充队列投递三问；
     // 空闲禁用（由 syncToolbar 按 state.running 同步）。
     { id: 'selfcheck', label: '反例自查', enabled: false },
+    // 0dm S2（2026-10-21）：交付状态只读投影——按需查询侧车 plan 与最近
+    // run 的终态/自查事实（不重算变更清单、不触发模型）。
+    { id: 'delivery', label: '交付状态', enabled: true },
     { id: 'refresh', label: '刷新', enabled: true },
     { id: 'stop', label: '停止', enabled: false },
     { id: 'open', label: '打开', enabled: true },
@@ -44,7 +47,7 @@ export const state = {
   //        或 {kind:'tool', toolName, entries:[{target, detail}], expanded}
   // droppedItems>0 表示最旧条目已裁出内存（性能上限登记：完整事实在
   // journal，渲染面按上限折叠——设计豁免见综合稿 §8）。
-  content: { items: [], currentModelIndex: null, droppedItems: 0 },
+  content: { items: [], currentModelIndex: null, droppedItems: 0, droppedUserCards: 0 },
   marker: [], // {kind:'user'|'hit', label, itemIndex}
   explorerVisible: true,
   markerVisible: true,
@@ -122,13 +125,24 @@ function pushContentItem(item) {
   items.push(item);
   if (items.length > MAX_CONTENT_ITEMS) {
     const drop = items.length - MAX_CONTENT_ITEMS;
+    // 329（2026-10-21）：/rewind 的 ordinal 是「会话第几张用户卡」；内存裁剪
+    // 后本地计数要加上被裁掉的用户卡数，否则可能把撤回目标数到错误的卡。
+    let droppedUserCards = 0;
+    for (let i = 0; i < drop; i++) {
+      const it = items[i];
+      if (it.kind === 'message' && it.role === '用户') droppedUserCards++;
+    }
     items.splice(0, drop);
     state.content.droppedItems += drop;
+    state.content.droppedUserCards = (state.content.droppedUserCards || 0) + droppedUserCards;
     if (state.content.currentModelIndex != null) {
       state.content.currentModelIndex -= drop;
       if (state.content.currentModelIndex < 0) state.content.currentModelIndex = null;
     }
-    for (const m of state.marker) m.itemIndex = Math.max(0, m.itemIndex - drop);
+    // 329（2026-10-21）：裁掉的条目其锚点必须一并移除——旧写法把越界下标
+    // 钳到 0，标记栏会跳到最后也指向错卡；存活锚点统一下移 drop。
+    state.marker = state.marker.filter((m) => m.itemIndex >= drop);
+    for (const m of state.marker) m.itemIndex -= drop;
   }
 }
 
@@ -156,12 +170,15 @@ export const vm = {
     }
     pushContentItem({ kind: 'message', role: '用户', content: sanitizeText(text), turn: state.turnCounter, warning: false, collapsed: false });
     // 标记锚点：每条用户输入一个（走查反馈 2026-09-25：锚定输入与输出）。
-    state.marker.push({
+    // 329（2026-10-21）：锚描述同时挂到条目上（item.anchor），截断/重放后
+    // 可由 vm.rebuildMarkers() 按当前 items 下标重建标记栏。
+    const item = items[items.length - 1];
+    item.anchor = {
       kind: 'user',
       turn: state.turnCounter,
       label: `▸ T${state.turnCounter} 输入`,
-      itemIndex: items.length - 1,
-    });
+    };
+    state.marker.push({ ...item.anchor, itemIndex: items.length - 1 });
   },
 
   addModelMessage(text, turn, warning) {
@@ -180,7 +197,9 @@ export const vm = {
       if (it.kind === 'message' && it.role === '模型' && it.content && it.content.trim()) {
         const last = state.marker[state.marker.length - 1];
         if (last && last.kind === 'model' && last.itemIndex === i) return;
-        state.marker.push({ kind: 'model', turn: it.turn, label: `◆ T${it.turn} 最终输出`, itemIndex: i });
+        // 329（2026-10-21）：锚描述随条目存一份，供标记栏重建复用。
+        it.anchor = { kind: 'model', turn: it.turn, label: `◆ T${it.turn} 最终输出` };
+        state.marker.push({ ...it.anchor, itemIndex: i });
         return;
       }
     }
@@ -211,10 +230,14 @@ export const vm = {
   addArchivedMessage(role, content, turn) {
     pushContentItem({ kind: 'message', role, content: sanitizeText(content), turn: turn || 0, warning: false, collapsed: false });
     if (role === '用户') {
-      state.marker.push({
+      const item = state.content.items[state.content.items.length - 1];
+      item.anchor = {
         kind: 'user',
         turn: turn || 0,
         label: `▸ T${turn || 0} 输入`,
+      };
+      state.marker.push({
+        ...item.anchor,
         itemIndex: state.content.items.length - 1,
       });
     }
@@ -279,6 +302,31 @@ export const vm = {
   clearHits() {
     // 只清搜索命中；输入/输出锚点保留（走查反馈 2026-09-25）。
     state.marker = state.marker.filter((m) => m.kind !== 'hit');
+  },
+
+  /* 329（2026-10-21）：按当前 items 重建标记栏下标。撤回截断/合并重放后
+   * items 已变，历史 marker.itemIndex 是数组下标、会漂移或越界（0.9.7
+   * 真机「标记栏显示与定位均错、旧消息无法定位」的直接原因）。锚语义保持
+   * 不变：用户输入锚按用户卡恢复；最终输出锚随条目存 item.anchor；搜索
+   * 命中锚按下标保留，越界即丢（内容已不在视图）。 */
+  rebuildMarkers() {
+    const rebuilt = [];
+    state.content.items.forEach((item, idx) => {
+      // 用户输入锚可从条目角色直接恢复（旧投影/手工装填的条目也能重建）；
+      // 最终输出锚只能沿用终态时记在条目上的描述。
+      const anchor =
+        item.anchor ||
+        (item.kind === 'message' && item.role === '用户'
+          ? { kind: 'user', turn: item.turn || 0, label: `▸ T${item.turn || 0} 输入` }
+          : null);
+      if (!anchor) return;
+      rebuilt.push({ ...anchor, itemIndex: idx });
+    });
+    for (const m of state.marker) {
+      if (m.kind !== 'hit') continue;
+      if (m.itemIndex >= 0 && m.itemIndex < state.content.items.length) rebuilt.push({ ...m });
+    }
+    state.marker = rebuilt;
   },
 
   // ── StatusBar ──

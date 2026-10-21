@@ -45,6 +45,19 @@ export function fetchConversations(root) {
   return getJson('/api/conversations' + rootParam(root));
 }
 
+/* 329（2026-10-21）：撤回水位投影——`/api/recall` 返回该会话侧车
+ * `recall_log`（按时间序）。前端重放据此裁掉被撤回的旧 tail；端点不可用
+ * （旧载体/后端未起）时调用方按「无水位」处理，不得静默改写历史。 */
+export function fetchRecall(session8, root) {
+  return getJson(`/api/recall?session8=${encodeURIComponent(session8)}${rootParam(root)}`);
+}
+
+/* 329（2026-10-21，0dm S2）：交付状态按需查询——只读投影（侧车 plan ＋
+ * 最近 run 的 run_finished/tool_completed 事实），不含模型调用。 */
+export function fetchDelivery(session8, root) {
+  return getJson(`/api/delivery?session8=${encodeURIComponent(session8)}${rootParam(root)}`);
+}
+
 /* 会话归档只读投影（0br S3 新增面，用户令 2026-09-25）。 */
 export function fetchArchives(root) {
   return getJson('/api/archives' + rootParam(root));

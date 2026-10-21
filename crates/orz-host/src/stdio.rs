@@ -108,7 +108,9 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
                 // The client asks for a new session; the agent generates the ID.
                 let session_id = uuid::Uuid::new_v4().to_string();
                 self.server
-                    .handle_session_new_with_options(
+                    // 329（2026-10-21）：交互式 session/new 不做 0cy 收卷——
+                    // 用户切换/新建会话不得收卷其它会话足迹（328 §6.5）。
+                    .handle_session_new_with_options_no_sweep(
                         &session_id,
                         Some(args.cwd),
                         self.trust_policy,

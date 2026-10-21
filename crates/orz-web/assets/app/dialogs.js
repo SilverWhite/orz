@@ -7,6 +7,10 @@
  */
 
 import { state, vm } from './state.js';
+/* 329（2026-10-21，0dm S2）：交付状态只读投影——请求走 api.js，渲染在
+ * delivery.js（纯函数）；本文件只管弹窗生命周期（加载/错误/空态）。 */
+import { fetchDelivery } from './api.js';
+import { renderDeliveryStatus } from './delivery.js';
 
 const SLASH_COMMANDS = [
   ['/help', '帮助', '打开帮助弹窗'],
@@ -451,5 +455,53 @@ export function openCommand(initial) {
     actionsRow.appendChild(cancel);
     body.appendChild(actionsRow);
     setTimeout(() => input.focus(), 0);
+  });
+}
+
+/* ── 0dm S2（2026-10-21）：交付状态（只读事实投影） ──
+ * 设计 §4.2：`submit` 已从模型面退役，交付由 `[RUN_END]`（intent=conclude /
+ * reason=completed）机械完成；`compute_delivery_status` 依赖 loop 运行时内存
+ * 基线，空闲 UI 不可复算。本面板只读 `/api/delivery`（侧车 plan ＋ 最近 run
+ * 的 run_finished/tool_completed 事实）：不写状态、不发 prompt、不触发模型。
+ * 加载/错误/空态显式呈现；切会话或切视图后迟到的结果作废（同 openRewind）。 */
+export function openDeliveryStatus() {
+  openModal(async (win, body) => {
+    const title = modalTitle('交付状态');
+    win.appendChild(title);
+    const status = document.createElement('div');
+    status.style.margin = '6px 0';
+    body.appendChild(status);
+
+    const s8 = state.boundSession8;
+    if (!s8) {
+      status.textContent =
+        '尚未绑定会话——先打开或恢复一个会话，再查询交付状态（本面板只读，不触发模型）。';
+      return;
+    }
+    status.textContent = `正在读取会话 ${s8} 的交付事实…`;
+    const epoch = state.navEpoch;
+    const root = state.sessionRoot || state.workspaceCwd || '';
+    let data;
+    try {
+      data = await fetchDelivery(s8, root);
+    } catch (e) {
+      status.textContent = `交付状态读取失败：${e.message}（只读投影，未触发模型）`;
+      return;
+    }
+    if (state.boundSession8 !== s8 || state.navEpoch !== epoch) {
+      status.textContent = '会话绑定已变化——本次查询结果作废；请重新打开交付状态。';
+      return;
+    }
+    status.remove();
+    renderDeliveryStatus(body, data);
+
+    const actionsRow = document.createElement('div');
+    actionsRow.className = 'modal-actions';
+    const close = document.createElement('button');
+    close.textContent = '关闭';
+    close.addEventListener('click', closeModal);
+    actionsRow.appendChild(close);
+    body.appendChild(actionsRow);
+    close.focus();
   });
 }

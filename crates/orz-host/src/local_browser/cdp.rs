@@ -163,6 +163,13 @@ const DEFAULT_TOTAL_BUDGET: Duration = Duration::from_secs(60);
 /// Discovery-endpoint HTTP bound (loopback devtools, sub-second in health).
 const HTTP_JSON_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// 329（2026-10-21）：`/json/version` 就绪重试的退避参数——初始 100ms、
+/// 逐次翻倍、上限 200ms。328 §6.3 的真机竞态窗口是秒级（端口文件写于
+/// 19:55:04、失败于 19:55:06、19:58:25 同一端口可用），100–200ms 的探测
+/// 足够密；退避翻倍把 30s 载入预算内的请求数压在几十次以内，不刷日志。
+const DISCOVERY_RETRY_INITIAL: Duration = Duration::from_millis(100);
+const DISCOVERY_RETRY_MAX: Duration = Duration::from_millis(200);
+
 /// 0bx（2026-09-27）：CDP 端点探活的单次连接超时——回环连接，短超时足够。
 const ENDPOINT_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 /// 0bx：端点探活读数 TTL——`ready()` 在每次浏览器调用与 `web_search` 链首
@@ -615,11 +622,19 @@ impl CdpBrowserSession {
             .map_err(|e| CdpError::Spawn(format!("{}: {e}", binary.display())))?;
 
         let port_file = profile_dir.join("DevToolsActivePort");
+        // 329（2026-10-21）：载入预算的唯一起点——端口文件轮询与随后的
+        // `/json/version` 就绪重试共用它；重试只吃剩余时间，不会在
+        // DEFAULT_LOAD_TIMEOUT 之外再开一份载入预算（328 §6.3）。
+        let discovery_deadline = tokio::time::Instant::now() + DEFAULT_LOAD_TIMEOUT;
         let port = poll_devtools_active_port(&port_file, DEFAULT_LOAD_TIMEOUT.as_secs()).await?;
 
         // The probe verifies the endpoint actually answers (not just the
         // port file). The browser ws itself is opened lazily per first call.
-        let version = http_get_json(port, "/json/version").await?;
+        // 329（2026-10-21）：Chrome 先写 DevToolsActivePort、devtools HTTP
+        // 端点稍后才监听，单次探测会偶发 `connect ... 10061`（328 §6.3）；
+        // 改为在剩余载入预算内有界重试。确定性错误（非 200 / 非法长度 /
+        // JSON 解析失败）不重试，仍原样上报 `http_get_json` 的真实 cause。
+        let version = discover_version_with_retry(port, discovery_deadline).await?;
         let ws_url = version["webSocketDebuggerUrl"]
             .as_str()
             .ok_or_else(|| CdpError::Discovery("no webSocketDebuggerUrl in /json/version".into()))?
@@ -3183,6 +3198,103 @@ pub(crate) async fn http_get_json(port: u16, path: &str) -> Result<Value, CdpErr
     .map_err(|_| CdpError::Discovery(format!("http GET {path} timed out after 5s")))?
 }
 
+/// 329（2026-10-21）：发现请求的可重试判定——`http_get_json` 的错误一律是
+/// `CdpError::Discovery(文案)`，这里只按文案前缀分类（不新增错误类型）：
+/// - `connect: ` / `write: ` / `read: `：回环连接被拒（10061）、启动期被
+///   RST、读写 IO 失败，同属「端点还没就绪」，可重试；
+/// - `http GET ... timed out after`：端点接了连接但没回话（仍在启动），
+///   属传输层未就绪，可重试；
+/// - 其余（非 200、非法 Content-Length、响应超 16KB、JSON 解析失败）是
+///   确定性协议错误，重试只会复现同一失败，立即返回（328 §6.3）。
+fn discovery_error_is_retryable(err: &CdpError) -> bool {
+    let CdpError::Discovery(msg) = err else {
+        return false;
+    };
+    ["connect: ", "write: ", "read: ", "http GET "]
+        .iter()
+        .copied()
+        .any(|prefix| msg.starts_with(prefix))
+}
+
+/// 329（2026-10-21）：在 `deadline` 内轮询 `/json/version`，成功即返回——
+/// 修 328 §6.3 的 readiness race（Chrome 先写 `DevToolsActivePort`，HTTP
+/// 端点稍后才监听，旧实现只探测一次，真机偶发 `connect ... 10061`）。
+///
+/// 预算是调用方给的 `deadline`（`launch` 取载入预算
+/// [`DEFAULT_LOAD_TIMEOUT`] 的剩余部分，见 `launch` 中的 `discovery_deadline`），
+/// 不另开预算：deadline 只控制「还能不能再发起一次尝试」，排期不超过
+/// 载入预算的剩余部分；单次请求仍由 [`http_get_json`] 的
+/// [`HTTP_JSON_TIMEOUT`] 收口，故最坏耗时 = 剩余排期 + 最后一次在途请求
+/// （≤5s），不存在 30s 再叠 30s。只对传输层「还没就绪」的失败重试，间隔
+/// [`DISCOVERY_RETRY_INITIAL`] 起、逐次翻倍、上限 [`DISCOVERY_RETRY_MAX`]。
+///
+/// 失败时返回最后一次**真实**错误（`CdpError::Discovery`，cause 文案原样
+/// 保留，不改错误类型）：确定性错误首轮即返回，可重试错误在预算耗尽或
+/// 剩余时间归零时返回。成功路径契约不变——返回的仍是同一份
+/// `/json/version` JSON，`webSocketDebuggerUrl` 由 `launch` 按原逻辑提取。
+///
+/// 日志：单次重试 debug、放弃时 info（带尝试次数与最终 cause）；首轮即
+/// 确定性失败只 debug（调用方会把错误原样上报），不刷日志。
+async fn discover_version_with_retry(
+    port: u16,
+    deadline: tokio::time::Instant,
+) -> Result<Value, CdpError> {
+    let started = tokio::time::Instant::now();
+    let mut attempt: u32 = 0;
+    let mut backoff = DISCOVERY_RETRY_INITIAL;
+    loop {
+        attempt += 1;
+        match http_get_json(port, "/json/version").await {
+            Ok(version) => {
+                if attempt > 1 {
+                    tracing::debug!(
+                        port,
+                        attempts = attempt,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "CDP discovery: /json/version ready after retry"
+                    );
+                }
+                return Ok(version);
+            }
+            Err(err) => {
+                let retryable = discovery_error_is_retryable(&err);
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if !retryable || remaining.is_zero() {
+                    if attempt > 1 {
+                        tracing::info!(
+                            port,
+                            attempts = attempt,
+                            elapsed_ms = started.elapsed().as_millis() as u64,
+                            retryable,
+                            error = %err,
+                            "CDP discovery: giving up on /json/version"
+                        );
+                    } else {
+                        tracing::debug!(
+                            port,
+                            retryable,
+                            error = %err,
+                            "CDP discovery: /json/version failed"
+                        );
+                    }
+                    return Err(err);
+                }
+                // 等待时间也裁到剩余预算内：不在 deadline 之后再空睡一轮。
+                let wait = backoff.min(remaining);
+                tracing::debug!(
+                    port,
+                    attempt,
+                    wait_ms = wait.as_millis() as u64,
+                    error = %err,
+                    "CDP discovery: /json/version not ready, retrying"
+                );
+                tokio::time::sleep(wait).await;
+                backoff = (backoff * 2).min(DISCOVERY_RETRY_MAX);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4115,6 +4227,120 @@ mod tests {
         });
         let err = http_get_json(port, "/json/version").await.unwrap_err();
         assert!(err.to_string().contains("Content-Length"), "{err}");
+        server.abort();
+    }
+
+    /// 329（2026-10-21）：328 §6.3 的就绪竞态——前几次连接被拒（端口空着，
+    /// 回环上就是真实 10061），HTTP 端点起来后一次成功。端口先临时 bind
+    /// 占出再释放，保证「先拒绝、后监听」可复现；监听器在 300ms 后才 bind，
+    /// 因此成功必然来自重试（单次探测会在首轮直接失败）。
+    #[tokio::test]
+    async fn discover_version_with_retry_recovers_after_refused_connections() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let port = {
+            let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            probe.local_addr().unwrap().port()
+        }; // drop → 端口无人监听 → connect 立即被拒
+        let server = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+                .await
+                .expect("test port must still be free");
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut chunk = [0u8; 1024];
+            let _ = stream.read(&mut chunk).await.unwrap();
+            let body = r#"{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/x"}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(resp.as_bytes()).await.unwrap();
+        });
+        let started = tokio::time::Instant::now();
+        let version = discover_version_with_retry(port, started + Duration::from_secs(5))
+            .await
+            .expect("an endpoint that starts late must be retried into success");
+        assert!(
+            version["webSocketDebuggerUrl"]
+                .as_str()
+                .unwrap()
+                .contains("devtools/browser")
+        );
+        // 监听器 300ms 才 bind：成功不可能早于重试时间线（约 100ms + 200ms）。
+        assert!(
+            started.elapsed() >= Duration::from_millis(250),
+            "success must come from retries, took {:?}",
+            started.elapsed()
+        );
+        server.await.unwrap();
+    }
+
+    /// 329（2026-10-21）：deadline 内始终拒绝——返回最后一次真实错误
+    /// （connect/timeout cause 保留）。边界：deadline 只决定「还能不能再发起
+    /// 一次尝试」，**不抢占已在途的单次请求**（`http_get_json` 受
+    /// `HTTP_JSON_TIMEOUT` 5s 收口）；本机对关闭回环端口的 connect 实测可耗
+    /// ~2s（SYN 重试），故上界取 6s 而不是 2s。
+    #[tokio::test]
+    async fn discover_version_with_retry_gives_up_at_deadline() {
+        let port = {
+            let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            probe.local_addr().unwrap().port()
+        }; // drop → 全程无人监听，每次 connect 都被拒
+        let started = tokio::time::Instant::now();
+        let err = discover_version_with_retry(port, started + Duration::from_millis(300))
+            .await
+            .unwrap_err();
+        let elapsed = started.elapsed();
+        let message = err.to_string();
+        assert!(
+            message.contains("connect") || message.contains("timed out"),
+            "last real cause must survive: {message}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(6),
+            "a single in-flight request may consume up to HTTP_JSON_TIMEOUT, took {elapsed:?}"
+        );
+        // 确实尝试过（不是同步短路返回）。
+        assert!(
+            elapsed >= Duration::from_millis(100),
+            "expected bounded retries before giving up, took {elapsed:?}"
+        );
+    }
+
+    /// 329（2026-10-21）：HTTP 非 200 属确定性错误——不重试、立即返回；
+    /// 计数锁死为一次请求（若发生重试，第二次请求会被同一 loop 接受并计数）。
+    #[tokio::test]
+    async fn discover_version_with_retry_fails_fast_on_non_200() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let requests = Arc::new(AtomicU32::new(0));
+        let server_requests = requests.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                server_requests.fetch_add(1, Ordering::SeqCst);
+                let mut chunk = [0u8; 1024];
+                let _ = stream.read(&mut chunk).await;
+                let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+                if stream.write_all(resp.as_bytes()).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let err =
+            discover_version_with_retry(port, tokio::time::Instant::now() + Duration::from_secs(5))
+                .await
+                .unwrap_err();
+        assert!(err.to_string().contains("404"), "{err}");
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            1,
+            "a non-200 response must not be retried"
+        );
         server.abort();
     }
 

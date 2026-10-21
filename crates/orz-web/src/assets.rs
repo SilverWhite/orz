@@ -99,6 +99,13 @@ pub static ASSETS: &[Asset] = &[
         "application/javascript; charset=utf-8",
         "app/widgets.js"
     ),
+    // 329（2026-10-21，0dm S2）：交付状态面板渲染件——dialogs.js 静态 import，
+    // 缺此条目会让 dialogs 整块 404（所有弹窗失效）。
+    asset!(
+        "/assets/app/delivery.js",
+        "application/javascript; charset=utf-8",
+        "app/delivery.js"
+    ),
     asset!(
         "/assets/app/dialogs.js",
         "application/javascript; charset=utf-8",
@@ -134,6 +141,10 @@ mod tests {
         assert!(lookup("/").is_some(), "index must be served at /");
         assert!(lookup("/index.html").is_some());
         assert!(lookup("/assets/app/main.js").is_some());
+        assert!(
+            lookup("/assets/app/delivery.js").is_some(),
+            "0dm S2 交付状态面板渲染件必须随包提供"
+        );
         assert!(lookup("/assets/vendor/98.css").is_some());
         assert!(lookup("/assets/vendor/marked.umd.js").is_some());
         assert!(lookup("/nope").is_none());

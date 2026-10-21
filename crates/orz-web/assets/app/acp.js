@@ -14,6 +14,12 @@ const handlers = {
   permission: null, // (request) => Promise<response>
   closed: null, // () => void
   open: null, // () => void
+  // 329（2026-10-21）：桥的 attach 前置帧——刷新/切换视图后重连到仍在跑的
+  // 会话（`{session_id, reused, prompt_in_flight, grace_secs}`）；null 表示
+  // 新 child（无会话可绑）。
+  attached: null, // (params) => void
+  // 329：桥主动通知（child 退出 / 断线 backlog 截断）——如实上屏，不静默。
+  notice: null, // (kind) => void
 };
 
 function send(obj) {
@@ -83,6 +89,13 @@ export function connect(token) {
       }
       if (msg.method === 'session/update') {
         handlers.update?.(msg.params?.sessionId, msg.params?.update);
+      } else if (msg.method === '_orz/bridge_attached') {
+        // 329：桥先发此帧再补发断线期间的 backlog；绑定与重放由 main.js 决定。
+        handlers.attached?.(msg.params || {});
+      } else if (msg.method === '_orz/bridge_child_exited') {
+        handlers.notice?.('child_exited');
+      } else if (msg.method === '_orz/bridge_backlog_truncated') {
+        handlers.notice?.('backlog_truncated');
       } else if (msg.method === 'session/request_permission') {
         // 必须回应（否则 agent 等待超时）：交给 dialogs 的权限弹窗。
         Promise.resolve(handlers.permission?.(msg.params)).then((result) => {

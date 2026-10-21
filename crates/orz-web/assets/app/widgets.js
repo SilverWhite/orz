@@ -108,6 +108,8 @@ const TOOLBAR_ACTIONS = {
   forward: () => ui.navAction('forward'),
   resume: () => ui.resumeConversation(),
   selfcheck: () => ui.runSelfCheck(),
+  // 0dm S2（2026-10-21）：交付状态只读投影面板（/api/delivery）。
+  delivery: () => ui.openDeliveryStatus(),
   refresh: () => ui.refresh(),
   stop: () => ui.stopRun(),
   open: () => ui.openCommand(),

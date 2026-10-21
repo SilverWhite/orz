@@ -35,7 +35,7 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde_json::json;
 
-use crate::acp_pump::SessionSlot;
+use crate::acp_pump::{AgentBridge, Attach};
 use crate::security;
 
 /// Inbound ACP frame cap (16 MiB): prompts are text; a paste beyond this
@@ -68,7 +68,9 @@ pub struct ServerState {
     /// 已信任工作区后，原工作区不在信任清单里，从探索器消失且切不回来）。
     pub visited: Arc<std::sync::Mutex<Vec<PathBuf>>>,
     pub agent_binary: Arc<PathBuf>,
-    pub session: SessionSlot,
+    /// 329（2026-10-21）：会话保活 supervisor——WS 只是可换的投影面，child
+    /// 生命周期归桥（断线 detach、同区重连 attach、grace 到期回收）。
+    pub bridge: AgentBridge,
 }
 
 impl ServerState {
@@ -356,36 +358,32 @@ async fn ws_acp(
         .max_frame_size(ACP_WS_MAX_MESSAGE_BYTES);
     // 0bv ②（2026-09-26，B 形态）：单会话槽改为**每工作区一槽**——切换工作区
     // 不清场、不杀旧对话子进程；新区可在自身 cwd 下开新会话。新连接按**连接
-    // 时点**的当前 cwd spawn（旧会话占的是它自己的工作区槽）。
+    // 时点**的当前 cwd 解析（旧会话占的是它自己的工作区槽）。
+    //
+    // 329（2026-10-21）：槽由 `AgentBridge` 持有——WS 断开只是 detach，child
+    // 按 `ORZ_WEB_KEEPALIVE_SECS`（默认 30 min）保活；同区重连走 attach 并
+    // 收到 `_orz/bridge_attached` 前置帧（session_id/prompt_in_flight）。只有
+    // 已有 WS 正在 attach 同一工作区时才回 409（避免双 sink 抢写）。
     let cwd = state.cwd();
     let key = cwd.display().to_string();
-    if state.session.is_held(&key).await {
-        return (
+    match state.bridge.attach(&key, &cwd).await {
+        Attach::Busy => (
             StatusCode::CONFLICT,
             Json(json!({"error": {"code": 409, "message": "该工作区已有活动连接（关闭该页后重试）"}})),
         )
-            .into_response();
-    }
-    let slot = state.session.clone();
-    upgrade.on_upgrade(move |socket| async move {
-        // Acquire inside the upgrade so a failed upgrade never leaks the
-        // slot; a race loser gets its socket closed with an explanation.
-        if !slot.try_acquire(&key).await {
-            // Inherent WebSocket::send + drop-close (axum semantics).
-            let mut socket = socket;
-            let _ = socket
-                .send(axum::extract::ws::Message::text(
-                    r#"{"error":{"code":409,"message":"该工作区已有活动连接"}}"#,
-                ))
-                .await;
-            return;
+            .into_response(),
+        Attach::SpawnFailed(message) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": {"code": -32603, "message": message}})),
+        )
+            .into_response(),
+        Attach::Ready(attached) => {
+            let bridge = state.bridge.clone();
+            upgrade.on_upgrade(move |socket| async move {
+                bridge.run_connection(socket, attached).await;
+            })
         }
-        // RAII release: the slot frees on every exit path of `pump`,
-        // including an unexpected panic unwinding through this future.
-        let guard = crate::acp_pump::SlotGuard::new(slot.clone(), key.clone());
-        crate::acp_pump::pump(socket, (*state.agent_binary).clone(), cwd, guard.releaser()).await;
-        drop(guard);
-    })
+    }
 }
 
 async fn ws_journal(
@@ -485,6 +483,74 @@ async fn api_conversations(
         );
     };
     Json(json!({ "conversations": crate::runs::list_conversations(&cwd) })).into_response()
+}
+
+/// 329（2026-10-21）：`/api/recall` —— 会话侧车 `recall_log` 的只读投影。
+/// Web 合并重放据此裁掉被撤回的旧 tail（服务端侧车是唯一真相面；journal
+/// 历史本身不动，见 0di 设计 D4）。
+#[derive(serde::Deserialize)]
+struct RecallQuery {
+    token: Option<String>,
+    session8: Option<String>,
+    #[serde(default)]
+    root: Option<String>,
+}
+
+async fn api_recall(
+    State(state): State<ServerState>,
+    Query(q): Query<RecallQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
+        return resp;
+    }
+    let Some(cwd) = state.resolve_root(q.root.as_deref()) else {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "工作区根不可用（须为当前或已信任工作区）",
+        );
+    };
+    let Some(session8) = q.session8.as_deref() else {
+        return error_response(StatusCode::BAD_REQUEST, "缺少 session8");
+    };
+    match crate::runs::recall_log(&cwd, session8) {
+        Ok(log) => Json(json!({ "session8": session8, "recall_log": log })).into_response(),
+        Err(e) => error_response(StatusCode::BAD_REQUEST, &e),
+    }
+}
+
+/// 329（2026-10-21，0dm S2）：`/api/delivery` —— 交付状态的只读事实投影
+/// （侧车 plan ＋ 最近 run 的 run_finished/tool_completed；不触发模型、
+/// 不重算 loop 运行时的变更清单基线）。
+#[derive(serde::Deserialize)]
+struct DeliveryQuery {
+    token: Option<String>,
+    session8: Option<String>,
+    #[serde(default)]
+    root: Option<String>,
+}
+
+async fn api_delivery(
+    State(state): State<ServerState>,
+    Query(q): Query<DeliveryQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
+        return resp;
+    }
+    let Some(cwd) = state.resolve_root(q.root.as_deref()) else {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "工作区根不可用（须为当前或已信任工作区）",
+        );
+    };
+    let Some(session8) = q.session8.as_deref() else {
+        return error_response(StatusCode::BAD_REQUEST, "缺少 session8");
+    };
+    match crate::delivery::delivery_summary(&cwd, session8) {
+        Ok(summary) => Json(summary).into_response(),
+        Err(e) => error_response(StatusCode::BAD_REQUEST, &e),
+    }
 }
 
 /// Session-archive listing (0br S3 新增面): `.gsa/archives/{s8}.json.gz`
@@ -786,6 +852,9 @@ pub fn router(state: ServerState) -> Router {
         .route("/api/runs", get(api_runs))
         .route("/api/run/{run_id}/events", get(api_run_events))
         .route("/api/conversations", get(api_conversations))
+        // 329（2026-10-21）：/rewind 撤回水位 ＋ 0dm S2 交付状态只读投影。
+        .route("/api/recall", get(api_recall))
+        .route("/api/delivery", get(api_delivery))
         .route("/api/archives", get(api_archives))
         .route(
             "/api/archives/{session8}",
@@ -833,7 +902,7 @@ mod tests {
             cwd: Arc::new(std::sync::RwLock::new(cwd.clone())),
             visited: Arc::new(std::sync::Mutex::new(vec![cwd])),
             agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
-            session: SessionSlot::default(),
+            bridge: AgentBridge::new(PathBuf::from("orz-test-binary"), std::time::Duration::ZERO),
         }
     }
 
@@ -1016,7 +1085,7 @@ mod tests {
             cwd: Arc::new(std::sync::RwLock::new(root.clone())),
             visited: Arc::new(std::sync::Mutex::new(vec![root.clone()])),
             agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
-            session: SessionSlot::default(),
+            bridge: AgentBridge::new(PathBuf::from("orz-test-binary"), std::time::Duration::ZERO),
         };
         let get = |app: axum::Router, uri: String| async move {
             app.oneshot(
@@ -1316,7 +1385,7 @@ mod tests {
             cwd: Arc::new(std::sync::RwLock::new(tmp.clone())),
             visited: Arc::new(std::sync::Mutex::new(vec![tmp.clone()])),
             agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
-            session: SessionSlot::default(),
+            bridge: AgentBridge::new(PathBuf::from("orz-test-binary"), std::time::Duration::ZERO),
         };
         let resolved = state
             .resolve_root(Some(tmp.to_str().unwrap()))
@@ -1340,7 +1409,7 @@ mod tests {
             cwd: Arc::new(std::sync::RwLock::new(a.clone())),
             visited: Arc::new(std::sync::Mutex::new(vec![a.clone()])),
             agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
-            session: SessionSlot::default(),
+            bridge: AgentBridge::new(PathBuf::from("orz-test-binary"), std::time::Duration::ZERO),
         };
         state.set_cwd(b.clone());
         assert!(path_eq(&state.cwd(), &b));

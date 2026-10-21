@@ -12,6 +12,7 @@
 pub mod acp_pump;
 pub mod archives;
 pub mod assets;
+pub mod delivery;
 pub mod journal_tail;
 pub mod runs;
 pub mod security;
@@ -95,6 +96,23 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
         );
     }
     println!("orz web: 仅监听回环地址；Ctrl+C 退出（会一并结束桥接的 orz 会话）");
+    // 329（2026-10-21）：会话保活——WS 断开后 child 仍活（默认 30 min），
+    // 刷新/切视图重连即 attach；0 恢复旧的「断线即杀」。
+    let grace = acp_pump::keepalive_grace_from_env();
+    if grace.is_zero() {
+        println!(
+            "orz web: 会话保活：关闭（{} = 0，断线即回收）",
+            acp_pump::KEEPALIVE_ENV
+        );
+    } else {
+        println!(
+            "orz web: 会话保活：{} 秒（{} 可覆盖；断线期间输出缓存在桥内）",
+            grace.as_secs(),
+            acp_pump::KEEPALIVE_ENV
+        );
+    }
+    let bridge = acp_pump::AgentBridge::new(agent_binary.clone(), grace);
+    bridge.start_reaper();
 
     let state = server::ServerState {
         token: Arc::new(token),
@@ -102,7 +120,7 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
         // 启动 cwd 即本会话第一个「打开过」的工作区（不是持久授信）。
         visited: Arc::new(std::sync::Mutex::new(vec![config.cwd.clone()])),
         agent_binary: Arc::new(agent_binary),
-        session: acp_pump::SessionSlot::default(),
+        bridge,
     };
     server::serve(state, bind).await.map_err(|e| e.to_string())
 }

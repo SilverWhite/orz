@@ -314,6 +314,35 @@ pub fn list_conversations(cwd: &Path) -> Vec<ConversationSummary> {
     out
 }
 
+/// 329（2026-10-21）：会话侧车 `recall_log` 的只读投影（/rewind 撤回水位）。
+///
+/// 侧车只在「打开会话」时读一次全量 JSON——不参与 5 秒一次的探索器轮询。
+/// 无 recall_log（旧侧车/未撤回）返回空数组；坏 id / 缺侧车 / 坏 JSON 都是
+/// 显式错误（调用方按无水位继续，但不得静默伪造）。
+pub fn recall_log(cwd: &Path, session8: &str) -> Result<Vec<Value>, String> {
+    if !session8_is_safe(session8) {
+        return Err(format!("invalid session id: {session8}"));
+    }
+    let path = conversations_dir(cwd).join(format!("{session8}.json"));
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("conversation not found: {e}"))?;
+    let value: Value =
+        serde_json::from_str(&text).map_err(|e| format!("invalid conversation sidecar: {e}"))?;
+    Ok(value
+        .get("recall_log")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
+}
+
+/// 8 lowercase hex chars (the `.gsa` session-file stem shape).
+fn session8_is_safe(session8: &str) -> bool {
+    session8.len() == 8
+        && session8
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,6 +543,40 @@ mod tests {
             Some("6ab3dbe5-1111-2222-3333-444455556666"),
             "head cut inside a multi-byte char must not drop session_id"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 329 钉：recall_log 只读投影（撤回水位）——有则原样返回，无则空数组；
+    /// 坏 id / 缺侧车是显式错误（调用方按无水位继续，但不得静默伪装）。
+    #[test]
+    fn recall_log_projects_sidecar_watermark_and_rejects_bad_ids() {
+        let root = temp_root("recall-log");
+        let dir = root.join(".gsa/conversations");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("0a1b2c3d.json"),
+            r#"{"schema_version":"0.2.0-draft","session_id":"0a1b2c3d-1111-2222-3333-444455556666","messages":[],"recall_log":[{"recalled_at":1760000000.5,"ordinal":2,"removed_messages":4,"remaining_messages":3,"dropped_supplements":0}]}"#,
+        )
+        .unwrap();
+        let log = recall_log(&root, "0a1b2c3d").unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0]["ordinal"], 2);
+        assert_eq!(log[0]["recalled_at"].as_f64(), Some(1760000000.5));
+
+        // 旧侧车（无 recall_log）＝空水位，不是错误。
+        std::fs::write(
+            dir.join("0a1b2c3e.json"),
+            r#"{"schema_version":"0.2.0-draft","session_id":"x","messages":[]}"#,
+        )
+        .unwrap();
+        assert!(recall_log(&root, "0a1b2c3e").unwrap().is_empty());
+
+        // 坏 id（长度/大写/穿越）一律拒绝。
+        assert!(recall_log(&root, "../etc").is_err());
+        assert!(recall_log(&root, "0A1B2C3D").is_err());
+        assert!(recall_log(&root, "0a1b2c3d0").is_err());
+        // 缺侧车是显式错误。
+        assert!(recall_log(&root, "deadbeef").is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

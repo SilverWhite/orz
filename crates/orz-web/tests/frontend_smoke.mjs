@@ -1290,8 +1290,8 @@ assert.equal(state.sessionId, 'cafef00d-1111-2222-3333-444455556666', 'newSessio
 assert.notEqual(state.sessionId, oldSession);
 console.log('ok  14.8 删除已加载会话清空绑定＋newSession 解绑/停 tail（防 sidecar 写回）');
 
-/* 14.9 刷页/关闭风险提示：running/排队/后台任务都必须拦，文案说明只恢复
- *      文本上下文。 */
+/* 14.9 刷页/关闭风险提示（329 口径：子进程保活，刷新可重连）：running/
+ *      排队/后台任务都必须拦，文案说明保活窗口与排队补充/后台任务不恢复。 */
 const unloadHandlers = windowListeners.beforeunload ?? [];
 assert.ok(unloadHandlers.length, 'beforeunload 必须已注册');
 vm.setRunning(true);
@@ -1307,12 +1307,299 @@ const unloadEvent = {
 unloadHandlers.at(-1)(unloadEvent);
 assert.equal(unloadPrevented, true, '存在运行/队列/后台任务时必须拦刷新/关闭');
 const warning = String(unloadEvent.returnValue);
-assert.ok(warning.includes('仅文本上下文'), '必须说明只恢复文本上下文');
+assert.ok(warning.includes('保活'), '329：必须说明子进程保活/刷新可重连');
 assert.ok(warning.includes('后台任务') && warning.includes('排队补充'), '必须点名后台任务/排队补充不恢复');
 vm.setRunning(false);
 state.supplementQueueDepth = 0;
 state.backgroundTasks = 0;
-console.log('ok  14.9 beforeunload 风险面＋「仅文本上下文恢复，后台任务/队列不恢复」文案');
+console.log('ok  14.9 beforeunload 风险面＋「保活窗口/排队补充＋后台任务不恢复」文案');
+
+/* ── 15. 329（2026-10-21）：/rewind 本地投影截断＋同文重发＋重放水位过滤 ──
+ * 0.9.7 真机问题：撤回后标记栏显示/定位均错、旧消息无法再定位。服务端
+ * `_orz/recall` 已正确截断侧车；本段钉子全在 Web 投影面。 */
+
+const userTexts = () =>
+  state.content.items
+    .filter((it) => it.kind === 'message' && it.role === '用户')
+    .map((it) => it.content);
+const messageTexts = () =>
+  state.content.items.filter((it) => it.kind === 'message').map((it) => it.content);
+const markerInBounds = () =>
+  state.marker.every((m) => m.itemIndex >= 0 && m.itemIndex < state.content.items.length);
+
+assert.equal(
+  state.sessionId,
+  'cafef00d-1111-2222-3333-444455556666',
+  '前提：15.x 需要 14.8 留下的活跃绑定（/rewind 只作用于绑定会话）',
+);
+
+/* 15.1 撤回成功：按 ordinal 数用户卡截断 items、marker、turnCounter。 */
+resetView();
+state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
+state.marker = [];
+state.turnCounter = 0;
+applyJournalEvent({ run_id: 'RUN-cafef00d-1', event_type: 'prompt_submitted', payload: { prompt: '问题一' } });
+applyJournalEvent({ event_type: 'model_output', payload: { text: '回答一' } });
+applyJournalEvent({ event_type: 'run_finished', payload: { status: 'completed' } });
+applyJournalEvent({ run_id: 'RUN-cafef00d-2', event_type: 'prompt_submitted', payload: { prompt: '问题二' } });
+applyJournalEvent({ event_type: 'model_output', payload: { text: '回答二' } });
+applyJournalEvent({ event_type: 'run_finished', payload: { status: 'completed' } });
+assert.deepEqual(userTexts(), ['问题一', '问题二'], '前提：本地视图有两张用户卡');
+assert.equal(state.turnCounter, 3, '前提：第二 run 的 turn 为 3');
+const itemsBeforeRecall = state.content.items.length;
+
+acpMock.recallPreviewHandler = (msg, ws) => wsRespond(ws, msg.id, { messages: [] });
+await ui.rewindPreview();
+acpMock.recallHandler = (msg, ws) =>
+  wsRespond(ws, msg.id, { recalled: true, recall_text: '问题二', removed_messages: 4, dropped_supplements: 0 });
+const recallResult = await ui.rewindRecall(2);
+assert.equal(recallResult?.recalled, true, '撤回必须把服务端结果原样返回（dialogs 回填依赖）');
+assert.deepEqual(userTexts(), ['问题一'], '第 2 张用户卡及其后全部条目必须删除');
+assert.ok(state.content.items.length < itemsBeforeRecall, 'items 必须缩短');
+assert.equal(state.content.currentModelIndex, null, '截断后流式指针必须复位');
+assert.equal(state.turnCounter, 2, 'turnCounter 必须取截断后最后一张用户卡的 turn');
+assert.equal(markerInBounds(), true, '截断后 marker 下标不得越界');
+assert.equal(state.marker.filter((m) => m.kind === 'user').length, 1, '只保留幸存用户卡的输入锚');
+assert.equal(state.marker.filter((m) => m.kind === 'model').length, 1, '幸存运行的最终输出锚保留');
+assert.equal(
+  state.content.items[state.marker.find((m) => m.kind === 'model').itemIndex]?.content,
+  '回答一',
+  '最终输出锚必须指向幸存模型卡',
+);
+assert.ok(
+  state.content.items.some((it) => it.role === '系统' && it.content.includes('已撤回 4 条消息')),
+  '撤回回执仍须落在内容面（可回查）',
+);
+
+// 搜索命中锚：重建时有效下标保留、越界即丢（内容已不在视图）。
+vm.addSearchHit('L0', 0);
+state.marker.push({ kind: 'hit', label: '● 越界', itemIndex: state.content.items.length + 3 });
+vm.rebuildMarkers();
+assert.ok(
+  state.marker.some((m) => m.kind === 'hit' && m.label === '● L0' && m.itemIndex === 0),
+  '有效搜索命中锚重建后保留',
+);
+assert.equal(
+  state.marker.some((m) => m.kind === 'hit' && m.label === '● 越界'),
+  false,
+  '越界搜索命中锚重建即丢',
+);
+vm.clearHits();
+console.log('ok  15.1 撤回成功：items 截断＋marker 重建＋turnCounter 回退');
+
+/* 15.2 撤回后同文重发不再被去重吞：被撤回的用户卡已删除，去重窗口只看
+ * 最近一条用户消息（问题一），同文「问题二」必须重新入卡并产新输入锚。 */
+vm.addUserMessage('问题二');
+assert.deepEqual(userTexts(), ['问题一', '问题二'], '撤回后同文重发必须产生新用户卡');
+const newUserAnchor = state.marker.filter((m) => m.kind === 'user').at(-1);
+assert.match(newUserAnchor?.label || '', /T2 输入/, '重发必须产生新的输入锚');
+assert.equal(
+  state.content.items[newUserAnchor.itemIndex]?.content,
+  '问题二',
+  '新输入锚必须指向重发的卡',
+);
+console.log('ok  15.2 撤回后同文重发重新入卡并产新输入锚（去重窗口＝最近一条）');
+
+/* 15.3 本地视图找不到第 ordinal 张用户卡：不瞎截、不抛错，如实提示并
+ * 保留服务端结果（只读回放/本地已裁掉场景）。 */
+const itemsBeforeMiss = state.content.items.length;
+await ui.rewindPreview();
+acpMock.recallHandler = (msg, ws) =>
+  wsRespond(ws, msg.id, { recalled: true, recall_text: '', removed_messages: 1, dropped_supplements: 0 });
+const missResult = await ui.rewindRecall(9);
+assert.equal(missResult?.recalled, true, '找不到序号也必须保留服务端结果');
+assert.deepEqual(userTexts(), ['问题一', '问题二'], '找不到第 ordinal 张用户卡时不得瞎截');
+assert.equal(
+  state.content.items.length,
+  itemsBeforeMiss + 1,
+  '未截断时只应新增一条说明系统行（不得删卡）',
+);
+assert.ok(
+  messageTexts().some((t) => t.includes('本地视图不含第 9 条用户消息')),
+  '必须如实提示「本地视图已不含该序号，未做本地截断」',
+);
+console.log('ok  15.3 本地缺该序号：不瞎截＋如实提示＋保留服务端结果');
+
+/* 15.4 scrollToItem 越界：显式提示、不抛错、不读 undefined 崩溃。 */
+connBanner.textContent = '';
+assert.doesNotThrow(
+  () => ui.scrollToItem(state.content.items.length + 5),
+  '越界标记跳转不得抛错',
+);
+assert.ok(connBanner.textContent.includes('已不在视图中'), '越界必须显式提示（不静默）');
+assert.doesNotThrow(() => ui.scrollToItem(0), '在界内的标记跳转保持可用');
+console.log('ok  15.4 scrollToItem 越界显式提示（不静默/不崩溃）');
+
+/* 15.4b 内存裁剪后的 ordinal 轴：被裁掉的用户卡计入序号，不得把撤回目标
+ * 数到错误的本地卡（droppedUserCards=1 时，服务器第 2 张＝本地第 1 张）。 */
+resetView();
+state.content = { items: [], currentModelIndex: null, droppedItems: 1, droppedUserCards: 1 };
+state.marker = [];
+state.turnCounter = 0;
+vm.addUserMessage('本地第二张');
+vm.addUserMessage('本地第三张');
+await ui.rewindPreview();
+acpMock.recallHandler = (msg, ws) =>
+  wsRespond(ws, msg.id, { recalled: true, recall_text: '本地第二张', removed_messages: 2, dropped_supplements: 0 });
+await ui.rewindRecall(2);
+assert.deepEqual(
+  userTexts(),
+  [],
+  '服务器第 2 张用户卡＝本地第 1 张：必须把它及之后裁掉（不得数到本地第 2 张）',
+);
+assert.equal(state.turnCounter, 0, '本地已无用户卡时 turnCounter 归 0');
+console.log('ok  15.4b 内存裁剪后 ordinal 轴仍对齐（droppedUserCards）');
+
+/* 15.5 重放按 recall_log 过滤：第一条 run 被撤回裁掉尾部，第二条 run 在
+ * 撤回之后 → 只保留前段＋第二条。 */
+const TS_BASE = Date.parse('2026-10-21T00:00:00Z');
+const at = (sec) => new Date(TS_BASE + sec * 1000).toISOString();
+const journalEvent = (runId, sec, type, payload = {}) => ({
+  run_id: runId,
+  timestamp: at(sec),
+  event_type: type,
+  payload,
+});
+const runOneEvents = [
+  journalEvent('RUN-bcc0ffee-1', 1, 'prompt_submitted', { prompt: '旧问题一' }),
+  journalEvent('RUN-bcc0ffee-1', 2, 'model_output', { text: '旧回答一' }),
+  journalEvent('RUN-bcc0ffee-1', 3, 'prompt_submitted', { prompt: '旧问题二' }),
+  journalEvent('RUN-bcc0ffee-1', 4, 'model_output', { text: '旧回答二' }),
+  journalEvent('RUN-bcc0ffee-1', 5, 'run_finished', { status: 'completed' }),
+];
+const runTwoEvents = [
+  journalEvent('RUN-bcc0ffee-2', 7, 'prompt_submitted', { prompt: '新问题三' }),
+  journalEvent('RUN-bcc0ffee-2', 8, 'model_output', { text: '新回答三' }),
+  journalEvent('RUN-bcc0ffee-2', 9, 'run_finished', { status: 'completed' }),
+];
+const recallEventsApi = (eventsByRun, recallLog) => async (url) => {
+  const u = String(url);
+  if (u.includes('/api/recall')) return jsonResponse({ session8: 'bcc0ffee', recall_log: recallLog });
+  if (u.includes('/api/run/')) {
+    const m = /\/api\/run\/([^/?]+)\/events/.exec(u);
+    const runId = m ? decodeURIComponent(m[1]) : '';
+    return jsonResponse({ lines: eventsByRun[runId] || [], next_offset: 0 });
+  }
+  if (u.includes('/api/runs')) return jsonResponse({ runs: [] });
+  if (u.includes('/api/conversations')) return jsonResponse({ conversations: [] });
+  if (u.includes('/api/archives')) return jsonResponse({ archives: [] });
+  return jsonResponse({});
+};
+
+resetView();
+state.conversations = [
+  { session8: 'bcc0ffee', session_id: 'bcc0ffee-1111-2222-3333-444455556666', root: 'D:\\CLI\\orz' },
+];
+state.runs = [
+  { run_id: 'RUN-bcc0ffee-2', status: 'completed' },
+  { run_id: 'RUN-bcc0ffee-1', status: 'completed' },
+];
+await withFetch(
+  recallEventsApi(
+    { 'RUN-bcc0ffee-1': runOneEvents, 'RUN-bcc0ffee-2': runTwoEvents },
+    [{ ordinal: 2, recalled_at: TS_BASE / 1000 + 6, removed_messages: 3 }],
+  ),
+  async () => {
+    await ui.openUri('conversation://bcc0ffee');
+  },
+);
+assert.deepEqual(
+  userTexts(),
+  ['旧问题一', '新问题三'],
+  '撤回水位：第 2 张用户卡及其后旧 tail 被裁，recall 之后的新 run 保留',
+);
+assert.ok(messageTexts().includes('旧回答一'), '撤回点之前的回答保留');
+assert.equal(messageTexts().includes('旧回答二'), false, '被撤回的旧回答不得在重放中复活');
+assert.equal(messageTexts().includes('旧问题二'), false, '被撤回的旧问题不得在重放中复活');
+assert.ok(messageTexts().includes('新回答三'), 'recall 之后的 run 正常重放');
+assert.equal(state.turnCounter, 3, '过滤重放后 turnCounter 取最后一个保留 run 的序号');
+assert.equal(markerInBounds(), true, '重放后 marker 下标不得越界');
+assert.equal(
+  messageTexts().some((t) => t.includes('无终态')),
+  false,
+  '撤回裁掉终态不得误报「历史未完成」',
+);
+assert.equal(state.marker.filter((m) => m.kind === 'model').length, 1, '只保留 recall 之后 run 的最终输出锚');
+assert.equal(
+  state.content.items[state.marker.find((m) => m.kind === 'model').itemIndex]?.content,
+  '新回答三',
+  '重放后的最终输出锚必须指向保留的模型卡',
+);
+console.log('ok  15.5 合并重放按 recall_log 过滤（前段保留＋撤回后 run 保留）');
+
+/* 15.6 多条 recall 级联：按 recalled_at 升序依次应用（乱序日志也必须按
+ * 时间序）；只应用最后一条会把「旧回答一」一起裁掉，这里正是反例钉。 */
+resetView();
+state.runs = [
+  { run_id: 'RUN-bcc0ffee-2', status: 'completed' },
+  { run_id: 'RUN-bcc0ffee-1', status: 'completed' },
+];
+await withFetch(
+  recallEventsApi(
+    { 'RUN-bcc0ffee-1': runOneEvents, 'RUN-bcc0ffee-2': runTwoEvents },
+    [
+      { ordinal: 2, recalled_at: TS_BASE / 1000 + 10, removed_messages: 3 }, // 后发生（日志乱序）
+      { ordinal: 2, recalled_at: TS_BASE / 1000 + 6, removed_messages: 3 }, // 先发生
+    ],
+  ),
+  async () => {
+    await ui.openUri('conversation://bcc0ffee');
+  },
+);
+assert.deepEqual(userTexts(), ['旧问题一'], '两条 recall 级联后只剩第一段');
+assert.ok(
+  messageTexts().includes('旧回答一'),
+  '第一条 recall 裁掉的是旧问题二之后；旧回答一必须存活（只取最后一条的反例）',
+);
+assert.equal(messageTexts().includes('旧回答二'), false, '第一条 recall 裁掉旧回答二');
+assert.equal(messageTexts().includes('新问题三'), false, '第二条 recall 裁掉 recall 之后的新 run');
+assert.equal(messageTexts().includes('新回答三'), false, '第二条 recall 裁掉新回答');
+console.log('ok  15.6 多条 recall 按时间序级联（非只取最后一条）');
+
+/* 15.6b 撤回后没有新事件：游标扫描不会触发，收尾仍须按序应用水位——
+ * 否则「只撤回、未重发」的会话重开会把被撤回的旧 tail 带回来。 */
+resetView();
+state.runs = [{ run_id: 'RUN-bcc0ffee-1', status: 'completed' }];
+await withFetch(
+  recallEventsApi(
+    { 'RUN-bcc0ffee-1': runOneEvents },
+    [{ ordinal: 2, recalled_at: TS_BASE / 1000 + 10, removed_messages: 3 }],
+  ),
+  async () => {
+    await ui.openUri('conversation://bcc0ffee');
+  },
+);
+assert.deepEqual(userTexts(), ['旧问题一'], 'recall 之后无新事件时仍须应用水位（裁掉旧 tail）');
+assert.ok(messageTexts().includes('旧回答一'), '撤回点之前的内容保留');
+assert.equal(messageTexts().includes('旧回答二'), false, '无新事件也不得复活被撤回内容');
+console.log('ok  15.6b 撤回后无新事件：收尾仍应用水位');
+
+/* 15.7 水位端点不可用：catch 成「无水位」，打开会话不失败、按原全量重放。 */
+resetView();
+state.runs = [{ run_id: 'RUN-bcc0ffee-1', status: 'completed' }];
+await withFetch(
+  async (url) => {
+    const u = String(url);
+    if (u.includes('/api/recall')) {
+      return { ok: false, status: 500, json: async () => ({ error: { message: 'recall endpoint unavailable' } }) };
+    }
+    if (u.includes('/api/run/')) return jsonResponse({ lines: runOneEvents, next_offset: 0 });
+    if (u.includes('/api/runs')) return jsonResponse({ runs: [] });
+    if (u.includes('/api/conversations')) return jsonResponse({ conversations: [] });
+    if (u.includes('/api/archives')) return jsonResponse({ archives: [] });
+    return jsonResponse({});
+  },
+  async () => {
+    await ui.openUri('conversation://bcc0ffee');
+  },
+);
+assert.deepEqual(
+  userTexts(),
+  ['旧问题一', '旧问题二'],
+  '水位端点失败必须按无水位继续（不得让打开会话失败）',
+);
+assert.ok(messageTexts().includes('旧回答二'), '无水位时保持原全量重放（旧行为不变）');
+console.log('ok  15.7 /api/recall 不可用：按无水位继续＋原全量重放');
 
 console.log('\nfrontend smoke: 全部通过');
 process.exit(0);

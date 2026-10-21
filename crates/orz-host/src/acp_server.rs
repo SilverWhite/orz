@@ -3520,6 +3520,29 @@ impl AcpServer {
         .await
     }
 
+    /// 329（2026-10-21，328 §6.5 用户主权裁决）：**交互式 ACP `session/new`
+    /// 不做 0cy 收卷**——会话生命周期归用户手动；sweep 只留给启动侧遗留
+    /// 扫描（`orz-bin` run 起点）与显式维护命令。0cy 的「新对话新台账」
+    /// 语义由启动侧扫描承接，不靠一次点击新建就删掉别的会话足迹。
+    pub async fn handle_session_new_with_options_no_sweep(
+        &self,
+        session_id: &str,
+        base_dir: Option<PathBuf>,
+        trust_policy: crate::session::TrustPolicy,
+        policy: PermissionPolicy,
+        retrieval_enabled: bool,
+    ) -> Result<serde_json::Value, AcpError> {
+        self.attach_session_with_options(
+            session_id,
+            base_dir,
+            trust_policy,
+            policy,
+            retrieval_enabled,
+            false,
+        )
+        .await
+    }
+
     async fn attach_session_with_options(
         &self,
         session_id: &str,
@@ -9865,6 +9888,43 @@ mod tests {
         assert_eq!(loaded.prompt_count, 1);
         assert_eq!(loaded.restore_count, 1);
         drop(sessions);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 329 钉（328 §6.5）：交互式 `session/new` 不触发 0cy 收卷——点「新建
+    /// 会话」不得收卷兄弟会话足迹；sweep 只留给启动侧扫描/显式维护命令。
+    #[tokio::test]
+    async fn interactive_session_new_does_not_sweep_sibling_sessions() {
+        let base = test_dir();
+        let sibling = "dddddddd-1111-2222-3333-444455556666";
+        let fresh = "eeeeeeee-1111-2222-3333-444455556666";
+        hygiene_seed_sidecar(&base, sibling, "keep me");
+        let runs = base.join(".gsa").join("runs");
+        std::fs::create_dir_all(runs.join(format!("RUN-{}-0", &sibling[..8]))).unwrap();
+
+        let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![])));
+        server
+            .handle_session_new_with_options_no_sweep(
+                fresh,
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+                Default::default(),
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            base.join(".gsa")
+                .join("conversations")
+                .join(format!("{}.json", &sibling[..8]))
+                .exists(),
+            "interactive session/new must not sweep a sibling sidecar"
+        );
+        assert!(
+            runs.join(format!("RUN-{}-0", &sibling[..8])).exists(),
+            "interactive session/new must not remove a sibling run directory"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 

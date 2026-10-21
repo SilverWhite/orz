@@ -6,7 +6,7 @@
  */
 
 import { state, vm } from './state.js';
-import { setToken, fetchBoot, fetchConversations, fetchArchives, fetchArchive, postArchive, unarchiveSession, deleteSession, grantTrust, switchWorkspace } from './api.js';
+import { setToken, fetchBoot, fetchConversations, fetchArchives, fetchArchive, postArchive, unarchiveSession, deleteSession, grantTrust, switchWorkspace, fetchRecall } from './api.js';
 import * as acp from './acp.js';
 import { refreshRuns, replayRun, tailRun, closeTail } from './journal.js';
 import { applyJournalEvent, applyAcpUpdate } from './projection.js';
@@ -438,6 +438,30 @@ async function syncLiveTail() {
     // 是 `RUN-<s8>-*`；只认这两种，ARC/RST 永不跟随。
     const mine = runs.find((r) => isSessionRunId(r.run_id, s8));
     if (!mine) return; // 新会话首 prompt 前：空实时窗等待
+    // 329（2026-10-21）：撤回后实时窗不得把被撤回的旧 run 从头重放。
+    // 只有「本会话最新 run 在最近一次撤回时刻之前已结束」时跳过它；撤回后
+    // 新起的 run（或仍在跑的 run）照常尾随。
+    if (mine.status !== 'running') {
+      let recalledAt = 0;
+      try {
+        const recall = await fetchRecall(s8, tailRoot);
+        for (const record of recall?.recall_log || []) {
+          recalledAt = Math.max(recalledAt, Number(record?.recalled_at) || 0);
+        }
+      } catch {
+        /* 无水位（旧载体/端点不可用）：按原样尾随，不阻断实时面 */
+      }
+      if (recalledAt > 0 && Number(mine.modified_ms) <= recalledAt * 1000) {
+        currentRunId = mine.run_id; // 标记已处理：别每 5 秒重复提示/重放
+        state.liveRunId = null;
+        vm.addSystemMessage(
+          '（撤回后实时窗从下一个 run 开始；被撤回的旧运行不再重放，历史经会话回看）',
+          false,
+        );
+        renderAll();
+        return;
+      }
+    }
     wanted = mine.run_id;
   } else {
     wanted = state.runs[0]?.run_id ?? null;
@@ -510,6 +534,8 @@ async function openRunReplay(runId) {
   } catch (e) {
     vm.addSystemMessage(`（运行 ${runId} 读取失败：${e.message}）`, true);
   }
+  // 329（2026-10-21）：重放后按 items 重建标记栏下标（单 run 回放同样适用）。
+  vm.rebuildMarkers();
   // 318 P1-B4：无终态的旧 run 是历史未完成，绝不冒充「运行中」。
   if (!sawTerminal) {
     vm.addSystemMessage(`（运行 ${runId} 无终态事件——历史未完成；不代表当前运行中）`, true);
@@ -531,6 +557,117 @@ async function returnToLive() {
   vm.syncToolbar();
   renderAll();
   await startTail();
+}
+
+/* 329（2026-10-21）：撤回水位重放过滤（/api/recall 的 recall_log）。
+ * 服务端 /rewind 只截断侧车；journal 历史不动。合并重放若按全量 journal
+ * 铺开，被撤回的旧 tail 会复活。因此有 recall_log 时才缓冲事件，按撤回
+ * 时刻把「第 ordinal 个用户消息事件」及其后内容裁掉；无水位仍走逐 run
+ * 流式重放（性能不变）。口径与服务端一致：ordinal 数用户消息事件，
+ * prompt_submitted 与 supplement_delivered 都算。 */
+const RECALL_FILTER_MAX_EVENTS = 200000;
+
+const isUserMessageEvent = (ev) =>
+  ev?.event_type === 'prompt_submitted' || ev?.event_type === 'supplement_delivered';
+
+/* 按 recalled_at 升序应用水位；同一时刻多条 recall 按日志顺序依次应用。
+ * 事件缺/坏 timestamp 视为「早于 recall」：不触发比较，随所在前段保留/
+ * 被裁；只 console.debug 记一次，不刷屏。 */
+function filterEventsByRecall(events, recallLog) {
+  const recalls = (recallLog || [])
+    .map((r, order) => ({ at: Number(r?.recalled_at), ordinal: Number(r?.ordinal), order }))
+    .filter((r) => Number.isFinite(r.at) && Number.isInteger(r.ordinal) && r.ordinal > 0)
+    .sort((a, b) => a.at - b.at || a.order - b.order);
+  const kept = [];
+  let cursor = 0;
+  let badTimestampLogged = false;
+  const applyRecall = (recall) => {
+    let seen = 0;
+    for (let i = 0; i < kept.length; i++) {
+      if (!isUserMessageEvent(kept[i])) continue;
+      seen++;
+      if (seen === recall.ordinal) {
+        kept.length = i;
+        return;
+      }
+    }
+    console.debug(`[rewind] 撤回水位 ordinal ${recall.ordinal} 在重放事件中无可裁用户消息`);
+  };
+  for (const ev of events) {
+    const ts = Date.parse(ev?.timestamp);
+    if (!Number.isFinite(ts) && !badTimestampLogged) {
+      badTimestampLogged = true;
+      console.debug('[rewind] 事件缺/坏 timestamp，按早于撤回处理', ev?.event_id ?? ev?.event_type ?? '');
+    }
+    while (cursor < recalls.length && Number.isFinite(ts) && ts >= recalls[cursor].at * 1000) {
+      applyRecall(recalls[cursor]);
+      cursor++;
+    }
+    kept.push(ev);
+  }
+  // 撤回后没有新事件的会话：上面的循环不会触发，收尾仍须按序应用剩余
+  // 水位——否则「只撤回、未重发」的会话重放时仍会带回被撤回的旧 tail。
+  // 多条水位继续按时间序级联（后一条的 ordinal 以前一条裁完后的会话为准）。
+  while (cursor < recalls.length) {
+    applyRecall(recalls[cursor]);
+    cursor++;
+  }
+  return kept;
+}
+
+/* 329（2026-10-21）：合并重放入口。无 recall_log 时保持逐 run 流式重放
+ * （不改变性能）；有水位时缓冲全部事件，过滤后逐事件重放。事件数超过
+ * 上限则放弃过滤：已缓冲前缀原样重放、其余恢复流式，并如实提示。返回
+ * 无终态 run 数（按 journal 原始事件统计，撤回裁掉终态不算「未完成」）。 */
+async function replayConversationMerged(s8, ordered, recallLog) {
+  let unfinished = 0;
+  if (!recallLog.length) {
+    for (const run of ordered) {
+      let sawTerminal = false;
+      await replayRun(run.run_id, (ev) => {
+        if (isTerminalEvent(ev)) sawTerminal = true;
+        applyJournalEvent(ev);
+      });
+      if (!sawTerminal) unfinished++;
+    }
+    return unfinished;
+  }
+  const events = [];
+  let overflow = false;
+  try {
+    for (const run of ordered) {
+      let sawTerminal = false;
+      await replayRun(run.run_id, (ev) => {
+        if (isTerminalEvent(ev)) sawTerminal = true;
+        if (overflow) {
+          applyJournalEvent(ev);
+          return;
+        }
+        events.push(ev);
+        if (events.length > RECALL_FILTER_MAX_EVENTS) {
+          overflow = true;
+          for (const buffered of events) applyJournalEvent(buffered);
+          events.length = 0;
+          vm.addSystemMessage(
+            `（会话 ${s8} 的 journal 事件超过 ${RECALL_FILTER_MAX_EVENTS} 条——已放弃按撤回水位过滤，按原样重放）`,
+            true,
+          );
+        }
+      });
+      if (!sawTerminal) unfinished++;
+    }
+  } catch (e) {
+    // 某个 run 读取失败：已缓冲的前缀仍须落地（与旧流式路径同样「不留
+    // 空白」），过滤后重放已拿到的部分，错误由调用方提示。
+    if (!overflow) {
+      for (const ev of filterEventsByRecall(events, recallLog)) applyJournalEvent(ev);
+    }
+    throw e;
+  }
+  if (!overflow) {
+    for (const ev of filterEventsByRecall(events, recallLog)) applyJournalEvent(ev);
+  }
+  return unfinished;
 }
 
 /* 会话合并视图（走查反馈六 2026-09-25）：同一会话的全部运行按时间序
@@ -572,20 +709,26 @@ async function openConversation(s8) {
     vm.addSystemMessage(`（会话 ${s8} 缺少完整 ACP 标识，只读打开，不能续接）`, true);
   }
   vm.syncToolbar();
+  // 329（2026-10-21）：撤回水位——端点不可用（旧载体/后端未起/跨根）时按
+  // 「无水位」继续，绝不让打开会话失败。根取会话归属根（跨工作区回看）。
+  let recallLog = [];
+  try {
+    const recallRoot = s8 === boundSession8() ? state.sessionRoot : summary?.root;
+    const recall = await fetchRecall(s8, recallRoot);
+    recallLog = Array.isArray(recall?.recall_log) ? recall.recall_log : [];
+  } catch (e) {
+    console.debug(`[rewind] 撤回水位不可用（${s8}）：${e.message}`);
+  }
   let unfinished = 0;
   try {
-    for (const run of ordered) {
-      let sawTerminal = false;
-      await replayRun(run.run_id, (ev) => {
-        if (isTerminalEvent(ev)) sawTerminal = true;
-        applyJournalEvent(ev);
-      });
-      if (!sawTerminal) unfinished++;
-    }
+    unfinished = await replayConversationMerged(s8, ordered, recallLog);
   } catch (e) {
     // 中途失败也要给出可见答复，不能留空白（错误路径修复 2026-09-25）。
     vm.addSystemMessage(`（会话 ${s8} 打开失败：${e.message}）`, true);
   }
+  // 329（2026-10-21）：重放后按当前 items 重建标记栏——撤回过滤会裁掉旧
+  // 事件，事件期间记下的数组下标不得沿用到重放后的内容面。
+  vm.rebuildMarkers();
   const unfinishedNote = unfinished
     ? `；其中 ${unfinished} 次运行无终态（历史未完成，不代表当前运行中）`
     : '';
@@ -798,6 +941,8 @@ ui.toggleMarkers = () => {
 };
 ui.openHelp = (tab) => dialogs.openHelp(tab);
 ui.openProperties = () => dialogs.openProperties();
+// 0dm S2（2026-10-21）：交付状态按需查询（只读投影，不触发模型）。
+ui.openDeliveryStatus = () => dialogs.openDeliveryStatus();
 ui.openCommand = (initial) => dialogs.openCommand(initial);
 ui.openFind = () => dialogs.openFind();
 ui.focusExplorer = () => {
@@ -851,8 +996,50 @@ ui.rewindRecall = async (ordinal) => {
   }
   try {
     const r = await acp.sessionRecall(target, ordinal);
-    // P2（318）：撤回不能只有 4 秒 flash——留一条持久系统行作为可回查的事实。
     const dropped = r.dropped_supplements > 0 ? `；${r.dropped_supplements} 条未投递补充一并丢弃` : '';
+    // 329（2026-10-21）：服务端已截断侧车，本地投影必须同步截断——旧实现
+    // 只加一条系统行，被撤回的卡与其 marker 留在窗内，重发还会被去重吞。
+    // ordinal 是「可撤回用户消息」序号（1-based），本地按用户卡计数；内存
+    // 裁剪掉的用户卡也计入 ordinal 轴，避免把目标数到错误的卡。
+    const droppedUsers = state.content.droppedUserCards || 0;
+    const localOrdinal = Number(ordinal) - droppedUsers;
+    let seen = 0;
+    let cut = -1;
+    if (localOrdinal >= 1) {
+      for (let i = 0; i < state.content.items.length; i++) {
+        const it = state.content.items[i];
+        if (it.kind !== 'message' || it.role !== '用户') continue;
+        seen++;
+        if (seen === localOrdinal) {
+          cut = i;
+          break;
+        }
+      }
+    }
+    if (cut < 0) {
+      // 只读回放/本地已裁掉/序号漂移：不瞎截，保留服务端结果并如实说明。
+      vm.addSystemMessage(
+        `（服务端已撤回 ${r.removed_messages ?? '?'} 条消息${dropped}，但本地视图不含第 ${ordinal} 条用户消息——未做本地截断；请重新打开会话查看）`,
+        true,
+      );
+      renderAll();
+      return r;
+    }
+    state.content.items.splice(cut);
+    // 契约：先过滤越界锚点，再按 items 重建（保留输入锚/最终输出锚/搜索命中）。
+    state.marker = state.marker.filter((m) => m.itemIndex < cut);
+    let lastUserTurn = 0;
+    for (let i = state.content.items.length - 1; i >= 0; i--) {
+      const it = state.content.items[i];
+      if (it.kind === 'message' && it.role === '用户') {
+        lastUserTurn = it.turn || 0;
+        break;
+      }
+    }
+    state.turnCounter = lastUserTurn;
+    state.content.currentModelIndex = null;
+    vm.rebuildMarkers();
+    // P2（318）：撤回不能只有 4 秒 flash——留一条持久系统行作为可回查的事实。
     vm.addSystemMessage(`（已撤回 ${r.removed_messages ?? '?'} 条消息${dropped}；原文已回输入框）`, false);
     renderAll();
     return r;
@@ -1086,6 +1273,14 @@ ui.openUri = async (uri) => {
 };
 
 ui.scrollToItem = (itemIndex) => {
+  // 329（2026-10-21）：标记锚可能来自失效的旧投影（撤回截断/重放/内存裁剪
+  // 之前）。越界必须显式提示，不静默失败、不读 undefined 崩溃。
+  if (!Number.isInteger(itemIndex) || itemIndex < 0 || itemIndex >= state.content.items.length) {
+    flash(
+      `标记指向的条目已不在视图中（下标 ${itemIndex}，当前 ${state.content.items.length} 条）；请刷新或重新打开会话`,
+    );
+    return;
+  }
   // 跳转顺带展开折叠卡（走查反馈 2026-09-25：锚点直达正文）。
   const item = state.content.items[itemIndex];
   if (item?.kind === 'message' && item.collapsed) {
@@ -1298,12 +1493,13 @@ document.getElementById('btnQuit').addEventListener('click', () => {
   }
 });
 
-// 刷新/关闭守卫（审查处理批 B2 登记；318 P1-B7 强化）：v1 无断线重连——
-// 桥为单会话且连接关闭即结束 `orz --stdio` 子进程；排队补充与后台任务
-// 在内核态，session/load 只恢复文本/黑板/LIF，不会恢复它们。存在运行/
-// 队列/后台任务时必须提示；文案明确恢复边界。
+// 刷新/关闭守卫（审查处理批 B2 登记；318 P1-B7 强化；329 改口径）：
+// 桥按 `ORZ_WEB_KEEPALIVE_SECS`（默认 1800s）保活 `orz --stdio` 子进程——
+// 刷新/短时断线后重开页面会经 `_orz/bridge_attached` 重连到同一会话，排队
+// 补充与后台任务随 child 存活；只有桥进程退出或超过保活窗口才回收。仍须
+// 提示的真实边界：关掉页面超过保活窗口，运行中的任务会被回收。
 const UNLOAD_WARNING =
-  '刷新/关闭会结束桥接会话：仅文本上下文可经会话恢复，排队补充与后台任务不会恢复。';
+  '刷新可重连续接（子进程默认保活 30 分钟）；关闭页面超过保活窗口会回收子进程，排队补充与后台任务将不恢复。';
 
 function unloadRiskReasons() {
   const reasons = [];
@@ -1351,6 +1547,55 @@ acp.on('closed', () => {
 });
 acp.on('open', () => flash('桥接已连接'));
 
+/* 329（2026-10-21）：会话保活——刷新/断线重连后的 attach 前置帧。
+ * 桥在 new WS 上先发 `_orz/bridge_attached`（session_id/reused/
+ * prompt_in_flight/cwd），本页据此绑定仍在跑的会话：不再 session/new，
+ * 也不再要求用户先点「恢复并继续」。 */
+acp.on('attached', (params) => {
+  void onBridgeAttached(params);
+});
+acp.on('notice', (kind) => {
+  if (kind === 'child_exited') {
+    vm.addSystemMessage(
+      '（桥接的 agent 子进程已退出：本轮若未收尾则已终止；文本上下文可经「恢复并继续」续接）',
+      true,
+    );
+    vm.setRunning(false);
+  } else if (kind === 'backlog_truncated') {
+    vm.addSystemMessage(
+      '（断线期间输出超过桥缓存上限，部分流式帧已丢弃；完整事实以 journal 为准）',
+      true,
+    );
+  }
+  renderAll();
+});
+
+async function onBridgeAttached(params) {
+  const sid = params?.session_id;
+  if (!sid || sid === acpSessionId) return;
+  const root = params.cwd || state.workspaceCwd;
+  if (params.prompt_in_flight) {
+    // 服务端事实：本轮仍在跑。状态栏/停止键与真实运行同源（318 P1-B4）。
+    vm.setRunning(true);
+  }
+  setBinding(sid, root);
+  liveMode = true;
+  vm.addSystemMessage(
+    `（已重连到仍在运行的会话 ${sid.slice(0, 8)}${params.reused ? '（子进程保活）' : ''}${
+      params.prompt_in_flight ? '；本轮仍在运行，输出继续' : '；当前空闲'
+    }）`,
+    false,
+  );
+  // 从 journal 头补齐该 run（断线期间的事实不丢）；在跑时随后由
+  // session/update 续流。置 null 强制 syncLiveTail 重挂。
+  currentRunId = null;
+  if (params.prompt_in_flight) {
+    await resyncBusyState();
+  }
+  await startTail();
+  renderAll();
+}
+
 /* ── 启动 ── */
 
 async function boot() {
@@ -1386,7 +1631,7 @@ async function boot() {
   // 318 P1-B7：刷新/断线恢复边界必须在 UI 里有字——不是只在 beforeunload
   // 的浏览器原生提示里（原生文案现代浏览器不可定制，且未必显示）。
   vm.addSystemMessage(
-    '（提示：刷新/关闭页面会结束桥接会话；仅文本上下文可经会话恢复——排队补充与后台任务不会恢复）',
+    '（提示：刷新/短时断线后重开页面会重连到同一会话（子进程保活）；桥进程退出或超过保活窗口后，排队补充与后台任务不恢复）',
     false,
   );
   renderAll();
