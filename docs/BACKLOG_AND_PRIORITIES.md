@@ -1470,6 +1470,7 @@ S4＝报告已落，**计数同步已随提交批落地**。
 - **证据**：318 档 §2 P0-4（`acp_server.rs:3270-3304` load→new，`:3177-3201` sweep；web `main.js:326-334`、`widgets.js:279-283`）／§3 P1-A2/A4/A5、P1-B2/B3/B7、P2（`:3350-3351` 烧号、`next_prompt_count` fail-open、`:3292` 不校验 cwd/policy/retrieval、删除后复活、跨进程互斥未承诺）／`input.rs:185` never resumes／`stdio.rs:137` `LoadSessionResponse::new()` 空／`acp_pump.rs:118-162` 断线杀进程。
 - **329 修复：Web 会话保活/重连（2026-10-21，计数 63 不变；未重建）**：`orz-web` 新增 `AgentBridge` 会话 supervisor——按工作区持 `orz --stdio` child；WS 断开＝detach（默认保活 1800s，`ORZ_WEB_KEEPALIVE_SECS` 可配，0＝旧行为，硬顶 6h；期间 stdout 进 8 MiB 有界 backlog）；同区重连＝attach（先发 `_orz/bridge_attached` 前置帧〔session_id/reused/prompt_in_flight/cwd〕再补发 backlog）；已 attach 时第二 WS 仍 409；reaper 回收 grace 到期/child 退出槽；后端最小观察 `session/new|load` 的 sessionId 与 `session/prompt` 在途事实。前端 `onBridgeAttached` 直接绑定仍在跑的会话并复位运行态；刷新/断线不再杀 run，排队补充与后台任务随 child 存活；桥进程退出/超窗口仍不恢复（跨进程持久化仍未实现）。单测 7/7。**S3/S4 待训练结束后重建**。[`329 档`](audits/329_FIVE_ISSUE_FIX_REWIND_KEEPALIVE_CDP_SWEEP_AND_0DM_S2_2026-10-21.md)
 - **验收（319 后更新）**：①`session/load` 不再触发收卷——**319 达成**；②ACP/Web 历史回放按协议返回既有对话——**319 达成**（`session/update`，用户/助手；工具/系统消息不回放）；③跨进程租约——**319 达成**（OS 锁，第二进程 fail-closed）；④「只读浏览」与「恢复并继续」显式分开——**待续**；⑤刷新/断线后队列、后台任务、浏览器/终端会话域的恢复边界——**329 刷新/断线已不杀 child（保活窗口内重连续接）**；跨进程恢复待续；⑥`session/close` 状态机＋`sessions` 有界——**S1 设计完成（331），实现待 S2**；⑦删除后绑定清除、侧车不复活——**S1 设计完成（331：禁隐式物化＋tombstone），实现待 S2**；⑧RST/ARC 计数与恢复/归档一致——**待续**；⑨TUI 仍只读，不改写成可恢复——**319 维持**。
+- 下一步：S2 实现（332 批：`_orz/session_close`、有界 32、删除不复活、占用者提示；10 单测＋smoke）→ 0.9.8 重建 → S4 真机；批次序见 [`332–333 计划`](WEB_CONSOLIDATION_BATCH_SCHEDULE_2026-10-21.md) §3。
 - 入口：[`318 批档`](audits/318_FULL_PROJECT_REVIEW_PHASE1_2026-10-19.md) / [`0dk S1`](SESSION_LIFECYCLE_OWNERSHIP_AND_CLOSE_DESIGN_2026-10-21.md) / [`设计稿 v1.1`](0DI_RECALL_SUPPLEMENT_DESIGN_2026-10-18.md) `§4.7`（跨进程前提）/ TODO `P1-0dk` / `orz/crates/orz-host/src/acp_server.rs`。
 
 ### 0dl. 宿主灾难保底与维护 CLI 加固（GAP-HOST-DISASTER-BACKSTOP-HARDENING）（P1；2026-10-19 由 318 审查立项，319 批；61 → 62；来源＝318 审查 P0-2／P0-3／P1-D2（`reviewed/accepted`，只读）＋用户裁决按审查建议立项；审查档＝[`318 批档`](audits/318_FULL_PROJECT_REVIEW_PHASE1_2026-10-19.md)）
@@ -1502,6 +1503,7 @@ S4＝报告已落，**计数同步已随提交批落地**。
 - **S3 词表**：INDEX §0.2 状态词补 `landed`/`shipped`/`verified` 三级（或作为实现状态子字段），旧条目回填。
 - 验收：S1＝12 页齐全且证据对齐；S2＝十条在 0.9.8 载体上全绿、失败可复现；S3＝词表更新且回填完成。
 - 边界：不新增功能项；差距挂现有项或显式不做；不换底座、不重写 loop；不改 ADR-0010 设计语义。
+- 批次序：S2 真机套件与 S3 词表排在 332/333 与 0.9.8 重建之后，见 [`332–333 计划`](WEB_CONSOLIDATION_BATCH_SCHEDULE_2026-10-21.md) §4–§5。
 - 入口：[`330 档`](audits/330_SURFACE_CONTRACT_BASELINE_2026-10-21.md) / [`surfaces/`](../architecture/current/surfaces/) / TODO `P1-0dn`。
 
 ### 0dh. 长程进程显式通道——TER 封闭面受控重开＋收割语义修订（LONGRUNNING-PROCESS-EXPLICIT-CHANNEL）（P1；2026-10-17 用户令立项，294 批；63 → 64；来源＝昨晚真机实锤〔会话 b41b096d runs5-7：训练两次被环境杀〕＋用户令「orz内部的deepseek没办法起长程进程，这个要额外给他开一个通道」＋「看来是目前版本的orz存在bug，待我修一下」）

@@ -1085,6 +1085,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] **余项待续**：跨进程恢复（桥进程退出/超保活窗口后后台任务与补充队列不恢复——329 已让刷新/断线不再杀 child）；`session/close` 状态机完整化＋`sessions` 有界；「只读浏览」与「恢复并继续」显式分开；删除后绑定清除、侧车不复活；RST/ARC 计数一致；web/TUI 生命周期入口收口。
 - [x] **329 修复：Web 会话保活/重连**（2026-10-21，计数不变；未重建）：`orz-web` 新增 `AgentBridge`（每工作区持 child；WS 断开 detach、默认保活 1800s、`ORZ_WEB_KEEPALIVE_SECS` 可配；同区重连 attach 发 `_orz/bridge_attached` 前置帧并补发 8 MiB 有界 backlog；grace 到期/child 退出由 reaper 回收；第二 WS 仍 409）。前端据此直接绑定仍在跑的会话并复位运行态；单测 7/7。入口：[`329 档`](docs/audits/329_FIVE_ISSUE_FIX_REWIND_KEEPALIVE_CDP_SWEEP_AND_0DM_S2_2026-10-21.md)。
 - [ ] **S3 载体重建／S4 真机核证**：load 不收卷、历史回放、跨进程互斥、刷新/断线提示、删除不复活、TUI 仍只读。
+- [ ] **S2 实现／S4 真机**：S2＝332 批（`_orz/session_close`、有界 32、删除不复活、占用者提示；10 单测＋smoke）；S4＝0.9.8 重建后真机。批次序见 [`332–333 计划`](docs/WEB_CONSOLIDATION_BATCH_SCHEDULE_2026-10-21.md) §3。
 - 边界：TUI 不改成可恢复（`frozen`）；0dk 转 `partial`（S1 设计达成，S2 实现未落，不写成 implemented）。
 - 入口：[`318 批档`](docs/audits/318_FULL_PROJECT_REVIEW_PHASE1_2026-10-19.md) / [`0dk S1`](docs/SESSION_LIFECYCLE_OWNERSHIP_AND_CLOSE_DESIGN_2026-10-21.md) / [`设计稿 v1.1 §4.7`](docs/0DI_RECALL_SUPPLEMENT_DESIGN_2026-10-18.md) / BACKLOG `0dk` / `orz/crates/orz-host/src/acp_server.rs`。
 
@@ -1113,6 +1114,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] **S2 真机场景套件**：10 条脚本化场景（仓内 CDP 客户端驱动真 Chrome＋`--fake-provider`，不引 Playwright），每次载体重建后必跑、读数进审计。场景＝刷新重连、双标签 409、撤回后重发、删除后不复活、保活过期提示、交付面板、审批并发、上下文读数、后台可见、版本偏斜。
 - [ ] **S3 台账三级状态**：`landed`/`shipped`/`verified` 词表进 INDEX §0.2，旧条目回填；`implemented` 仅在 `verified` 后使用。
 - 验收：S1＝12 页齐全且证据对齐（已达成）；S2＝十条在 0.9.8 载体上全绿、失败可复现；S3＝词表更新且回填完成。
+- 批次序：S2/S3 排在 332/333 与 0.9.8 重建之后，见 [`332–333 计划`](docs/WEB_CONSOLIDATION_BATCH_SCHEDULE_2026-10-21.md) §4–§5。
 - 边界：不新增功能项；差距挂现有项或显式不做；不换底座、不重写 loop；不改 ADR-0010 设计语义。
 - 入口：[`330 档`](docs/audits/330_SURFACE_CONTRACT_BASELINE_2026-10-21.md) / [`surfaces/`](architecture/current/surfaces/) / BACKLOG `0dn`。
 
