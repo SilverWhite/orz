@@ -84,8 +84,11 @@ const escapeRegExp = (s) => String(s ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&
  * 不是绝对路径则拒绝恢复（不把相对路径交给 host）。 */
 const isAbsolutePath = (p) => /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(p || '');
 
-async function resolveLoadCwd() {
-  let cwd = state.workspaceCwd;
+async function resolveLoadCwd(target) {
+  // 2026-10-21：优先用会话的**归属工作区根**（ConversationSummary.root）。
+  // 切换工作区后，旧会话仍打开在窗内；若用当前 cwd 去 load，host 会在
+  // 新根的 `.gsa/conversations/` 找不到侧车并报 `session not found`。
+  let cwd = target && isAbsolutePath(target.root) ? target.root : state.workspaceCwd;
   if (!isAbsolutePath(cwd)) {
     try {
       const b = await fetchBoot();
@@ -549,7 +552,7 @@ async function openConversation(s8) {
     // 当前绑定会话的历史面：不是只读回看；继续输入会先回实时再续接。
     vm.addSystemMessage(`（会话 ${s8} 历史回放——当前活跃会话；继续输入将回到实时并续接）`, false);
   } else if (summary?.session_id) {
-    state.resumeTarget = { s8, sessionId: summary.session_id };
+    state.resumeTarget = { s8, sessionId: summary.session_id, root: summary.root };
     vm.addSystemMessage(
       `（会话 ${s8} —— 只读回看；点工具栏「恢复并继续」显式恢复后才可续接）`,
       false,
@@ -634,7 +637,7 @@ async function resumeViewedConversation() {
       vm.addSystemMessage(`（会话 ${s8} 恢复已取消：绑定未切换）`, true);
       return;
     }
-    const cwd = await resolveLoadCwd();
+    const cwd = await resolveLoadCwd(target);
     if (!stillCurrent()) {
       vm.addSystemMessage(`（会话 ${s8} 恢复已取消：绑定未切换）`, true);
       return;
@@ -985,6 +988,17 @@ async function switchWorkspaceTo(path) {
     const b = await switchWorkspace(path);
     state.workspaceCwd = b.cwd || path;
     state.trustedWorkspaces = b.trusted_workspaces || state.trustedWorkspaces;
+    state.recentWorkspaces = b.recent_workspaces || state.recentWorkspaces;
+    const trustedNow = (state.trustedWorkspaces || []).some(
+      (t) => pathNorm(t.path) === pathNorm(state.workspaceCwd),
+    );
+    if (!trustedNow) {
+      vm.addSystemMessage(
+        `（工作区 ${state.workspaceCwd} 尚未持久授信：本次会话内可随时切回；` +
+          '要刷新后仍保留，请在该工作区发一条消息，信任提示里点确认。）',
+        false,
+      );
+    }
     if (
       acpSessionId &&
       state.sessionRoot &&
@@ -1322,6 +1336,7 @@ async function boot() {
     const b = await fetchBoot();
     state.workspaceCwd = b.cwd || '';
     state.trustedWorkspaces = b.trusted_workspaces || [];
+    state.recentWorkspaces = b.recent_workspaces || [];
     renderExplorer();
   } catch {
     /* boot 不可达：探索器仍显示 nav 当前值 */

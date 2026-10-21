@@ -179,11 +179,29 @@ impl ContextScaleState {
     /// 从会话侧车水位键（`["192k", "320k", "first_block"]`）恢复。
     pub fn from_notified_keys(keys: &[String]) -> Self {
         let mut fired = HashSet::new();
+        // 2026-10-21 修：H1（硬提醒）闩位必须随会话水位一起恢复。此前
+        // `latched` 恒空，而 `due()` 对硬档用 `latched.insert(..)` 判「新
+        // 越线」——每个新 run 从侧车重建状态后，只要模型面仍在 320K 之上
+        // 就会把「一直在线以上」误判成「再次越线」，每轮都重发硬提醒、逼
+        // 模型每轮压缩一次（RUN-c23e0aaa-13/14/17 实测 350-380K 反复压缩，
+        // 每次只降 20K 又立刻回到线上）。恢复时把已发 **H1** 置入闩位：
+        // 仍在线以上 ⇒ 不重发；真正落到线下时 `due()` 会清闩，之后再越线
+        // 才重发（保留「每次越线提醒一次」的原语义）。
+        // T1（500K 必定压缩）**不**随恢复压闩：它是安全线，恢复后仍在线上
+        // 必须重新要求压缩（失败则 700K 守卫兜底），不能因一次 fired 就静默。
+        let h1_tokens = DEFAULT_LADDER
+            .iter()
+            .find(|step| step.tier == LadderTier::HardReminder)
+            .map(|step| step.tokens);
+        let mut latched = HashSet::new();
         let mut flags = HashSet::new();
         for key in keys {
             match parse_key(key) {
                 Some(tokens) => {
                     fired.insert(tokens);
+                    if Some(tokens) == h1_tokens {
+                        latched.insert(tokens);
+                    }
                 }
                 None => {
                     let key = key.trim();
@@ -196,7 +214,7 @@ impl ContextScaleState {
         }
         Self {
             fired,
-            latched: HashSet::new(),
+            latched,
             flags,
         }
     }
@@ -865,12 +883,13 @@ mod tests {
             FLAG_FIRST_BLOCK.to_string(),
             "垃圾".to_string(),
         ]);
-        // 软档＝水位压住；**硬档＝按越线重新武装**（恢复会话仍在线上 ⇒ H1 再提醒
-        // 一次，这是设计意图：先警告再发请求）。
+        // 软档＝水位压住；硬档闩位随水位一起恢复——**恢复时仍在线上不得
+        // 重发**（2026-10-21 修：否则每个新 run 都重建状态、把「一直在
+        // 320K 以上」误判为「再次越线」，实测每轮压缩一次仍压不回线下）。
         let fires = state.due(330_000, &DEFAULT_LADDER);
         assert_eq!(
             fires.iter().map(|f| f.milestone_tokens).collect::<Vec<_>>(),
-            vec![256_000, 320_000]
+            vec![256_000]
         );
         // 字面水位随侧车往返（first_block），不参与数值刻度。
         assert!(state.has_flag(FLAG_FIRST_BLOCK));
@@ -890,6 +909,48 @@ mod tests {
             state.notified_keys(),
             vec!["192k", "256k", "320k", "500k", FLAG_FIRST_BLOCK]
         );
+    }
+
+    /// 2026-10-21（RUN-c23e0aaa-13/14/17 摩擦）：会话水位里已有 320k 时，
+    /// 恢复后模型面仍在线以上 → 不得重发 H1；必须真正落到线下再越线才重发。
+    #[test]
+    fn hard_reminder_does_not_refire_across_resume_while_still_above() {
+        let mut state = ContextScaleState::from_notified_keys(&[
+            "192k".to_string(),
+            "256k".to_string(),
+            "320k".to_string(),
+        ]);
+        assert!(
+            state.due(357_699, &DEFAULT_LADDER).is_empty(),
+            "still above 320K after resume must not re-fire H1"
+        );
+        // 压回线下后闩位释放，再越线才提醒。
+        assert!(state.due(300_000, &DEFAULT_LADDER).is_empty());
+        let fires = state.due(330_000, &DEFAULT_LADDER);
+        assert_eq!(
+            fires.iter().map(|f| f.milestone_tokens).collect::<Vec<_>>(),
+            vec![320_000],
+            "a genuine new crossing re-fires H1"
+        );
+    }
+
+    /// T1 是安全线：恢复会话仍在 500K 以上时必须重新要求压缩，不能因为
+    /// 侧车里已有 `500k` 水位就静默跳过（与 H1 的「不重发」刻意不同）。
+    #[test]
+    fn hard_truncate_line_refires_after_resume() {
+        let mut state = ContextScaleState::from_notified_keys(&[
+            "192k".to_string(),
+            "256k".to_string(),
+            "320k".to_string(),
+            "500k".to_string(),
+        ]);
+        let fires = state.due(520_000, &DEFAULT_LADDER);
+        assert_eq!(
+            fires.iter().map(|f| f.milestone_tokens).collect::<Vec<_>>(),
+            vec![500_000],
+            "T1 must re-fire on resume while still above the line"
+        );
+        assert_eq!(fires[0].tier, LadderTier::HardTruncate);
     }
 
     #[test]

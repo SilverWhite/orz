@@ -62,6 +62,11 @@ pub struct ServerState {
     /// 即时刷新）＋新会话在新 cwd spawn；已打开旧会话按其**归属工作区根**
     /// 解析（`?root=`，见 [`ServerState::resolve_root`]）。
     pub cwd: Arc<std::sync::RwLock<PathBuf>>,
+    /// 本桥进程内**打开过**的工作区根（启动 cwd ＋ 每次切换的前后根）。
+    /// 只活在内存、不写 TrustStore：不是持久授信，只让「切出去」的工作区
+    /// 仍可切回、其旧会话仍可按 `?root=` 回看（2026-10-21 用户报告：切到
+    /// 已信任工作区后，原工作区不在信任清单里，从探索器消失且切不回来）。
+    pub visited: Arc<std::sync::Mutex<Vec<PathBuf>>>,
     pub agent_binary: Arc<PathBuf>,
     pub session: SessionSlot,
 }
@@ -75,17 +80,42 @@ impl ServerState {
             .clone()
     }
 
-    /// 机械切换当前工作区（调用方须先过门禁：已信任 + canonical 目录）。
+    /// 机械切换当前工作区（调用方须先过门禁：已信任或本会话打开过 +
+    /// canonical 目录）。切换前把旧 cwd 记入 `visited`，切换后记入新 cwd。
     pub fn set_cwd(&self, next: PathBuf) {
+        let prev = self.cwd();
+        if !path_eq(&prev, &next) {
+            self.note_visited(&prev);
+        }
+        self.note_visited(&next);
         *self
             .cwd
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = next;
     }
 
+    /// 记一个本会话打开过的工作区根（去重、保序）。
+    fn note_visited(&self, path: &std::path::Path) {
+        let mut visited = self
+            .visited
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !visited.iter().any(|p| path_eq(p, path)) {
+            visited.push(path.to_path_buf());
+        }
+    }
+
+    /// 本会话打开过的工作区根（启动 cwd 在前，切换顺序在后）。
+    pub fn visited_workspaces(&self) -> Vec<PathBuf> {
+        self.visited
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     /// 归属工作区根解析（0bv ② S1 要点④）：`root=None` → 当前 cwd；否则仅
-    /// 接受「当前 cwd ∪ 已信任工作区集」内的 canonical 目录
-    /// （fail-closed——未知根一律 `None`，调用方按 4xx 拒绝）。
+    /// 接受「当前 cwd ∪ 已信任工作区集 ∪ 本会话打开过的根」内的 canonical
+    /// 目录（fail-closed——未知根一律 `None`，调用方按 4xx 拒绝）。
     pub fn resolve_root(&self, root: Option<&str>) -> Option<PathBuf> {
         let current = self.cwd();
         let Some(root) = root.filter(|r| !r.trim().is_empty()) else {
@@ -103,10 +133,12 @@ impl ServerState {
             .iter()
             .any(|t| path_eq(std::path::Path::new(&t.path), &canon))
         {
-            Some(canon)
-        } else {
-            None
+            return Some(canon);
         }
+        if self.visited_workspaces().iter().any(|p| path_eq(p, &canon)) {
+            return Some(canon);
+        }
+        None
     }
 }
 
@@ -150,6 +182,15 @@ fn path_eq(a: &std::path::Path, b: &std::path::Path) -> bool {
             .to_lowercase()
     };
     norm(a) == norm(b)
+}
+
+/// `visited` 路径 → 前端 JSON 字符串列表（原始大小写/分隔符，仅作显示与
+/// 切回目标；比较仍由 `path_eq` 负责）。
+fn workspace_paths(paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
 }
 
 pub struct BindError(pub String);
@@ -670,6 +711,9 @@ async fn api_boot(
         // 用户全局信任存储（~/.grok/trusted_folders.toml）的授予清单——
         // 探索器「工作区 → 已信任工作区」子级的数据源（0br S3）。
         "trusted_workspaces": crate::trust::list_trusted_workspaces(),
+        // 2026-10-21：本桥进程内打开过的工作区（含启动 cwd 与切换历史）。
+        // 不是持久授信；只保证「切出去还能切回来」，并在探索器里显式可见。
+        "recent_workspaces": workspace_paths(&state.visited_workspaces()),
     }))
     .into_response()
 }
@@ -685,10 +729,10 @@ struct WorkspaceSwitchBody {
 /// （旧对话子进程不杀；同会话不迁移——对话只认初始工作区；旧会话读面经
 /// `?root=` 按归属工作区根解析）。
 ///
-/// 门禁（fail-closed）：① 目标须为**已信任工作区**（TrustStore 用户级单源；
-/// 未信任 ⇒ 403＋引导「信任」按钮；浏览器零路径执行）；② 目标须存在且为
-/// canonical 目录；③「运行中禁切」由前端 `state.running` 主判（桥侧无活跃
-/// run 读数，不虚设判定——裁决 D-e）。
+/// 门禁（fail-closed）：① 目标须为**已信任工作区**，或本桥进程内**打开过**
+/// 的工作区（启动 cwd／上次切换的根——只活在内存，不是持久授信）；② 目标
+/// 须存在且为 canonical 目录；③「运行中禁切」由前端 `state.running` 主判
+/// （桥侧无活跃 run 读数，不虚设判定——裁决 D-e）。
 async fn api_workspace_switch(
     State(state): State<ServerState>,
     Query(q): Query<TokenQuery>,
@@ -708,10 +752,14 @@ async fn api_workspace_switch(
         return error_response(StatusCode::BAD_REQUEST, "目标不是目录");
     }
     let trusted = crate::trust::list_trusted_workspaces();
-    if !trusted
+    let known = trusted
         .iter()
         .any(|t| path_eq(std::path::Path::new(&t.path), &target))
-    {
+        || state
+            .visited_workspaces()
+            .iter()
+            .any(|p| path_eq(p, &target));
+    if !known {
         return error_response(
             StatusCode::FORBIDDEN,
             "未信任工作区：请先在该工作区启动 orz 并点「信任」（fail-closed）",
@@ -722,6 +770,7 @@ async fn api_workspace_switch(
         "ok": true,
         "cwd": target.display().to_string(),
         "trusted_workspaces": trusted,
+        "recent_workspaces": workspace_paths(&state.visited_workspaces()),
     }))
     .into_response()
 }
@@ -778,9 +827,11 @@ mod tests {
     use tower::ServiceExt;
 
     fn test_state() -> ServerState {
+        let cwd = std::env::temp_dir();
         ServerState {
             token: Arc::new("tok-123".into()),
-            cwd: Arc::new(std::sync::RwLock::new(std::env::temp_dir())),
+            cwd: Arc::new(std::sync::RwLock::new(cwd.clone())),
+            visited: Arc::new(std::sync::Mutex::new(vec![cwd])),
             agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
             session: SessionSlot::default(),
         }
@@ -963,6 +1014,7 @@ mod tests {
         let state = ServerState {
             token: Arc::new("tok-123".into()),
             cwd: Arc::new(std::sync::RwLock::new(root.clone())),
+            visited: Arc::new(std::sync::Mutex::new(vec![root.clone()])),
             agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
             session: SessionSlot::default(),
         };
@@ -1262,6 +1314,7 @@ mod tests {
         let state = ServerState {
             token: Arc::new("tok".into()),
             cwd: Arc::new(std::sync::RwLock::new(tmp.clone())),
+            visited: Arc::new(std::sync::Mutex::new(vec![tmp.clone()])),
             agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
             session: SessionSlot::default(),
         };
@@ -1272,12 +1325,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// 2026-10-21 用户报告：切到另一个（已信任）工作区后，原工作区从探索器
+    /// 消失且切不回来。`set_cwd` 必须把前后根都记入 visited，`resolve_root`
+    /// 必须继续接受它（旧会话只读回看），`api_workspace_switch` 的 known 门
+    /// 才能放行切回。
+    #[test]
+    fn visited_workspace_survives_switch_and_resolves_old_root() {
+        let a = tempfile_dir();
+        let b = tempfile_dir();
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let state = ServerState {
+            token: Arc::new("tok".into()),
+            cwd: Arc::new(std::sync::RwLock::new(a.clone())),
+            visited: Arc::new(std::sync::Mutex::new(vec![a.clone()])),
+            agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
+            session: SessionSlot::default(),
+        };
+        state.set_cwd(b.clone());
+        assert!(path_eq(&state.cwd(), &b));
+        let visited = state.visited_workspaces();
+        assert!(
+            visited.iter().any(|p| path_eq(p, &a)),
+            "previous workspace must stay visible: {visited:?}"
+        );
+        assert!(
+            visited.iter().any(|p| path_eq(p, &b)),
+            "new workspace must be visible: {visited:?}"
+        );
+        let resolved_a = state
+            .resolve_root(Some(a.to_str().unwrap()))
+            .unwrap_or_else(|| panic!("visited root must resolve: {}", a.display()));
+        assert!(path_eq(&resolved_a, &a));
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
+    }
+
     fn tempfile_dir() -> PathBuf {
         // 318 CI: GitHub Windows temp paths can contain 8.3 short names
         // (`RUNNER~1`); canonicalize the parent first so `std::fs::canonicalize`
         // of the child is byte-identical to the plain spelling under test.
-        let base = dunce::canonicalize(std::env::temp_dir())
-            .unwrap_or_else(|_| std::env::temp_dir());
+        let base =
+            dunce::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
         let dir = base.join(format!(
             "orz-web-path-eq-test-{}-{}",
             std::process::id(),

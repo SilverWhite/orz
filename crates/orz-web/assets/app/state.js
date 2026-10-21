@@ -80,6 +80,9 @@ export const state = {
   // 工作区事实（/api/boot）：当前 cwd＋用户全局信任存储的授予清单。
   workspaceCwd: '',
   trustedWorkspaces: [],
+  // 2026-10-21：本桥会话内打开过的工作区（含启动 cwd 与切换历史）。
+  // 不是持久授信；用于「切出去还能切回来」与旧工作区会话回看。
+  recentWorkspaces: [],
 
   // ── 对象导航历史（AddressBar 语义，R-4） ──
   nav: { current: 'workspace://live', back: [], forward: [] },
@@ -98,6 +101,7 @@ export const state = {
   explorer: {
     workspaceCollapsed: false,
     trustedCollapsed: true,
+    recentCollapsed: true,
     activeCollapsed: false,
     archivedCollapsed: false,
   },

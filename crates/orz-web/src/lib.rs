@@ -98,7 +98,9 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
 
     let state = server::ServerState {
         token: Arc::new(token),
-        cwd: Arc::new(std::sync::RwLock::new(config.cwd)),
+        cwd: Arc::new(std::sync::RwLock::new(config.cwd.clone())),
+        // 启动 cwd 即本会话第一个「打开过」的工作区（不是持久授信）。
+        visited: Arc::new(std::sync::Mutex::new(vec![config.cwd.clone()])),
         agent_binary: Arc::new(agent_binary),
         session: acp_pump::SessionSlot::default(),
     };

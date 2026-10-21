@@ -491,6 +491,43 @@ fn string_values(value: &serde_json::Value) -> Vec<String> {
     out
 }
 
+/// Per-field cap for the single-line row contract（设计 §2.3 摘要行规模）。
+/// 同一口径同时约束外置台账文件（[`external_row_line`]）与模型面台账块
+/// （[`build_ledger_block`]）——2026-10-21 修：后者此前直接渲染原始
+/// target／pointer／final_reply，长命令体会把压缩 marker 撑到数十 KB，
+/// 压缩释放的 token 又被 marker 吃回去（RUN-c23e0aaa-17 实测 marker
+/// 28K 字符，仅释放 ≈34K token）。
+const LEDGER_FIELD_CAP: usize = 300;
+
+/// 模型面台账块的**整行**上限（设计「摘要行 ~200–350 字符/行」）。外置文件
+/// 用逐字段 300 上限保证可 grep；进入压缩 marker / D4 机械段的块还必须按行
+/// 收紧——否则三字段各 300 仍可拼出近千字符/行，19 行就把 marker 撑回
+/// 数十 KB（RUN-c23e0aaa-17 实测）。
+const LEDGER_BLOCK_ROW_CAP: usize = 400;
+
+/// 按字符（非字节）截断并加省略号。
+fn truncate_chars(mut s: String, cap: usize) -> String {
+    if s.chars().count() <= cap {
+        return s;
+    }
+    s = s.chars().take(cap).collect();
+    s.push('…');
+    s
+}
+
+/// Escape embedded line breaks so a logical row is exactly one physical line,
+/// then bound the field so the ledger stays a compact grep-able summary (full
+/// content remains in `messages` / journal).
+fn sanitize_ledger_field(value: &str) -> String {
+    let escaped = value.replace(['\r', '\n'], "\\n");
+    if escaped.chars().count() <= LEDGER_FIELD_CAP {
+        return escaped;
+    }
+    let mut truncated: String = escaped.chars().take(LEDGER_FIELD_CAP).collect();
+    truncated.push('…');
+    truncated
+}
+
 /// One external-file row: `[<全局序号>] 轮次 <窗口内轮次>: <工具> 目标=…
 /// 结果=… 最终回复=…`。`[<全局序号>]` 为按行续点的 per-row 全局序号
 /// （跨压缩连续；多结果轮按条各占一行、序号连续递增），文件只增，读尾行
@@ -503,20 +540,6 @@ fn string_values(value: &serde_json::Value) -> Vec<String> {
 /// （实测 `[31] 轮次 27: blackboard_read ...` 记录跨 15 行）。单行契约是
 /// 「追加续号」正确性的前提；上限符合设计「摘要行 ~200–350 字符/行」。
 pub fn external_row_line(seq: u64, row: &ActionLedgerRow) -> String {
-    /// Per-field cap for the single-line row contract（设计 §2.3 摘要行规模）。
-    const LEDGER_ROW_FIELD_CAP: usize = 300;
-    /// Escape embedded line breaks so a logical row is exactly one physical
-    /// line, then bound the field so the file stays a compact grep-able
-    /// summary (full content remains in `messages` / journal).
-    fn sanitize_field(value: &str) -> String {
-        let escaped = value.replace(['\r', '\n'], "\\n");
-        if escaped.chars().count() <= LEDGER_ROW_FIELD_CAP {
-            return escaped;
-        }
-        let mut truncated: String = escaped.chars().take(LEDGER_ROW_FIELD_CAP).collect();
-        truncated.push('…');
-        truncated
-    }
     format!(
         "[{seq}] 轮次 {}: {} 目标={} 结果={} 最终回复={}",
         row.round_index + 1,
@@ -524,13 +547,13 @@ pub fn external_row_line(seq: u64, row: &ActionLedgerRow) -> String {
         if row.target.is_empty() {
             "（无）".to_string()
         } else {
-            sanitize_field(&row.target)
+            sanitize_ledger_field(&row.target)
         },
-        sanitize_field(&row.pointer),
+        sanitize_ledger_field(&row.pointer),
         if row.final_reply.is_empty() {
             "（无）".to_string()
         } else {
-            sanitize_field(&row.final_reply)
+            sanitize_ledger_field(&row.final_reply)
         },
     )
 }
@@ -791,25 +814,33 @@ pub(crate) fn rows_for_round(
 }
 
 /// Render the deterministic ledger block (one line per row).
+///
+/// 2026-10-21 修：与 [`external_row_line`] 同一字段上限/换行转义。此块会
+/// 进入压缩 marker 与 D4 机械段——未截断时一条 `run_terminal_cmd` 的
+/// 整段脚本会把 marker 撑大（实测 28K 字符），压缩释放的上下文被 marker
+/// 反吞，形成「压了等于没压」的摩擦。
 pub fn build_ledger_block(rows: &[ActionLedgerRow]) -> String {
     let mut lines = vec![format!("{ACTION_LEDGER_PREFIX} {ACTION_LEDGER_VERSION}]")];
     for row in rows {
-        lines.push(format!(
+        let line = format!(
             "轮次 {}: {} 目标={} 结果={} 最终回复={}",
             row.round_index + 1,
             row.tool,
             if row.target.is_empty() {
-                "（无）"
+                "（无）".to_string()
             } else {
-                &row.target
+                sanitize_ledger_field(&row.target)
             },
-            row.pointer,
+            sanitize_ledger_field(&row.pointer),
             if row.final_reply.is_empty() {
-                "（无）"
+                "（无）".to_string()
             } else {
-                &row.final_reply
+                sanitize_ledger_field(&row.final_reply)
             },
-        ));
+        );
+        // 整行再收紧一次：字段级上限只防单字段爆炸，三字段叠加仍可能近千
+        // 字符/行；marker 的总量约束靠这里。
+        lines.push(truncate_chars(line, LEDGER_BLOCK_ROW_CAP));
     }
     lines.push("[/动作台账]".to_string());
     lines.join("\n")
@@ -989,6 +1020,40 @@ mod tests {
         );
         // c3 的原文留在保留尾（cut 之后）。
         assert!(messages[cut..].iter().any(|m| m.content == "页面"));
+    }
+
+    #[test]
+    fn ledger_block_bounds_every_field_and_keeps_one_line_per_row() {
+        let long = format!("first line\n{}", "x".repeat(900));
+        let rows = vec![
+            ActionLedgerRow {
+                round_index: 0,
+                tool: "run_terminal_cmd".to_string(),
+                target: long.clone(),
+                pointer: long.clone(),
+                final_reply: long,
+            },
+            ActionLedgerRow {
+                round_index: 1,
+                tool: "read_file".to_string(),
+                target: "a.py".to_string(),
+                pointer: "sha256:abc".to_string(),
+                final_reply: String::new(),
+            },
+        ];
+        let ledger = build_ledger_block(&rows);
+        let lines: Vec<&str> = ledger.lines().collect();
+        assert_eq!(lines.len(), rows.len() + 2, "one physical line per row");
+        for line in &lines[1..lines.len() - 1] {
+            assert!(!line.contains('\n'), "{line:?}");
+            assert!(
+                line.chars().count() <= LEDGER_BLOCK_ROW_CAP + 1,
+                "row must stay bounded, got {} chars: {line:?}",
+                line.chars().count()
+            );
+        }
+        assert!(lines[1].contains("\\n"), "embedded newlines are escaped");
+        assert!(lines[1].contains('…'), "over-cap fields are truncated");
     }
 
     #[test]

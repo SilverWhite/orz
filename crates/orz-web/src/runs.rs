@@ -44,6 +44,10 @@ pub struct ConversationSummary {
     /// Full ACP session id recovered from the bounded sidecar head.  The
     /// explorer displays `session8`, but continuation must bind the exact id.
     pub session_id: Option<String>,
+    /// 2026-10-21：该会话的归属工作区根（列清单时的 cwd）。切换工作区后
+    /// 仍打开着旧会话时，`session/load` 必须用这个根而不是新 cwd——否则
+    /// 侧车在新根的 `.gsa/conversations/` 下找不到，界面报「恢复失败」。
+    pub root: String,
     pub size_bytes: u64,
     pub modified_ms: u128,
 }
@@ -300,6 +304,7 @@ pub fn list_conversations(cwd: &Path) -> Vec<ConversationSummary> {
         out.push(ConversationSummary {
             session8: session8.to_string(),
             session_id: conversation_session_id(&path),
+            root: cwd.display().to_string(),
             size_bytes: meta.len(),
             modified_ms: modified_ms(&meta),
         });

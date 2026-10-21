@@ -2126,6 +2126,22 @@ fn semantic_compression_reason(kind: Option<CompressionWindowKind>) -> &'static 
     kind.map_or("model_selected", CompressionWindowKind::semantic_reason)
 }
 
+/// 2026-10-21（RUN-c23e0aaa-13/14/15/16/17 摩擦）：候选终答**已经自带**
+/// 反例自查段时，不再注入 `[COUNTEREXAMPLE_GATE]`。实测模型从第二次起就会
+/// 在终答开头写「## 反例自查（输出前最后一次）」——旧逻辑仍按「无工具调用」
+/// 再插一次门，逼出第二份完整终答（每份 3.5–5.3K 字），并让候选里产出的
+/// `[SEMANTIC_SUMMARY]` 在「门 → 终答」之间被消费：终答是在刚被压缩过的
+/// 上下文里写的（RUN-17 实测 381K→361K，终答还反过来声称「本轮无可压块」）。
+/// 判据只认行首标题，避免正文里偶然提到「反例」就误跳过。
+fn final_answer_has_counterexample_selfcheck(text: &str) -> bool {
+    text.lines().any(|line| {
+        line.trim_start()
+            .trim_start_matches(|c: char| c == '#' || c == '*')
+            .trim_start()
+            .starts_with("反例自查")
+    })
+}
+
 /// 0bi ⑩（ADR-0010 §14.76，2026-09-23）：answer 变体反例门的收窄判据——
 /// 本 run 有**执行事实**（≥1 个工具轮，或黑板已有编辑记录）或 **plan 存在
 /// 且未完成**（任一步骤非 Done/Failed）时才触发；纯文本短答（无工具轮、
@@ -2370,6 +2386,11 @@ pub(crate) async fn run_agent_loop(
     // 让 H1 窗口产出的压缩被记成 `model_selected`（工具窗口未产出摘要即收口
     // 的场景），落地前恰有 H1 开窗也会抢走已产出摘要的归因。
     let mut pending_semantic: Option<(String, Option<CompressionWindowKind>, bool)> = None;
+    // 2026-10-21：反例门注入后的**下一轮**先不消费 `pending_semantic`。
+    // 候选终答里产出的语义摘要若在「门 → 终答」之间落地，终答会在刚被
+    // 压缩过的上下文里重写（RUN-17 实测 381K→361K，终答反称「本轮无可压
+    // 块」）；摘要留到 run 尾（终答已产出）再消费，门轮与草稿同上下文。
+    let mut defer_semantic_once = false;
     // 在程压缩窗口的种类（`None` ＝ 无窗口在程）。开窗时置位、窗口不在程时
     // 清空；识别语义摘要那一刻的值随摘要进 `pending_semantic`（归因固定点）。
     let mut window_kind: Option<CompressionWindowKind> = None;
@@ -2842,7 +2863,9 @@ pub(crate) async fn run_agent_loop(
         // 机械层把「机械摘要行（结构化轨）＋语义摘要（模型产出）」写到 marker
         // 里，模型面随之下移；**本地面一条不删**（不变量 I3）。reason：窗口
         // 收口＝`context_scale_window`，模型自选＝`model_selected`。
-        if let Some((summary, summary_window, stop_declared)) = pending_semantic.take() {
+        if !std::mem::take(&mut defer_semantic_once)
+            && let Some((summary, summary_window, stop_declared)) = pending_semantic.take()
+        {
             // 0ap 复核批（P2）：归因取**摘要产出时**记录的窗口种类——工具
             // 知情发起 ⇒ `model_selected`（设计 §1）；H1 阶梯窗口／T1 必定
             // 压缩强制窗 ⇒ `context_scale_window`；无窗口（模型自选）⇒
@@ -4061,9 +4084,16 @@ pub(crate) async fn run_agent_loop(
             // 收窄——只有本 run 有执行事实（工具轮／编辑记录）或 plan 存在
             // 且未完成时才值得自查；纯文本短答跳过，省一轮模型调用（外部
             // ACP 客户端的「草稿＋终稿」重复面也随之短聊消解）。
+            // 2026-10-21：候选终答已自带反例自查段时同样跳过——重复注入
+            // 会逼出第二份完整终答并让候选里的语义摘要被提前消费。
+            let candidate_has_selfcheck = response
+                .text
+                .as_deref()
+                .is_some_and(final_answer_has_counterexample_selfcheck);
             if !counterexample_fired
                 && profile.counterexample_gate
                 && answer_gate_has_substance(svc, tool_rounds)
+                && !candidate_has_selfcheck
             {
                 writer
                     .record(
@@ -4098,6 +4128,9 @@ pub(crate) async fn run_agent_loop(
                     round: None,
                 });
                 counterexample_fired = true;
+                // 候选终答里的语义摘要留到 run 尾消费：门轮必须看到与草稿
+                // 相同的上下文，不能在草稿与终答之间压缩。
+                defer_semantic_once = true;
                 continue;
             }
             // 0ac S3①-b M1（2026-09-15，设计 §4.1「句号边界分段续写」的

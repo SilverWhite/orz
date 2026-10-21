@@ -198,12 +198,25 @@ export function renderExplorer() {
    * （/api/boot），展示面不动信任判定。） ── */
   root.appendChild(groupHeader('工作区', 'workspaceCollapsed'));
   if (!state.explorer.workspaceCollapsed) {
-    const cur = el('div', 'marker-entry explorer-sub', `当前: ${state.workspaceCwd || state.nav.current}`);
-    cur.title = 'workspace://live —— 点击回到实时';
+    const norm = (p) =>
+      (p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const trusted = state.trustedWorkspaces || [];
+    const currentTrusted = trusted.some(
+      (t) => norm(t.path) === norm(state.workspaceCwd),
+    );
+    const cur = el(
+      'div',
+      'marker-entry explorer-sub',
+      `当前: ${state.workspaceCwd || state.nav.current}${
+        currentTrusted ? '' : '（未持久授信）'
+      }`,
+    );
+    cur.title = currentTrusted
+      ? 'workspace://live —— 点击回到实时'
+      : 'workspace://live —— 点击回到实时；未持久授信：发消息时会弹信任确认，确认后刷新仍保留';
     cur.addEventListener('click', () => ui.openUri('workspace://live'));
     root.appendChild(cur);
 
-    const trusted = state.trustedWorkspaces || [];
     root.appendChild(subHeader(`已信任工作区（${trusted.length}）`, 'trustedCollapsed'));
     if (!state.explorer.trustedCollapsed) {
       if (!trusted.length) root.appendChild(el('div', 'explorer-sub muted', '（无记录）'));
@@ -211,8 +224,6 @@ export function renderExplorer() {
        * 清单全局共享，来自用户全局 TrustStore 的只读投影）。当前工作区标
        * 「（当前）」且消隐点击；运行中禁切由 main.js 切换处理器主判
        * （state.running）——运行中点击会得到一句如实回显、不发请求。 */
-      const norm = (p) =>
-        (p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
       for (const t of trusted) {
         const isCurrent = norm(t.path) === norm(state.workspaceCwd);
         const row = el(
@@ -233,6 +244,28 @@ export function renderExplorer() {
           );
         }
         root.appendChild(row);
+      }
+    }
+
+    /* 2026-10-21：本桥会话内打开过、但既非当前也未持久授信的工作区。
+     * 旧版只列 TrustStore 授予项——从启动工作区切走后，它会从探索器
+     * 整体消失，用户既看不到也切不回来。此行组只代表「本次会话可切回」，
+     * 不冒充持久授信；要长期保留仍走信任提示。 */
+    const recent = (state.recentWorkspaces || []).filter((p) => {
+      if (norm(p) === norm(state.workspaceCwd)) return false;
+      return !trusted.some((t) => norm(t.path) === norm(p));
+    });
+    if (recent.length) {
+      root.appendChild(subHeader(`本次会话打开过（${recent.length}）`, 'recentCollapsed'));
+      if (!state.explorer.recentCollapsed) {
+        for (const p of recent) {
+          const row = el('div', 'marker-entry explorer-row', p);
+          row.title = '本次会话内打开过 —— 点击切回（未持久授信；刷新前有效）';
+          row.addEventListener('click', () =>
+            ui.openUri('workspace://switch/' + encodeURIComponent(p)),
+          );
+          root.appendChild(row);
+        }
       }
     }
   }

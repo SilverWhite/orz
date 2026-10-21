@@ -6229,6 +6229,63 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 2026-10-21（RUN-c23e0aaa 摩擦）：候选终答已自带「反例自查」段时
+    /// 不再注入 gate——否则同一 run 产出两份完整终答，且候选里的语义摘要
+    /// 会在「门 → 终答」之间被提前消费（终答在刚压缩过的上下文里重写）。
+    #[tokio::test]
+    async fn counterexample_gate_skipped_when_draft_already_has_selfcheck() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let draft = "## 反例自查（输出前最后一次）\n\n**未验证前提**：无\n\n终答正文";
+        let fake = Arc::new(FakeProvider::from_texts(vec![draft]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-GATE-SELFCHECK".to_string(),
+            1,
+            "任务".to_string(),
+            vec!["步骤一".to_string()],
+        );
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "hello",
+                "RUN-GATE-SELFCHECK",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, draft);
+        let types = event_types(&dir);
+        assert_eq!(
+            types
+                .iter()
+                .filter(|t| **t == EventType::CounterexampleGate)
+                .count(),
+            0,
+            "self-check already present ⇒ no second gate: {types:?}"
+        );
+        assert_eq!(
+            types
+                .iter()
+                .filter(|t| **t == EventType::ModelOutput)
+                .count(),
+            1,
+            "only one model round: {types:?}"
+        );
+        assert_eq!(fake.received_requests().len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 0bi ⑩（ADR-0010 §14.76）：answer 门收窄——纯文本短答（无工具轮、
     /// 无编辑记录、无未完成 plan）跳过反例门：首轮文本即终答，不再多花
     /// 一轮模型调用，也不注入 [COUNTEREXAMPLE_GATE]。
