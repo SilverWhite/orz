@@ -59,7 +59,7 @@ orz 为**本地优先**、**保障优先**、**直接进入真机而非沙箱环
 
 ### Agent 层
 
-- **主 Agent**：唯一任务推进者。系统提示近零，面对生产装配的固定 12 工具面——8 个保留工具 `read_file`/`grep`/`search_replace`/`run_terminal_cmd`/`web_search`/`web_fetch`/`get_task_output`/`kill_task`，加 `blackboard_read`、`blackboard_write`（向黑板计划/笔记/发现区写入，单条 ≤8K）、`context_manage`（单工具带 mode：压缩/清零/一键清理）与 `submit`；`context_compress` 已退役（0cz 方案 A，压缩通道由 `context_manage mode=compress` 承继）。默认检索门开启时 `web_fetch` 按单入口投影退出主面（主面可见 11），检索显式关闭时 12 全见；计数以 `orz-host/src/tools.rs` 保留面与 `orz-loop/src/controller.rs` 生产装配为准。默认模型注册为 DeepSeek v4 flash（thinking 默认 max）（因当前 DeepSeek 会自动路由至deepseek v4.1 flash，所以暂时没有变动接口名）。任务最终经 submit 两阶段（请求 → 确认）交付，终答前有一轮机械审计与反例自查。
+- **主 Agent**：唯一任务推进者。系统提示近零，面对生产装配的固定 12 工具面——8 个保留工具 `read_file`/`grep`/`search_replace`/`run_terminal_cmd`/`web_search`/`web_fetch`/`get_task_output`/`kill_task`，加 `blackboard_read`、`blackboard_write`（向黑板计划/笔记/发现区写入，单条 ≤8K）、`context_manage`（单工具带 mode：压缩/清零/一键清理）与 `self_check`；`context_compress` 已退役（0cz 方案 A，压缩通道由 `context_manage mode=compress` 承继）。默认检索门开启时 `web_fetch` 按单入口投影退出主面（主面可见 11），检索显式关闭时 12 全见；计数以 `orz-host/src/tools.rs` 保留面与 `orz-loop/src/controller.rs` 生产装配为准。默认模型注册为 DeepSeek v4 flash（thinking 默认 max）（因当前 DeepSeek 会自动路由至deepseek v4.1 flash，所以暂时没有变动接口名）。任务以 `[RUN_END]` 终态声明结束；终答前可主动调用 `self_check` 做三问反例自查（PULL，不再自动注入门）；`submit` 已从模型工具面退役，交付状态由 Web/TUI 按需展示。
 - **外部检索子代理**：联网检索经外部检索子代理执行；检索启用门默认开——显式关闭即整族关闭（`ORZ_RETRIEVAL_ENABLED=0`），主面 `web_search` 保持单一派发入口、执行体在子代理（全局并发 1）。启用后子代理工具面恒注册本地浏览器与原生 web 双族检索工具（带车道名与推荐序的静态标注，本地浏览器优先），换道由模型自主选择：本地浏览器通道走引擎 SERP（Google 主序、Bing 回退、DDG 兜底；人化输入延迟＝逐字符键入 + 提交前停顿 + Enter，对模型不可见），HTTP 分段道为自建引擎链（缺省直连 `360search,baidu`，代理链加 `duckduckgo`；TLS/HTTP2 指纹伪装，结果质量判断交检索子代理）。浏览器启动可用性以事实事件（`browser_launch_result`）在事件链留痕。内部检索 lane 保留设计，触发工具当前封存。
 - **会话与计划**：TUI 不跨进程恢复——交互会话面只做只读回看/`--replay`（`input.rs` 明确 never resumes）；ACP/Web 提供 `session/load` 附着既有侧车会话：取 `.gsa/sessions/<session_id>.lease` 跨进程 OS 锁（同会话第二进程 fail-closed）、要求绝对且可 canonicalize 的 cwd、不触发 0cy 启动侧收卷，并按 ACP v1 经 `session/update` 回放用户/助手历史（工具/系统消息不回放；文本上下文、黑板、LIF 侧车按侧车恢复；补充队列不持久化）。仍待 `0dk`：刷新/断线后后台任务与补充队列不恢复、`session/close` 状态机未完整；一次性 `-p` 不开启跨调用恢复，但同样落会话持久化，并按里程碑增量归档到 `.gsa/archives/`。`--plan` 提供机械计划状态机工作流，生产路径中 plan_first 休眠。
 
@@ -86,7 +86,7 @@ orz 为**本地优先**、**保障优先**、**直接进入真机而非沙箱环
 - Rust 生产 workspace（`orz/`）：`orz-loop`（Agent loop、黑板与守卫）、`orz-host`（工具执行、权限桥、凭据、本地浏览器）、`orz-assurance`（journal、事件、ACAF、verifier）、`orz-bin`（CLI 入口）、`orz-tui`（终端工作台）、`orz-web`（Web 工作台：回环桥＋内嵌静态前端，`orz web` 入口）。
 - 支撑体系：`assurance/` 为 Python reference/conformance 参考；`runtime/` 为事件 Schema；`protocol/` 为结构化操作协议草案。
 
-一次运行的路径大致是：入口 → 会话与 journal 初始化 → 主 Agent 轮次（近零提示 + 固定 12 工具面）→ 工具直接调用执行 → 机械层权限/票据门 → 执行与检索 → 结果与事件回流 → submit 两阶段交付 → journal 收尾。之后可以 `--replay` 回放，或经 ACP/Web 附着会话复查（TUI 只读回看）。
+一次运行的路径大致是：入口 → 会话与 journal 初始化 → 主 Agent 轮次（近零提示 + 固定 12 工具面）→ 工具直接调用执行 → 机械层权限/票据门 → 执行与检索 → 结果与事件回流 → `[RUN_END]` 终态声明 → journal 收尾。之后可以 `--replay` 回放，或经 ACP/Web 附着会话复查（TUI 只读回看）。
 
 机制的完整状态、稳定 ID 与深入入口见下方「开发者入口」；设计见 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)，当前投影在 [`architecture/current/README.md`](architecture/current/README.md)。
 
