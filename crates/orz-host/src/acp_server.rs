@@ -12,6 +12,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use orz_assurance::lif::{DomainSpike, TemporalSessionSnapshot};
 use orz_assurance::{EventTrack, EventType, JournalRecorderError, Redaction, RunEvent};
@@ -32,6 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::permission::PermissionPolicy;
 use crate::session::{SessionError, bootstrap_session};
+use crate::session_ops::{CloseReason, ReleaseOutcome, SessionHost, SessionOutcome, SessionState};
 
 /// Errors from the ACP server layer.
 #[derive(Debug, thiserror::Error)]
@@ -46,6 +48,32 @@ pub enum AcpError {
     InvalidRequest(String),
     #[error("host error: {0}")]
     Host(String),
+    /// 0dk S2（332）：传输无关的会话生命周期错误（close/state/delete）。
+    /// 线格式由 ACP 适配器映射到 -32010..-32014 + `data` 四要素。
+    #[error("session lifecycle: {0}")]
+    SessionLifecycle(#[from] crate::session_ops::SessionError),
+}
+
+/// 0dk S2（332）：会话表默认上限（设计 §8）。
+pub const DEFAULT_SESSION_CAP: usize = 32;
+/// `ORZ_SESSION_CAP`：正整数＝上限，`0`＝不限；非法值回落默认并告警。
+pub const SESSION_CAP_ENV: &str = "ORZ_SESSION_CAP";
+
+fn session_cap_from_env() -> usize {
+    let Ok(raw) = std::env::var(SESSION_CAP_ENV) else {
+        return DEFAULT_SESSION_CAP;
+    };
+    match raw.trim().parse::<usize>() {
+        Ok(cap) => cap,
+        Err(_) => {
+            tracing::warn!(
+                value = raw,
+                default = DEFAULT_SESSION_CAP,
+                "{SESSION_CAP_ENV} must be a non-negative integer; using default"
+            );
+            DEFAULT_SESSION_CAP
+        }
+    }
 }
 
 /// Journal-recording error → ACP error (the ACP layer has no journal variant;
@@ -305,6 +333,12 @@ struct StoredSession {
     /// （下一次 LLM 调用边界投递）。队列跨 run 存活（cancel 不清队）；
     /// close_session/进程退出即灭（会话域锚点与 terminal backend 一致）。
     supplement_queue: Arc<crate::SupplementQueue>,
+    /// 0dk S2（332）：LRU 驱逐刻度——prompt 起点刷新。`close` 与容量驱逐
+    /// 只按「最近一次 prompt」排序，创建时刻只作同刻兜底。
+    last_prompt_at: Instant,
+    /// 0dk S2（332）：close/evict 已登记。prompt 与第二次 close 必须让路
+    /// （返回 busy/invalid_state），保证「不半关闭」（设计 §6.3）。
+    closing: bool,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10) + 0t (2026-09-09, ADR-0010 §14.65):
@@ -778,6 +812,113 @@ fn acquire_session_lease(base_dir: &Path, session_id: &str) -> Result<std::fs::F
     Ok(file)
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// 0dk S2（332 批）：会话生命周期的持久标记
+//
+// 设计 §6/§7 要求 close 后「侧车保留、内存移除」，delete 后「不复活」。
+// 进程内存不是真相：另一个进程（CLI `delete-session`、桥维护子进程）看不到
+// 本进程的 map，所以两种边界各留一个小标记：
+//   `.gsa/sessions/<s8>.closed`  — close/evict 已发生（幂等 close 的依据）
+//   `.gsa/sessions/<s8>.deleted` — delete 已发生（prompt/load 一律 not_found）
+// 键用 8 位前缀：CLI 删除面只有 s8，且 `<s8>` 也是侧车/journal 的既有键。
+// 标记不是 journal——journal 是「一 run 一链」的完整性单元，会话级事件
+// 混写会破坏 verifier 的单终态约束；close/delete 的审计事实由标记 + tracing
+// 承载，run journal 面不动（332 审计档登记）。
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Session id → 8 位展示/文件键（与侧车、journal 段同口径）。
+fn session_key(session_id: &str) -> String {
+    session_id.chars().take(8).collect()
+}
+
+fn session_closed_marker_path(base_dir: &Path, session_id: &str) -> PathBuf {
+    base_dir
+        .join(".gsa")
+        .join("sessions")
+        .join(format!("{}.closed", session_key(session_id)))
+}
+
+fn session_tombstone_path(base_dir: &Path, session_id: &str) -> PathBuf {
+    base_dir
+        .join(".gsa")
+        .join("sessions")
+        .join(format!("{}.deleted", session_key(session_id)))
+}
+
+fn write_session_closed_marker(
+    base_dir: &Path,
+    session_id: &str,
+    reason: crate::session_ops::CloseReason,
+) -> std::io::Result<()> {
+    let path = session_closed_marker_path(base_dir, session_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let body = serde_json::json!({
+        "schema": "orz-session-state-v1",
+        "session_id": session_id,
+        "state": "closed",
+        "reason": reason.as_str(),
+        "closed_at": now_epoch_secs(),
+    });
+    std::fs::write(&path, serde_json::to_vec_pretty(&body).unwrap_or_default())
+}
+
+fn clear_session_closed_marker(base_dir: &Path, session_id: &str) {
+    let path = session_closed_marker_path(base_dir, session_id);
+    if path.is_file() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn session_closed_marker_exists(base_dir: &Path, session_id: &str) -> bool {
+    session_closed_marker_path(base_dir, session_id).is_file()
+}
+
+/// 删除墓碑：先写它、再删数据（顺序不可反——反了就有「删到一半又被
+/// prompt 物化回来」的窗口）。写入失败 ⇒ 调用方必须放弃删除。
+fn write_session_tombstone(base_dir: &Path, session_id: &str, source: &str) -> std::io::Result<()> {
+    let path = session_tombstone_path(base_dir, session_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let body = serde_json::json!({
+        "schema": "orz-session-state-v1",
+        "session_id": session_id,
+        "state": "deleted",
+        "source": source,
+        "deleted_at": now_epoch_secs(),
+    });
+    std::fs::write(&path, serde_json::to_vec_pretty(&body).unwrap_or_default())
+}
+
+fn session_tombstoned(base_dir: &Path, session_id: &str) -> bool {
+    session_tombstone_path(base_dir, session_id).is_file()
+}
+
+/// 另一进程是否持 lease。**不创建** lease 文件（close 一个未知 id 不得在
+/// 磁盘上留下痕迹）；打不开也按「被占」fail-closed。
+fn session_lease_held_elsewhere(base_dir: &Path, session_id: &str) -> bool {
+    let path = session_lease_path(base_dir, session_id);
+    if !path.is_file() {
+        return false;
+    }
+    let Ok(file) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+    else {
+        return true;
+    };
+    match file.try_lock_exclusive() {
+        Ok(()) => {
+            let _ = file.unlock();
+            false
+        }
+        Err(_) => true,
+    }
+}
+
 /// Sessions currently leased by any process, keyed by their 8-char display
 /// prefix. Scans the lease directory because the lease filename uses the full
 /// session id while the sweep only knows the prefix.
@@ -867,6 +1008,15 @@ fn persist_conversation_sidecar(
     // 状态是真实语义；其余空续接包维持跳过（全新会话在首个成功 prompt
     // 前没有文件，`load` 的 NotFound → `None` 自然覆盖）。
     if continuation.messages.is_empty() && continuation.recall_log.is_empty() {
+        return Ok(());
+    }
+    // 0dk S2（332）：删除后禁止侧车重写——最后一个在途 run 的收尾写入
+    // 也不得让已删会话复活（设计 §7）。删除是权威事实，这里静默跳过。
+    if session_tombstoned(base_dir, &continuation.session_id) {
+        tracing::warn!(
+            session_id = continuation.session_id,
+            "conversation sidecar write skipped: session deleted (tombstone)"
+        );
         return Ok(());
     }
     let path = conversation_sidecar_path(base_dir, &continuation.session_id);
@@ -2304,6 +2454,12 @@ pub async fn delete_session_on_demand(base_dir: &Path, session8: &str) -> Result
     if activation.is_file() {
         paths.push(activation);
     }
+    // 0dk S2（332）：close 的持久标记也在删除口径内（否则「已删会话」的
+    // closed 标记会先于墓碑命中，close 幂等查询会把删除面说成 closed）。
+    let closed_marker = session_closed_marker_path(base_dir, session8);
+    if closed_marker.is_file() {
+        paths.push(closed_marker);
+    }
     if let Ok(entries) = std::fs::read_dir(gsa.join("grill")) {
         let prefix = format!("{session8}-");
         for entry in entries.flatten() {
@@ -2350,6 +2506,11 @@ pub async fn delete_session_on_demand(base_dir: &Path, session8: &str) -> Result
     }
     if paths.is_empty() {
         return Err(format!("会话 {session8} 在本工作区无数据可删除"));
+    }
+    // 0dk S2（332）：先立墓碑、再删数据。顺序反了就有「删到一半又被
+    // prompt 物化回来」的窗口；墓碑写不成 ⇒ 拒绝删除（fail-closed）。
+    if let Err(e) = write_session_tombstone(base_dir, session8, "cli_delete") {
+        return Err(format!("写入删除墓碑失败（已拒绝删除，避免会话复活）: {e}"));
     }
     for path in &paths {
         let result = if path.is_dir() {
@@ -3177,6 +3338,13 @@ const GRILL_FINISH_PROMPT: &str = "\
 /// The ACP server — holds active sessions and dispatches requests.
 pub struct AcpServer {
     sessions: Arc<Mutex<HashMap<String, StoredSession>>>,
+    /// 0dk S2（332）：内存会话表上限（`ORZ_SESSION_CAP`，0＝不限）。超限
+    /// 只驱逐「无在途 run」的 LRU；`active` 永不驱逐（设计 §8）。
+    session_cap: usize,
+    /// 0dk S2（332）：本进程最近一次 attach 的工作区根。close/state 对
+    /// 「内存表里没有」的会话也要能查 closed/tombstone 标记——桥每个
+    /// workspace 一个 child，这个根就是本 child 的归属根。
+    default_base: Mutex<Option<PathBuf>>,
     /// Outbound ACP gateway (agent → client messages: permissions etc.).
     /// `None` in headless mode — permission prompts fail closed.
     gateway: Arc<Mutex<Option<AcpAgentGatewaySender>>>,
@@ -3364,6 +3532,8 @@ impl AcpServer {
     pub fn with_gateway(model_gateway: Arc<dyn ModelGateway>) -> Self {
         AcpServer {
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            session_cap: session_cap_from_env(),
+            default_base: Mutex::new(None),
             gateway: Arc::new(Mutex::new(None)),
             model_gateway,
             acaf: None,
@@ -3390,6 +3560,13 @@ impl AcpServer {
     /// refuses runs at the controller boundary).
     pub fn with_acaf_fail_closed(mut self, fail_closed: bool) -> Self {
         self.acaf_fail_closed = fail_closed;
+        self
+    }
+
+    /// 0dk S2（332）：覆盖会话表上限（测试用；生产走 `ORZ_SESSION_CAP`）。
+    /// `0` = 不限。
+    pub fn with_session_cap(mut self, cap: usize) -> Self {
+        self.session_cap = cap;
         self
     }
 
@@ -3557,6 +3734,11 @@ impl AcpServer {
         // itself only records where, under what trust policy, and under what
         // permission policy runs live.
         let base = base_dir.unwrap_or_else(|| PathBuf::from("."));
+        // 0dk S2（332）：删除墓碑优先于一切物化路径——已删会话不得经 new/load
+        // 复活（设计 §7）。CLI `delete-session` 与 Web 删除写同一个标记。
+        if session_tombstoned(&base, session_id) {
+            return Err(AcpError::SessionNotFound(session_id.to_string()));
+        }
         let lease = acquire_session_lease(&base, session_id)?;
         // 0cy（docs/GSA_SESSION_HYGIENE_DESIGN_2026-10-11.md）：新会话起点＝
         // 空台账＋无前档足迹——非存活、非当前的会话足迹先收卷进
@@ -3688,6 +3870,13 @@ impl AcpServer {
         if continuation.session_started_at.is_none() {
             continuation.session_started_at = Some(now_epoch_secs());
         }
+        // 0dk S2（332）：本 child 的归属根（close/state 对不在内存表的会话
+        // 也要能查标记）；成功 attach 即清除上一次 close 的 closed 标记。
+        *self
+            .default_base
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(base.clone());
+        clear_session_closed_marker(&base, session_id);
         self.sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -3713,8 +3902,12 @@ impl AcpServer {
                     // 0di：会话级中途补充队列（与 terminal backend 同域——
                     // 会话持有 Arc，build_host 每 prompt 注入 host）。
                     supplement_queue: Arc::new(crate::SupplementQueue::new()),
+                    last_prompt_at: Instant::now(),
+                    closing: false,
                 },
             );
+        // 0dk S2（332）：有界——插入后按 LRU 驱逐无在途 run 的旧会话。
+        self.evict_over_cap();
 
         Ok(serde_json::json!({
             "session_id": session_id,
@@ -3887,6 +4080,12 @@ impl AcpServer {
         session_id: &str,
         prompt: &str,
     ) -> Result<serde_json::Value, AcpError> {
+        // 0dk S2（332）：删除不复活——prompt 只查表，不重建。若磁盘上已有
+        // tombstone（另一个进程刚删），本进程的内存行也必须就地作废，返回
+        // not_found，且绝不触发侧车重写（设计 §7/不变量 5）。
+        if self.refuse_deleted_session(session_id) {
+            return Err(AcpError::SessionNotFound(session_id.to_string()));
+        }
         // Reserve the run id BEFORE bootstrap: the counter advances even when
         // the run fails (untrusted cwd, model error), so a retried prompt gets
         // a fresh run dir — reusing a failed run's dir would append to its
@@ -3908,6 +4107,18 @@ impl AcpServer {
             let session = sessions
                 .get_mut(session_id)
                 .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
+            // 0dk S2（332）：closing 已登记 ⇒ 拒绝新 prompt（不半关闭）。
+            if session.closing {
+                return Err(AcpError::SessionLifecycle(
+                    crate::session_ops::SessionError::InvalidState {
+                        session_id: session_id.to_string(),
+                        state: crate::session_ops::SessionState::Closing,
+                        verb: "prompt",
+                    },
+                ));
+            }
+            // LRU 刻度：每次 prompt 起点刷新（close/evict 只看它）。
+            session.last_prompt_at = Instant::now();
             let n = session.prompt_count;
             session.prompt_count += 1;
             (
@@ -4563,6 +4774,9 @@ impl AcpServer {
         snapshot_hash: &str,
         scope: Option<Vec<PathBuf>>,
     ) -> Result<serde_json::Value, AcpError> {
+        if self.refuse_deleted_session(session_id) {
+            return Err(AcpError::SessionNotFound(session_id.to_string()));
+        }
         let (base_dir, trust_policy, restore_number) = {
             let mut sessions = self
                 .sessions
@@ -4680,6 +4894,379 @@ impl AcpServer {
             .collect()
     }
 
+    // ── 0dk S2（332）：会话生命周期（close/state/delete/evict） ──────────
+
+    /// 本进程看到的会话根：内存行优先，否则取本 child 最近一次 attach 的
+    /// 工作区根（close/state 需要查磁盘标记）。
+    fn lifecycle_base(&self, session_id: &str) -> Option<PathBuf> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(session_id)
+            .map(|session| session.base_dir.clone())
+            .or_else(|| {
+                self.default_base
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            })
+    }
+
+    fn lifecycle_state(&self, session_id: &str) -> Option<SessionState> {
+        let sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let session = sessions.get(session_id)?;
+        if session.closing {
+            return Some(SessionState::Closing);
+        }
+        let run_active = self
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(session_id)
+            .is_some();
+        Some(if run_active {
+            SessionState::Active
+        } else if session.prompt_count == 0 {
+            SessionState::Created
+        } else {
+            SessionState::Idle
+        })
+    }
+
+    /// 在途 run 的审计证据：prompt_count 在 run 起点就已自增，故当前
+    /// run 序号＝`prompt_count - 1`。
+    fn run_evidence(&self, session_id: &str) -> Option<String> {
+        let prompt_count = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(session_id)
+            .map(|session| session.prompt_count)?;
+        Some(format!(
+            "RUN-{}-{}",
+            session_key(session_id),
+            prompt_count.saturating_sub(1)
+        ))
+    }
+
+    /// 会话域收尾（close/delete 共用）：浏览器进程树、终端 actor、run 表、
+    /// 待消费取消/归档票。**不**动侧车——close 的语义是「侧车保留」。
+    fn teardown_runtime(&self, session: StoredSession, session_id: &str) {
+        if let Some(browser) = session.browser.clone() {
+            tokio::spawn(async move {
+                browser.shutdown().await;
+            });
+        }
+        session.terminal_backend.cancel();
+        self.runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(session_id);
+        self.pending_cancels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(session_id);
+        // 驱逐/关闭的会话不再补归档（close 不是 archive；设计 §6 状态表）。
+        self.pending_archives
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(session_id);
+    }
+
+    fn finish_closed(
+        &self,
+        session: StoredSession,
+        session_id: &str,
+        reason: crate::session_ops::CloseReason,
+    ) {
+        let base = session.base_dir.clone();
+        self.teardown_runtime(session, session_id);
+        if let Err(e) = write_session_closed_marker(&base, session_id, reason) {
+            tracing::warn!(
+                session_id,
+                reason = reason.as_str(),
+                "session closed marker write failed: {e}"
+            );
+        }
+        tracing::info!(
+            session_id,
+            reason = reason.as_str(),
+            "session closed (sidecar retained)"
+        );
+        self.emit_session_state(session_id, SessionState::Closed, Some(reason));
+    }
+
+    /// `_orz/session_state`（设计 §4 不变量 8）：每次转移发一条扩展通知。
+    /// 无 gateway（无头）时静默——没有客户端可通知。
+    fn emit_session_state(
+        &self,
+        session_id: &str,
+        state: SessionState,
+        reason: Option<crate::session_ops::CloseReason>,
+    ) {
+        let Some(gateway) = self.gateway() else {
+            return;
+        };
+        let params = serde_json::json!({
+            "sessionId": session_id,
+            "state": state.as_str(),
+            "reason": reason.map(crate::session_ops::CloseReason::as_str),
+            "at": now_epoch_secs(),
+        });
+        let Ok(raw) = serde_json::value::to_raw_value(&params) else {
+            return;
+        };
+        let notification =
+            acp::ExtNotification::new("orz/session_state", std::sync::Arc::from(raw));
+        if !gateway.forward_fire_and_forget(notification) {
+            tracing::warn!(
+                session_id,
+                "session_state notification dropped (gateway gone)"
+            );
+        }
+    }
+
+    /// 原子「标记 closing + 移除」；有在途 run 时拒绝（不半关闭）。
+    fn release_session(
+        &self,
+        session_id: &str,
+        reason: crate::session_ops::CloseReason,
+    ) -> ReleaseOutcome {
+        let removed = {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(session) = sessions.get_mut(session_id) else {
+                return ReleaseOutcome::NotFound;
+            };
+            if session.closing {
+                return ReleaseOutcome::Busy;
+            }
+            // sessions → runs 的锁序：prompt 的 guard 只在 runs 锁内完成
+            // 注册后立即释放，不会持有 runs 等 sessions；其余路径同序。
+            let run_active = self
+                .runs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(session_id);
+            if run_active {
+                return ReleaseOutcome::Busy;
+            }
+            session.closing = true;
+            let Some(session) = sessions.remove(session_id) else {
+                return ReleaseOutcome::NotFound;
+            };
+            session
+        };
+        self.finish_closed(removed, session_id, reason);
+        ReleaseOutcome::Released
+    }
+
+    /// 有界会话表（设计 §8）：只驱逐无在途 run 的 LRU；全 active 时保留
+    /// 超限并告警，绝不驱逐运行中的会话。
+    fn evict_over_cap(&self) {
+        let cap = self.session_cap;
+        if cap == 0 {
+            return;
+        }
+        loop {
+            let victim = {
+                let mut sessions = self
+                    .sessions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if sessions.len() <= cap {
+                    return;
+                }
+                let runs = self
+                    .runs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut candidates: Vec<(String, Instant)> = sessions
+                    .iter()
+                    .filter(|(id, session)| !session.closing && !runs.contains_key(*id))
+                    .map(|(id, session)| (id.clone(), session.last_prompt_at))
+                    .collect();
+                drop(runs);
+                candidates.sort_by_key(|(_, at)| *at);
+                let Some((id, _)) = candidates.into_iter().next() else {
+                    tracing::warn!(
+                        sessions = sessions.len(),
+                        cap,
+                        "session cap exceeded but every session has an in-flight run"
+                    );
+                    return;
+                };
+                let Some(session) = sessions.remove(&id) else {
+                    continue;
+                };
+                (id, session)
+            };
+            tracing::info!(
+                session_id = victim.0,
+                cap,
+                "session cap reached; evicting LRU idle session"
+            );
+            self.finish_closed(victim.1, &victim.0, crate::session_ops::CloseReason::Evict);
+        }
+    }
+
+    /// 0dk S2（332）：close 的公开入口（`_orz/session_close`）。
+    pub async fn handle_session_close(
+        &self,
+        session_id: &str,
+        reason: crate::session_ops::CloseReason,
+    ) -> Result<SessionOutcome, crate::session_ops::SessionError> {
+        self.handle_session_close_with_timeout(
+            session_id,
+            reason,
+            crate::session_ops::DEFAULT_CLOSE_TIMEOUT,
+        )
+        .await
+    }
+
+    /// 超时可注入版本（单测用短超时；生产固定 10s）。
+    pub async fn handle_session_close_with_timeout(
+        &self,
+        session_id: &str,
+        reason: crate::session_ops::CloseReason,
+        timeout: std::time::Duration,
+    ) -> Result<SessionOutcome, crate::session_ops::SessionError> {
+        if validate_session_id(session_id).is_err() {
+            return Err(crate::session_ops::SessionError::NotFound {
+                session_id: session_id.to_string(),
+            });
+        }
+        let host = LifecycleHost(self);
+        crate::session_ops::close(&host, session_id, reason, timeout).await
+    }
+
+    /// `_orz/session_state`：查态（不转移）。
+    pub fn handle_session_state(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionOutcome, crate::session_ops::SessionError> {
+        if validate_session_id(session_id).is_err() {
+            return Err(crate::session_ops::SessionError::NotFound {
+                session_id: session_id.to_string(),
+            });
+        }
+        let host = LifecycleHost(self);
+        crate::session_ops::state_of(&host, session_id)
+    }
+
+    /// 删除原语（`_orz/session_delete`）：先 close 再删数据，最后写墓碑。
+    /// `active`/`closing` 一律拒绝（设计 §7）。
+    pub async fn handle_session_delete(
+        &self,
+        session_id: &str,
+    ) -> Result<serde_json::Value, crate::session_ops::SessionError> {
+        use crate::session_ops::SessionError;
+        if validate_session_id(session_id).is_err() {
+            return Err(SessionError::NotFound {
+                session_id: session_id.to_string(),
+            });
+        }
+        let host = LifecycleHost(self);
+        if host.is_deleted(session_id) {
+            return Ok(serde_json::json!({
+                "sessionId": session_id,
+                "state": "deleted",
+                "deleted": true,
+                "already": true,
+            }));
+        }
+        match host.state_of(session_id) {
+            Some(SessionState::Active) | Some(SessionState::Closing) => {
+                return Err(SessionError::Busy {
+                    session_id: session_id.to_string(),
+                    evidence: host
+                        .run_evidence(session_id)
+                        .unwrap_or_else(|| "run=unknown".to_string()),
+                    waited_ms: 0,
+                });
+            }
+            Some(_) => {}
+            None => {
+                if host.lease_held_elsewhere(session_id) {
+                    return Err(SessionError::LeaseConflict {
+                        session_id: session_id.to_string(),
+                        detail: "lease locked by another orz process".to_string(),
+                    });
+                }
+            }
+        }
+        let Some(base) = host.base_for(session_id) else {
+            return Err(SessionError::NotFound {
+                session_id: session_id.to_string(),
+            });
+        };
+        // 先 close（幂等）：释放 lease、移出内存、写 closed 标记。
+        crate::session_ops::close(
+            &host,
+            session_id,
+            crate::session_ops::CloseReason::UserClose,
+            crate::session_ops::DEFAULT_CLOSE_TIMEOUT,
+        )
+        .await?;
+        let s8 = session_key(session_id);
+        let message = delete_session_on_demand(&base, &s8)
+            .await
+            .map_err(|detail| SessionError::Internal {
+                session_id: session_id.to_string(),
+                detail,
+            })?;
+        tracing::info!(session_id, %s8, "session deleted (tombstone written)");
+        Ok(serde_json::json!({
+            "sessionId": session_id,
+            "state": "deleted",
+            "deleted": true,
+            "already": false,
+            "message": message,
+        }))
+    }
+
+    /// 删除墓碑的进程内执法：prompt 前调用；命中即作废内存行并拒绝。
+    fn refuse_deleted_session(&self, session_id: &str) -> bool {
+        let Some(base) = self.lifecycle_base(session_id) else {
+            return false;
+        };
+        if !session_tombstoned(&base, session_id) {
+            return false;
+        }
+        // 在途 run 不拆：拆掉 token/terminal 只会让取消失联，run 仍会跑完；
+        // 侧车写入已被 tombstone 拦住，内存行留给容量驱逐或进程退出。
+        let run_active = self
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(session_id);
+        if run_active {
+            tracing::warn!(
+                session_id,
+                "operation refused: session was deleted out-of-process while a run is in flight"
+            );
+            return true;
+        }
+        let removed = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(session_id);
+        if let Some(session) = removed {
+            tracing::warn!(
+                session_id,
+                "operation refused: session was deleted out-of-process; in-memory row discarded"
+            );
+            self.teardown_runtime(session, session_id);
+        }
+        true
+    }
+
     /// Spawn the archive task for a ticket（后台 best-effort，失败只 warn、
     /// 不阻塞调用方）。0dd（2026-10-16）后票面恒为 close 道——归档非增量
     /// （`incremental=false`）；里程碑旗标只存于无头车道直调参数。
@@ -4721,6 +5308,11 @@ impl AcpServer {
         session_id: &str,
         text: &str,
     ) -> Result<serde_json::Value, AcpError> {
+        // 0dk S2（332）：已删会话不得接收补充/撤回/恢复——与 prompt 同一
+        // tombstone 执法口径（删除不复活）。
+        if self.refuse_deleted_session(session_id) {
+            return Err(AcpError::SessionNotFound(session_id.to_string()));
+        }
         // Hold the run-state lock through the push. A Prompt marker is the
         // intended queueing window; a Restore marker is recall/restore's
         // exclusive section and must reject append atomically (otherwise a
@@ -4761,6 +5353,9 @@ impl AcpServer {
     /// 0di：撤回预览——会话续接包的用户消息清单（ordinal 1-based 递增，
     /// 侧车唯一真相面）。run/restore 在途时拒绝（撤回与提示同锁互斥）。
     pub fn handle_recall_preview(&self, session_id: &str) -> Result<serde_json::Value, AcpError> {
+        if self.refuse_deleted_session(session_id) {
+            return Err(AcpError::SessionNotFound(session_id.to_string()));
+        }
         let runs = self
             .runs
             .lock()
@@ -4816,6 +5411,9 @@ impl AcpServer {
         session_id: &str,
         ordinal: u32,
     ) -> Result<serde_json::Value, AcpError> {
+        if self.refuse_deleted_session(session_id) {
+            return Err(AcpError::SessionNotFound(session_id.to_string()));
+        }
         // Fail-closed（与 restore 同形）：run/restore 在途即拒绝；recall
         // 登记互斥_marker，RAII 释放。
         let _inflight = RestoreInflightGuard::new(&self.runs, session_id).map_err(|session_id| {
@@ -5091,6 +5689,66 @@ impl AcpServer {
             host = host.with_tool_timeout(timeout);
         }
         Ok(host)
+    }
+}
+
+/// 0dk S2（332）：`AcpServer` 的传输无关视图——只暴露 session_ops 需要的
+/// 查/取消/释放/标记检查。ACP 类型不进入状态机（设计 §11）。
+struct LifecycleHost<'a>(&'a AcpServer);
+
+impl LifecycleHost<'_> {
+    fn base_for(&self, session_id: &str) -> Option<PathBuf> {
+        self.0.lifecycle_base(session_id)
+    }
+}
+
+impl SessionHost for LifecycleHost<'_> {
+    fn state_of(&self, session_id: &str) -> Option<SessionState> {
+        self.0.lifecycle_state(session_id)
+    }
+
+    fn cancel(&self, session_id: &str) -> bool {
+        // 只取消 Prompt 的 token；Restore 没有取消句柄，误走
+        // `cancel_current_run` 会登记 pending_cancel，可能毒化下一次 prompt。
+        let is_prompt = matches!(
+            self.0
+                .runs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(session_id),
+            Some(RunInFlight::Prompt(_))
+        );
+        is_prompt && self.0.cancel_current_run(session_id)
+    }
+
+    fn release(&self, session_id: &str, reason: CloseReason) -> ReleaseOutcome {
+        self.0.release_session(session_id, reason)
+    }
+
+    fn run_evidence(&self, session_id: &str) -> Option<String> {
+        self.0.run_evidence(session_id)
+    }
+
+    fn is_deleted(&self, session_id: &str) -> bool {
+        self.0
+            .lifecycle_base(session_id)
+            .map(|base| session_tombstoned(&base, session_id))
+            .unwrap_or(false)
+    }
+
+    fn is_closed(&self, session_id: &str) -> bool {
+        let Some(base) = self.0.lifecycle_base(session_id) else {
+            return false;
+        };
+        session_closed_marker_exists(&base, session_id)
+            || conversation_sidecar_path(&base, session_id).is_file()
+    }
+
+    fn lease_held_elsewhere(&self, session_id: &str) -> bool {
+        self.0
+            .lifecycle_base(session_id)
+            .map(|base| session_lease_held_elsewhere(&base, session_id))
+            .unwrap_or(false)
     }
 }
 
@@ -5498,6 +6156,423 @@ mod tests {
             .await;
         assert!(result.is_err());
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // ── 0dk S2（332）：会话生命周期验收（设计 §12 十条） ─────────────────
+
+    #[tokio::test]
+    async fn close_idle_releases_lease_and_removes_entry() {
+        let base = test_dir();
+        let server = shadow_server();
+        let id = "sess-close-idle";
+        server
+            .handle_session_new(id, Some(base.clone()), crate::session::TrustPolicy::Skip)
+            .await
+            .unwrap();
+        assert!(
+            session_lease_held_elsewhere(&base, id),
+            "the owning process must look like a lease holder to a second probe"
+        );
+
+        let out = server
+            .handle_session_close(id, CloseReason::UserClose)
+            .await
+            .expect("close idle");
+        assert!(out.closed && !out.already);
+        assert_eq!(out.state, SessionState::Closed);
+        assert!(!server.list_sessions().contains(&id.to_string()));
+        assert!(
+            !session_lease_held_elsewhere(&base, id),
+            "lease must be released on close"
+        );
+        assert!(
+            session_closed_marker_path(&base, id).is_file(),
+            "closed state must be durable for the next process"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn close_is_idempotent() {
+        let base = test_dir();
+        let server = shadow_server();
+        let id = "sess-close-twice";
+        server
+            .handle_session_new(id, Some(base.clone()), crate::session::TrustPolicy::Skip)
+            .await
+            .unwrap();
+        server
+            .handle_session_close(id, CloseReason::UserClose)
+            .await
+            .expect("first close");
+        // 内存表已无该行，但 closed 标记仍在——第二次 close 必须报 already。
+        let again = server
+            .handle_session_close(id, CloseReason::UserClose)
+            .await
+            .expect("second close");
+        assert!(again.closed && again.already);
+        assert_eq!(again.state, SessionState::Closed);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn close_active_cancels_then_closes() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = Arc::new(shadow_server_with_gateway(Arc::new(
+                    FakeProvider::new(vec![ScriptedResponse::text("慢速回答。")])
+                        .with_chunk_delay(std::time::Duration::from_millis(120)),
+                )));
+                server.set_gateway(dead_gateway());
+                let id = "sess-close-active";
+                server
+                    .handle_session_new(id, Some(base.clone()), crate::session::TrustPolicy::Skip)
+                    .await
+                    .unwrap();
+
+                let srv = server.clone();
+                let prompt = tokio::task::spawn_local(async move {
+                    srv.handle_session_prompt(id, "hello").await
+                });
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                let out = server
+                    .handle_session_close(id, CloseReason::UserClose)
+                    .await
+                    .expect("close active");
+                assert!(out.closed && !out.already);
+                assert!(
+                    !server.list_sessions().contains(&id.to_string()),
+                    "close must remove the session entry"
+                );
+                let result = prompt.await.unwrap();
+                assert!(
+                    matches!(result, Err(AcpError::AgentLoop(AgentLoopError::Cancelled))),
+                    "the in-flight run must terminate as cancelled"
+                );
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn close_times_out_returns_busy_and_keeps_active() {
+        let base = test_dir();
+        let server = shadow_server();
+        let id = "sess-close-timeout";
+        server
+            .handle_session_new(id, Some(base.clone()), crate::session::TrustPolicy::Skip)
+            .await
+            .unwrap();
+        // 模拟一个「cancel 不收敛」的在途 run：真实链路的 10s 上限无法在
+        // 单测里等，这里直接放一个不会被消费的 Prompt token——close 必须
+        // 在 60ms 后报 busy，且不得移除会话/标记。
+        server
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                id.to_string(),
+                RunInFlight::Prompt(tokio_util::sync::CancellationToken::new()),
+            );
+
+        let err = server
+            .handle_session_close_with_timeout(
+                id,
+                CloseReason::UserClose,
+                std::time::Duration::from_millis(60),
+            )
+            .await
+            .expect_err("cancel does not converge within 60ms");
+        assert!(matches!(err, crate::session_ops::SessionError::Busy { .. }));
+        assert_eq!(err.code(), -32011);
+        assert!(
+            server.list_sessions().contains(&id.to_string()),
+            "a timed-out close must not half-close the session"
+        );
+        assert!(
+            server
+                .runs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(id),
+            "the run marker must survive the timeout"
+        );
+        assert!(
+            !session_closed_marker_path(&base, id).is_file(),
+            "busy must not write a closed marker"
+        );
+
+        // 收尾：run 终结后再 close 成功（证明 busy 可重试）。
+        server
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
+        let out = server
+            .handle_session_close(id, CloseReason::UserClose)
+            .await
+            .expect("retry close");
+        assert!(out.closed);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn prompt_after_delete_returns_not_found_without_materializing() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = shadow_server();
+                let id = "aaaa1111-2222-3333-4444-555566667777";
+                let s8 = "aaaa1111";
+                server
+                    .handle_session_new(id, Some(base.clone()), crate::session::TrustPolicy::Skip)
+                    .await
+                    .unwrap();
+                server
+                    .handle_session_prompt(id, "删除前的问题")
+                    .await
+                    .unwrap();
+                let sidecar = conversation_sidecar_path(&base, id);
+                assert!(sidecar.is_file(), "a completed prompt writes the sidecar");
+
+                delete_session_on_demand(&base, s8).await.expect("delete");
+                assert!(!sidecar.is_file(), "delete removes the sidecar");
+                assert!(session_tombstoned(&base, id), "delete writes a tombstone");
+
+                let err = server
+                    .handle_session_prompt(id, "删除后的问题")
+                    .await
+                    .expect_err("deleted session must not be prompted");
+                assert!(matches!(err, AcpError::SessionNotFound(_)), "{err:?}");
+                assert!(
+                    !sidecar.is_file(),
+                    "prompt must not rematerialize a deleted sidecar"
+                );
+                assert!(
+                    !server.list_sessions().contains(&id.to_string()),
+                    "the stale in-memory row must be discarded"
+                );
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn delete_active_is_rejected() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = Arc::new(shadow_server_with_gateway(Arc::new(
+                    FakeProvider::new(vec![ScriptedResponse::text("运行中。")])
+                        .with_chunk_delay(std::time::Duration::from_millis(300)),
+                )));
+                server.set_gateway(dead_gateway());
+                let id = "bbbb2222-3333-4444-5555-666677778888";
+                server
+                    .handle_session_new(id, Some(base.clone()), crate::session::TrustPolicy::Skip)
+                    .await
+                    .unwrap();
+                let srv = server.clone();
+                let prompt = tokio::task::spawn_local(async move {
+                    srv.handle_session_prompt(id, "hello").await
+                });
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+                let err = server
+                    .handle_session_delete(id)
+                    .await
+                    .expect_err("active delete");
+                assert!(matches!(err, crate::session_ops::SessionError::Busy { .. }));
+                assert_eq!(err.code(), -32011);
+                assert!(
+                    server.list_sessions().contains(&id.to_string()),
+                    "a rejected delete must leave the session intact"
+                );
+
+                assert!(server.cancel_current_run(id));
+                let _ = prompt.await.unwrap();
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn sessions_cap_evicts_lru_idle_only() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = Arc::new(
+                    shadow_server_with_gateway(Arc::new(
+                        FakeProvider::new(vec![ScriptedResponse::text("占住运行。")])
+                            .with_chunk_delay(std::time::Duration::from_millis(300)),
+                    ))
+                    .with_session_cap(2),
+                );
+                server.set_gateway(dead_gateway());
+                let active = "sess-cap-active";
+                server
+                    .handle_session_new(
+                        active,
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                let srv = server.clone();
+                let prompt = tokio::task::spawn_local(async move {
+                    srv.handle_session_prompt(active, "hello").await
+                });
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                // Active 会话是最旧的；若按纯 LRU 会先驱逐它——必须跳过。
+                for id in ["sess-cap-b", "sess-cap-c"] {
+                    server
+                        .handle_session_new(
+                            id,
+                            Some(base.clone()),
+                            crate::session::TrustPolicy::Skip,
+                        )
+                        .await
+                        .unwrap();
+                }
+                let live = server.list_sessions();
+                assert!(live.contains(&active.to_string()), "active must survive");
+                assert!(live.contains(&"sess-cap-c".to_string()));
+                assert!(
+                    !live.contains(&"sess-cap-b".to_string()),
+                    "the oldest idle session must be evicted, not the active one"
+                );
+                assert_eq!(live.len(), 2, "cap is enforced after insertion");
+                assert!(
+                    session_closed_marker_path(&base, "sess-cap-b").is_file(),
+                    "evicted sessions keep a durable closed marker"
+                );
+
+                assert!(server.cancel_current_run(active));
+                let _ = prompt.await.unwrap();
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn second_process_gets_lease_conflict() {
+        let base = test_dir();
+        let server = shadow_server();
+        // 先把本 child 的归属根立起来（close 未知 id 时查 lease 需要根）。
+        server
+            .handle_session_new(
+                "sess-lease-other",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        let id = "sess-lease-332";
+        let _held = acquire_session_lease(&base, id).expect("second process lease");
+        let err = server
+            .handle_session_close(id, CloseReason::UserClose)
+            .await
+            .expect_err("another process holds the lease");
+        assert!(matches!(
+            err,
+            crate::session_ops::SessionError::LeaseConflict { .. }
+        ));
+        assert_eq!(err.code(), -32013);
+        assert_eq!(err.class(), "session");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn session_state_notification_emitted_on_transition() {
+        let base = test_dir();
+        let server = shadow_server();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+        server.set_gateway(xai_acp_lib::AcpAgentGatewaySender::new(tx));
+        let id = "sess-state-note";
+        server
+            .handle_session_new(id, Some(base.clone()), crate::session::TrustPolicy::Skip)
+            .await
+            .unwrap();
+        server
+            .handle_session_close(id, CloseReason::Switch)
+            .await
+            .expect("close");
+
+        let msg = rx.recv().await.expect("state notification");
+        match msg {
+            xai_acp_lib::AcpClientMessage::ExtNotification(args) => {
+                assert_eq!(args.request.method.as_ref(), "orz/session_state");
+                let params: serde_json::Value =
+                    serde_json::from_str(args.request.params.get()).unwrap();
+                assert_eq!(params["sessionId"], id);
+                assert_eq!(params["state"], "closed");
+                assert_eq!(params["reason"], "switch");
+            }
+            other => panic!("unexpected gateway message: {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn unknown_private_method_returns_method_not_found() {
+        let server = Arc::new(shadow_server());
+        let handler = StdioAgentHandler::new(server);
+        let params: std::sync::Arc<serde_json::value::RawValue> =
+            std::sync::Arc::from(serde_json::value::to_raw_value(&serde_json::json!({})).unwrap());
+        let request =
+            acp::ClientRequest::ExtMethodRequest(acp::ExtRequest::new("orz/not_a_method", params));
+        let err = handler
+            .handle_request(request)
+            .await
+            .expect_err("unknown ext method");
+        assert_eq!(err.code, acp::ErrorCode::MethodNotFound);
+    }
+
+    /// 线格式钉子：`_orz/session_close` 走 ExtRequest，参数 camelCase，
+    /// 结果 `{sessionId,state,closed,already}`；重复调用 already=true。
+    #[tokio::test]
+    async fn session_close_ext_method_roundtrip() {
+        let base = test_dir();
+        let server = Arc::new(shadow_server());
+        let handler = StdioAgentHandler::new(server.clone());
+        let id = "sess-close-ext";
+        server
+            .handle_session_new(id, Some(base.clone()), crate::session::TrustPolicy::Skip)
+            .await
+            .unwrap();
+
+        let call = |id: &'static str| {
+            let params: std::sync::Arc<serde_json::value::RawValue> = std::sync::Arc::from(
+                serde_json::value::to_raw_value(&serde_json::json!({
+                    "sessionId": id,
+                    "reason": "switch"
+                }))
+                .unwrap(),
+            );
+            acp::ClientRequest::ExtMethodRequest(acp::ExtRequest::new("orz/session_close", params))
+        };
+        let first = handler.handle_request(call(id)).await.expect("ext close");
+        let acp::AgentResponse::ExtMethodResponse(raw) = first else {
+            panic!("expected ext method response");
+        };
+        let value: serde_json::Value = serde_json::from_str(raw.0.get()).unwrap();
+        assert_eq!(value["sessionId"], id);
+        assert_eq!(value["state"], "closed");
+        assert_eq!(value["closed"], true);
+        assert_eq!(value["already"], false);
+
+        let again = handler
+            .handle_request(call(id))
+            .await
+            .expect("idempotent ext close");
+        let acp::AgentResponse::ExtMethodResponse(raw) = again else {
+            panic!("expected ext method response");
+        };
+        let value: serde_json::Value = serde_json::from_str(raw.0.get()).unwrap();
+        assert_eq!(value["already"], true);
         let _ = std::fs::remove_dir_all(&base);
     }
 

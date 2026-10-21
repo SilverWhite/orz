@@ -32,6 +32,10 @@ export const state = {
     { id: 'delivery', label: '交付状态', enabled: true },
     { id: 'refresh', label: '刷新', enabled: true },
     { id: 'stop', label: '停止', enabled: false },
+    // 0dk S2（332）：显式关闭当前会话（私有扩展 `_orz/session_close`）。
+    // 运行中禁用——关闭会先取消在途 run，但 UI 仍要求先「停止」，避免误点。
+    // 位置紧随「停止」：同属会话/运行控制，且不破坏「新建会话→后退」冻结序。
+    { id: 'close', label: '关闭会话', enabled: false },
     { id: 'open', label: '打开', enabled: true },
     { id: 'verify', label: '验证', enabled: false },
     { id: 'properties', label: '属性', enabled: true },
@@ -387,6 +391,9 @@ export const vm = {
     btn('stop').enabled = state.running;
     btn('selfcheck').enabled = state.running;
     btn('new').enabled = !state.running && !state.loadingSession;
+    // 0dk S2：只有「当前绑定且有会话」才可关闭；运行/恢复中一律禁用。
+    btn('close').enabled =
+      !state.running && !state.loadingSession && !!state.sessionId;
     // 只在「查看某会话且该会话不是当前绑定」且侧车/归档带完整 id 时可恢复。
     // 2026-10-21 恢复修复：archive:// 视图同样可恢复（host 侧 load 自动回档）。
     const viewed = state.nav.current.startsWith('conversation://')

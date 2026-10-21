@@ -96,6 +96,23 @@ fn ext_response_value(v: serde_json::Value) -> AgentResponse {
     AgentResponse::ExtMethodResponse(acp::ExtResponse::new(raw))
 }
 
+/// 0dk S2（332）：`_orz/*` 参数兼容 camelCase（设计线格式）与既有
+/// snake_case（0di 面），两者都收。
+fn ext_session_id(params: &serde_json::Value) -> String {
+    params
+        .get("sessionId")
+        .or_else(|| params.get("session_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// 0dk S2（332）：会话生命周期错误 → JSON-RPC 错误（-32010..-32014 +
+/// `data` 四要素）。传输适配器只做这一层映射，状态机在 `session_ops`。
+fn session_error_to_acp(err: crate::session_ops::SessionError) -> acp::Error {
+    acp::Error::new(err.code(), err.to_string()).data(err.data())
+}
+
 impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
     async fn handle_request(&self, request: ClientRequest) -> acp::Result<AgentResponse> {
         match request {
@@ -242,6 +259,61 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
                             .handle_recall(&session_id, ordinal)
                             .map(ext_response_value)
                             .map_err(acp::Error::into_internal_error)
+                    }
+                    // 0dk S2（332）：会话生命周期私有扩展（设计 §5.2）。
+                    // `_orz/session_close` 先 cancel 再释放（10s 上限），
+                    // `_orz/session_state` 只查不移，`_orz/session_delete`
+                    // 先 close 再删数据并写墓碑。
+                    "orz/session_close" => {
+                        let session_id = ext_session_id(&params);
+                        if session_id.is_empty() {
+                            return Err(acp::Error::new(
+                                acp::ErrorCode::InvalidRequest.into(),
+                                "session_close requires sessionId",
+                            ));
+                        }
+                        let reason = crate::session_ops::CloseReason::parse(
+                            params.get("reason").and_then(|v| v.as_str()),
+                        );
+                        let outcome = self
+                            .server
+                            .handle_session_close(&session_id, reason)
+                            .await
+                            .map_err(session_error_to_acp)?;
+                        Ok(ext_response_value(
+                            serde_json::to_value(outcome).unwrap_or(serde_json::Value::Null),
+                        ))
+                    }
+                    "orz/session_state" => {
+                        let session_id = ext_session_id(&params);
+                        if session_id.is_empty() {
+                            return Err(acp::Error::new(
+                                acp::ErrorCode::InvalidRequest.into(),
+                                "session_state requires sessionId",
+                            ));
+                        }
+                        let outcome = self
+                            .server
+                            .handle_session_state(&session_id)
+                            .map_err(session_error_to_acp)?;
+                        Ok(ext_response_value(
+                            serde_json::to_value(outcome).unwrap_or(serde_json::Value::Null),
+                        ))
+                    }
+                    "orz/session_delete" => {
+                        let session_id = ext_session_id(&params);
+                        if session_id.is_empty() {
+                            return Err(acp::Error::new(
+                                acp::ErrorCode::InvalidRequest.into(),
+                                "session_delete requires sessionId",
+                            ));
+                        }
+                        let value = self
+                            .server
+                            .handle_session_delete(&session_id)
+                            .await
+                            .map_err(session_error_to_acp)?;
+                        Ok(ext_response_value(value))
                     }
                     _ => Err(acp::Error::method_not_found()),
                 }

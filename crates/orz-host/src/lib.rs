@@ -97,6 +97,7 @@ impl Drop for DispatchGuard<'_> {
 }
 pub mod retention;
 pub mod session;
+pub mod session_ops;
 pub mod stdio;
 pub mod tools;
 

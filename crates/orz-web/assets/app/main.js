@@ -1155,6 +1155,19 @@ ui.newSession = async () => {
     flash('当前有运行在进行（Ctrl+Z 可取消）');
     return;
   }
+  // 0dk S2（332）：换会话＝close(switch)——旧会话不再留在 agent 内存里空转
+  // （有界表容量有限）。关闭失败不阻塞新建：至少解绑本地并如实提示。
+  const oldSession = acpSessionId;
+  if (oldSession) {
+    try {
+      await acp.sessionClose(oldSession, 'switch');
+    } catch (e) {
+      vm.addSystemMessage(
+        `（旧会话关闭失败：${e.message}；已仅解绑本地，历史仍保留在 .gsa）`,
+        true,
+      );
+    }
+  }
   detachBinding();
   liveMode = true;
   // 导航历史属于旧会话的浏览足迹，一并归零——「后退」不得回到旧会话回放。
@@ -1171,6 +1184,49 @@ ui.newSession = async () => {
     vm.addSystemMessage(`（新会话创建失败：${e.message}）`, true);
   }
   flash('已新建会话（旧会话可经探索器回看）');
+};
+
+/* 0dk S2（332）：关闭当前会话（工具栏「关闭会话」）。服务端先 cancel 在途
+ * run（运行中按钮已禁用），再释放 lease、移出内存；侧车保留，历史可回看。
+ * 成败都以服务端事实为准：already=true 表示此前已关闭。 */
+ui.closeSession = async () => {
+  if (state.loadingSession) {
+    flash('会话恢复中——加载完成前不能关闭');
+    return;
+  }
+  if (state.running) {
+    flash('运行中不能关闭：先点「停止」或等本轮结束');
+    return;
+  }
+  const id = acpSessionId;
+  if (!id) {
+    flash('当前没有绑定会话可关闭');
+    return;
+  }
+  try {
+    const out = await acp.sessionClose(id, 'user_close');
+    // 通知可能先到并已解绑/清场；只在仍绑定同一会话时补做本地收尾。
+    if (acpSessionId === id) {
+      detachBinding();
+      liveMode = true;
+      state.nav = { current: 'workspace://live', back: [], forward: [] };
+      state.navEpoch++;
+      clearTranscript();
+      vm.setRunning(false);
+    }
+    renderAll();
+    flash(
+      out?.already
+        ? '该会话此前已关闭（历史保留在 .gsa）'
+        : '会话已关闭（历史保留在 .gsa，可从探索器回看）',
+    );
+  } catch (e) {
+    vm.addSystemMessage(
+      `关闭没成功：${e.message}。→ 等当前操作结束后重试；若仍失败，关闭其他 orz 窗口后刷新`,
+      true,
+    );
+    renderAll();
+  }
 };
 
 ui.navAction = async (dir) => {
@@ -1567,6 +1623,30 @@ acp.on('notice', (kind) => {
       true,
     );
   }
+  renderAll();
+});
+
+/* 0dk S2（332）：服务端会话状态转移（`_orz/session_state`）。只处理
+ * 「当前绑定会话被关闭」——包括不是本页发起的容量驱逐；此时必须解绑，
+ * 否则下一条 prompt 会拿着已关闭 id 去撞 not_found。 */
+acp.on('state', (params) => {
+  const sessionId = params?.sessionId;
+  const next = params?.state;
+  if (!sessionId || next !== 'closed') return;
+  if (acpSessionId !== sessionId) return;
+  const reason = params?.reason;
+  detachBinding();
+  liveMode = true;
+  state.nav = { current: 'workspace://live', back: [], forward: [] };
+  state.navEpoch++;
+  clearTranscript();
+  vm.setRunning(false);
+  vm.addSystemMessage(
+    `（会话 ${sessionId.slice(0, 8)} 已关闭${
+      reason === 'evict' ? '（容量驱逐：内存会话上限 32）' : ''
+    }；历史保留在 .gsa，可从探索器回看或「恢复并继续」）`,
+    false,
+  );
   renderAll();
 });
 

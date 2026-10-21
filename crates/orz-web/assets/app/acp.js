@@ -20,6 +20,9 @@ const handlers = {
   attached: null, // (params) => void
   // 329：桥主动通知（child 退出 / 断线 backlog 截断）——如实上屏，不静默。
   notice: null, // (kind) => void
+  // 0dk S2（332）：会话状态转移通知 `_orz/session_state`
+  // （{sessionId,state,reason}）——关闭/驱逐的服务端事实。
+  state: null, // (params) => void
 };
 
 function send(obj) {
@@ -64,7 +67,17 @@ export function connect(token) {
       resolve();
     };
     ws.onerror = () => {
-      if (!settled) reject(new Error('无法连接桥（令牌无效或已有活动会话）'));
+      if (!settled) {
+        // 四要素（0dk S2 §9）：发生了什么＋为什么＋下一步＋证据。
+        // 浏览器的 WebSocket 不暴露 HTTP 409 响应体，故占用/令牌两类原因
+        // 合并成一条可行动文案；具体 reason 记在桥日志。
+        reject(
+          new Error(
+            '连不上本地桥：另一个 orz 窗口可能正占用此工作区，或页面令牌已过期。' +
+              '→ 关闭其他 orz 窗口后刷新本页；仍失败请重启 orz web（证据：ws /ws/acp）',
+          ),
+        );
+      }
     };
     ws.onclose = () => {
       pending.forEach((p) => p.reject(new Error('桥接已关闭')));
@@ -96,6 +109,8 @@ export function connect(token) {
         handlers.notice?.('child_exited');
       } else if (msg.method === '_orz/bridge_backlog_truncated') {
         handlers.notice?.('backlog_truncated');
+      } else if (msg.method === '_orz/session_state') {
+        handlers.state?.(msg.params || {});
       } else if (msg.method === 'session/request_permission') {
         // 必须回应（否则 agent 等待超时）：交给 dialogs 的权限弹窗。
         Promise.resolve(handlers.permission?.(msg.params)).then((result) => {
@@ -171,4 +186,21 @@ export function sessionRecallPreview(sessionId) {
 
 export function sessionRecall(sessionId, ordinal) {
   return extRequest('_orz/recall', { session_id: sessionId, ordinal });
+}
+
+/* 0dk S2（332）：关闭会话（私有扩展；先 cancel 再释放，10s 上限）。
+ * reason: user_close | switch | evict | shutdown。 */
+export function sessionClose(sessionId, reason = 'user_close') {
+  return extRequest('_orz/session_close', { sessionId, reason });
+}
+
+/* 0dk S2：查询会话状态（不转移）——关闭前确认/驱逐后诊断用。 */
+export function sessionState(sessionId) {
+  return extRequest('_orz/session_state', { sessionId });
+}
+
+/* 0dk S2：删除原语（先 close 再删数据，写墓碑）。Web 既有删除走 CLI
+ * 维护面；此入口供后续 333 收口与真机场景使用。 */
+export function sessionDelete(sessionId) {
+  return extRequest('_orz/session_delete', { sessionId });
 }

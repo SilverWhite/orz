@@ -227,6 +227,23 @@ impl AgentHandle {
             Some("session/prompt") => {
                 self.state.lock().await.prompt_in_flight = None;
             }
+            // 0dk S2（332）：会话关闭/删除成功后，槽不能再把这个 id 当作
+            // 「可重绑的活跃会话」写进 attach preamble——刷新后的页面会拿
+            // 已关闭 id 去 session/load。清掉事实即可，桥不做会话语义。
+            Some("_orz/session_close") | Some("_orz/session_delete") => {
+                let closed_id = value
+                    .get("result")
+                    .and_then(|r| r.get("sessionId"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string);
+                let mut state = self.state.lock().await;
+                if let Some(closed_id) = closed_id
+                    && state.session_id.as_deref() == Some(closed_id.as_str())
+                {
+                    state.session_id = None;
+                    state.prompt_in_flight = None;
+                }
+            }
             _ => {}
         }
     }

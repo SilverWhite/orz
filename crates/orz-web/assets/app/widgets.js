@@ -104,6 +104,8 @@ document.addEventListener('click', () => closeMenus());
 
 const TOOLBAR_ACTIONS = {
   new: () => ui.newSession(),
+  // 0dk S2（332）：关闭当前会话（`_orz/session_close`）。
+  close: () => ui.closeSession(),
   back: () => ui.navAction('back'),
   forward: () => ui.navAction('forward'),
   resume: () => ui.resumeConversation(),

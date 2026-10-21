@@ -369,7 +369,17 @@ async fn ws_acp(
     match state.bridge.attach(&key, &cwd).await {
         Attach::Busy => (
             StatusCode::CONFLICT,
-            Json(json!({"error": {"code": 409, "message": "该工作区已有活动连接（关闭该页后重试）"}})),
+            // 0dk S2（332）：占用者提示带原因/四要素（设计 §9.2）。浏览器
+            // 的 WebSocket 不暴露握手响应体，故前端另有同义可行动文案；
+            // 该 JSON 供 HTTP 客户端与桥日志取证。
+            Json(json!({"error": {
+                "code": 409,
+                "reason": "workspace_occupied",
+                "class": "connection",
+                "message": "该工作区已有活动连接：另一个窗口正在接收这个会话。",
+                "hint": "关闭其他 orz 窗口后刷新本页；刚关掉的窗口需等桥保活回收（默认 30 分钟，可用 ORZ_WEB_KEEPALIVE_SECS 调整）。",
+                "evidence": format!("workspace={key}"),
+            }})),
         )
             .into_response(),
         Attach::SpawnFailed(message) => (

@@ -91,6 +91,9 @@ const acpMock = {
   queueHandler: null,
   recallPreviewHandler: null,
   recallHandler: null,
+  closeHandler: null,
+  stateHandler: null,
+  deleteHandler: null,
 };
 
 function wsRespond(ws, id, result) {
@@ -125,6 +128,36 @@ function mockAcpSend(msg, ws) {
       break;
     case '_orz/recall':
       (acpMock.recallHandler ?? ((m, w) => wsRespond(w, m.id, { recalled: true, recall_text: '' })))(msg, ws);
+      break;
+    case '_orz/session_close':
+      (acpMock.closeHandler ??
+        ((m, w) =>
+          wsRespond(w, m.id, {
+            sessionId: m.params?.sessionId,
+            state: 'closed',
+            closed: true,
+            already: false,
+          })))(msg, ws);
+      break;
+    case '_orz/session_state':
+      (acpMock.stateHandler ??
+        ((m, w) =>
+          wsRespond(w, m.id, {
+            sessionId: m.params?.sessionId,
+            state: 'idle',
+            closed: false,
+            already: false,
+          })))(msg, ws);
+      break;
+    case '_orz/session_delete':
+      (acpMock.deleteHandler ??
+        ((m, w) =>
+          wsRespond(w, m.id, {
+            sessionId: m.params?.sessionId,
+            state: 'deleted',
+            deleted: true,
+            already: false,
+          })))(msg, ws);
       break;
     default:
       fail();
@@ -279,7 +312,18 @@ const selfcheckBtn = ui.toolbar.children.find((n) => n.textContent === '反例�
 assert.ok(selfcheckBtn, '工具栏必须常驻「反例自查」入口');
 assert.equal(selfcheckBtn.disabled, true, '空闲时「反例自查」必须禁用（0dm）');
 assert.equal(typeof ui.newSession, 'function', '新建会话动作已接线');
-console.log('ok  工具栏「新建会话」居「后退」之前');
+// 0dk S2（332）：关闭会话入口存在，且运行中/无绑定时禁用。
+const closeToolbarBtn = ui.toolbar.children.find((n) => n.textContent === '关闭会话');
+assert.ok(closeToolbarBtn, '工具栏必须常驻「关闭会话」入口（0dk S2）');
+assert.equal(closeToolbarBtn.disabled, true, '无绑定会话时「关闭会话」必须禁用');
+vm.setRunning(true);
+vm.syncToolbar();
+widgets.renderToolbar();
+const closeRunningBtn = ui.toolbar.children.find((n) => n.textContent === '关闭会话');
+assert.equal(closeRunningBtn.disabled, true, '运行中「关闭会话」必须禁用（先停止再关闭）');
+vm.setRunning(false);
+vm.syncToolbar();
+console.log('ok  工具栏「新建会话」居「后退」之前＋关闭会话入口（运行中禁用）');
 
 /* ── 5. dialogs 权限应答结算（审查处理批 C-1 回归） ── */
 
@@ -1278,17 +1322,47 @@ await withFetch(fallbackApi(), async () => {
 assert.equal(methodCalls('session/prompt').length, promptsBefore + 1, '删除后仍应能新建会话发送');
 assert.equal(methodCalls('session/prompt').at(-1)?.params?.sessionId, 'beefcafe-1111-2222-3333-444455556666', '下一条 prompt 不得复用已删除会话');
 assert.equal(state.sessionId, 'beefcafe-1111-2222-3333-444455556666');
-// newSession：旧会话发不出 ACP close（协议无该方法），至少解绑并停 tail。
+// newSession：0dk S2 起换会话＝`_orz/session_close(switch)`，再新建。
 const oldSession = state.sessionId;
 acpMock.newHandler = (msg, ws) =>
   wsRespond(ws, msg.id, { sessionId: 'cafef00d-1111-2222-3333-444455556666' });
 const newCallsBefore = methodCalls('session/new').length;
+const closeCallsBeforeNew = methodCalls('_orz/session_close').length;
 await ui.newSession();
 await flush();
 assert.equal(methodCalls('session/new').length, newCallsBefore + 1, 'newSession 必须显式新建会话');
+assert.equal(
+  methodCalls('_orz/session_close').length,
+  closeCallsBeforeNew + 1,
+  '换会话必须先关闭旧会话（close/switch）',
+);
+assert.equal(methodCalls('_orz/session_close').at(-1)?.params?.sessionId, oldSession, '关闭目标＝旧绑定');
+assert.equal(methodCalls('_orz/session_close').at(-1)?.params?.reason, 'switch');
 assert.equal(state.sessionId, 'cafef00d-1111-2222-3333-444455556666', 'newSession 切换绑定');
 assert.notEqual(state.sessionId, oldSession);
-console.log('ok  14.8 删除已加载会话清空绑定＋newSession 解绑/停 tail（防 sidecar 写回）');
+
+// 0dk S2：工具栏「关闭会话」显式发 `_orz/session_close(user_close)` 并解绑。
+const boundForClose = state.sessionId;
+const closeCallsBefore = methodCalls('_orz/session_close').length;
+await ui.closeSession();
+await flush();
+const closeCall = methodCalls('_orz/session_close').at(-1);
+assert.equal(closeCall?.params?.sessionId, boundForClose, '关闭必须命中当前绑定会话');
+assert.equal(closeCall?.params?.reason, 'user_close', '工具栏关闭＝user_close（非 switch）');
+assert.equal(methodCalls('_orz/session_close').length, closeCallsBefore + 1);
+assert.equal(state.sessionId, null, '关闭成功后必须清空绑定');
+assert.equal(state.boundSession8, null);
+assert.equal(state.nav.current, 'workspace://live', '关闭后回到实时空视图');
+console.log('ok  0dk S2 关闭会话：入口/运行中禁用＋close(user_close/switch)＋解绑');
+// 15.x 前提：重新建立一个活跃绑定（上一步的关闭入口已按语义解绑）。
+acpMock.newHandler = (msg, ws) =>
+  wsRespond(ws, msg.id, { sessionId: 'cafef00d-1111-2222-3333-444455556666' });
+await withFetch(fallbackApi(), async () => {
+  await sendFromInput('关闭后再开');
+  await flush();
+});
+assert.equal(state.sessionId, 'cafef00d-1111-2222-3333-444455556666');
+console.log('ok  14.8 删除已加载会话清空绑定＋newSession 换会话 close(switch)＋关闭会话入口');
 
 /* 14.9 刷页/关闭风险提示（329 口径：子进程保活，刷新可重连）：running/
  *      排队/后台任务都必须拦，文案说明保活窗口与排队补充/后台任务不恢复。 */
