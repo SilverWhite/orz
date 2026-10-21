@@ -42,7 +42,10 @@ pub(crate) const ACTION_NAME_MAX_CHARS: usize = 128;
 /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the final plan step must be
 /// a fixed terminal step (递交/完成) — it never auto-advances on ordinary
 /// order receipts; only the explicit `submit` delivery path marks it done.
-pub(crate) const TERMINAL_STEP_IDS: &[&str] = &["deliver", "submit"];
+pub(crate) const TERMINAL_STEP_IDS: &[&str] = &["deliver"];
+/// 0dm（2026-10-21）：`submit` 从模型工具面退役；旧计划/旧 journal 的
+/// `submit` 末步仍按 terminal 解释（回放兼容），新计划只接受 `deliver`。
+pub(crate) const LEGACY_TERMINAL_STEP_IDS: &[&str] = &["deliver", "submit"];
 
 /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): terminal-step predicate —
 /// the LAST plan step whose id ∈ {deliver, submit}. Keyed on the terminal
@@ -53,7 +56,7 @@ pub(crate) const TERMINAL_STEP_IDS: &[&str] = &["deliver", "submit"];
 pub(crate) fn is_terminal_step(steps: &[crate::blackboard::PlanStep], idx: usize) -> bool {
     steps
         .get(idx)
-        .map(|s| idx + 1 == steps.len() && TERMINAL_STEP_IDS.contains(&s.id.as_str()))
+        .map(|s| idx + 1 == steps.len() && LEGACY_TERMINAL_STEP_IDS.contains(&s.id.as_str()))
         .unwrap_or(false)
 }
 
@@ -823,10 +826,10 @@ mod tests {
         );
     }
 
-    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): both allowlisted
-    /// terminal ids (`deliver` / `submit`) pass the final-step rule.
+    /// 0dm（2026-10-21）：`submit` 从模型工具面退役——新计划末步只接受
+    /// `deliver`；旧计划的 `submit` 末步仍由 `is_terminal_step` 兼容解释。
     #[test]
-    fn final_step_submit_is_accepted() {
+    fn final_step_submit_is_rejected_for_new_plans() {
         let v = parse_and_validate_plan(&serde_json::json!({
             "plan": {
                 "plan_id": "p",
@@ -837,7 +840,13 @@ mod tests {
                 ]
             }
         }));
-        assert!(v.errors.is_empty(), "{:?}", v.errors);
+        assert!(
+            v.errors
+                .iter()
+                .any(|e| e.contains("final step id must be a terminal step")),
+            "{:?}",
+            v.errors
+        );
     }
 
     /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2 + 审查处理 O2): the

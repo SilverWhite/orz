@@ -82,6 +82,9 @@ impl ToolDispatcher {
         // `plan_write` (the 8-tool face freeze's user-led explicit
         // exception +1). Name via `tool_names` single source (0ao).
         BLACKBOARD_WRITE_TOOL_NAME,
+        // 0dm（2026-10-21）：`self_check` 只返回三问模板、无文件/网络/外部
+        // 副作用——ReadOnly 类（与 blackboard_read 同族）。
+        "self_check",
         // 0ap (2026-09-18, 设计 §4 用户裁决): `context_compress` 是**纯内存
         // 压缩状态操作**——请求开 D3 模型参与压缩窗口 ＋返回滑块读数，无
         // 文件/网络/黑板外部副作用，ReadOnly 类（所有策略自动放行）。8 工具
@@ -205,6 +208,9 @@ impl ToolDispatcher {
             // (+ blackboard handover write) only — honest "other" fold,
             // same family as context_compress (NOT a "read": clear/compress
             // are state operations, and the action board should say so).
+            "other"
+        } else if tool_name == "self_check" {
+            // 0dm：自查只是把三问模板交还模型，无副作用——"other" 折叠。
             "other"
         } else if Self::is_shell_tool(tool_name) {
             "terminal"

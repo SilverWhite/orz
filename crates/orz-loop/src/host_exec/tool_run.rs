@@ -3586,6 +3586,58 @@ impl AgentLoopController {
         // tool that journals nothing between ToolStarted/ToolCompleted must
         // not trip the stall watchdog (the tool itself is bounded by the
         // P0-1 per-call timeout).
+        // 0dm（2026-10-21）：反例自查 PULL——无参工具只返回三问模板，无
+        // 文件/网络/外部副作用；不阻断、不判定，由模型据此修订或确认终答。
+        if tc.name == "self_check" {
+            if !self.console_default_enabled {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "self_check_disabled",
+                        "self_check refused — the console dual-mode is disabled",
+                    )
+                    .await?,
+                    None,
+                ));
+            }
+            let content = crate::prompt::SELF_CHECK_BLOCK.to_string();
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 0,
+                    }),
+                )
+                .await?;
+            self.push_tool_action_stamped(
+                ToolDispatcher::action_category(&tc.name).to_string(),
+                tc.name.clone(),
+                chrono_utc_now(),
+            );
+            messages.push(Message {
+                role: Role::Tool,
+                content: content.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+            return Ok((
+                ToolResult {
+                    output: content,
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                },
+                None,
+            ));
+        }
         // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): `submit` —— 末步
         // 「递交/完成」的显式递交/状态展示路径（无参、两阶段）。
         // THIN-HARNESS-REDESIGN-V2 §9.3 (2026-08-29)：无 plan 会话同样

@@ -107,6 +107,7 @@ const TOOLBAR_ACTIONS = {
   back: () => ui.navAction('back'),
   forward: () => ui.navAction('forward'),
   resume: () => ui.resumeConversation(),
+  selfcheck: () => ui.runSelfCheck(),
   refresh: () => ui.refresh(),
   stop: () => ui.stopRun(),
   open: () => ui.openCommand(),

@@ -502,7 +502,7 @@ mod tests {
             "web_search",
             "blackboard_read",
             "blackboard_write",
-            "submit",
+            "self_check",
         ];
         for tool in &expected {
             assert!(
@@ -564,7 +564,7 @@ mod tests {
             "web_search",
             "blackboard_read",
             "blackboard_write",
-            "submit",
+            "self_check",
         ] {
             assert!(
                 declared.contains(&tool),
@@ -687,8 +687,10 @@ mod tests {
             )
                 // 外部检索族（web_search / web_fetch 及其变体）：检索 lane 自执行。
                 || crate::relay::is_web_retrieval_tool(name)
-                // 终端交付工具（交付期声明，机械链即交付出口本身）。
+                // 终端交付工具（0dm 起 submit 退役，保留旧名豁免；自查工具
+                // 是控制器内存面工具，无探针判定）。
                 || name == "submit"
+                || name == "self_check"
                 // 检索模式门工具（宿主路由检索族；主面由模式门与 R1 封存管辖）。
                 || name == "pdf_read"
                 || name.starts_with("retrieve_project_")

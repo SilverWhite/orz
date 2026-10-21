@@ -24,6 +24,9 @@ export const state = {
     // 318 P1-B2（2026-10-19）：打开旧会话默认只读回看，不再自动 load。
     // 只有点这个显式动作才恢复 ACP 会话并切换绑定（加载中变为「取消恢复」）。
     { id: 'resume', label: '恢复并继续', enabled: false },
+    // 0dm（2026-10-21）：反例自查 PULL 入口——运行中经补充队列投递三问；
+    // 空闲时按钮仍在，点击只提示「先发起任务」。
+    { id: 'selfcheck', label: '反例自查', enabled: true },
     { id: 'refresh', label: '刷新', enabled: true },
     { id: 'stop', label: '停止', enabled: false },
     { id: 'open', label: '打开', enabled: true },

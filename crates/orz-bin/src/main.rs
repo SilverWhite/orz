@@ -1682,6 +1682,9 @@ async fn run(
             // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console
             // default + direct 受控降级（双模式）随生产路径启用。
             .with_console_default_enabled(true)
+            // 0dm（2026-10-21）：主车道有执行事实时，终答必须带 [RUN_END]；
+            // 无声明先 nudge 一次，第二次 fail-open（ORZ_TERMINAL_DECLARATION=off 关）。
+            .with_terminal_declaration_required(true)
             .with_snapshot_store(Some(handle.snapshot_store.clone()))
             .with_retrieval_enabled(retrieval_enabled)
             // ACAF Slice 1 (ADR-0011 §4.4): optional signer-process client

@@ -791,6 +791,21 @@ ui.refresh = async () => {
   await refreshExplorerData();
   flash('运行历史已刷新');
 };
+/* 0dm（2026-10-21）：工具栏「反例自查」——PULL 入口。运行中经中途补充
+ * 队列投递三问；空闲/只读视图不凭空起一轮。 */
+ui.runSelfCheck = async () => {
+  if (!state.running) {
+    flash('反例自查只在任务运行中可用；先发起任务');
+    return;
+  }
+  if (state.loadingSession || promptGateReason()) {
+    flash('当前视图不可补充；请回到实时会话');
+    return;
+  }
+  await queueSupplement(
+    '请对当前结论执行反例自查（三问），然后按需继续或输出 [RUN_END]。',
+  );
+};
 ui.flashStatus = () => flash(`当前模型: ${state.modelLabel}`);
 
 /* 0di：撤回面动作（dialogs.openRewind 经 actions 调用）。

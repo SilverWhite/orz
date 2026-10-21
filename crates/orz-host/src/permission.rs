@@ -593,6 +593,9 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
         // fold），桥臂漏登，宿主护栏覆盖断言（本文件测试）按设计拦下
         // （246 批 §5.4）。
         || tool == CONTEXT_MANAGE_TOOL_NAME
+        // 0dm（2026-10-21）：`self_check` 只返回三问模板，无文件/网络/外部
+        // 副作用——与 blackboard_read 同族，ReadOnly 自动放行。
+        || tool == "self_check"
     {
         // Controller-owned in-memory tools (A3 blackboard_read / A6 §8 C.2
         // compaction_whitelist_add): NO external side effect — no file, no
@@ -885,6 +888,8 @@ mod tests {
                 CONTEXT_MANAGE_TOOL_NAME,
                 serde_json::json!({"mode": "clear", "handover": "x"}),
             ),
+            // 0dm：自查工具无参数。
+            ("self_check", serde_json::json!({})),
             (
                 "compaction_whitelist_add",
                 serde_json::json!({"content": "x"}),

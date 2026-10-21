@@ -82,6 +82,22 @@ pub fn model_stop_await_enabled() -> bool {
         .unwrap_or(true)
 }
 
+/// 0dm（2026-10-21）：主车道「有执行事实」的终态声明要求开关。
+///
+/// `ORZ_TERMINAL_DECLARATION=off|0|false|no` 显式关闭（跑分装置/外部 ACP
+/// 客户端）；缺省 `required`。开关只影响**是否要求** `[RUN_END]`，不影响
+/// 声明本身的解析与落账。
+pub fn terminal_declaration_required() -> bool {
+    std::env::var("ORZ_TERMINAL_DECLARATION")
+        .map(|v| {
+            !matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "off" | "0" | "false" | "no"
+            )
+        })
+        .unwrap_or(true)
+}
+
 /// 从模型收束文本里提取**最后一段**声明块（旧在前；取最后一段＝最终意图）。
 pub fn extract_model_stop(text: &str) -> Option<ModelStopDeclaration> {
     let start = text.rfind(MODEL_STOP_PREFIX)?;

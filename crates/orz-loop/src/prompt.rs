@@ -37,6 +37,31 @@ pub const COUNTEREXAMPLE_GATE_BLOCK: &str = "[COUNTEREXAMPLE_GATE v0.1]\n\
 注意：本反例询问仅出现一次，请在最终回答前完成全部反例自查。\n\
 [/COUNTEREXAMPLE_GATE]";
 
+/// 0dm（2026-10-21）：反例自查 PULL 化后的模型工具结果块。三问与旧
+/// `COUNTEREXAMPLE_GATE_BLOCK` 同源文案，但改为**模型主动调用**时返回；
+/// 不再由机械层在终答前自动注入。
+pub const SELF_CHECK_PREFIX: &str = "[SELF_CHECK";
+
+pub const SELF_CHECK_BLOCK: &str = "[SELF_CHECK]\n\
+请对即将输出的结论做最后一次反例自查：\n\
+1. 是否存在未验证的前提？\n\
+2. 是否存在可推翻结论的已知证据？\n\
+3. 结论强度是否超出证据支持？\n\
+这不是硬门。请据此修订或确认终答，然后按终态声明输出 [RUN_END]。\n\
+[/SELF_CHECK]";
+
+/// 0dm：主车道常驻软提示（用户 2026-10-21 指定文案，逐字）。
+pub const SELF_CHECK_RESIDENT_LINE: &str = "请对非日常聊天类的任务调用反例自查。";
+
+/// 0dm：终态声明缺失时的一次性机械提示（不是门；第二次无声明即
+/// fail-open 接受）。
+pub const TERMINAL_NOTICE_PREFIX: &str = "[TERMINAL_NOTICE";
+
+pub const TERMINAL_NOTICE_BLOCK: &str = "[TERMINAL_NOTICE]\n\
+当前回复未声明结束。若任务已完成，请输出 [RUN_END]（intent/reason/summary）；\
+若未完成，请继续调用工具。\n\
+[/TERMINAL_NOTICE]";
+
 /// GAP-INQUIRY-SPLIT (2026-08-09): prefix of the injected orientation block
 /// (ADR-0010 §4.2 — session-level 7-round neutral inquiry). Registered with
 /// `is_injected_block_text` so the injected block never enters the persisted
@@ -70,6 +95,8 @@ pub const INITIAL_ROUND_INQUIRY_INJECTED_PREFIX: &str = "[INITIAL_ROUND_INQUIRY"
 pub fn is_injected_block_text(content: &str) -> bool {
     let content = content.trim();
     content == COUNTEREXAMPLE_GATE_BLOCK
+        || content == SELF_CHECK_BLOCK
+        || content == TERMINAL_NOTICE_BLOCK
         || INJECTED_BLOCK_PREFIXES
             .iter()
             .any(|prefix| content.starts_with(prefix))
@@ -88,6 +115,9 @@ pub fn is_injected_block_text(content: &str) -> bool {
 /// [`is_generated_injected_block`]（前缀＋生成形态），而不是本表。
 pub const INJECTED_BLOCK_PREFIXES: &[&str] = &[
     COUNTEREXAMPLE_GATE_PREFIX,
+    // 0dm（2026-10-21）：自查 PULL 块（工具结果）与终态缺失提示块。
+    SELF_CHECK_PREFIX,
+    TERMINAL_NOTICE_PREFIX,
     // GAP-INQUIRY-SPLIT: the injected orientation block must never be
     // persisted — a repeated `[ORIENTATION …]` block would
     // otherwise pollute the persisted conversation (R-8 regression point).

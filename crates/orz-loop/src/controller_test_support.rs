@@ -329,6 +329,9 @@ pub(crate) fn stage_c_controller(gateway: Arc<dyn ModelGateway>) -> AgentLoopCon
     AgentLoopController::with_gateway(gateway)
         .with_plan_first_enabled(true)
         .with_console_default_enabled(true)
+        // 0dm: legacy `submit` tests keep the retired tool explicitly; the
+        // production face no longer declares it by default.
+        .with_legacy_submit_tool(true)
 }
 
 pub(crate) struct FullRegistry;

@@ -185,6 +185,9 @@ impl MechanicalAuditState {
     /// 报告块（设计 §2.4：收敛为执行事实摘要——仅三类；每键至多一条；
     /// 无建议、无引导）。`wallclock` 为 run 已用墙钟。0cn S2 起预算行
     /// 退役（ADR-0010 §14.82）：不再渲染轮数记次，墙钟行保留。
+    ///
+    /// 0dm（2026-10-21）：反例门退役后终答前不再自动注入审计报告；本方法
+    /// 保留为旧 `ORZ_TERMINAL_DECLARATION=off` 兼容路径与 S2 UI 单一来源。
     pub(crate) fn report(&self, wallclock: Option<std::time::Duration>) -> String {
         let mut lines = vec![format!("{MECHANICAL_AUDIT_PREFIX} v0.1]")];
         let exec: Vec<&AuditEntry> = self

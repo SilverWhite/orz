@@ -715,6 +715,13 @@ pub struct AgentLoopController {
     /// 默认 + direct 受控降级）的模型面开关。生产接线（ACP server / CLI
     /// run）随 plan_first 一并开启；测试保持既有工具面。
     pub(crate) console_default_enabled: bool,
+    /// 0dm（2026-10-21）：`submit` 从模型面退役；仅为旧 console 测试/兼容
+    /// 车道保留显式开关（`ORZ_SUBMIT_TOOL=1` 或测试 builder）。
+    pub(crate) legacy_submit_tool: bool,
+    /// 0dm（2026-10-21）：主车道「有执行事实」时终答必须带 `[RUN_END]`。
+    /// 生产 builder 显式置 true；单元测试默认 false 保持旧文本终答形态，
+    /// 新终态钉单独置 true。
+    pub(crate) terminal_declaration_required: bool,
     /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): run 级双模式
     /// 状态（模式/故障连败/询问标记/transition_id/direct 证据面）。run
     /// 起始复位；plan epoch 轮换/黑板旋转不清除。
@@ -1001,6 +1008,8 @@ impl AgentLoopController {
             console_order_seq: std::sync::atomic::AtomicU64::new(0),
             console_probe_source: Mutex::new(None),
             console_default_enabled: false,
+            legacy_submit_tool: false,
+            terminal_declaration_required: false,
             console_mode_state: Mutex::new(crate::console_mode::ConsoleModeState::start(
                 crate::console_mode::DEFAULT_DIRECT_FALLBACK_THRESHOLD,
             )),
@@ -1680,6 +1689,8 @@ impl AgentLoopController {
             console_order_seq: std::sync::atomic::AtomicU64::new(0),
             console_probe_source: Mutex::new(None),
             console_default_enabled: false,
+            legacy_submit_tool: false,
+            terminal_declaration_required: false,
             console_mode_state: Mutex::new(crate::console_mode::ConsoleModeState::start(
                 crate::console_mode::DEFAULT_DIRECT_FALLBACK_THRESHOLD,
             )),
@@ -1776,6 +1787,28 @@ impl AgentLoopController {
     pub fn with_console_default_enabled(mut self, enabled: bool) -> Self {
         self.console_default_enabled = enabled;
         self
+    }
+
+    /// 0dm：显式恢复旧 `submit` 工具（仅 console 车道；旧 console 测试与
+    /// `ORZ_SUBMIT_TOOL=1` 兼容用）。生产默认不调用。
+    pub fn with_legacy_submit_tool(mut self, enabled: bool) -> Self {
+        self.legacy_submit_tool = enabled;
+        self
+    }
+
+    /// 0dm：主车道有执行事实时要求终答携带 `[RUN_END]`。生产 builder
+    /// 显式开启；测试默认关闭以保持旧文本终答形态。
+    pub fn with_terminal_declaration_required(mut self, required: bool) -> Self {
+        self.terminal_declaration_required = required;
+        self
+    }
+
+    pub(crate) fn terminal_declaration_required(&self) -> bool {
+        self.terminal_declaration_required
+    }
+
+    pub(crate) fn legacy_submit_tool(&self) -> bool {
+        self.legacy_submit_tool
     }
 
     /// 0p S1 / W2 D-2 (2026-09-07, ADR-0010 §14.61 设计 D)：注入真实会话
@@ -4203,24 +4236,42 @@ impl AgentLoopController {
                 }),
             });
         }
-        // AGENT-DELIVERY-FLOW (2026-08-23, ADR-0010 §14.35 第 19 项 / 设计
-        // §2.2) + THIN-HARNESS-REDESIGN-V2 §9.3 (2026-08-29): `submit` ——
-        // 显式递交/交付状态展示路径（无参，console 默认态主车道；无 plan
-        // 会话同样放行，降级为纯状态展示，非硬门）。第一次调用机械计算
-        // 交付状态（工作区变更清单，过滤 .gsa/缓存目录，上限 20 + 计数行）
-        // 渲染进黑板 plan 视图；模型核查后同动作再触发一次确认。终答仍
-        // 只由模型自发（反例门 + 机械审计报告在终答前承接核对）。
-        if self.console_default_enabled && !tool_defs.iter().any(|t| t.name == "submit") {
+        // 0dm（2026-10-21）：`submit` 从模型面退役——交付状态由机械/UI 按需
+        // 查询，模型不再为机械信息付两轮。旧 console 车道经显式开关
+        // （builder 或 `ORZ_SUBMIT_TOOL=1`）临时保留；handler 仍为休眠路径。
+        let legacy_submit = self.legacy_submit_tool()
+            || std::env::var("ORZ_SUBMIT_TOOL")
+                .map(|v| v.trim() == "1")
+                .unwrap_or(false);
+        if self.console_default_enabled
+            && legacy_submit
+            && !tool_defs.iter().any(|t| t.name == "submit")
+        {
             tool_defs.push(ToolDef {
                 name: "submit".to_string(),
-                description: "Request/confirm delivery (AGENT-DELIVERY-FLOW). \
-                     Call `submit` (no arguments) once to have the harness \
-                     mechanically compute and render the delivery status \
-                     (workspace changes, filtered, ≤20 entries) into the \
-                     blackboard plan view; review it, then call `submit` \
-                     again to confirm and advance into the final-answer \
-                     flow. Informational, not a hard gate — submission \
-                     requires no plan and no step state."
+                description: "Legacy delivery-status probe (0dm: retired from the \
+                     model face; available only when the compatibility switch is \
+                     on). Call once to render the workspace delivery status into \
+                     the blackboard plan view, then again to confirm. Informational; \
+                     final answers use [RUN_END], not submit."
+                    .to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                }),
+            });
+        }
+        // 0dm（2026-10-21）：反例自查 PULL 工具——无参，返回三问模板；不
+        // 阻断、不判定，只把检查交还模型。主车道（console 默认态）声明。
+        if self.console_default_enabled && !tool_defs.iter().any(|t| t.name == "self_check") {
+            tool_defs.push(ToolDef {
+                name: "self_check".to_string(),
+                description: "Run the counterexample self-check before ending a \
+                     non-routine task. Call with no arguments; returns the three \
+                     standard questions (unverified premises / known counter-evidence / \
+                     strength vs evidence) for you to answer and, if needed, revise \
+                     the conclusion. Informational, not a hard gate — use it when you \
+                     are about to finish substantive work, then end with [RUN_END]."
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
@@ -4462,6 +4513,9 @@ impl AgentLoopController {
         let LoopOutcome {
             last_text,
             tool_rounds,
+            terminal_source,
+            terminal_nudged,
+            self_check_called,
             ..
         } = outcome;
 
@@ -4511,6 +4565,10 @@ impl AgentLoopController {
             // 内第 N 个 prompt；CLI 单 run 缺省 1）——退役硬编码 1。
             "turn_count": self.session_turn,
             "tool_rounds": tool_rounds,
+            // 0dm（2026-10-21）：终态来源与自查事实（新增字段；旧键语义不变）。
+            "terminal_source": terminal_source,
+            "terminal_nudged": terminal_nudged,
+            "self_check_called": self_check_called,
         });
         if let Some(decl) = last_text
             .as_deref()
@@ -5237,17 +5295,18 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
             value
         }
-        // 旧形：无声明 ⇒ 只 status/turn_count/tool_rounds（逐字兼容断言）。
+        // 0dm：无声明 ⇒ 旧三键保持，另加终态来源/自查事实三键。
         let legacy = payload_of("普通终答，无声明", "RUN-STOP-LEGACY").await;
+        assert_eq!(legacy["status"], serde_json::json!("completed"));
+        assert_eq!(legacy["turn_count"], serde_json::json!(1));
+        assert_eq!(legacy["tool_rounds"], serde_json::json!(0));
         assert_eq!(
-            legacy,
-            serde_json::json!({
-                "status": "completed",
-                "turn_count": 1,
-                "tool_rounds": 0,
-            }),
-            "无声明路径载荷与旧形逐字一致"
+            legacy["terminal_source"],
+            serde_json::json!("short_text"),
+            "无执行事实的短答 → short_text"
         );
+        assert_eq!(legacy["terminal_nudged"], serde_json::json!(false));
+        assert_eq!(legacy["self_check_called"], serde_json::json!(false));
         // 中性终态：暂停＋待回应＋摘要（新增字段承载）。
         let paused = payload_of(
             "先停在这里。\n[RUN_END]\nintent: pause\nreason: awaiting_response\n\
@@ -5464,7 +5523,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_turn_full_gate_sequence() {
+    async fn run_turn_terminal_nudge_sequence() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -5472,20 +5531,20 @@ mod tests {
             tool_result: None,
         };
 
-        // Two scripted texts — the first is intercepted by the counterexample
-        // gate (§4.6: the final-answer gate fires once before the conclusion);
-        // the second is the post-gate final answer. 0bi ⑩（ADR-0010 §14.76）：
-        // answer 门收窄为「有执行事实或未完成 plan 才触发」——本轮以未完成
-        // plan 作为执行事实保持全门序列（纯文本短答跳过门的钉子见
-        // `counterexample_gate_skipped_for_text_only_short_run`）。
-        let gateway: Arc<dyn ModelGateway> =
-            Arc::new(FakeProvider::from_texts(vec!["结果：完成", "结果：完成"]));
-        let controller = AgentLoopController::with_gateway(gateway).with_plan(
-            "PLAN-GATE-SEQ".to_string(),
-            1,
-            "任务".to_string(),
-            vec!["步骤一".to_string()],
-        );
+        // 0dm：首轮纯文本无 [RUN_END] → 注入一次 [TERMINAL_NOTICE]；第二轮
+        // 带声明 → 终答。plan 提供执行事实，确保声明要求生效。
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec![
+            "草稿进度",
+            "结果：完成\n[RUN_END]\nintent: conclude\nreason: completed\nsummary: 完成\n[/RUN_END]",
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_terminal_declaration_required(true)
+            .with_plan(
+                "PLAN-TERMINAL-SEQ".to_string(),
+                1,
+                "任务".to_string(),
+                vec!["步骤一".to_string()],
+            );
         let result = controller
             .run_turn(
                 &host,
@@ -5500,7 +5559,10 @@ mod tests {
             .await;
 
         assert!(result.is_ok(), "{result:?}");
-        assert_eq!(result.unwrap().0, "结果：完成");
+        assert_eq!(
+            result.unwrap().0,
+            "结果：完成\n[RUN_END]\nintent: conclude\nreason: completed\nsummary: 完成\n[/RUN_END]"
+        );
 
         let replay =
             orz_assurance::replay_journal(&dir.join("events.jsonl"), Some("RUN-SEQ"), None, true);
@@ -5532,7 +5594,8 @@ mod tests {
                 // before its model_output.
                 EventType::FaceFingerprint,
                 EventType::ModelOutput,
-                EventType::CounterexampleGate,
+                // 0dm：无声明 → 一次终态提示（不是 gate）。
+                EventType::GateDecision,
                 EventType::FaceFingerprint,
                 EventType::ModelOutput,
                 // 0df (2026-10-17, ADR-0010 §14.86): the per-run usage
@@ -5611,6 +5674,7 @@ mod tests {
                 .unwrap();
             assert!(meter_pos < terminal_pos, "meter row must precede terminal");
             let payload = &rows[0]["payload"];
+            // 兼容门路径（测试默认）＝两轮：gate + 终答。
             assert_eq!(payload["model_calls"], 2, "run {run} folded rounds");
             // fake 无 usage ⇒ 如实 incomplete（不装完整）。
             assert_eq!(payload["usage_incomplete"], true);
@@ -6146,7 +6210,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn counterexample_gate_fires_once_before_final_answer() {
+    async fn self_check_tool_is_callable_and_recorded() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -6154,76 +6218,58 @@ mod tests {
             tool_result: None,
         };
 
-        // First no-tool round is the final-answer candidate → the gate fires
-        // ONCE and the post-gate round produces the actual final answer.
-        // 0bi ⑩（ADR-0010 §14.76）：answer 门收窄后，纯文本短答需有执行事实
-        // 或未完成 plan 才触发——本钉子以未完成 plan 作为执行事实。
-        let fake = Arc::new(FakeProvider::from_texts(vec!["草稿", "终答"]));
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("self_check", "call-self")]),
+            ScriptedResponse::text(
+                "结论\n[RUN_END]\nintent: conclude\nreason: completed\nsummary: done\n[/RUN_END]",
+            ),
+        ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway).with_plan(
-            "PLAN-GATE-ONCE".to_string(),
-            1,
-            "任务".to_string(),
-            vec!["步骤一".to_string()],
-        );
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_console_default_enabled(true)
+            .with_terminal_declaration_required(true);
         let (response, _, _) = controller
-            .run_turn(&host, "hello", "RUN-GATE", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "hello",
+                "RUN-SELFCHECK",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
-        // The intercepted draft is never returned — the post-gate answer is.
-        assert_eq!(response, "终答");
+        assert!(response.starts_with("结论"), "{response:?}");
 
-        let types = event_types(&dir);
-        assert_eq!(
-            types
-                .iter()
-                .filter(|t| **t == EventType::CounterexampleGate)
-                .count(),
-            1,
-            "gate must fire exactly once: {types:?}"
-        );
-        assert_eq!(
-            types
-                .iter()
-                .filter(|t| **t == EventType::ModelOutput)
-                .count(),
-            2,
-            "{types:?}"
-        );
         let events = events(&dir);
-        let gate_event = events
-            .iter()
-            .find(|e| e.event_type == EventType::CounterexampleGate)
-            .unwrap();
-        assert_eq!(
-            gate_event.payload.get("position").and_then(|p| p.as_str()),
-            Some("final_answer")
-        );
-        assert_eq!(
-            gate_event
-                .payload
-                .get("once_only")
-                .and_then(|o| o.as_bool()),
-            Some(true)
-        );
         assert!(
-            gate_event
-                .payload
-                .get("message_block")
-                .and_then(|b| b.as_str())
-                .is_some_and(|b| b.starts_with("[COUNTEREXAMPLE_GATE v0.1]"))
+            events.iter().any(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("self_check")
+            }),
+            "self_check tool_completed event"
         );
-
-        // The block was injected into the post-gate round's request.
-        let requests = fake.received_requests();
-        assert_eq!(requests.len(), 2);
-        assert!(
-            requests[1]
-                .messages
+        assert_eq!(
+            events
                 .iter()
-                .any(|m| m.role == Role::User && m.content.contains("[COUNTEREXAMPLE_GATE v0.1]")),
-            "{:?}",
-            requests[1].messages
+                .filter(|e| e.event_type == EventType::CounterexampleGate)
+                .count(),
+            0,
+            "automatic counterexample gate must be retired"
+        );
+        let finished = events
+            .iter()
+            .find(|e| e.event_type == EventType::RunFinished)
+            .expect("run_finished");
+        assert_eq!(
+            finished.payload["self_check_called"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            finished.payload["terminal_source"],
+            serde_json::json!("run_end")
         );
 
         let _ = std::fs::remove_dir_all(&dir);

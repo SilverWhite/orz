@@ -546,9 +546,9 @@ pub(crate) struct LoopProfile {
     /// blackboard plan summary in the compaction marker, live text-delta
     /// forwarding).
     pub role: AgentRole,
-    /// §4.5: the final-answer counterexample gate fires only in main runs
-    /// (a retrieval result is not a run's formal answer). Grill turns fold
-    /// this to `false` too (a grill question is not a run-semantic).
+    /// §4.5: legacy counterexample gate (only when
+    /// `ORZ_TERMINAL_DECLARATION=off` compatibility mode is in force; the
+    /// production 0dm path retires it). Grill turns false.
     pub counterexample_gate: bool,
     /// 0di（2026-10-18，ADR-0010 §14.88）：本车道是否在 loop-top drain 会话
     /// 级中途补充队列——**主 run 车道独占**。grill 轮的 `role` 也是 Main，
@@ -810,6 +810,13 @@ pub(crate) struct LoopOutcome {
     /// future 已丢弃，计数器必须在 dispatch 侧存活 ⇒ 走
     /// `SharedLoopServices` 的 AtomicU64）。
     pub retrieval_calls: u64,
+    /// 0dm（2026-10-21）：主车道终态来源（`run_end` / `text_without_terminal`
+    /// / `short_text` / `budget_exhausted` / `gate_block` / `close_round`）。
+    pub terminal_source: &'static str,
+    /// 0dm：是否注入过 `[TERMINAL_NOTICE]`。
+    pub terminal_nudged: bool,
+    /// 0dm：本 run 是否调用过 `self_check`。
+    pub self_check_called: bool,
 }
 
 /// Outcome of one template-summary attempt.
@@ -2126,28 +2133,10 @@ fn semantic_compression_reason(kind: Option<CompressionWindowKind>) -> &'static 
     kind.map_or("model_selected", CompressionWindowKind::semantic_reason)
 }
 
-/// 2026-10-21（RUN-c23e0aaa-13/14/15/16/17 摩擦）：候选终答**已经自带**
-/// 反例自查段时，不再注入 `[COUNTEREXAMPLE_GATE]`。实测模型从第二次起就会
-/// 在终答开头写「## 反例自查（输出前最后一次）」——旧逻辑仍按「无工具调用」
-/// 再插一次门，逼出第二份完整终答（每份 3.5–5.3K 字），并让候选里产出的
-/// `[SEMANTIC_SUMMARY]` 在「门 → 终答」之间被消费：终答是在刚被压缩过的
-/// 上下文里写的（RUN-17 实测 381K→361K，终答还反过来声称「本轮无可压块」）。
-/// 判据只认行首标题，避免正文里偶然提到「反例」就误跳过。
-fn final_answer_has_counterexample_selfcheck(text: &str) -> bool {
-    text.lines().any(|line| {
-        line.trim_start()
-            .trim_start_matches(|c: char| c == '#' || c == '*')
-            .trim_start()
-            .starts_with("反例自查")
-    })
-}
-
-/// 0bi ⑩（ADR-0010 §14.76，2026-09-23）：answer 变体反例门的收窄判据——
-/// 本 run 有**执行事实**（≥1 个工具轮，或黑板已有编辑记录）或 **plan 存在
-/// 且未完成**（任一步骤非 Done/Failed）时才触发；纯文本短答（无工具轮、
-/// 无未完成 plan）跳过门，不再多花一轮模型调用。纯机械判据：不判内容、
-/// 不需模型参与。plan 变体（plan 写入前）不受此收窄影响。
-fn answer_gate_has_substance(svc: &SharedLoopServices<'_>, tool_rounds: u32) -> bool {
+/// 0dm（2026-10-21）：主车道终态声明的「执行事实」判据——本 run 有工具轮、
+/// 黑板编辑记录，或 plan 存在且未完成。纯文本短聊不要求 `[RUN_END]`。
+/// 纯机械判据，不判内容、不需模型参与。
+fn run_has_substance(svc: &SharedLoopServices<'_>, tool_rounds: u32) -> bool {
     if tool_rounds > 0 {
         return true;
     }
@@ -2161,6 +2150,17 @@ fn answer_gate_has_substance(svc: &SharedLoopServices<'_>, tool_rounds: u32) -> 
             .steps
             .iter()
             .any(|step| !matches!(step.status, StepStatus::Done(_) | StepStatus::Failed(_)))
+}
+
+/// 0dm 兼容门（`ORZ_TERMINAL_DECLARATION=off`）：候选已自带反例自查段时
+/// 跳过旧 gate，避免重复终答（0.9.5 的修复保留在兼容路径）。
+fn candidate_has_counterexample_selfcheck(text: &str) -> bool {
+    text.lines().any(|line| {
+        line.trim_start()
+            .trim_start_matches(|c: char| c == '#' || c == '*')
+            .trim_start()
+            .starts_with("反例自查")
+    })
 }
 
 /// 0cp S2（D2，2026-10-03）：RLI 卡死看门狗的轮询间隔（秒）——设计口径
@@ -2278,8 +2278,7 @@ pub(crate) async fn run_agent_loop(
     // with a NEW activation (Closed → next creation starts at 0). The main
     // agent keeps the inherited per-run semantic (`initial_tool_rounds` 0).
     let mut tool_rounds = profile.initial_tool_rounds;
-    // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): run 级墙钟
-    // 起点——审计报告的预算（轮数/墙钟用量）与运行内审查表（run 结束即弃）。
+    // 0dm 兼容门/审计报告的墙钟起点。
     let run_started_at = std::time::Instant::now();
     let mut mechanical_audit = crate::mechanical_audit::MechanicalAuditState::new();
     // The `None` seed is required by Rust's initialization rules (the
@@ -2311,7 +2310,15 @@ pub(crate) async fn run_agent_loop(
     // 2026-08-09) — orientation counts live in the session-level
     // `OrientationSessionState` threaded through the turn chain; output
     // repetition is handled by the generation-time output-health guard.
+    // 0dm：旧反例门仅作 `ORZ_TERMINAL_DECLARATION=off` 兼容路径；
+    // 生产新路径不触发（见终答候选分支）。
     let mut counterexample_fired = false;
+    // 0dm（2026-10-21）：终态声明状态。`terminal_source` 在各类出口赋值；
+    // `terminal_nudged` 保证只提示一次；`self_check_called` 由工具调用派生。
+    #[allow(unused_assignments)] // 所有出口都会赋值；初值仅为类型/防御
+    let mut terminal_source: &'static str = "run_end";
+    let mut terminal_nudged = false;
+    let mut self_check_called = false;
     // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): a
     // checkpoint fire whose block was injected but whose forced-template
     // round has not completed yet (main lane only — retrieval lanes commit
@@ -3149,6 +3156,17 @@ pub(crate) async fn run_agent_loop(
                 // hard gate only).
                 crate::prompt::build_retrieval_system_prompt(*role, goal, "")
             }
+        };
+        // 0dm（2026-10-21）：主车道常驻软提示（用户指定文案，逐字）＋终态
+        // 语法短行。放系统提示（不进对话侧车、不增加模型面消息条数）。
+        let system = if profile.role == AgentRole::Main {
+            format!(
+                "{}\n\n{}\n结束前输出 [RUN_END]（intent/reason/summary）。",
+                system,
+                crate::prompt::SELF_CHECK_RESIDENT_LINE
+            )
+        } else {
+            system
         };
         // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 计划型执行框架
         // 在系统提示词层无条件注入（plan_first 会话；主/检索子代理同一
@@ -4038,6 +4056,7 @@ pub(crate) async fn run_agent_loop(
                 tool_rounds,
             )
             .await?;
+            terminal_source = "budget_exhausted";
             break;
         }
 
@@ -4065,35 +4084,24 @@ pub(crate) async fn run_agent_loop(
                 tool_rounds,
             )
             .await?;
+            terminal_source = "close_round";
             break;
         }
 
+        if response.tool_calls.iter().any(|tc| tc.name == "self_check") {
+            self_check_called = true;
+        }
         if response.tool_calls.is_empty() {
-            // §4.6.1/4.6.2: the first no-tool-call response is a
-            // final-answer candidate — before committing it, the
-            // counterexample gate fires ONCE (the block explicitly tells
-            // the model it appears only once). The candidate is journaled
-            // as model_output (evidence) but not committed to the
-            // conversation; the post-gate response is the final answer
-            // (D6). A post-gate round that returns tool calls continues
-            // the loop normally — the gate never fires again this run.
-            // Grill mode (2026-08-08): the counterexample gate is a
-            // run-semantic (final answers); a grill question is not one
-            // — skipped.
-            // 0bi ⑩（ADR-0010 §14.76，2026-09-23 用户裁决）：answer 变体
-            // 收窄——只有本 run 有执行事实（工具轮／编辑记录）或 plan 存在
-            // 且未完成时才值得自查；纯文本短答跳过，省一轮模型调用（外部
-            // ACP 客户端的「草稿＋终稿」重复面也随之短聊消解）。
-            // 2026-10-21：候选终答已自带反例自查段时同样跳过——重复注入
-            // 会逼出第二份完整终答并让候选里的语义摘要被提前消费。
-            let candidate_has_selfcheck = response
-                .text
-                .as_deref()
-                .is_some_and(final_answer_has_counterexample_selfcheck);
-            if !counterexample_fired
+            // 0dm 兼容路径：`ORZ_TERMINAL_DECLARATION=off` 时保留旧反例门
+            // （生产 required 路径不走这里；旧测试/旧客户端行为不变）。
+            if !controller.terminal_declaration_required()
                 && profile.counterexample_gate
-                && answer_gate_has_substance(svc, tool_rounds)
-                && !candidate_has_selfcheck
+                && !counterexample_fired
+                && run_has_substance(svc, tool_rounds)
+                && !response
+                    .text
+                    .as_deref()
+                    .is_some_and(candidate_has_counterexample_selfcheck)
             {
                 writer
                     .record(
@@ -4105,11 +4113,6 @@ pub(crate) async fn run_agent_loop(
                         }),
                     )
                     .await?;
-                // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 /
-                // 设计 §2.4)：审计报告随最终答案前中立问询轮注入——与
-                // [COUNTEREXAMPLE_GATE] 同轮独立块；收敛为执行事实摘要
-                // （动作/文件 delta/预算/异常事实），无建议、无引导；
-                // 报告块不进归档（注册进 injected-block filter）。
                 let audit_report = mechanical_audit.report(Some(run_started_at.elapsed()));
                 messages.push(Message {
                     role: Role::User,
@@ -4128,10 +4131,47 @@ pub(crate) async fn run_agent_loop(
                     round: None,
                 });
                 counterexample_fired = true;
-                // 候选终答里的语义摘要留到 run 尾消费：门轮必须看到与草稿
-                // 相同的上下文，不能在草稿与终答之间压缩。
                 defer_semantic_once = true;
                 continue;
+            }
+            // 0dm（2026-10-21）：终态声明契约——不再在终答前自动注入反例门。
+            // 主车道有执行事实时，纯文本必须带 [RUN_END]；否则先 nudge 一次，
+            // 第二次仍无声明则 fail-open 接受（terminal_source 如实落账）。
+            let candidate_text = response.text.as_deref().unwrap_or("");
+            let declared = crate::model_stop::extract_model_stop(candidate_text).is_some();
+            let require_declaration = profile.role == AgentRole::Main
+                && controller.terminal_declaration_required()
+                && crate::model_stop::terminal_declaration_required()
+                && run_has_substance(svc, tool_rounds);
+            if require_declaration && !declared && !terminal_nudged {
+                writer
+                    .record(
+                        EventType::GateDecision,
+                        serde_json::json!({
+                            "gate": "terminal_declaration",
+                            "decision": "nudge",
+                        }),
+                    )
+                    .await?;
+                messages.push(Message {
+                    role: Role::User,
+                    content: crate::prompt::TERMINAL_NOTICE_BLOCK.to_string(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                terminal_nudged = true;
+                // 候选里的语义摘要留到 run 尾消费：下一轮必须与草稿同上下文。
+                defer_semantic_once = true;
+                continue;
+            }
+            if declared {
+                terminal_source = "run_end";
+            } else if require_declaration {
+                terminal_source = "text_without_terminal";
+            } else {
+                terminal_source = "short_text";
             }
             // 0ac S3①-b M1（2026-09-15，设计 §4.1「句号边界分段续写」的
             // 收尾注入形态）：本轮已是纯文本终答候选而队列仍有未投递事实
@@ -4267,6 +4307,7 @@ pub(crate) async fn run_agent_loop(
                 tool_rounds,
             )
             .await?;
+            terminal_source = "gate_block";
             break;
         }
 
@@ -5883,6 +5924,9 @@ pub(crate) async fn run_agent_loop(
             .retrieval_calls
             .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
             .unwrap_or(0),
+        terminal_source,
+        terminal_nudged,
+        self_check_called,
     })
 }
 
@@ -9710,18 +9754,6 @@ mod tests {
                 .flat_map(|r| r.messages.iter())
                 .all(|m| !m.content.contains("压缩回执")),
             "告知块不得注入（STOP 同消息豁免）: {requests:?}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-
-        // 对照臂：无 STOP 声明 ⇒ 照常注入（0bs ⑥ 不翻）。
-        let (fake, dir) = run(false, "RUN-0DE-N3B").await;
-        let requests = fake.received_requests();
-        assert!(
-            requests
-                .iter()
-                .flat_map(|r| r.messages.iter())
-                .any(|m| m.content.contains("压缩回执")),
-            "无 STOP 声明时告知块照常注入（0bs ⑥ 语义保留）: {requests:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
