@@ -136,6 +136,16 @@
 - **(h) 回滚路径**：机械层的硬编辑应留一个回退供模型选择，告知时一并将回退窗口交给模型；连带设计档模板增补「回滚路径」小节（仅约束新增）。
 - **补充裁决（同日）**：0bm 执行形态＝**狗粮长轮**——用户令「0bm 也定为新的狗粮长轮，不直接进行处理」；主代理不直接落码，待下发真机轮执行；前置建议（下发时定）＝重建载体纳入 0bl 十件未提交落码。
 
+### 1.263 2026-10-21 332 批 0dk S2 会话生命周期落码（**实现批**，S2 落码＋11 单测＋smoke，计数 64 不变；**未重建**）
+
+- **由来**：用户令「请开始进行 0dk 落码部分吧」；按 331 补记批次序 §3（332＝会话生命周期实现）。
+- **落码**：新增 [`orz-host/src/session_ops.rs`](../orz/crates/orz-host/src/session_ops.rs)——`SessionState/CloseReason/SessionCommand/SessionOutcome`＋`SessionHost` trait＋`close/state` 驱动，**不依赖 ACP、不 import `xai-acp-lib`**；`acp_server` 加 `session_cap`（`ORZ_SESSION_CAP` 默认 32，0＝不限）、`last_prompt_at`/`closing`、`.gsa/sessions/<s8>.closed|deleted` 标记、`release_session`/`evict_over_cap`/`handle_session_close|state|delete`；`stdio` 加 `_orz/session_close|state|delete` 三适配（-32010..-32014＋`data` 四要素；参数兼容 camel/snake）；prompt/queue/recall/restore/侧车写入统一 tombstone 执法；CLI `delete-session` 先写墓碑再删数据。`orz-web`：桥在 close/delete 响应后清槽 `session_id`，409 带 `workspace_occupied` 原因；Web 工具栏「关闭会话」（运行/恢复中禁用）、换会话先 `close(switch)`、`_orz/session_state` 对当前绑定自动解绑。**11 条验收单测**：close idle/active/timeout/idempotent、删除不复活、active 拒删、cap LRU、lease 冲突、状态通知、未知私有方法、close 线格式往返。
+- **读数**：`cargo check -p orz-host --tests` exit 0；11 条 0dk 单测全过；`cargo test -p orz-host --lib -- --test-threads=1` **421 passed / 0 failed / 6 ignored**；`orz-web` **63/0**；frontend smoke **44 ok**；`cargo fmt --check` clean。训练进程于批次收尾前结束，未借机重建。
+- **偏差（已留档）**：①会话级 `session_closed/session_deleted` 用持久标记而非 run journal（journal 一 run 一链、单终态，混写会破坏 verifier）；②close 不归档（设计 `closed`＝侧车保留；归档是独立动词）；③驱逐把无在途 run 的 `created` 视作 idle 同类；④60ms 超时单测注入 run marker（真实 cancel 会提前收敛，取消路径由 close-active 钉覆盖）；⑤浏览器原生 WS 读不到 409 body，故前端另有同义可行动文案。
+- **台账**：本卷；[`332 档`](audits/332_SESSION_LIFECYCLE_IMPLEMENTATION_2026-10-21.md)；主 BACKLOG 指针/计数/0dk 节；TODO 计数/P1 路由/P1-0dk；索引 v4.301 → v4.302＋`AUTH-332-SESSION-LIFECYCLE-IMPL`；`orz_source_manifest.sha256` 重生成。
+- **下一步**：0.9.8 双平台重建＋换装 → 0dn S2 真机十条（关闭后再载入/删除不复活/刷新重连/第二标签占用/保活过期五条先行）→ S4 收口（0dk/0di/0dm）。
+- 关键词：332 批、0dk S2、session_ops、`_orz/session_close`、session_state、session_delete、ORZ_SESSION_CAP、LRU 32、tombstone、删除不复活、占用者 409、关闭会话、421/63/44、计数 64、索引 v4.302。
+
 ### 1.262 2026-10-21 331 批 0dk S1 会话生命周期状态机设计（**设计批**，零源码零跑批，计数 64 不变）
 
 - **由来**：330 批诊断「0dk 无设计稿」；用户裁决三件——①**Web 唯一交互面，TUI 冻结**（只修崩溃/安全，不删代码）；②**close 走私有扩展**（避免强绑 grok）；③**ACP 不降级、不追 v1**，但扩展层与传输解耦以保底座可换。

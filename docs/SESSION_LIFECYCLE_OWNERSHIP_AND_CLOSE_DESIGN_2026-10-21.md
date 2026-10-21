@@ -1,6 +1,6 @@
 # 会话生命周期状态机设计（0dk S1：所有权、关闭、删除与私有扩展）
 
-> 状态：`current-design`（2026-10-21，331 批；0dk S1）。
+> 状态：`current-design`（2026-10-21，331 批；0dk S1）。**S2 已落码（332 批，见 [`332 档`](audits/332_SESSION_LIFECYCLE_IMPLEMENTATION_2026-10-21.md)）；实现偏差登记在该档 §4（会话级事件用持久标记而非 run journal、close 不归档）。**
 > 设计权威：[`ADR-0010`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；用户裁决（2026-10-21）：**Web 为唯一交互面，TUI 冻结**；**close 走私有扩展**；**扩展层与传输解耦，保持底座可更换**。
 > 上游：318 审查 P0-4（[`318 档`](audits/318_FULL_PROJECT_REVIEW_PHASE1_2026-10-19.md)）／319 已落部分／329 保活（[`329 档`](audits/329_FIVE_ISSUE_FIX_REWIND_KEEPALIVE_CDP_SWEEP_AND_0DM_S2_2026-10-21.md)）／330 契约基线 S2/S3（[`330 档`](audits/330_SURFACE_CONTRACT_BASELINE_2026-10-21.md)）。
 > 本稿只定**会话边界**，不改 loop、工具面、上下文、写控语义。

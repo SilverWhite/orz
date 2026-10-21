@@ -1,8 +1,8 @@
 # S2 会话生命周期（surface-session）
 
-> 状态：`current-design`（2026-10-21 330 批建立）。设计权威 [ADR-0010](../../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；**S1 状态机设计见 [`0dk S1`](../../../docs/SESSION_LIFECYCLE_OWNERSHIP_AND_CLOSE_DESIGN_2026-10-21.md)（331 批）**；本页只写**用户可见面**的机械契约，不是实现说明。
-> 代码：`orz/crates/orz-host/src/acp_server.rs`（new/load/prompt/cancel/lease）、`orz/crates/orz-host/src/stdio.rs`、`orz/crates/orz-web/src/{server.rs,acp_pump.rs}`、`orz/crates/orz-web/assets/app/main.js`。
-> 审计：[330 批档](../../../docs/audits/330_SURFACE_CONTRACT_BASELINE_2026-10-21.md)；归属项：0dk（余项）、0cy（收卷口径）。
+> 状态：`current-design`（2026-10-21 330 批建立）。设计权威 [ADR-0010](../../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)；**S1 状态机设计见 [`0dk S1`](../../../docs/SESSION_LIFECYCLE_OWNERSHIP_AND_CLOSE_DESIGN_2026-10-21.md)（331 批）**；**S2 落码见 [`332 档`](../../../docs/audits/332_SESSION_LIFECYCLE_IMPLEMENTATION_2026-10-21.md)**；本页只写**用户可见面**的机械契约，不是实现说明。
+> 代码：`orz/crates/orz-host/src/acp_server.rs`（new/load/prompt/cancel/lease）、`orz/crates/orz-host/src/session_ops.rs`（332：close/state/delete/evict）、`orz/crates/orz-host/src/stdio.rs`、`orz/crates/orz-web/src/{server.rs,acp_pump.rs}`、`orz/crates/orz-web/assets/app/{main,acp,state,widgets}.js`。
+> 审计：[330 批档](../../../docs/audits/330_SURFACE_CONTRACT_BASELINE_2026-10-21.md)；归属项：0dk（S4 余项）、0cy（收卷口径）。
 
 ## 1. 状态机
 
@@ -22,8 +22,8 @@
 2. **id 同源**：web/ACP/journal 三处会话标识同源（`sessionId` 前 8 hex ＝ `RUN-<s8>-<n>` 前缀）。
 3. **load 不收卷**：`session/load` 与交互式 `session/new` 均不触发 0cy 启动侧 sweep（329 落码）。
 4. **回放边界**：`session/load` 只回放 user/assistant 消息；工具/系统消息不回放——客户端必须知道历史不完整。
-5. **close 先行**：关闭会话必须先取消在途 run 再释放资源（ACP v1 `session/close` 语义；本地面尚未实现）。
-6. **删除不留尾**：删除会话后，下一条 prompt 不得把侧车写回（未达成，登记在 0dk）。
+5. **close 先行**：关闭会话必须先取消在途 run 再释放资源（`_orz/session_close` 私有扩展；332 落码：10s 上限、超时 busy 不半关、closed 标记幂等）。
+6. **删除不留尾**：删除会话后，下一条 prompt 不得把侧车写回（332 落码：`.deleted` 墓碑＋prompt/recall/queue/restore/侧车写多路执法）。
 
 ## 3. 失败模式
 
@@ -31,9 +31,9 @@
 |---|---|---|
 | 运行中崩溃 | CC 把未完成 tool 标 cut off、不重跑；OpenHands 用 `get_unmatched_actions()` 兜底 | journal 留 `tool_started` 无 `tool_completed`；327 已修配对读取 |
 | 归档后继续聊 | CC `claude rm` 只移出列表、transcript 保留 | orz 回档成功即删包（既定语义），回档后可继续 |
-| 删除已载入会话 | opencode 需先停会话；Codex 运行中 delete 被拒 | 删除后绑定未清、下一条 prompt 复活（0dk 余项） |
+| 删除已载入会话 | opencode 需先停会话；Codex 运行中 delete 被拒 | 332：删除写墓碑、prompt 拒绝并作废内存行；Web 删除后解绑（真机待 S4） |
 | 第二进程打开 | CC 普通 resume 不锁、后台会话独占；无一家有跨进程租约 | 本地已加 OS lease（领先业界） |
-| 协议缺 close | ACP v1 有可选 `session/close`（先 cancel 再释放） | 本地按 0.10.4 实现，无 close、无 list |
+| 协议缺 close | ACP v1 有可选 `session/close`（先 cancel 再释放） | 0.10.4＋`_orz/session_close|state|delete` 私有扩展（332）；不追 ACP v1（用户裁决） |
 
 ## 4. 明确不做
 
@@ -45,16 +45,16 @@
 
 | 项 | 现状 | 证据 | 等级 |
 |---|---|---|---|
-| close 状态机 | **设计完成（331，`_orz/session_close`：先 cancel 再释放、幂等、10s 上限）**；实现待 S2 | [`0dk S1`](../../../docs/SESSION_LIFECYCLE_OWNERSHIP_AND_CLOSE_DESIGN_2026-10-21.md) | 阻塞 |
-| `sessions` 有界 | map 无上限，长期运行只增不减 | `acp_server.rs` sessions map | 应修 |
-| 删除后复活 | 删除绑定未清，prompt 写回侧车 | 318 §3 P2、0dk 验收⑦ | 应修 |
+| close 状态机 | **已落码（332）**：`_orz/session_close`（先 cancel、10s 上限、busy 不半关、幂等）＋`_orz/session_state` 通知 | [`332 档`](../../../docs/audits/332_SESSION_LIFECYCLE_IMPLEMENTATION_2026-10-21.md) | 已闭（真机待 S4） |
+| `sessions` 有界 | **已落码（332）**：`ORZ_SESSION_CAP` 默认 32（0＝不限），LRU 只驱逐无在途 run 的会话 | `session_ops.rs`／`acp_server.rs` | 已闭（真机待 S4） |
+| 删除后复活 | **已落码（332）**：`.deleted` 墓碑＋prompt/recall/queue/restore/侧车写多路执法 | 同上 | 已闭（真机待 S4） |
 | load 回放工具面 | 只回放 user/assistant | `acp_server.rs:3822` 起 | 接受（须 UI 标注） |
 | ACP v1 对齐 | 停在 0.10.4；缺 resume/close/list | vendored `xai-acp-lib` 0.1.0 | 阻塞 |
 | TUI 恢复 | 只读，never resumes | `orz-tui/src/input.rs:185` | 接受 |
 
 ## 6. 0.9.8 判决
 
-- **必闭**：close 状态机（含 cancel 先行）、ACP v1 `resume/close/list` 对齐、删除后不复活、`sessions` 有界。
+- **必闭**：close 状态机（332 已落）、删除后不复活（332 已落）、`sessions` 有界（332 已落）；ACP v1 `resume/close/list` 对齐——私有 `_orz/*` 已覆盖 close，v1 升级不追（用户裁决 2026-10-21）。
 - **可延**：TUI 可写恢复。
 - **不做**：跨机、多写者。
 
@@ -65,5 +65,5 @@
 | 1 单一写者 | `session_lease_is_exclusive_and_released_on_drop` | 跨进程真机未验 |
 | 3 load 不收卷 | `session/load must not run the 0cy sweep`、`interactive_session_new_does_not_sweep_sibling_sessions` | — |
 | 4 回放边界 | `session/load history replay`（host 单测） | 工具面口径无测试 |
-| 5 close 先行 | 无 | 整条缺 |
-| 6 删除不留尾 | `close_session_releases_metadata` | 复活路径无测试 |
+| 5 close 先行 | `close_idle_releases_lease_and_removes_entry`、`close_active_cancels_then_closes`、`close_times_out_returns_busy_and_keeps_active`、`close_is_idempotent` | 真机 close/驱逐未验 |
+| 6 删除不留尾 | `prompt_after_delete_returns_not_found_without_materializing`、`delete_active_is_rejected` | 真机删除未验 |
