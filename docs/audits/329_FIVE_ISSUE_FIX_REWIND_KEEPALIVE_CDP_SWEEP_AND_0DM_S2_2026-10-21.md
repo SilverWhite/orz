@@ -80,6 +80,8 @@
 | `cargo test -p orz-host --lib interactive_session_new_does_not_sweep_sibling_sessions session_load_does_not_sweep_sibling_sessions` | **2 passed** |
 | `node orz/crates/orz-web/tests/frontend_smoke.mjs` | **43 条 ok，全部通过**（新增 §15 十条） |
 | `rustfmt --edition 2024 --check`（9 个触碰文件） | **clean**（先对 `orz-web/src/lib.rs` 跑一次 rustfmt 后全清） |
+| `python scripts/generate_orz_source_manifest.py` | **1491 entries**；`--check` → `valid` |
+| `python scripts/check_repository.py` | **`valid: true`，`error_count: 0`**（4 类 allowlist 警告为既有：存档 2046／仓外证据 2／子模块引用 6／.tmp 证据 47） |
 | 载体/真机 | **未跑**（用户令：训练进程优先，暂不重建） |
 
 ## §4 未做与顺延
@@ -116,7 +118,8 @@
 | `docs/BACKLOG_AND_PRIORITIES.md` | 指针行＋计数行；0di/0dk/0cy/0dm/EVIDENCE-LOCAL-BROWSER 各节补 329 |
 | `docs/BACKLOG_AND_PRIORITIES_2.md` | §1.260 329 批流水 |
 | `README.md` | 会话保活与 `session/new` 不收卷口径同步 |
-| `orz_source_manifest.sha256` | orz 提交后重生成 |
+| `orz_source_manifest.sha256` | orz 提交后重生成（1491 entries；`--check` valid） |
+| 提交 | orz `c17bc6d9` → `cli/feat/fusion-architecture`（已推）；父仓 `ddfc282e` → `origin/main`（已推，含 328 台账补提交与 manifest；其后「回执补记」单列一次提交） |
 
 ## §7 入口
 
