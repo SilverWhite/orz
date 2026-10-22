@@ -159,13 +159,66 @@ fn terminal_status(event_type: &str, payload: &Value) -> Option<String> {
     }
 }
 
+/// 2026-10-22（338 批）：run 排序——**先按会话分组，组内按序号降序**，组间按
+/// 组内最新 mtime 降序。
+///
+/// `list_runs` 原本只按 journal mtime 排序；但「回档」走
+/// `restore_session_from_archive`（`std::fs::write` 逐件重写，归档包只存正文
+/// 不存时间戳），会把**同一会话全部 run 的 mtime 压到同一刻**。真机实证
+/// c23e0aaa：24 个 journal 的 mtime 落在 20:19:07.700–.744（44 ms 内、16 个
+/// 不同值），排序退化成目录名字典序 `0,1,10,11,…,23,3,4,5,6,7,8,9` ⇒ 会话
+/// 回放末尾落在 run 8/9 的旧内容上，标记栏按回放顺序乱序，「恢复并继续」
+/// 取到的实时 run 也是 run 9。同会话内 mtime 既然如此不可信，就不能再让它
+/// 当组内主键：组内一律按 `RUN-/ARC-/RST-<s8>-<n>` 的 n 降序。
+///
+/// 纯函数，便于单元测试。
+fn split_run_id(run_id: &str) -> (String, Option<u64>) {
+    match run_id.rsplit_once('-') {
+        Some((prefix, tail)) => match tail.parse::<u64>() {
+            Ok(seq) => (prefix.to_string(), Some(seq)),
+            Err(_) => (run_id.to_string(), None),
+        },
+        None => (run_id.to_string(), None),
+    }
+}
+
+/// 排序（新在前）：组间按组内最大 mtime 降序；组内按序号降序；再以完整 id
+/// 降序保证确定性（readdir 顺序不是排序依据）。
+pub(crate) fn order_run_entries(entries: Vec<(String, u128)>) -> Vec<String> {
+    let mut groups: Vec<(String, u128, Vec<(Option<u64>, String)>)> = Vec::new();
+    let mut by_key: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (run_id, modified_ms) in entries {
+        let (key, seq) = split_run_id(&run_id);
+        let slot = match by_key.get(&key) {
+            Some(&i) => i,
+            None => {
+                groups.push((key.clone(), modified_ms, Vec::new()));
+                by_key.insert(key.clone(), groups.len() - 1);
+                groups.len() - 1
+            }
+        };
+        let group = &mut groups[slot];
+        group.1 = group.1.max(modified_ms);
+        group.2.push((seq, run_id));
+    }
+    groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
+    let mut out: Vec<String> = Vec::new();
+    for (_, _, mut members) in groups {
+        members.sort_by(|(seq_a, id_a), (seq_b, id_b)| {
+            seq_b.cmp(seq_a).then_with(|| id_b.cmp(id_a))
+        });
+        out.extend(members.into_iter().map(|(_, run_id)| run_id));
+    }
+    out
+}
+
 /// List runs under `{cwd}/.gsa/runs/`, newest first, capped. Content
 /// probes (started timestamp + terminal status) run only for the most
 /// recent [`PROBE_CAP`] entries — older runs read as `archived` without
 /// touching their journals.
 pub fn list_runs(cwd: &Path) -> Vec<RunSummary> {
     // Phase 1: cheap directory metadata only.
-    let mut entries: Vec<(String, PathBuf)> = Vec::new();
+    let mut entries: Vec<(String, PathBuf, u128)> = Vec::new();
     let Ok(dir_entries) = std::fs::read_dir(runs_dir(cwd)) else {
         return Vec::new();
     };
@@ -181,21 +234,31 @@ pub fn list_runs(cwd: &Path) -> Vec<RunSummary> {
             continue;
         }
         let journal = path.join("events.jsonl");
-        if std::fs::metadata(&journal).is_err() {
+        let Ok(meta) = std::fs::metadata(&journal) else {
             continue;
-        }
-        entries.push((run_id.to_string(), journal));
+        };
+        entries.push((run_id.to_string(), journal, modified_ms(&meta)));
     }
-    // Newest first by journal mtime, capped before any content probe.
-    entries.sort_by_key(|(_, journal)| {
-        std::cmp::Reverse(
-            std::fs::metadata(journal)
-                .ok()
-                .map(|m| modified_ms(&m))
-                .unwrap_or(0),
-        )
-    });
-    entries.truncate(LIST_CAP);
+    // Newest first（338：mtime 降序；平局按会话内序号降序），capped before
+    // any content probe.
+    let order = order_run_entries(
+        entries
+            .iter()
+            .map(|(run_id, _, ms)| (run_id.clone(), *ms))
+            .collect(),
+    );
+    let index: std::collections::HashMap<&str, &PathBuf> = entries
+        .iter()
+        .map(|(run_id, journal, _)| (run_id.as_str(), journal))
+        .collect();
+    let entries: Vec<(String, PathBuf)> = order
+        .into_iter()
+        .take(LIST_CAP)
+        .filter_map(|run_id| {
+            let journal = index.get(run_id.as_str())?;
+            Some((run_id, (*journal).clone()))
+        })
+        .collect();
 
     let mut out: Vec<RunSummary> = Vec::with_capacity(entries.len());
     for (i, (run_id, journal)) in entries.iter().enumerate() {
@@ -578,5 +641,67 @@ mod tests {
         // 缺侧车是显式错误。
         assert!(recall_log(&root, "deadbeef").is_err());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 338 钉（真机 c23e0aaa）：回档把同会话全部 journal 的 mtime 压到同一刻
+    /// （实测 24 件落在 44 ms 内、16 个不同值），只按 mtime 排序会退化成目录名
+    /// 字典序 `0,1,10,…,23,3,4,5,6,7,8,9`——会话回放末尾落在旧 run、标记栏乱
+    /// 序、「恢复并继续」取到 run 9。同会话内必须以序号为平局判据。
+    #[test]
+    fn order_run_entries_breaks_mtime_ties_by_session_sequence() {
+        // 平局组（回档同刻写入）：字典序输入必须还原为序号降序（新在前）。
+        let same_ms = 1_792_671_547_700u128;
+        let ids: Vec<String> = [
+            "RUN-c23e0aaa-0",
+            "RUN-c23e0aaa-1",
+            "RUN-c23e0aaa-10",
+            "RUN-c23e0aaa-11",
+            "RUN-c23e0aaa-2",
+            "RUN-c23e0aaa-23",
+            "RUN-c23e0aaa-3",
+            "RUN-c23e0aaa-9",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let mut entries: Vec<(String, u128)> = ids.into_iter().map(|id| (id, same_ms)).collect();
+        // 打乱一次，确认顺序不依赖输入次序（readdir 顺序不是排序依据）。
+        entries.reverse();
+        let ordered = order_run_entries(entries);
+        assert_eq!(
+            ordered,
+            vec![
+                "RUN-c23e0aaa-23",
+                "RUN-c23e0aaa-11",
+                "RUN-c23e0aaa-10",
+                "RUN-c23e0aaa-9",
+                "RUN-c23e0aaa-3",
+                "RUN-c23e0aaa-2",
+                "RUN-c23e0aaa-1",
+                "RUN-c23e0aaa-0",
+            ],
+            "同 mtime 的同会话 run 必须按序号降序（新在前），不得落回字典序"
+        );
+
+        // 跨会话仍以 mtime 为主（新会话的 run 排在前），平局才看序号。
+        let ordered = order_run_entries(vec![
+            ("RUN-aaaaaaaa-0".to_string(), same_ms),
+            ("RUN-bbbbbbbb-5".to_string(), same_ms + 1),
+            ("RUN-aaaaaaaa-2".to_string(), same_ms),
+        ]);
+        assert_eq!(ordered[0], "RUN-bbbbbbbb-5", "较新 mtime 必须排最前");
+        assert_eq!(ordered[1], "RUN-aaaaaaaa-2", "同 mtime 组内仍按序号降序");
+        assert_eq!(ordered[2], "RUN-aaaaaaaa-0");
+
+        // 非序号形态（RUN-CLI-<s8> 无尾序号）不参与序号比较，仍确定性排序。
+        let ordered = order_run_entries(vec![
+            ("RUN-CLI-cccccccc".to_string(), same_ms),
+            ("RUN-cccccccc-3".to_string(), same_ms),
+        ]);
+        assert_eq!(ordered.len(), 2, "两条都必须保留");
+        assert_eq!(
+            ordered[0], "RUN-cccccccc-3",
+            "有序号者优先（视作同刻内更具体）；无序号形态不 panic"
+        );
     }
 }

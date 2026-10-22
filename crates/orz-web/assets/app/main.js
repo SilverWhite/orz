@@ -151,6 +151,55 @@ const isSessionRunId = (runId, s8) =>
 
 const escapeRegExp = (s) => String(s ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/* 2026-10-22（338 批，真机 c23e0aaa）：会话内 run 顺序＝**序号**，不是文件
+ * mtime。工作台「回档」走 host 侧 `restore_session_from_archive`，逐件
+ * `std::fs::write` 重写活区（归档包只存正文、不存时间戳）⇒ 同一会话全部
+ * journal 的 mtime 被压到同一刻（真机 24 件落在 44 ms 内、16 个不同值）。
+ * `/api/runs` 只按 mtime 排序、平局无判据 ⇒ 顺序坍塌成目录名字典序
+ * `0,1,10,11,…,23,3,4,5,6,7,8,9`：会话回放末尾落在 run 8/9 的旧内容（T9/T10）、
+ * 标记栏按回放顺序乱序、「恢复并继续」把实时尾挂在 run 9。
+ * 故前端不依赖服务端顺序——显式按序号升序铺开，mtime 只作无序号形态的兜底。 */
+const runSequence = (runId) => {
+  // ARC-/RST- 审计 journal 与 RUN- 共用同一会话序号轴（归档 run 的 n 就是归档
+  // 发生时的会话计数），一并参与排序，归档事实才会落在正确的时间位置。
+  const m = /^(?:RUN|ARC|RST)-[0-9a-fA-F]{8}-(\d+)$/.exec(String(runId ?? ''));
+  return m ? Number(m[1]) : null;
+};
+
+const compareSessionRunOrder = (a, b) => {
+  const sa = runSequence(a.run_id);
+  const sb = runSequence(b.run_id);
+  if (sa != null && sb != null && sa !== sb) return sa - sb;
+  if (sa != null && sb == null) return -1;
+  if (sa == null && sb != null) return 1;
+  const ma = Number(a.modified_ms) || 0;
+  const mb = Number(b.modified_ms) || 0;
+  if (ma !== mb) return ma - mb;
+  return String(a.run_id).localeCompare(String(b.run_id));
+};
+
+/* 本会话全部 run（含 ARC- 归档审计 journal，回放里要显示归档事实），旧→新。 */
+function orderedSessionRuns(runs, s8) {
+  const re = new RegExp(`^(?:RUN-CLI-|ARC-|RUN-)${escapeRegExp(s8)}`);
+  return (runs || []).filter((r) => re.test(r.run_id)).slice().sort(compareSessionRunOrder);
+}
+
+/* 本会话最新 run（序号最大者；无序号形态回退 mtime）。 */
+function latestSessionRun(runs, s8) {
+  let latest = null;
+  let best = null;
+  for (const r of runs || []) {
+    if (!isSessionRunId(r.run_id, s8)) continue;
+    const seq = runSequence(r.run_id);
+    const key = [seq == null ? -1 : seq, Number(r.modified_ms) || 0];
+    if (!best || key[0] > best[0] || (key[0] === best[0] && key[1] >= best[1])) {
+      latest = r;
+      best = key;
+    }
+  }
+  return latest;
+}
+
 /* 318 P2（host 侧 2026-10-19 变更）：`session/load` 要求绝对 cwd 且会
  * canonicalize。boot/cwd 正常是绝对路径；缺省时回退 /api/boot 一次，仍
  * 不是绝对路径则拒绝恢复（不把相对路径交给 host）。 */
@@ -574,7 +623,8 @@ async function syncLiveTail() {
     // ARC/RST journals are maintenance facts, never the active model turn.
     // 318 P1-B5：CLI 侧车 run 是精确 `RUN-CLI-<s8>`（无尾分隔符），模型 run
     // 是 `RUN-<s8>-*`；只认这两种，ARC/RST 永不跟随。
-    const mine = runs.find((r) => isSessionRunId(r.run_id, s8));
+    // 338：最新 run 按序号取，不看清单顺序（回档会压平 mtime，清单顺序坍塌）。
+    const mine = latestSessionRun(runs, s8);
     if (!mine) return; // 新会话首 prompt 前：空实时窗等待
     // 329（2026-10-21）：撤回后实时窗不得把被撤回的旧 run 从头重放。
     // 只有「本会话最新 run 在最近一次撤回时刻之前已结束」时跳过它；撤回后
@@ -589,7 +639,11 @@ async function syncLiveTail() {
       } catch {
         /* 无水位（旧载体/端点不可用）：按原样尾随，不阻断实时面 */
       }
-      if (recalledAt > 0 && Number(mine.modified_ms) <= recalledAt * 1000) {
+      // 338：开始时刻取 journal 的 `run_started`（`started`）——回档会把
+      // mtime 压到“回档时刻”，用 mtime 比对会让被撤回的旧 run 看起来像
+      // 撤回之后发生，从而被重新尾随重放。
+      const mineStartedMs = Date.parse(mine.started) || Number(mine.modified_ms);
+      if (recalledAt > 0 && mineStartedMs <= recalledAt * 1000) {
         currentRunId = mine.run_id; // 标记已处理：别每 5 秒重复提示/重放
         state.liveRunId = null;
         vm.addSystemMessage(
@@ -855,8 +909,9 @@ async function openConversation(s8) {
   }
   // 318 P1-B1/P2：s8 来自 URI，进 RegExp 前必须转义（`.`/`(` 等元字符
   // 会让构造抛错或跨会话误配；会话 id 只应是 8 hex，防御仍须在）。
-  const re = new RegExp(`^(?:RUN-CLI-|ARC-|RUN-)${escapeRegExp(s8)}`);
-  const ordered = state.runs.filter((r) => re.test(r.run_id)).slice().reverse(); // 旧→新
+  // 338（真机 c23e0aaa）：顺序按 run 序号，不相信清单顺序——回档把同会话
+  // journal 的 mtime 压平后，`/api/runs` 的 mtime 顺序会退化为目录名字典序。
+  const ordered = orderedSessionRuns(state.runs, s8); // 旧→新
   closeTail();
   currentRunId = null;
   state.liveRunId = null;
@@ -895,9 +950,13 @@ async function openConversation(s8) {
   }
   let unfinished = 0;
   try {
-    // 334（§4.11）：把重放窗口起点（最早一条 run 的 mtime）交给水位过滤，
-    // 用于识别「窗口不含撤回前段」。
-    unfinished = await replayConversationMerged(s8, ordered, recallLog, ordered[0]?.modified_ms);
+    // 334（§4.11）：把重放窗口起点（最早一条 run 的开始时刻）交给水位过滤，
+    // 用于识别「窗口不含撤回前段」。338：优先用 journal 的 `run_started`
+    // 时间戳（`RunSummary.started`）——回档会把 mtime 压平到“回档时刻”，
+    // 用它当窗口起点会把每次回档后的会话都误判成「窗口缺撤回前段」并跳过
+    // 水位过滤（真机 c23e0aaa：mtime 20:19 > 撤回时刻 17:14）。
+    const windowStartMs = Date.parse(ordered[0]?.started) || ordered[0]?.modified_ms;
+    unfinished = await replayConversationMerged(s8, ordered, recallLog, windowStartMs);
   } catch (e) {
     // 中途失败也要给出可见答复，不能留空白（错误路径修复 2026-09-25）。
     vm.addSystemMessage(`（会话 ${s8} 打开失败：${e.message}）`, true);
@@ -2220,7 +2279,16 @@ async function boot() {
   }, 5000);
 }
 
-/* 334：冒烟测试钩子（不新增 UI 面）——绑定读数归零/attach 顺序可直接注入。 */
-export const __testHooks = { setBinding, detachBinding, resyncBusyState, onBridgeAttached };
+/* 334：冒烟测试钩子（不新增 UI 面）——绑定读数归零/attach 顺序可直接注入。
+ * 338：并出 run 排序两支（回档压平 mtime 后的顺序回归钉子）。 */
+export const __testHooks = {
+  setBinding,
+  detachBinding,
+  resyncBusyState,
+  onBridgeAttached,
+  orderedSessionRuns,
+  latestSessionRun,
+  runSequence,
+};
 
 boot();

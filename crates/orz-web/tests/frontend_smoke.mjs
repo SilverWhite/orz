@@ -2241,5 +2241,90 @@ assert.ok(connBanner.textContent.includes('有运行在进行'), '409 必须显�
 assert.ok(connBanner.textContent.includes('等本轮结束'), '409 必须显示可行动 hint');
 console.log('ok  16.10 工作区切换：重连新根＋旧会话留旧区＋409 显示 message/hint');
 
+/* ── 17. 338（2026-10-22 真机 c23e0aaa）：回档压平 mtime 后的会话顺序 ── */
+// 17.1 合并回放必须按 run 序号铺开，不得相信 /api/runs 的 mtime 顺序。
+// 真机：24 个 journal 的 mtime 被「回档」压到 44 ms 内（16 个不同值），服务端
+// 顺序退化为目录名字典序 0,1,10,11,…,23,3,4,5,6,7,8,9 ⇒ 回放末尾落在 run 8/9
+// 的旧内容（T9/T10），标记栏随之乱序。
+assert.ok(hooks?.orderedSessionRuns && hooks?.latestSessionRun, 'main.js 必须导出 run 排序钩子');
+const flatMs = 1792671547700;
+const lexicographic = [
+  'RUN-c23e0aaa-0', 'RUN-c23e0aaa-1', 'RUN-c23e0aaa-10', 'RUN-c23e0aaa-11',
+  'RUN-c23e0aaa-12', 'RUN-c23e0aaa-2', 'RUN-c23e0aaa-20', 'RUN-c23e0aaa-23',
+  'RUN-c23e0aaa-3', 'RUN-c23e0aaa-9', 'ARC-c23e0aaa-24', 'RUN-d24eadd6-0',
+].map((run_id) => ({ run_id, modified_ms: flatMs }));
+const orderedIds = hooks.orderedSessionRuns(lexicographic, 'c23e0aaa').map((r) => r.run_id);
+assert.deepEqual(
+  orderedIds,
+  [
+    'RUN-c23e0aaa-0', 'RUN-c23e0aaa-1', 'RUN-c23e0aaa-2', 'RUN-c23e0aaa-3',
+    'RUN-c23e0aaa-9', 'RUN-c23e0aaa-10', 'RUN-c23e0aaa-11', 'RUN-c23e0aaa-12',
+    'RUN-c23e0aaa-20', 'RUN-c23e0aaa-23', 'ARC-c23e0aaa-24',
+  ],
+  '会话回放必须按 run 序号旧→新铺开（ARC 审计 run 按同一序号面就位）',
+);
+assert.ok(
+  !orderedIds.includes('RUN-d24eadd6-0'),
+  '其他会话的 run 不得混进本会话回放',
+);
+assert.equal(
+  orderedIds.at(-1),
+  'ARC-c23e0aaa-24',
+  '回放末尾必须是序号最大者（真机：旧实现末尾落在 run 8/9 的 T9/T10 旧内容）',
+);
+console.log('ok  17.1 conversation replay ordered by run sequence（mtime 压平后不坍塌）');
+
+// 17.2 「最新 run」＝序号最大者，同样不看清单顺序（回档后 state.runs[0] 可能是
+// run 9；实时尾曾因此挂在 T9/T10 上，恢复并继续后标记栏只剩最后两条）。
+const shuffled = [...lexicographic].reverse();
+assert.equal(
+  hooks.latestSessionRun(shuffled, 'c23e0aaa')?.run_id,
+  'RUN-c23e0aaa-23',
+  '最新 run 必须是 RUN-c23e0aaa-23（ARC- 维护 journal 不参与尾随）',
+);
+assert.equal(
+  hooks.latestSessionRun([{ run_id: 'RUN-CLI-6ab7de01', modified_ms: flatMs }], '6ab7de01')?.run_id,
+  'RUN-CLI-6ab7de01',
+  '无序号形态（RUN-CLI-<s8>）仍须可选中（回退 mtime）',
+);
+assert.equal(hooks.runSequence('RUN-CLI-6ab7de01'), null, '无序号形态不得伪造序号');
+console.log('ok  17.2 latest run by sequence（恢复并继续不再挂到 run 9）');
+
+// 17.3 回档压平 mtime 后，撤回窗口起点必须取 journal 的 run_started 时间戳，
+// 不能取 modified_ms——否则「窗口起点（回档时刻）晚于撤回时刻」会被误判成
+// 「窗口缺撤回前段」，整条水位被跳过、被撤回内容复活（真机 c23e0aaa：mtime
+// 20:19 > 撤回 17:14）。
+resetView();
+state.conversations = [
+  { session8: 'bcc0ffee', session_id: 'bcc0ffee-1111-2222-3333-444455556666', root: 'D:\\CLI\\orz' },
+];
+const restoreMs = TS_BASE + 9_000_000; // 回档时刻（远晚于撤回）
+state.runs = [
+  // 服务端新序（新在前），但两条 mtime 都被回档压到同一刻
+  { run_id: 'RUN-bcc0ffee-2', status: 'completed', modified_ms: restoreMs, started: at(7) },
+  { run_id: 'RUN-bcc0ffee-1', status: 'completed', modified_ms: restoreMs, started: at(1) },
+];
+await withFetch(
+  recallEventsApi(
+    { 'RUN-bcc0ffee-1': runOneEvents, 'RUN-bcc0ffee-2': runTwoEvents },
+    [{ ordinal: 2, recalled_at: TS_BASE / 1000 + 6, removed_messages: 3 }],
+  ),
+  async () => {
+    await ui.openUri('conversation://bcc0ffee');
+  },
+);
+assert.deepEqual(
+  userTexts(),
+  ['旧问题一', '新问题三'],
+  'mtime 被回档压平后水位仍必须生效（窗口起点取 run_started）',
+);
+assert.equal(
+  messageTexts().some((t) => t.includes('窗口缺撤回前段')),
+  false,
+  '不得因回档 mtime 误报「窗口缺撤回前段」',
+);
+assert.equal(messageTexts().includes('旧回答二'), false, '被撤回内容不得复活');
+console.log('ok  17.3 recall window start uses run_started（回档 mtime 不影响撤回水位）');
+
 console.log('\nfrontend smoke: 全部通过');
 process.exit(0);
