@@ -13,7 +13,7 @@
   → 332（已完成 2026-10-21）会话生命周期实现（close/有界/删除不复活/占用者提示）
   → 333（已完成 2026-10-21）Web 细节（必闭 3–10，拆 333a/333b）
   → 334（已完成 2026-10-22）328–333 审查问题全量处置（P0×3＋P1×9＋P2；计数 64 不变）
-  → 0.9.8 双平台重建＋Windows 换装＋ACAF 重 provision
+  → 335（已完成 2026-10-22）0.9.8 双平台重建＋Windows 换装＋ACAF 重 provision（计数 64 不变；未发行）
   → 0dn S2 真机十条场景
   → S4 真机收口（0dk/0di/0dm）
 ```
@@ -86,6 +86,8 @@
 ---
 
 ## §5 0.9.8 重建与真机
+
+> **335 已完成（2026-10-22）**：WIN `orz.exe` 59,261,952 `e3df4308…`／ACAF `49ea0702…`／MATCH 3/3；LIN `orz` 118,384,560 `8f61631f…`／static-pie／alpine+bookworm rc0；详见 [`335 档`](audits/335_CARRIER_REBUILD_V098_2026-10-22.md)。未推送/未发行；0dn S2 与 S4 仍待。
 
 1. 重建：双平台（WIN `build_orz.ps1 -Release`；LIN docker）＋ACAF 重 provision＋身份门。
 2. 换装：`C:\Users\1\AppData\Local\orz\bin` 三件套＋`.bak` 链＋`--build-info` 核证。
