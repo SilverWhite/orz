@@ -17,7 +17,7 @@
 | Linux 形态 | `e_type=3 (DYN)`、`e_machine=62`、**无 PT_INTERP**（static-pie）；alpine 3.20 `RUN-CLI-6ad9f82f` rc0；bookworm-slim `RUN-CLI-6ad9f839` rc0；bookworm `doctor` **ok=10 warn=2 fail=0**（warn＝无 Chrome＋新工作区无 run journal） |
 | Linux 清单 | `D:/tb-eval/orz-linux/carrier-manifest.json` **v0.9.8 / 3 entries**；carrier 复验 3 件通过 |
 | **0dn S2** | **十条全 PASS**（75 条断言，0 失败；总墙钟 148.2 s；同日复跑 `s2-098-run2` 仍 10/10、75 断言逐项过、143.3 s）；每场景真 Chrome（headless=new）＋`orz web`＋fake 替身；读数 `D:/tb-eval/s2-098/results.json`，截图同目录 |
-| 门禁 | 见 §7；计数 64 不变；未推送（用户未令）、未发行 |
+| 门禁 | 见 §7；计数 64 不变；**已推送、未发行**（父仓 `main` 已推送；orz `cli/feat/fusion-architecture`＝`cfed6191`） |
 
 ## §1 换装（双平台）
 
@@ -114,11 +114,11 @@
 - orz 子仓：`orz/crates/orz-web/assets/app/main.js` 两处修正；提交见 §8。
 - 载体：WIN `D:/tb-eval/orz-windows`（3 entries，`7cf16614…`）；LIN `D:/tb-eval/orz-linux`（3 entries，`bfcc3f0a…`）；装机位 `C:/Users/1/AppData/Local/orz/bin` 三件已换。
 - 335 档 §2 的 WIN 哈希与 §3 的 LIN 哈希已被本批取代；335 档补一行指针（历史读数不删）。
-- **未做**：`v0.9.8` tag／GitHub Release／安装包（用户令「安装包先不发行」延续）；父仓/orz 推送（用户未令）；0dn S3；Linux 评测宿主以外环境。
+- **已推送、未做**：父仓 `main` 与 orz `cli/feat/fusion-architecture`（`c3faec70..cfed6191`）已推送，远端 ref 回读一致；`v0.9.8` tag／GitHub Release／安装包**未做**（用户令「安装包先不发行」延续）；0dn S3；Linux 评测宿主以外环境。
 - 计数 **64 不变**；0dn 状态仍为 `pending`（S1＋S2 达成，S3 待续）。
 
 ## §8 提交
 
 - orz：`cfed6191`（`fix(336): persistent version-skew banner + fast-run journal catch-up`；仅 `main.js`，+26/−5）。
 - 父仓：`261e018c`（`feat(336): 0.9.8 适用版换装＋0dn S2 真机十条（10/10 PASS）`；本档＋套件＋索引/TODO/BACKLOG/335 指针＋源清单 1494 条＋子模块指针）。
-- 未推送（用户未令）；未建 tag、未发 Release、未打包安装包。
+- 已推送：父仓 `main`、orz `cli/feat/fusion-architecture`（`c3faec70..cfed6191`）；未建 tag、未发 Release、未打包安装包。
