@@ -1203,7 +1203,7 @@ cf3073242aee5e8665b76b3fd23c48637bade1d6913db10c7ef055372302b0a7  crates/orz-web
 523aff7be6ab5e3d4d4985517b373689b4aa0703746284b6b9fab54847eac933  crates/orz-web/assets/app/dialogs.js
 a1bcf295acba1c1c439e5e0d36b3f83e9a199f65ad217e7ed5f261a8cc9963f5  crates/orz-web/assets/app/journal.js
 aedc368985d14bc713c0aac90d60820fa29b4393745234c56acbc8680971c094  crates/orz-web/assets/app/keymap.js
-e9aa1a82e53ae58d97a47c5691f85c24b127866a8974afc97bcef061b5aa2de3  crates/orz-web/assets/app/main.js
+51a2e7383f7c16b84ffd0b4aa2e7a27a18a4c066dd45005ed535b251943ee225  crates/orz-web/assets/app/main.js
 f8a86a782fa63da3e47b2a80b17cf364b6896e7422ce7c6f47a487f80cefd1ed  crates/orz-web/assets/app/md.js
 8923ed71b51568aa84237fa8d465ef6077372889cbc1d4c154a39ffd343e1610  crates/orz-web/assets/app/projection.js
 68b81459066d13dbd5199a945bd2e253be04ee3b213ad83d06e45f70e7b59dfe  crates/orz-web/assets/app/state.js
