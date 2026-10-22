@@ -1,8 +1,8 @@
 # 336 批：0.9.8 适用版换装＋0dn S2 真机十条（2026-10-22）
 
-> **用户令**：「请进行实际适用版本的换装并做0dn S2吧」。**本批**＝把 335 构建的 0.9.8 按 S2 真机暴露的两处 Web 缺陷修正后重出、双平台换装（Windows 装机位/载体位＋Linux 载体位/评测挂载位），并在换装后的 0.9.8 上跑满 0dn S2 十条真机场景。**计数 64 不变**；0dn 仍为 S3 词表待续；未建 tag、未发 Release、未打包安装包。
+> **用户令**：「请进行实际适用版本的换装并做0dn S2吧」。**本批**＝把 335 构建的 0.9.8 按 S2 真机暴露的两处 Web 缺陷修正后重出、双平台换装（Windows 装机位/载体位＋Linux 载体位/评测挂载位），并在换装后的 0.9.8 上跑满 0dn S2 十条真机场景。**计数 64 不变**；0dn 仍为 S3 词表待续；本批未发行，**337 批已发行 v0.9.8**。
 >
-> **与 335 的关系（如实）**：335 的 0.9.8 三件套（WIN `e3df4308…`／LIN `8f61631f…`）被本批重出件取代；版本号仍为 `0.9.8`，因为 0.9.8 从未发行，且 330 验收口径要求「十条在 0.9.8 载体上全绿」。旧件在两侧均有 `.0.9.8-bak`；新哈希见 §1。
+> **与 335 的关系（如实）**：335 的 0.9.8 三件套（WIN `e3df4308…`／LIN `8f61631f…`）被本批重出件取代；版本号仍为 `0.9.8`，因为当时 0.9.8 尚未发行，且 330 验收口径要求「十条在 0.9.8 载体上全绿」。旧件在两侧均有 `.0.9.8-bak`；新哈希见 §1。
 
 ## §0 结论速览
 
@@ -17,11 +17,11 @@
 | Linux 形态 | `e_type=3 (DYN)`、`e_machine=62`、**无 PT_INTERP**（static-pie）；alpine 3.20 `RUN-CLI-6ad9f82f` rc0；bookworm-slim `RUN-CLI-6ad9f839` rc0；bookworm `doctor` **ok=10 warn=2 fail=0**（warn＝无 Chrome＋新工作区无 run journal） |
 | Linux 清单 | `D:/tb-eval/orz-linux/carrier-manifest.json` **v0.9.8 / 3 entries**；carrier 复验 3 件通过 |
 | **0dn S2** | **十条全 PASS**（75 条断言，0 失败；总墙钟 148.2 s；同日复跑 `s2-098-run2` 仍 10/10、75 断言逐项过、143.3 s）；每场景真 Chrome（headless=new）＋`orz web`＋fake 替身；读数 `D:/tb-eval/s2-098/results.json`，截图同目录 |
-| 门禁 | 见 §7；计数 64 不变；**已推送、未发行**（父仓 `main` 已推送；orz `cli/feat/fusion-architecture`＝`cfed6191`） |
+| 门禁 | 见 §7；计数 64 不变；**已推送；337 批发行 v0.9.8**（父仓 `main` 已推送；orz `cli/feat/fusion-architecture`＝`cfed6191`） |
 
 ## §1 换装（双平台）
 
-**为什么重出**：S2 在 335 的 0.9.8 上实测到 §2 两处缺陷；先用 335 原始件跑出 8/10，修码后重出并换装，S2 才十条全绿。重出仍为 0.9.8（未发行；版本号留给发行批决定）。
+**为什么重出**：S2 在 335 的 0.9.8 上实测到 §2 两处缺陷；先用 335 原始件跑出 8/10，修码后重出并换装，S2 才十条全绿。重出仍为 0.9.8（当时未发行；337 批已发行）。
 
 **Windows**
 
@@ -121,4 +121,4 @@
 
 - orz：`cfed6191`（`fix(336): persistent version-skew banner + fast-run journal catch-up`；仅 `main.js`，+26/−5）。
 - 父仓：`261e018c`（`feat(336): 0.9.8 适用版换装＋0dn S2 真机十条（10/10 PASS）`；本档＋套件＋索引/TODO/BACKLOG/335 指针＋源清单 1494 条＋子模块指针）。
-- 已推送：父仓 `main`、orz `cli/feat/fusion-architecture`（`c3faec70..cfed6191`）；未建 tag、未发 Release、未打包安装包。
+- 已推送：父仓 `main`、orz `cli/feat/fusion-architecture`（`c3faec70..cfed6191`）；本批未建 tag／Release，**337 批已建 tag `v0.9.8` 并发行**。

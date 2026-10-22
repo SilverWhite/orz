@@ -112,12 +112,12 @@
 - orz：bump 提交 `c3faec70`（父仓 pin 随本档提交）。
 - 父仓：本档＋索引 v4.306＋TODO/BACKLOG 指针＋`orz_source_manifest.sha256`（1494 条）＋`orz` 子模块指针。
 - **已推送**：父仓 `main` → `baf7260f`；orz `cli/feat/fusion-architecture` → `c3faec70`；远端 ref 回读一致。
-- **未建 tag／未发 Release**（用户令「安装包先不发行」）；README 发布面保持 v0.9.7 对应说明（发布批另做）。
+- **本批未建 tag／未发 Release**（用户令「安装包先不发行」）；README 发布面保持旧版说明（**337 批已发行 v0.9.8 并对齐 README**）。
 - 计数 64 不变；334 修复批仍 `AUTH-334-FIX-328-333`，本批新增 `AUTH-335-REBUILD-V098`（`reference`）。
 
 ## §8 边界与如实记
 
-1. **已推送但未发行**：父仓 `main` 与 orz `cli` 分支已推送；GitHub Release／tag／安装包打包未做（按用户令「安装包先不发行」）。
+1. **已推送但本批未发行**：父仓 `main` 与 orz `cli` 分支已推送；GitHub Release／tag／安装包本批未做（按用户令「安装包先不发行」）；**337 批已发行 `v0.9.8`**。
 2. **0dn S2 未跑**：真机十条场景仍待 0.9.8 载体上执行；本批只证「可构建、可换装、可启动、334 新面在体」。
 3. **Linux 未换装到评测宿主机位**：产物在 `D:/tb-eval/orz-linux` 与 `/target` 缓存；评测容器/宿主换装另批。
 4. **版本偏斜探针的旧载体边界**：0.9.7 无 `--version`，3 s 超时后 `child_version=null / version_skew=null`（不妄判）；0.9.9 假探针用于证明 true 分支。
