@@ -15,7 +15,7 @@
 | 4 | 上下文占用／最近一次压缩读数 | **落码**：`GET /api/context` 只读投影（侧车 chars/2 估算＋最近 8 个 run 的压缩事件＋存档计数）＋工具栏「上下文」弹窗 | `context.rs` 3 单测；smoke 14.10b |
 | 5 | 后台任务列表或「仅模型可见」 | **落码**：属性面板明确「仅模型可见；本页不提供任务表，刷新/关闭不恢复」，有读数时显示计数 | smoke 14.11 |
 | 6 | 交付面板空态＋`terminal_source` 可见 | **落码**：空态文案已在；冒烟钉住空态与 `terminal_source` 原码＋中文标注（面板原有能力，本批补验证） | smoke 14.11 |
-| 7 | `orz doctor`（报告式，不自动修） | **落码**：8 节报告（版本/cwd/.gsa 可写/lease/run/侧车/压缩/载体完整性）＋`summary`；有 fail ⇒ exit 1 | `doctor_report` 2 单测；实跑 `ok=7 warn=1 fail=0` |
+| 7 | `orz doctor`（报告式，不自动修） | **落码**：8 节报告（版本/cwd/.gsa 可写/lease/run/侧车/压缩/载体完整性）＋`summary`；有 fail ⇒ exit 1（334 再补 retrieval/端口/令牌/CDP 四项） | `doctor_report` 2 单测；实跑 `ok=7 warn=1 fail=0` |
 | 8 | `--version`＋桥/child 版本偏斜 | **落码**：`orz --version` 稳定单行；`/api/boot` 带 `bridge_version/child_version/version_skew`；偏斜横幅＋系统行 | `parse_version_output` 单测；smoke 14.11 |
 | 9 | 错误面四要素（`code/class/hint/evidence`＋`copy.js`） | **落码**：`copy.js` 表＋`describeError`；acp 错误经四要素合成，未知码 internal 兜底 | smoke 14.11 |
 
@@ -87,17 +87,20 @@
 | `cargo run -p orz-bin --bin orz -- doctor` | `ok=7 warn=1 fail=0`，exit 0（warn＝开发树无 carrier 清单） |
 | `node crates/orz-web/tests/frontend_smoke.mjs` | **47 条 ok，全部通过**（14.10a/14.10b/14.11 三条新钉） |
 | `cargo fmt --all -- --check` | **clean** |
-| `python scripts/check_repository.py` | 见 §7（提交前跑） |
+| `python scripts/check_repository.py` | **`valid: true` / `error_count: 0` / `warning_count: 4`**（4 类均为既有 allowlist：存档 2046／仓外证据 2／子模块引用 6／.tmp 证据 47；2026-10-21 复跑） |
 
 ## §4 偏差与边界（必须留档）
 
 1. **保活过期事实只在桥进程内存**：桥进程重启后，`expired` 表清空；刷新页面仍会看到 boot 的通用「窗口外不恢复」提示，但不会再点名上一会话。跨桥进程的过期审计需要持久化，属后续项。
-2. **上下文估算是近似**：`chars/2` 与 orz-loop 估算同口径但不等于真实 tokenizer；`last_compaction` 只扫最近 8 个 run 的 256 KiB 尾部，更早的压缩事件可能为 null，`notes` 明示。
+2. **上下文估算是近似**：`chars/2` 不等于真实 tokenizer（333 当批只数 `content` 且整体 `/2`，与 loop 不同源——见 §4.10）；`last_compaction` 只扫最近 8 个 run 的 256 KiB 尾部，更早的压缩事件可能为 null，`notes` 明示。
 3. **后台任务选择「仅模型可见」分支**：没有把 agent 进程内的 terminal task table 经 ACP 暴露到 Web；属性面板只声明边界，不虚构实时任务列表。
-4. **版本探针成本**：每次 `/api/boot` 会 spawn 两次 `--version`（桥自身与 agent binary），均为早退路径（<100ms 量级）；旧载体没有 `--version` 时字段为 null，不误报偏斜。
+4. **版本探针成本**：333 当批每次 `/api/boot` 会 spawn 两次 `--version`（桥自身与 agent binary，均为早退路径）；334 后桥版本改取编译期 `CARGO_PKG_VERSION`，只对 child spawn 一次（3 s 超时）。旧载体没有 `--version` 时字段为 null 并记 `child_probe`，不误报偏斜。
 5. **doctor 不自动修**：会创建 `.gsa` 目录与写删一个探针文件（会话本来也会建目录），但不会修复权限/清单/lease；发现项只报告并给下一步。
 6. **审批顶掉提示是「新弹窗内」提示**：旧请求仍只会收到 `cancelled`，不会在对话里补一条系统行（避免把权限面写进模型可读上下文）。
 7. **`copy.js` 只覆盖已知码**：未知 `data.code` 走 `internal` 兜底；工具失败不上浮、不进表。
+8. **doctor 面窄于 330 必闭第 8 条（334 已补四项）**：333 的八节（版本/cwd/.gsa/lease/run/侧车/压缩/载体）不含配置分层、端口、令牌、检索、CDP。334 修复批已补 `retrieval`／`web`（端口）／`token`／`cdp` 四项 cheap check，`runs` 改数值序并读终态、复用启动 integrity 缓存（不再二次哈希）。**剩余边界**：端口只探默认 `21487`（`ORZ_WEB_ADDR` 可覆盖）；配置分层仍未接入。
+9. **版本偏斜旧实现结构上恒 false（334 已修判定源）**：333 的 `bridge_version` 与 `child_version` 两次都探 `current_exe()`（同一文件），正常运行时 `version_skew` 恒 `Some(false)`；典型「桥内存 0.9.7、磁盘已换 0.9.8」反而报不出。334 修复批已改为「桥版本＝编译期 `CARGO_PKG_VERSION`，child 版本＝磁盘二进制 `--version` 探针（3 s 超时，失败记 `child_probe=failed_or_timeout`）」，偏斜才有生产触发路径。**剩余边界**：桥重启后旧会话仍需 `sessionStorage` 恢复（属 S3）。
+10. **上下文估算口径与 loop 不同源（334 已镜像）**：333 的 `/api/context` 只对 `messages[].content` 求和再整体 `/2`，未计 `reasoning_content` 与 `tool_calls`，工具/推理密集会话会低报，同口径声明不成立。334 修复批已镜像 orz-loop `estimate_message_tokens` 的字段（`content`＋`reasoning_content`＋`tool_calls` 的 `name`/`arguments`）并逐条 `/2`，`estimate_method` 明示「不含系统 preamble，不是 tokenizer」。**剩余边界**：与真实 tokenizer 的偏差仍在，读数只作近似（另见 S9 页 §7）。
 
 ## §5 未做与顺延
 
@@ -132,7 +135,7 @@
 | `TODO.md` | 计数行本批摘要；0dn 节补 333 预落 |
 | `docs/BACKLOG_AND_PRIORITIES.md` | 指针行/计数行；0dn 节补 333 |
 | `docs/BACKLOG_AND_PRIORITIES_2.md` | §1.264 333 批流水 |
-| `architecture/current/surfaces/{03,05,07,09,10,11,12}-*.md` | 对应面补「333 已落码」与测试映射 |
+| `architecture/current/surfaces/{03,05,07,08,09,10,11,12}-*.md` | 对应面补「333 已落码」与测试映射；其中 `08-permission-approval.md` 对应第 3 项审批并发 |
 | `orz_source_manifest.sha256` | orz 提交后重生成 |
 | 提交 | orz `feat/fusion-architecture`；父仓 `origin/main` |
 

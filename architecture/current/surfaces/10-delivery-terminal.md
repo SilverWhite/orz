@@ -59,5 +59,5 @@ self_check：模型主动调用（无参，三问）→ run_finished.self_check_
 | 1 声明才算终答 | `terminal` 系列 loop 单测（3 枚） | 真机三会话未跑（S4） |
 | 2 有界 nudge | nudge episode 单测 | 2 次上限无钉 |
 | 3 不自欺 | `self_check_tool_is_callable_and_recorded` | — |
-| 4 只投影 | `delivery_summary_projects_sidecar_and_last_run` 等 7 | **前端 0 测试** |
+| 4 只投影 | `delivery_summary_projects_sidecar_and_last_run` 等 7；333 smoke 14.11（空态＋`terminal_source`） | 无端到端（真机待 S4）；`delivery_status` 在 submit 退役后多为 null（面板主要价值是最近 run 终态/`terminal_source`/self_check） |
 | 5 submit 退役 | `submit` handler 单测 | 旧 console 兼容无测试 |

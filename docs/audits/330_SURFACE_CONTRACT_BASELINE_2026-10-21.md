@@ -101,6 +101,31 @@
 9. **上下文读数**：Web 至少显示占用或最近一次压缩的可读读数（不要求滑块）。
 10. **后台可见面**：Web 任务列表/状态，或明确「后台仅模型可见」。
 
+### 5.1 334 修复批后的逐条台账（2026-10-22）
+
+> 口径：`closed`＝有代码/测试/契约页证据；`waived`＝用户显式裁决不做（附裁决）；`partial`＝主路径已落但有列明的窄缺口。**不再用「333 覆盖 3–10」替代逐条核对**。
+
+| # | 必闭项 | 状态 | 证据/缺口 |
+|---|---|---|---|
+| 1 | 0dk S1 状态机/owner | **closed** | 331 设计＋332 落码＋334 收口 closing/archived/通知/SessionCommand；见 `AUTH-332` 与 334 修复档 |
+| 2 | ACP v1 对齐 | **waived** | 用户 2026-10-21 裁决「不追 v1」；`session/resume`/`close`/`list` 不接线，私有扩展保留为兼容层。本豁免自此表生效，不再计未闭 |
+| 3 | close/删除/有界 | **closed** | 332 落码；334 补 CLI 删除 lease 门/聚合失败可重试/archived 可删/`.lease` 清理 |
+| 4 | 回放口径 | **closed** | 334 裁定 **text_only**：load 只回放用户/助手正文，工具调用/系统消息不回放；`_orz/session_replay` 通知＋UI 标注＋`replay` 响应字段；已在内存时 load 早退，不二次回放（幂等）。因不回放工具面，无需 `tool_call_id` 去重 |
+| 5 | 保活边界诚实化 | **closed** | 329/332/333＋334：grace/dead 双原因、未应答 permission 重放、跨区 session→slot、409 文案修正 |
+| 6 | 撤回 | **closed** | 329 落码；334 加窗口缺口「跳过过滤并提示」＋S6/329 档记录 200 run/64 MiB 边界；精确锚仍未做 |
+| 7 | 交付面板 | **closed** | 329/333＋smoke 14.11；真机验证仍归 S4 |
+| 8 | 诊断与版本 | **partial** | 334 补 retrieval/web-port/token/cdp 四项＋runs 数值序/终态＋启动 integrity 复用＋`--version`＋编译期桥版本 vs 磁盘 child 探针（3s/child_probe）。**缺口**：配置分层未纳入；端口只探默认 21487（`ORZ_WEB_ADDR` 可覆盖） |
+| 9 | 上下文读数 | **closed** | 334 镜像 loop 字段（content＋reasoning_content＋tool_calls）并逐条 chars/2，声明不含系统 preamble；非 tokenizer 的偏差已写进 UI/契约页 |
+| 10 | 后台可见面 | **closed** | 333 明确「仅模型可见」；334 把计数文案改为「本页累计转入后台 N 次」，不再冒充当前任务数 |
+
+另补三面单列项：
+
+| 面 | 项 | 状态 | 证据 |
+|---|---|---|---|
+| S1 | 切区时有在跑 run 必须拒绝/取消 | **closed** | 334：`/api/workspace/switch` 在桥有 prompt_in_flight 时 409（四要素）；前端仍保留主判 |
+| S4 | 取消后 30s 未收敛兜底 | **closed** | 334：`stopRun` 30s 定时器，到点复位本地运行态并提示；journal 终态仍为真相 |
+| S12 | 版本偏斜 | **closed** | 334：桥版本取 `orz-bin` 的 `CARGO_PKG_VERSION`，child 用磁盘 `--version`（3s 超时）；`version_skew` 可真的为 true；`child_probe` 上报失败 |
+
 ---
 
 ## §6 明确不做（分歧登记，非缺陷）

@@ -81,6 +81,8 @@
 4. **超时测试用注入 run marker**：真实 `cancel` 会让 fake provider 在下一个 checkpoint 立刻收敛，60ms 超时测不到；`close_times_out` 直接注入不被消费的 `RunInFlight::Prompt`，验证「超时→busy→会话不半关→可重试」。真实取消路径由 `close_active_cancels_then_closes` 覆盖。
 5. **浏览器读不到 409 body**：原生 WebSocket 握手失败只给 `onerror`，无法读取 JSON；服务端 409 仍带四要素（HTTP 客户端/日志可取证），前端用合并了「占用/令牌过期」的可行动文案。
 6. **`default_base` 的作用域**：桥每个 workspace 一个 child，故「最近一次 attach 的根」可代表本 child 的归属根；若从未 attach 过任何会话，未知 id 的 close 只能返回 not_found（无法安全猜测根）。该边界写入 §5 残留。
+7. **CLI 删除当时绕过 close/lease（334 审查 P0，已由 334 修复批处理）**：332 的 `orz delete-session` 直接调 `delete_session_on_demand`，不 close、不探测 lease、不看在途 run；删除循环遇首个失败即 `?` 返回，且墓碑已存在时 `_orz/session_delete` 会按 `already=true` 早退，留下半删残件。334 修复批已改为 `delete_session_checked`（先 lease 探测、`active/closing` 回 `session_busy`、先 close 再删），删除失败改为聚合报告、可重试（墓碑存在时不早退，继续清残件）。本档保留 332 当批事实，偏差以 334 修复批台账为准。
+8. **`closing` 当时不可观测、`archived` 无构造点（334 审查 P1，已由 334 修复批处理）**：332 的 `release_session` 在 `sessions` 锁内把 `closing` 置位后同一临界区立即 `remove`，`_orz/session_state` 读不到 `closing`，prompt 的 `closing` 拒绝也成死路径；`SessionState::Archived` 全仓没有构造点，0cy 收卷后的会话只能报 `not_found`。334 修复批已把 `closing` 做成可观测转移（保留行、置位并发 `closing` 通知，再完成 closed 收尾），并新增 `is_archived` 派生（归档包存在且活区无侧车），使 archived 可查询、可直接删除。
 
 ## §5 未做与顺延
 
@@ -111,7 +113,7 @@
 | 文件 | 改动 |
 |---|---|
 | `docs/audits/332_...md` | 本档 |
-| `CLI_PROJECT_INDEX.md` | v4.301 → **v4.302**；头行 332 摘要；新增 `AUTH-332-SESSION-LIFECYCLE-IMPL`（`implemented`） |
+| `CLI_PROJECT_INDEX.md` | v4.301 → **v4.302**；头行 332 摘要；新增 `AUTH-332-SESSION-LIFECYCLE-IMPL`（**索引登记为 `reference`**；按 330 的「`implemented` 只在 verified 后」口径，真机 S4 前不翻 `implemented`） |
 | `TODO.md` | 0dk 节 S2 勾选；P1 路由行补 332 |
 | `docs/BACKLOG_AND_PRIORITIES.md` | 0dk 状态/下一步指针补 332 |
 | `docs/BACKLOG_AND_PRIORITIES_2.md` | §1.263 332 批流水 |

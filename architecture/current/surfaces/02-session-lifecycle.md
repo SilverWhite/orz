@@ -6,15 +6,30 @@
 
 ## 1. 状态机
 
+**口径**：本表是**用户可见面**（绑定/未绑定/加载中），不是 331 的内部七态状态机；两者的映射见本节末。
+
 | 状态 | 进入 | 退出 | 持久化 |
 |---|---|---|---|
-| `none` | 无侧车 | `session/new` | — |
-| `created` | `session/new` 返回 sessionId；写入 `.gsa/sessions/<s8>` 侧车 | `prompt` / `load` / `close` / `delete` | 侧车 |
+| `none` | 无会话（无 lease/侧车） | `session/new` | — |
+| `created` | `session/new` 返回 sessionId；仅建 lease（侧车在首个成功 prompt 后才落） | `prompt` / `load` / `close` / `delete` | lease（侧车随首个成功 prompt） |
 | `active` | `session/prompt` 在途 | 终态事件（`run_finished`/`run_failed`/`run_cancelled`/`run_invalidated`） | 侧车＋journal |
 | `detached` | 客户端断开（WS detach） | 重连 attach / 保活过期 reaped | 桥内存 |
 | `loaded` | `session/load`（全量回放后） | `prompt` / `close` | 侧车 |
 | `archived` | `orz archive` / 归档键 | `unarchive` | `.gsa/archives/*.gz` |
-| `deleted` | `orz delete-session` / 删除键 | — | 侧车与归档删除 |
+| `deleted` | `orz delete-session` / 删除键 | — | 侧车与归档删除＋`.deleted` tombstone |
+
+**与 331 七态的映射**：本页保留用户可见面，不复制内部状态机；`detached` 是桥传输层事实，不属于 331 七态。
+
+| 本页用户可见态 | 331 内部态 | 说明 |
+|---|---|---|
+| `none` | 无 | 未绑定、无 lease/侧车 |
+| `created` | `created` | new 只建 lease；侧车在首个成功 prompt 后才落 |
+| `active` | `active` | 有 run 在途 |
+| `detached` | 内部态不变 | WS detach／保活窗口（桥内存），不是 331 状态 |
+| `loaded` | `created`（load 回放后） | 加载完成、历史已回放 |
+| `archived` | `archived` | 归档包在、活区无侧车 |
+| `deleted` | `deleted` | tombstone |
+| —（不可见） | `idle` / `closing` / `closed` | idle＝已加载未运行；closing＝收尾窗口（334 后可查询）；closed＝未绑定但侧车保留 |
 
 ## 2. 不变量（违反即 bug）
 

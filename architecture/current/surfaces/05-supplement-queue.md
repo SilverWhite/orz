@@ -36,16 +36,17 @@ run 结束仍有残留 → 丢弃并计数（dropped_supplements）→ UI 告知
 
 | 项 | 现状 | 证据 | 等级 |
 |---|---|---|---|
-| 追加/深度 | 已实现，UI 提示；**333**：回执带 `capacity/remaining/scope`，属性面板显示深度/额度 | `main.js:204-214` | 已落 |
+| 追加/深度 | 已实现，UI 提示；**333**：回执带 `capacity/remaining/scope`，属性面板显示深度/额度；**334**：切会话/解绑时读数清零，属性面板以服务端 `remaining/scope` 为准 | `main.js`／`dialogs.js` | 已落（真机待 S4） |
 | 丢弃告知 | `dropped_supplements` 文案 | `main.js:999` | 接受 |
 | 投递可见 | `supplement_delivered` 事件 | `projection.js:78` | 接受 |
 | 队列持久化 | 无；进程退出即丢（333 在回执/属性面板明示「仅本会话进程，刷新/换页不保留」） | 0dk 验收⑤ | 可延（已诚实标注） |
-| 队列上限 | 有帽（16）；**333 已显示剩余额度** | `acp_server.rs` `handle_queue_append` | 已落 |
+| 队列上限 | 有帽（16）；**333 已显示剩余额度**；**334** attached ingress 有界（慢/半开 WS 不再无界增长） | `acp_server.rs` `handle_queue_append`／`acp_pump.rs` | 已落 |
 
 ## 6. 0.9.8 判决
 
 - **必闭**：明确「队列随进程存活、不跨进程」文案（与 S3 合并一处；333 已在入队回执/属性面板落地）。
-- **可延**：持久化、额度显示。
+- **已落**：额度显示（333 回执/属性面板）；334 修复批补切会话/解绑清零、以服务端 `remaining/scope` 为准、attached ingress 有界。
+- **可延**：持久化。
 - **不做**：插队/steering。
 
 ## 7. 测试映射

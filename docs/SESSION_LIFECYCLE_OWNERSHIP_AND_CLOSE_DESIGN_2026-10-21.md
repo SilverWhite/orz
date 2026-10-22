@@ -47,15 +47,15 @@
 
 ### 3.1 状态
 
-| 状态 | 含义 | 持久化 |
-|---|---|---|
-| `created` | 侧车已建、lease 已持、无在途 run | 侧车 |
-| `idle` | 上一轮已终态 | 侧车 |
-| `active` | 有 run 在途 | 侧车＋journal |
-| `closing` | 已发 cancel，等终态 | 内存 |
-| `closed` | 已释放 lease、移出内存；侧车保留 | 侧车 |
-| `archived` | 已打包 `.gsa/archives/*.gz`，活区侧车移除 | 包 |
-| `deleted` | 侧车/包/run 目录已删，留 tombstone | tombstone |
+| 状态 | 含义 | 持久化 | 可观测面（334 修复后） |
+|---|---|---|---|
+| `created` | 已持 lease、无在途 run；侧车在首个成功 prompt 后才落（`new` 不写侧车） | 内存＋lease | `_orz/session_state` 查询（attach 时也发一次当前态通知） |
+| `idle` | 上一轮已终态 | 侧车 | 查询；终态转移通知 |
+| `active` | 有 run 在途 | 侧车＋journal | 查询；通知；`run_evidence` |
+| `closing` | 已发 cancel，等终态 | 内存 | **334**：收尾窗口内查询可读 `closing`，并发 `closing` 通知 |
+| `closed` | 已释放 lease、移出内存；侧车保留 | 侧车＋`.closed` 标记 | 查询（`already=true`）；通知 |
+| `archived` | 已打包 `.gsa/archives/*.gz`，活区侧车移除 | 包 | **334**：`is_archived` 派生（包在、活区无侧车），可查询、可删除 |
+| `deleted` | 侧车/包/run 目录已删，留 tombstone | tombstone | 查询；通知 |
 
 ### 3.2 转移表
 
@@ -70,8 +70,14 @@
 | `close` | `created/idle/active` | `closing`→`closed` | `session_busy`（cancel 未收敛）/ `lease_conflict` |
 | `archive` | `idle/closed` | `archived` | `session_busy`（有 run）/ `invalid_state` |
 | `restore` | `archived` | `created` | `session_not_found` |
-| `delete` | `closed/archived` | `deleted` | `session_busy` / `lease_conflict` |
+| `delete` | `closed/archived`；实现另允许 `created/idle`（先 close 再删） | `deleted` | `session_busy`（`active/closing`）/ `lease_conflict` |
 | `evict` | `idle` | `closed`（reason=evict） | 不适用于 `active` |
+
+**动词表口径**：本表共 **十一行**（`new/load/attach/prompt/终态事件/cancel/close/archive/restore/delete/evict`），是状态机的完整动词面。索引/TODO/BACKLOG 旧称「六动词」只是历史简写——若按核心生命周期取六个，可读作 `new/load/prompt/close/delete/archive`（`restore` 为 `archive` 的逆、`attach` 是传输绑定、`cancel/evict/终态事件` 是转移条件）；**不另立第二套状态机，以本表十一行为准**。
+
+**delete 的便捷分支（有意偏差，已写入设计）**：实现允许 `created/idle` 先 `close` 再删（省去用户先手动关闭的一步）；`active/closing` 一律拒绝（`session_busy`，不半删）；`closed/archived` 直接删。§4 不变量 4 与 §7 已按此口径同步。
+
+**公开态的可观测面（334 修复后）**：七态全部保留，且都有查询面——`created/idle/active` 由内存行＋run 事实派生；`closed/deleted` 由 `.closed`/`.deleted` 持久标记；`closing` 在收尾窗口内可查询并收到通知（334 把「置位＋通知」与「移出表」拆开，不再同一临界区完成）；`archived` 由「归档包存在且活区无侧车」派生（`is_archived`），因此可查询、也可按 archived 直接删除。
 
 ### 3.3 图
 
@@ -102,7 +108,7 @@ stateDiagram-v2
 1. **唯一 owner**：一个 `<s8>` 同一时刻只有一个进程持 lease；第二进程 `lease_conflict`（fail-closed）。
 2. **单飞 prompt**：`active` 时再 `prompt` 返回 `session_busy`；排队走 `_orz/queue_append`。
 3. **close 先 cancel**：`close` 必须先取消在途 run 并等到终态，才释放 lease。
-4. **删除前置**：`delete` 只允许 `closed/archived`；`active` 一律拒。
+4. **删除前置**：`delete` 默认只允许 `closed/archived`；实现另允许 `created/idle` 先 `close` 再删（便捷分支，见 §3.2）；`active/closing` 一律拒（`session_busy`）。
 5. **不隐式物化**：`prompt` 只查表，不重建；缺失即 `session_not_found`（删除不复活）。
 6. **幂等**：`close` 对 `closed` 返回 `already=true`；`delete` 对 `deleted` 同。
 7. **有界**：内存会话表上限 32（可配），`active` 不驱逐，`idle` 按 LRU 驱逐并走 `close(evict)`。
@@ -183,7 +189,7 @@ pub struct SessionOutcome {
 
 - `prompt` 路径只做 `sessions.get(id)`；**删除物化分支**（这是 318 的根因）。
 - `delete`：先置 `deleted` 并从表移除，再删侧车/归档/run 目录；写 `.gsa/sessions/<s8>.deleted` tombstone。
-- 运行中删除：`active` → `session_busy`；`closing` → `invalid_state`。
+- 运行中删除：`active/closing` → `session_busy`（不半删；实现统一回 `session_busy`，不另用 `invalid_state`）；`created/idle` 先 close 再删，`closed/archived` 直接删（见 §3.2）。
 - CLI `delete-session` 走同一 `SessionCommand::Delete` 原语（先 close，再删）；跨进程持 lease 时 `lease_conflict`。
 
 ---

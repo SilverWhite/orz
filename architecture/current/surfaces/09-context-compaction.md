@@ -32,14 +32,14 @@
 ## 4. 明确不做
 
 - 用户手动压缩按钮（当前设计：压缩归模型/机械层；若要改属设计变更）。
-- Web 端上下文滑块（现状：只有一行压缩摘要）。
+- Web 端上下文滑块（现状：只有只读上下文弹窗，无滑块）。
 
 ## 5. 现状与差距
 
 | 项 | 现状 | 证据 | 等级 |
 |---|---|---|---|
 | 压缩事件投影 | Web 一行「[上下文压缩] …（估 ~NK）」 | `projection.js:237-243` | 接受 |
-| 水位可见 | **333 落码**：工具栏「上下文」→ `/api/context` 显示 chars/2 估算、水位提醒、最近压缩前后 token 与存档计数（只读；非 tokenizer 精确值） | `context.rs`／`dialogs.js` | 已落（真机读数待 S4） |
+| 水位可见 | **333 落码、334 修口径**：工具栏「上下文」→ `/api/context` 显示 chars/2 估算（content＋reasoning_content＋tool_calls，逐条 /2）、水位提醒、最近压缩前后 token 与存档计数（只读；非 tokenizer 精确值） | `context.rs`／`dialogs.js` | 已落（真机读数待 S4） |
 | 手动压缩 | Web 无 `/compress`；模型可 `context_manage` | `agent_loop.rs:9820` | 接受（设计） |
 | 压缩失败提示 | 有 `context_recovery_truncated` 事件 | `projection.js:248` | 接受 |
 | 0cz/0da S4 | 未真机 | BACKLOG | 应修（验证） |
@@ -58,4 +58,6 @@
 | 2 滑块不压 | 同上 | — |
 | 3 clear≠删除 | `cleared_face_honors_post_boundary_compression_and_estimate_falls` | — |
 | 4 水位会话级 | `slider_readout_matches_block_and_marker_state` | 跨 prompt 不重发无钉 |
-| 5 估算可见 | smoke §10 | Web 读数缺失 |
+| 5 估算可见 | smoke §10；333 smoke 14.10b（`/api/context` 弹窗） | 与真实 tokenizer 有偏差（口径见下） |
+
+**估算口径（334 修复后）**：`/api/context` 对每条消息累加 `content`＋`reasoning_content`＋`tool_calls`（`name`/`arguments`）字符数后**逐条 `/2`**，**不含系统 preamble**；与 orz-loop `estimate_message_tokens` 同字段、同除法，但**不等于真实 tokenizer**，读数只作近似。压缩读数取最近 8 个 run 的 journal 尾部（各 256 KiB），更早事件可能为 null。
