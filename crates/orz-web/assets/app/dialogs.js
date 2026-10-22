@@ -68,19 +68,33 @@ let activePermission = null; // showPermission 的 resolve
 /// 「上一条已取消」，不再让旧请求静默消失。
 let permissionDisplaced = 0;
 
-function settlePermissionCancelled() {
+/* 334（§4.6）：权限被取消（顶掉/Esc/用户点取消）时通知宿主机——main
+ * 补一条可回查的四要素系统行；用户主动取消由 userInitiated 区分，不夸张。 */
+function notifyPermissionCancelled(reason, userInitiated) {
+  try {
+    actions.onPermissionCancelled?.({ reason, userInitiated: !!userInitiated });
+  } catch {
+    /* 宿主回调失败不得阻断权限结算（agent 仍在等 cancelled）。 */
+  }
+}
+
+function settlePermissionCancelled(reason = 'closed') {
   if (!activePermission) return false;
   const resolve = activePermission;
   activePermission = null;
   resolve({ outcome: { outcome: 'cancelled' } });
+  notifyPermissionCancelled(reason, false);
   return true;
 }
 
-function finishPermission(result) {
+function finishPermission(result, { reason = 'user_cancel', userInitiated = true } = {}) {
   const resolve = activePermission;
   activePermission = null;
   closeModalNow();
   resolve?.(result);
+  if (result?.outcome?.outcome === 'cancelled') {
+    notifyPermissionCancelled(reason, userInitiated);
+  }
 }
 
 function closeModal() {
@@ -122,7 +136,7 @@ export function showPermission(request) {
   return new Promise((resolve) => {
     // 并发第二个权限请求：前一个结算为 cancelled（被顶掉，如实回传），
     // 再挂载本请求——不排队（v1 语义：一次只呈现一个，见 S2 §2 偏差 2）。
-    const displaced = settlePermissionCancelled();
+    const displaced = settlePermissionCancelled('displaced');
     if (displaced) permissionDisplaced += 1;
     activePermission = resolve;
     openModal((win, body) => {
@@ -345,21 +359,23 @@ export function openProperties() {
       ['运行态', state.running ? '运行中' : '空闲'],
       ['轮数', String(state.turnCounter)],
       ['内容条目', String(state.content.items.length)],
-      // 333（S5）：队列深度与剩余额度显式化——上限随 `_orz/queue_append`
-      // 响应回填，作用域只在本会话进程（刷新/换页不保留）。
+      // 333（S5）/334（§4.10）：队列深度、剩余额度与作用域直接用服务端
+      // `_orz/queue_append` 的读数（remaining/scope），不在前端二次相减。
       [
         '补充队列',
         `${state.supplementQueueDepth}/${state.queueCapacity ?? 16} 条（剩余 ${
-          (state.queueCapacity ?? 16) - state.supplementQueueDepth
-        }；仅本会话进程，刷新/换页不保留）`,
+          state.queueRemaining ?? '—'
+        }；作用域：${
+          state.queueScope === 'session_process'
+            ? '仅本会话进程，刷新/换页不保留'
+            : '未知'
+        }）`,
       ],
-      // 333（S7）：后台任务明确「仅模型可见」——本页不提供任务表，且刷新/
-      // 关闭/子进程回收后不恢复（不虚构一个读不到的列表）。
+      // 333（S7）/334（§4.10）：后台任务明确「本页累计转入后台次数」——
+      // 不是当前任务数（只增不减），本页不提供任务表，刷新/关闭不恢复。
       [
         '后台任务',
-        state.backgroundTasks > 0
-          ? `${state.backgroundTasks} 个（仅模型可见；本页不提供任务表，刷新/关闭不恢复）`
-          : '仅模型可见（本页不提供任务表；刷新/关闭不恢复）',
+        `本页累计转入后台 ${state.backgroundTasks} 次（仅模型可见；本页不提供任务表，刷新/关闭不恢复）`,
       ],
       ['会话（conversation）', 'conversation://{session8}（侧车由宿主管理）'],
     ];
@@ -395,22 +411,34 @@ export function openRewind() {
     body.appendChild(status);
     let entries = [];
     let queueDepth = 0;
+    let recallAnchor = null;
     try {
       const d = await actions.rewindPreview();
       entries = d.messages || [];
       queueDepth = d.queue_depth || 0;
+      // 334（§4.11）：预览响应带 recall_log 水位锚——把「上次撤回点」显式
+      // 告知用户（重放窗口有上限时，撤回投影可能不完整）。
+      const recallLog = Array.isArray(d.recall_log) ? d.recall_log : [];
+      for (const record of recallLog) {
+        const at = Number(record?.recalled_at);
+        if (!Number.isFinite(at)) continue;
+        if (!recallAnchor || at >= recallAnchor.at) recallAnchor = { at, record };
+      }
     } catch (e) {
       status.textContent = `读取失败：${e.message}`;
       return;
     }
+    const anchorNote = recallAnchor
+      ? ` 上次撤回锚：remaining_messages=${recallAnchor.record?.remaining_messages ?? '—'}，recalled_at=${recallAnchor.record?.recalled_at ?? '—'}。`
+      : '';
     if (!entries.length) {
-      status.textContent = '（会话尚无用户消息，无可撤回）';
+      status.textContent = `（会话尚无用户消息，无可撤回）${anchorNote}`;
       return;
     }
     status.textContent =
       `选择要撤回的用户消息——该条及其后的上下文将被移除，原文回输入框供编辑重发（运行历史不变；文件面 git 兜底）：${
         queueDepth > 0 ? ` 当前有 ${queueDepth} 条未投递补充，撤回会一并丢弃。` : ''
-      }`;
+      }${anchorNote}`;
     let selected = entries.length - 1; // 默认选最新一条（最常用）
     const list = document.createElement('div');
     list.style.maxHeight = '240px';

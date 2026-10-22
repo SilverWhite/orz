@@ -113,6 +113,75 @@ fn session_error_to_acp(err: crate::session_ops::SessionError) -> acp::Error {
     acp::Error::new(err.code(), err.to_string()).data(err.data())
 }
 
+/// 334（§4.4）：把宿主错误统一带上 `data{code,class,hint,evidence}` 四要素。
+/// 此前只有 close/state/delete 的 ext 面走 `session_error_to_acp`；prompt/
+/// load/queue/recall 的错误被压成 internal/裸 message，前端 `copy.js` 的
+/// 六类表一半没有生产者。这里按错误种类补齐，同时保留 JSON-RPC 码的语义。
+fn acp_error_with_data(err: crate::acp_server::AcpError) -> acp::Error {
+    use crate::acp_server::AcpError;
+    use crate::session_ops::SessionError;
+    match err {
+        AcpError::SessionLifecycle(err) => session_error_to_acp(err),
+        AcpError::SessionNotFound(session_id) => {
+            session_error_to_acp(SessionError::NotFound { session_id })
+        }
+        AcpError::InvalidRequest(message) => {
+            acp::Error::new(acp::ErrorCode::InvalidRequest.into(), message.clone()).data(
+                serde_json::json!({
+                    "code": "invalid_state",
+                    "class": "session",
+                    "hint": "先结束当前操作（停止/等待回复），再重试",
+                    "evidence": message,
+                }),
+            )
+        }
+        other => {
+            let message = other.to_string();
+            acp::Error::new(acp::ErrorCode::InternalError.into(), message.clone()).data(
+                serde_json::json!({
+                    "code": "internal",
+                    "class": "internal",
+                    "hint": "重试；仍失败请记录证据并重启 orz web",
+                    "evidence": message,
+                }),
+            )
+        }
+    }
+}
+
+/// 334：拼一条带四要素的非法参数错误（queue/recall 的入参门也走同一面）。
+fn invalid_request_with_data(message: &str) -> acp::Error {
+    acp::Error::new(acp::ErrorCode::InvalidRequest.into(), message.to_string()).data(
+        serde_json::json!({
+            "code": "invalid_state",
+            "class": "session",
+            "hint": "检查参数后重试；会话忙时先等待当前回复结束",
+            "evidence": message,
+        }),
+    )
+}
+
+/// 334：`_orz/*` 方法名 → 传输无关命令。未知方法返回 `None`。
+fn session_command(
+    method: &str,
+    params: &serde_json::Value,
+) -> Option<crate::session_ops::SessionCommand> {
+    use crate::session_ops::{CloseReason, SessionCommand};
+    let session_id = ext_session_id(params);
+    if session_id.is_empty() {
+        return None;
+    }
+    match method {
+        "orz/session_close" => Some(SessionCommand::Close {
+            session_id,
+            reason: CloseReason::parse(params.get("reason").and_then(|v| v.as_str())),
+        }),
+        "orz/session_state" => Some(SessionCommand::State { session_id }),
+        "orz/session_delete" => Some(SessionCommand::Delete { session_id }),
+        _ => None,
+    }
+}
+
 impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
     async fn handle_request(&self, request: ClientRequest) -> acp::Result<AgentResponse> {
         match request {
@@ -135,7 +204,7 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
                         self.retrieval_enabled,
                     )
                     .await
-                    .map_err(acp::Error::into_internal_error)?;
+                    .map_err(acp_error_with_data)?;
                 Ok(AgentResponse::NewSessionResponse(NewSessionResponse::new(
                     SessionId::new(session_id),
                 )))
@@ -151,20 +220,7 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
                         self.retrieval_enabled,
                     )
                     .await
-                    .map_err(|e| match e {
-                        // Busy/validation are normal protocol conditions, not
-                        // internal faults (318 P3): keep the JSON-RPC code
-                        // meaningful so clients can retry instead of treating
-                        // it as an agent crash.
-                        crate::acp_server::AcpError::InvalidRequest(message) => {
-                            acp::Error::new(acp::ErrorCode::InvalidRequest.into(), message)
-                        }
-                        crate::acp_server::AcpError::SessionNotFound(message) => acp::Error::new(
-                            acp::ErrorCode::InvalidRequest.into(),
-                            format!("session not found: {message}"),
-                        ),
-                        other => acp::Error::into_internal_error(other),
-                    })?;
+                    .map_err(acp_error_with_data)?;
                 Ok(AgentResponse::LoadSessionResponse(
                     acp::LoadSessionResponse::new(),
                 ))
@@ -189,7 +245,7 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
                     )) => Ok(AgentResponse::PromptResponse(PromptResponse::new(
                         StopReason::Cancelled,
                     ))),
-                    Err(e) => Err(acp::Error::into_internal_error(e)),
+                    Err(e) => Err(acp_error_with_data(e)),
                 }
             }
             ClientRequest::ExtMethodRequest(args) => {
@@ -215,15 +271,14 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
                             .and_then(|v| v.as_str())
                             .unwrap_or_default();
                         if session_id.is_empty() {
-                            return Err(acp::Error::new(
-                                acp::ErrorCode::InvalidRequest.into(),
+                            return Err(invalid_request_with_data(
                                 "queue_append requires session_id",
                             ));
                         }
                         self.server
                             .handle_queue_append(&session_id, text)
                             .map(ext_response_value)
-                            .map_err(acp::Error::into_internal_error)
+                            .map_err(acp_error_with_data)
                     }
                     "orz/recall_preview" => {
                         let session_id = params
@@ -234,7 +289,7 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
                         self.server
                             .handle_recall_preview(&session_id)
                             .map(ext_response_value)
-                            .map_err(acp::Error::into_internal_error)
+                            .map_err(acp_error_with_data)
                     }
                     "orz/recall" => {
                         let session_id = params
@@ -244,73 +299,30 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
                             .to_string();
                         let ordinal = params.get("ordinal").and_then(|v| v.as_u64());
                         let Some(ordinal) = ordinal else {
-                            return Err(acp::Error::new(
-                                acp::ErrorCode::InvalidRequest.into(),
-                                "recall requires ordinal (u32)",
-                            ));
+                            return Err(invalid_request_with_data("recall requires ordinal (u32)"));
                         };
                         let ordinal = u32::try_from(ordinal).map_err(|_| {
-                            acp::Error::new(
-                                acp::ErrorCode::InvalidRequest.into(),
-                                "recall ordinal out of range",
-                            )
+                            invalid_request_with_data("recall ordinal out of range")
                         })?;
                         self.server
                             .handle_recall(&session_id, ordinal)
                             .map(ext_response_value)
-                            .map_err(acp::Error::into_internal_error)
+                            .map_err(acp_error_with_data)
                     }
                     // 0dk S2（332）：会话生命周期私有扩展（设计 §5.2）。
-                    // `_orz/session_close` 先 cancel 再释放（10s 上限），
-                    // `_orz/session_state` 只查不移，`_orz/session_delete`
-                    // 先 close 再删数据并写墓碑。
-                    "orz/session_close" => {
-                        let session_id = ext_session_id(&params);
-                        if session_id.is_empty() {
-                            return Err(acp::Error::new(
-                                acp::ErrorCode::InvalidRequest.into(),
-                                "session_close requires sessionId",
+                    // 334：适配器只做「方法名→SessionCommand」映射，状态机
+                    // 语义统一由 `handle_session_command` 分发；close 先
+                    // cancel 再释放（10s 上限），state 只查不移，delete 先
+                    // close 再删数据并写墓碑。
+                    "orz/session_close" | "orz/session_state" | "orz/session_delete" => {
+                        let Some(command) = session_command(args.method.as_ref(), &params) else {
+                            return Err(invalid_request_with_data(
+                                "session lifecycle ext method requires sessionId",
                             ));
-                        }
-                        let reason = crate::session_ops::CloseReason::parse(
-                            params.get("reason").and_then(|v| v.as_str()),
-                        );
-                        let outcome = self
-                            .server
-                            .handle_session_close(&session_id, reason)
-                            .await
-                            .map_err(session_error_to_acp)?;
-                        Ok(ext_response_value(
-                            serde_json::to_value(outcome).unwrap_or(serde_json::Value::Null),
-                        ))
-                    }
-                    "orz/session_state" => {
-                        let session_id = ext_session_id(&params);
-                        if session_id.is_empty() {
-                            return Err(acp::Error::new(
-                                acp::ErrorCode::InvalidRequest.into(),
-                                "session_state requires sessionId",
-                            ));
-                        }
-                        let outcome = self
-                            .server
-                            .handle_session_state(&session_id)
-                            .map_err(session_error_to_acp)?;
-                        Ok(ext_response_value(
-                            serde_json::to_value(outcome).unwrap_or(serde_json::Value::Null),
-                        ))
-                    }
-                    "orz/session_delete" => {
-                        let session_id = ext_session_id(&params);
-                        if session_id.is_empty() {
-                            return Err(acp::Error::new(
-                                acp::ErrorCode::InvalidRequest.into(),
-                                "session_delete requires sessionId",
-                            ));
-                        }
+                        };
                         let value = self
                             .server
-                            .handle_session_delete(&session_id)
+                            .handle_session_command(command)
                             .await
                             .map_err(session_error_to_acp)?;
                         Ok(ext_response_value(value))

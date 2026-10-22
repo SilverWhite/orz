@@ -19,6 +19,7 @@
 //! paths — so this bridge enforces the session-cwd scope itself before the
 //! manager sees the request (see `access_in_scope`).
 
+#[cfg(test)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;

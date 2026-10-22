@@ -159,8 +159,8 @@ export function applyJournalEvent(ev) {
       const callId = str(p, 'call_id');
       const secs = (num(p, 'wall_ms') / 1000).toFixed(0);
       const pid = p?.pid ? `，PID ${p.pid}` : '';
-      // 318 P1-B7：自动转入后台的终端命令是刷新/关闭的真实风险面——
-      // beforeunload 提示需要计数（服务端任务不随文本上下文恢复）。
+      // 334（§4.10）：本页累计转入后台次数（非当前任务数，不回减）——
+      // beforeunload 风险面据此提示；真实任务表不在本页（仅模型可见）。
       state.backgroundTasks += 1;
       vm.addSystemMessage(
         `[工具运行中] ${tool} ${callId} 已运行 ${secs}s${pid}——命令继续运行，终态随后续工具结果返回`,

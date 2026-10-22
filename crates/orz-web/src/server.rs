@@ -68,6 +68,9 @@ pub struct ServerState {
     /// 已信任工作区后，原工作区不在信任清单里，从探索器消失且切不回来）。
     pub visited: Arc<std::sync::Mutex<Vec<PathBuf>>>,
     pub agent_binary: Arc<PathBuf>,
+    /// 334（§3.1）：桥进程**真实在跑**的产品版本（由 `orz-bin` 的
+    /// `CARGO_PKG_VERSION` 注入；`orz-web` crate 自身版本是 0.1.0，不能用）。
+    pub bridge_version: Arc<String>,
     /// 329（2026-10-21）：会话保活 supervisor——WS 只是可换的投影面，child
     /// 生命周期归桥（断线 detach、同区重连 attach、grace 到期回收）。
     pub bridge: AgentBridge,
@@ -330,6 +333,10 @@ struct TokenQuery {
     /// 0bv ②：归属工作区根（可选项；见 `ServerState::resolve_root`）。
     #[serde(default)]
     root: Option<String>,
+    /// 334（§4.5）：刷新页记住的绑定会话 id；桥按 session→slot 索引 attach
+    /// 到真正持有它的 child（跨区 load 后会话根 ≠ 当前 cwd）。
+    #[serde(default)]
+    session: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -364,20 +371,39 @@ async fn ws_acp(
     // 按 `ORZ_WEB_KEEPALIVE_SECS`（默认 30 min）保活；同区重连走 attach 并
     // 收到 `_orz/bridge_attached` 前置帧（session_id/prompt_in_flight）。只有
     // 已有 WS 正在 attach 同一工作区时才回 409（避免双 sink 抢写）。
-    let cwd = state.cwd();
+    // 334（§4.5）：`?root=` 让刷新页把绑定根带回来；未信任/不可用根拒绝
+    // （fail-closed，不能借 root 参数访问任意目录的 .gsa）。缺省用当前 cwd。
+    let cwd = match q.root.as_deref() {
+        Some(root) => match state.resolve_root(Some(root)) {
+            Some(root) => root,
+            None => {
+                return error_response(
+                    StatusCode::FORBIDDEN,
+                    "工作区根不可用（须为当前或已信任工作区）",
+                );
+            }
+        },
+        None => state.cwd(),
+    };
     let key = cwd.display().to_string();
-    match state.bridge.attach(&key, &cwd).await {
+    match state
+        .bridge
+        .attach(&key, &cwd, q.session.as_deref())
+        .await
+    {
         Attach::Busy => (
             StatusCode::CONFLICT,
             // 0dk S2（332）：占用者提示带原因/四要素（设计 §9.2）。浏览器
             // 的 WebSocket 不暴露握手响应体，故前端另有同义可行动文案；
             // 该 JSON 供 HTTP 客户端与桥日志取证。
+            // 334（§5.5）：grace 只影响 detached child；正常关闭页面会立即
+            // detach，重连不需要等 30 分钟。旧 hint 误导用户空等。
             Json(json!({"error": {
                 "code": 409,
                 "reason": "workspace_occupied",
                 "class": "connection",
                 "message": "该工作区已有活动连接：另一个窗口正在接收这个会话。",
-                "hint": "关闭其他 orz 窗口后刷新本页；刚关掉的窗口需等桥保活回收（默认 30 分钟，可用 ORZ_WEB_KEEPALIVE_SECS 调整）。",
+                "hint": "关闭仍开着该工作区的其他 orz 窗口/标签页后刷新本页；保活窗口只影响已断开的 child，正常关闭页面会立即释放连接。",
                 "evidence": format!("workspace={key}"),
             }})),
         )
@@ -807,18 +833,52 @@ fn parse_version_output(stdout: &str) -> Option<String> {
     rest.split_whitespace().next().map(str::to_string)
 }
 
-/// 执行 `<binary> --version`（纯 stdout，无 home 重定向/会话装配）。失败
-/// 一律 `None`——调用方把 `null` 如实呈现，不猜版本。
+/// 334（§3.1）：版本偏斜判定。桥版本是**编译期**事实（进程里真正在跑的
+/// 代码），child 版本是磁盘二进制自报——两者才可能不同。旧实现两次都探
+/// `current_exe()`，读的是同一个文件，`version_skew` 恒 false。
+fn version_skew(bridge: &str, child: Option<&str>) -> Option<bool> {
+    child.map(|child| bridge != child)
+}
+
+/// 执行 `<binary> --version`（纯 stdout，无 home 重定向/会话装配），带
+/// 超时：旧载体没有 `--version` 时会落入 TUI 分支并挂起，不能让
+/// `/api/boot` 无限等待。失败/超时一律 `None`——调用方把 `null` 如实呈现。
 fn binary_version(path: &std::path::Path) -> Option<String> {
-    let output = std::process::Command::new(path)
+    use std::io::Read;
+    const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+    let mut child = std::process::Command::new(path)
         .arg("--version")
         .stdin(std::process::Stdio::null())
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .ok()?;
-    if !output.status.success() {
-        return None;
+    let deadline = std::time::Instant::now() + PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                break;
+            }
+            Ok(None) => {}
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    parse_version_output(&String::from_utf8_lossy(&output.stdout))
+    let mut stdout = String::new();
+    child.stdout.take()?.read_to_string(&mut stdout).ok()?;
+    parse_version_output(&stdout)
 }
 
 async fn api_boot(
@@ -829,22 +889,28 @@ async fn api_boot(
     if let Err(resp) = gate(&state, &headers, q.token.as_ref()) {
         return resp;
     }
-    // 333（S12）：桥/child 版本一致性——两者都是同一 `orz` 二进制的不同
-    // 入口（`orz web` vs `orz --stdio`）；安装位半换装/开发树混跑时给出
-    // 显式偏斜事实。无 `--version` 的旧载体返回 null（不妄判）。
-    let bridge_version = std::env::current_exe()
+    // 334（§3.1）：桥版本用编译期 `CARGO_PKG_VERSION`（本进程真实在跑的
+    // 版本）；child 版本由磁盘二进制 `--version` 自报（带 3 s 超时）。
+    // 这样「桥内存里是 0.9.7、磁盘已换 0.9.8」能真的报出偏斜。
+    let bridge_version = state.bridge_version.as_str().to_string();
+    let child_path = state.agent_binary.clone();
+    let child_version = tokio::task::spawn_blocking(move || binary_version(&child_path))
+        .await
         .ok()
-        .and_then(|p| binary_version(&p));
-    let child_version = binary_version(&state.agent_binary);
-    let version_skew = match (&bridge_version, &child_version) {
-        (Some(a), Some(b)) => Some(a != b),
-        _ => None,
+        .flatten();
+    let version_skew = version_skew(&bridge_version, child_version.as_deref());
+    let child_probe = if child_version.is_some() {
+        "ok"
+    } else {
+        "failed_or_timeout"
     };
     Json(json!({
         "cwd": state.cwd().display().to_string(),
         "agent": state.agent_binary.display().to_string(),
         "bridge_version": bridge_version,
         "child_version": child_version,
+        // 334：探针失败/超时也如实上报（null 版本 + failed），不猜版本。
+        "child_probe": child_probe,
         "version_skew": version_skew,
         // 用户全局信任存储（~/.grok/trusted_folders.toml）的授予清单——
         // 探索器「工作区 → 已信任工作区」子级的数据源（0br S3）。
@@ -902,6 +968,21 @@ async fn api_workspace_switch(
             StatusCode::FORBIDDEN,
             "未信任工作区：请先在该工作区启动 orz 并点「信任」（fail-closed）",
         );
+    }
+    // 334（§3.2/S1）：服务端 run 守卫——旧实现只靠前端 `state.running`，
+    // 假运行态/多页时门形同虚设。桥有任一 child 的 prompt 在途即拒绝。
+    if state.bridge.any_prompt_in_flight().await {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": {
+                "code": "session_busy",
+                "class": "session",
+                "message": "有运行在进行，不能切换工作区。",
+                "hint": "等本轮结束或点「停止」后再切换；切换会改变新会话的归属根。",
+                "evidence": "bridge.prompt_in_flight=true",
+            }})),
+        )
+            .into_response();
     }
     state.set_cwd(target.clone());
     Json(json!({
@@ -976,6 +1057,7 @@ mod tests {
             cwd: Arc::new(std::sync::RwLock::new(cwd.clone())),
             visited: Arc::new(std::sync::Mutex::new(vec![cwd])),
             agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
+            bridge_version: Arc::new("0.9.7".to_string()),
             bridge: AgentBridge::new(PathBuf::from("orz-test-binary"), std::time::Duration::ZERO),
         }
     }
@@ -991,6 +1073,15 @@ mod tests {
         assert_eq!(parse_version_output("orz 1.2.3"), Some("1.2.3".to_string()));
         assert_eq!(parse_version_output("unknown"), None);
         assert_eq!(parse_version_output(""), None);
+    }
+
+    /// 334（§3.1）：桥版本取编译期事实、child 版本取磁盘探针——两个不同
+    /// 版本必须报 true；探针失败才是 None（不妄判）。
+    #[test]
+    fn version_skew_compares_bridge_and_child() {
+        assert_eq!(version_skew("0.9.7", Some("0.9.7")), Some(false));
+        assert_eq!(version_skew("0.9.7", Some("0.9.8")), Some(true));
+        assert_eq!(version_skew("0.9.8", None), None);
     }
 
     #[tokio::test]
@@ -1172,6 +1263,7 @@ mod tests {
             cwd: Arc::new(std::sync::RwLock::new(root.clone())),
             visited: Arc::new(std::sync::Mutex::new(vec![root.clone()])),
             agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
+            bridge_version: Arc::new("0.9.7".to_string()),
             bridge: AgentBridge::new(PathBuf::from("orz-test-binary"), std::time::Duration::ZERO),
         };
         let get = |app: axum::Router, uri: String| async move {
@@ -1472,6 +1564,7 @@ mod tests {
             cwd: Arc::new(std::sync::RwLock::new(tmp.clone())),
             visited: Arc::new(std::sync::Mutex::new(vec![tmp.clone()])),
             agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
+            bridge_version: Arc::new("0.9.7".to_string()),
             bridge: AgentBridge::new(PathBuf::from("orz-test-binary"), std::time::Duration::ZERO),
         };
         let resolved = state
@@ -1496,6 +1589,7 @@ mod tests {
             cwd: Arc::new(std::sync::RwLock::new(a.clone())),
             visited: Arc::new(std::sync::Mutex::new(vec![a.clone()])),
             agent_binary: Arc::new(PathBuf::from("orz-test-binary")),
+            bridge_version: Arc::new("0.9.7".to_string()),
             bridge: AgentBridge::new(PathBuf::from("orz-test-binary"), std::time::Duration::ZERO),
         };
         state.set_cwd(b.clone());

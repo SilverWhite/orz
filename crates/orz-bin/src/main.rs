@@ -149,6 +149,12 @@ fn main() {
     }
 }
 
+/// 334（§4.8）：启动时的载体完整性结论缓存。`doctor` 子命令是同一进程内的
+/// 后续分派，复用这次结果即可，避免对全清单做第二遍 sha256（旧实现
+/// `doctor_report` 无条件再调 `verify_at_startup`）。
+static STARTUP_INTEGRITY: std::sync::OnceLock<orz_host::carrier_integrity::IntegrityReport> =
+    std::sync::OnceLock::new();
+
 fn main_inner() {
     // 0bt② (2026-09-26, carries 0bj① m15): `--build-info` — the carrier's own
     // packaging-face version seam. The Rust binary carries no Win32
@@ -163,7 +169,12 @@ fn main_inner() {
     // 333（2026-10-21，S12）：`--version` / `-V` —— 桥/child 版本一致性探针
     // 的稳定线格式（`orz <version> (<os>/<arch>/<profile>)`）。与
     // `--build-info` 一样在 home 重定向与任何装配之前退出（纯 stdout）。
-    if std::env::args().any(|a| a == "--version" || a == "-V") {
+    // 334（§5.11）：只认首个位置参数，`orz -p --version` 不得被当成版本
+    // 请求直接退出（旧 `args.any()` 会扫描全 argv，吞掉提示词）。
+    if std::env::args()
+        .nth(1)
+        .is_some_and(|a| a == "--version" || a == "-V")
+    {
         println!(
             "orz {} ({}/{}/{})",
             env!("CARGO_PKG_VERSION"),
@@ -196,11 +207,12 @@ fn main_inner() {
     // 如实注记（2026-09-27 复审 P3）：本时点 tracing subscriber 尚未初始化
     // （各运行模式在分派后各自 init），下方 `tracing` 调用为前置埋点——
     // 当前有效腿是 stderr 横幅。
-    match orz_host::carrier_integrity::verify_at_startup() {
+    let startup_integrity = orz_host::carrier_integrity::verify_at_startup();
+    match &startup_integrity {
         orz_host::carrier_integrity::IntegrityReport::Violated { findings } => {
             eprintln!(
                 "{}",
-                orz_host::carrier_integrity::violation_banner(&findings)
+                orz_host::carrier_integrity::violation_banner(findings)
             );
             tracing::warn!(findings = ?findings, "carrier integrity check failed");
         }
@@ -209,6 +221,7 @@ fn main_inner() {
         }
         orz_host::carrier_integrity::IntegrityReport::NoManifest => {}
     }
+    let _ = STARTUP_INTEGRITY.set(startup_integrity);
     // L1 (2026-08-08 write placement): redirect `$GROK_HOME` off the user
     // directory to the orz install dir (degradation chain → `{cwd}/.gsa/
     // grok-home` → user dir). MUST run before any `orz_config::grok_home()`
@@ -345,14 +358,15 @@ fn main_inner() {
     // web subcommand, whose argv parser rejects `--stdio` explicitly, not
     // silently fall into stdio mode); env flags set above (--real etc.)
     // propagate to the child.
-    if args.get(1).map(String::as_str) == Some("web") {
-        run_web(&args[2..]);
-        return;
-    }
     // 333（2026-10-21，S11）：`orz doctor` —— 报告式诊断，不自动修复。
-    // 放在 web 之前：doctor 只读 cwd/.gsa，不装配会话/网络。
+    // 334：真正放在 web 之前（旧代码在 web 分支之后，注释与行为不一致）。
+    // doctor 只读 cwd/.gsa，不装配会话/网络。
     if args.get(1).map(String::as_str) == Some("doctor") {
         run_doctor(&args[2..]);
+        return;
+    }
+    if args.get(1).map(String::as_str) == Some("web") {
+        run_web(&args[2..]);
         return;
     }
     // 0br S3 (`orz archive <session8>`): on-demand session archive for the
@@ -786,6 +800,74 @@ fn count_files_with_ext(dir: &Path, ext: &str) -> usize {
         .count()
 }
 
+/// 334（§4.8）：run id 的数值序键。`RUN-x-9` 必须排在 `RUN-x-10` 前；
+/// 无序号形态（`RUN-CLI-<s8>`）稳定置后（与 delivery.rs 同口径）。
+fn run_sort_key(run_id: &str) -> (u64, &str) {
+    let ordinal = run_id
+        .rsplit_once('-')
+        .and_then(|(_, tail)| tail.parse::<u64>().ok())
+        .unwrap_or(u64::MAX);
+    (ordinal, run_id)
+}
+
+/// 334（§4.8）：读最近 run 的终态——只读文件尾部（256 KiB），找最后一条
+/// 终态事件及其 payload.status。旧实现只 `File::open` 判可读，S11 页却写
+/// 「最近 run 终态」，名实不符。
+fn read_run_terminal(path: &Path) -> (Option<String>, Option<String>) {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL: u64 = 256 * 1024;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return (None, None);
+    };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if file
+        .seek(SeekFrom::Start(len.saturating_sub(TAIL)))
+        .is_err()
+    {
+        return (None, None);
+    }
+    let mut buf = String::new();
+    if file.read_to_string(&mut buf).is_err() {
+        return (None, None);
+    }
+    for line in buf.lines().rev() {
+        let Ok(ev) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(kind) = ev.get("event_type").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if !matches!(
+            kind,
+            "run_finished" | "run_failed" | "run_cancelled" | "run_terminated" | "run_invalidated"
+        ) {
+            continue;
+        }
+        let status = ev
+            .get("payload")
+            .and_then(|p| p.get("status"))
+            .or_else(|| ev.get("status"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        return (Some(kind.to_string()), status);
+    }
+    (None, None)
+}
+
+/// 334（§4.8）：web 端口探针（默认 21487；`ORZ_WEB_ADDR` 的 `:port` 尾）。
+/// 监听=ok，未监听也 ok（doctor 常在 web 未起时运行），只如实报读数。
+fn doctor_web_port() -> (u16, bool) {
+    let port = std::env::var("ORZ_WEB_ADDR")
+        .ok()
+        .and_then(|addr| addr.rsplit_once(':').map(|(_, p)| p.to_string()))
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(21487);
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let listening =
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(150)).is_ok();
+    (port, listening)
+}
+
 /// 333：诊断报告（纯函数，测试不触碰网络/模型）。`cwd` 由调用方给出。
 fn doctor_report(cwd: &Path) -> DoctorReport {
     let mut r = DoctorReport::new();
@@ -841,14 +923,26 @@ fn doctor_report(cwd: &Path) -> DoctorReport {
                 .collect()
         })
         .unwrap_or_default();
-    run_ids.sort();
+    // 334：数值序（旧 `sort()` 是字符串序，RUN-x-9 会排在 RUN-x-10 之后）。
+    run_ids.sort_by(|a, b| run_sort_key(a).cmp(&run_sort_key(b)));
     if let Some(latest) = run_ids.last() {
         let journal = runs_dir.join(latest).join("events.jsonl");
         match std::fs::File::open(&journal) {
-            Ok(_) => r.ok(
-                "runs",
-                format!("{} 个 run journal；最新 {latest} 可读", run_ids.len()),
-            ),
+            Ok(_) => {
+                let (terminal, status) = read_run_terminal(&journal);
+                let terminal_text = match (&terminal, &status) {
+                    (Some(kind), Some(status)) => format!("终态 {kind}/{status}"),
+                    (Some(kind), None) => format!("终态 {kind}"),
+                    _ => "无终态（可能仍在跑或中断）".to_string(),
+                };
+                r.ok(
+                    "runs",
+                    format!(
+                        "{} 个 run journal；最新 {latest} 可读，{terminal_text}",
+                        run_ids.len()
+                    ),
+                )
+            }
             Err(e) => r.fail(
                 "runs",
                 format!("最新 journal 不可读（{}）: {e}", journal.display()),
@@ -872,7 +966,14 @@ fn doctor_report(cwd: &Path) -> DoctorReport {
         format!("{archives} 个压缩存档＋{blocks} 个回放块档"),
     );
 
-    match orz_host::carrier_integrity::verify_at_startup() {
+    // 334（§4.8）：复用启动时的完整性结论——doctor 子命令在同一进程内，
+    // 不应对全清单做第二遍 sha256。直接调用 `doctor_report` 的测试没有
+    // 启动缓存，此时才现场复验一次。
+    let integrity = STARTUP_INTEGRITY
+        .get()
+        .cloned()
+        .unwrap_or_else(orz_host::carrier_integrity::verify_at_startup);
+    match integrity {
         orz_host::carrier_integrity::IntegrityReport::Clean { checked } => {
             r.ok("carrier", format!("载体清单复验通过（{checked} 件）"));
         }
@@ -892,6 +993,51 @@ fn doctor_report(cwd: &Path) -> DoctorReport {
                 "无 carrier-manifest.json（开发树形态；发布包应带清单）".to_string(),
             );
         }
+    }
+
+    // 334（§4.8，330 必闭 #8 的其余面）：配置/端口/令牌/检索/CDP 四项
+    // cheap check。doctor 只读、不修复；未配置/未运行用 ok/warn 如实分级。
+    let retrieval = orz_host::retrieval_gate::retrieval_enabled_from_env();
+    r.ok(
+        "retrieval",
+        format!(
+            "检索门：{}（ORZ_RETRIEVAL_ENABLED；缺省开）",
+            if retrieval { "启用" } else { "关闭" }
+        ),
+    );
+    let (port, listening) = doctor_web_port();
+    r.ok(
+        "web",
+        format!(
+            "回环端口 {port}：{}",
+            if listening {
+                "在听（web 运行中）"
+            } else {
+                "未在听（doctor 独立运行/服务未启动属正常）"
+            }
+        ),
+    );
+    let ticket = std::env::var(MAINTENANCE_TICKET_ENV).unwrap_or_default();
+    r.ok(
+        "token",
+        if ticket.len() >= MAINTENANCE_TICKET_MIN_LEN {
+            "维护令牌已注入（长度达标）".to_string()
+        } else {
+            "维护令牌未注入（长度不足/未设置；仅桥内维护子命令需要，shell 下正常）".to_string()
+        },
+    );
+    let browser_env = std::env::var(orz_host::local_browser::ORZ_BROWSER_PATH_ENV).ok();
+    match orz_host::local_browser::find_browser(browser_env.as_deref()) {
+        Ok(browser) => r.ok(
+            "cdp",
+            format!("本地浏览器可发现：{}", browser.path.display()),
+        ),
+        Err(e) => r.warn(
+            "cdp",
+            format!(
+                "未发现 Chrome/Edge（本地浏览器检索不可用；设置 ORZ_BROWSER_PATH 可覆盖）: {e}"
+            ),
+        ),
     }
 
     r
@@ -984,7 +1130,9 @@ fn run_session_maintenance(verb: &str, rest: &[String]) {
         if verb == "unarchive" {
             orz_host::acp_server::unarchive_session_on_demand(&cwd, session8).await
         } else {
-            orz_host::acp_server::delete_session_on_demand(&cwd, session8).await
+            // 334（§3.3）：CLI 删除门——先探测跨进程 lease，再删；删除原语
+            // 本身逐件记录失败、墓碑已写后可重试（不再首个错误中断）。
+            orz_host::acp_server::delete_session_checked(&cwd, session8).await
         }
     });
     match result {
@@ -1118,13 +1266,16 @@ fn run_web(rest: &[String]) {
         )
         .with_writer(std::io::stderr)
         .try_init();
-    let config = match orz_web::parse_args(rest) {
+    let mut config = match orz_web::parse_args(rest) {
         Ok(config) => config,
         Err(e) => {
             eprintln!("error: {e}");
             std::process::exit(2);
         }
     };
+    // 334（§3.1）：桥版本取 orz-bin 的产品版本（0.9.7），不是 orz-web
+    // crate 版本（0.1.0）——否则 `/api/boot` 会把每次正常启动都报成偏斜。
+    config.bridge_version = env!("CARGO_PKG_VERSION").to_string();
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -2171,6 +2322,41 @@ mod tests {
             report.lines
         );
         assert_eq!(report.fail, 0, "{:?}", report.lines);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 334（§4.8）：run 列表按序号数值序，`-10` 在 `-9` 之后；最新 run 的
+    /// 终态/status 必须被 doctor 读出，而不是只判文件可读。
+    #[test]
+    fn doctor_run_order_is_numeric_and_terminal_is_read() {
+        assert!(
+            run_sort_key("RUN-x-9") < run_sort_key("RUN-x-10"),
+            "numeric order must beat lexical order"
+        );
+        assert!(run_sort_key("RUN-x-2") < run_sort_key("RUN-x-10"));
+        let dir = test_dir();
+        let runs = dir.join(".gsa").join("runs");
+        for id in ["RUN-x-2", "RUN-x-10"] {
+            let run = runs.join(id);
+            std::fs::create_dir_all(&run).unwrap();
+            std::fs::write(
+                run.join("events.jsonl"),
+                format!(
+                    "{}\n{}\n",
+                    serde_json::json!({"event_type": "run_preflight"}),
+                    serde_json::json!({"event_type": "run_finished", "payload": {"status": "completed"}})
+                ),
+            )
+            .unwrap();
+        }
+        let report = doctor_report(&dir);
+        let runs_line = report
+            .lines
+            .iter()
+            .find(|l| l.starts_with("[ok] runs:"))
+            .expect("runs section");
+        assert!(runs_line.contains("RUN-x-10"), "{runs_line}");
+        assert!(runs_line.contains("run_finished/completed"), "{runs_line}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

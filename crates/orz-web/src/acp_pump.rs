@@ -27,7 +27,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket};
@@ -47,6 +47,24 @@ const MAX_ACP_LINE_BYTES: usize = 64 * 1024 * 1024;
 /// are dropped (the truthful history is the journal tail, not this buffer) and
 /// the next attach is told so it can reconcile.
 const MAX_BACKLOG_BYTES: usize = 8 * 1024 * 1024;
+
+/// 334（§4.12）：attached 期 ingress 也有界——8 MiB 过去只约束 detached
+/// backlog，慢/半开 WS 时 unbounded channel 可无限增长。满时丢帧并置
+/// overflow 标记，由当前连接发 `_orz/bridge_ingress_truncated`（完整事实
+/// 仍在 journal，不谎称无丢失）。
+const MAX_ATTACHED_INGRESS_FRAMES: usize = 256;
+
+/// 334（§4.6）：未应答 agent→client 请求（permission）的重放上限。超出丢
+/// 最旧并计数；permission 超时后 agent 侧 fail-closed。
+const MAX_PENDING_PERMISSIONS: usize = 32;
+
+/// 334（§5.8）：`ws_acp` 在升级前就 claim sink；若升级失败回调不运行，
+/// sink 会泄漏到下一次 attach 409。claim 后 15 s 内 `run_connection` 未
+/// 启动即自动 detach（窄窗口自愈）。
+const ATTACH_CLAIM_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// 334（§5.6）：过期事实的保留上限——避免 map 无限累积（旧实现无 TTL）。
+const MAX_EXPIRED_AGE: Duration = Duration::from_secs(6 * 3600);
 
 /// Reaper cadence for detached slots.
 const REAPER_TICK: Duration = Duration::from_secs(15);
@@ -123,17 +141,25 @@ pub fn keepalive_grace_from_env() -> Duration {
 /// Per-workspace agent child plus its detachable output sink.
 struct SlotState {
     /// Current WS output sink; `None` = detached (frames go to `backlog`).
-    sink: Option<mpsc::UnboundedSender<String>>,
+    sink: Option<mpsc::Sender<String>>,
+    /// Connection generation owning `sink` (334 §5.7：旧 loop 的 detach 不得
+    /// 静音新连接）。
+    sink_conn: Option<u64>,
     /// Frames emitted while detached (bounded by `MAX_BACKLOG_BYTES`).
     backlog: VecDeque<String>,
     backlog_bytes: usize,
     /// Set when a backlog overflow dropped frames (told to the next attach).
     truncated: bool,
+    /// 334：attached ingress 满而丢帧（由当前连接发通知，不只等下次 attach）。
+    attached_overflow: bool,
     /// When the last attach went away (grace reaper reads this).
     detached_at: Option<Instant>,
     /// Learned from the `session/new` / `session/load` response — lets a
     /// refreshed page re-bind to the still-running session without a reload.
     session_id: Option<String>,
+    /// 334（§4.5）：会话的归属工作区根（load 参数 cwd），不是 child 的启动
+    /// cwd。刷新后的页面据此把 tail/撤回锚解析到正确根。
+    session_root: Option<String>,
     /// In-flight `session/prompt` request id (reconnect preamble fact).
     prompt_in_flight: Option<u64>,
     /// Child exited / stream broke; the slot is waiting for the reaper.
@@ -144,11 +170,14 @@ impl Default for SlotState {
     fn default() -> Self {
         Self {
             sink: None,
+            sink_conn: None,
             backlog: VecDeque::new(),
             backlog_bytes: 0,
             truncated: false,
+            attached_overflow: false,
             detached_at: None,
             session_id: None,
+            session_root: None,
             prompt_in_flight: None,
             dead: false,
         }
@@ -183,36 +212,67 @@ impl SlotState {
 struct ExpiredSession {
     session_id: String,
     at: Instant,
+    /// `grace` = 保活窗口到期；`child_exited` = detached 期 child 自己死了。
+    /// 334（§5.6）：dead 分支也必须留下过期事实，不能只给通用 boot 文案。
+    reason: &'static str,
 }
 
 /// One workspace's agent child. Cloned as `Arc`; the reader task and the
 /// bridge both hold it.
+/// 334（§4.1）：client→agent 请求事实。**只**记录这个方向；agent→client
+/// 的 permission 请求有独立的 id 空间（agent rpc 从 0 起、Web 从 1 起），
+/// 混在一张表里会让同值 id 互相覆盖，prompt 响应永远清不掉 in-flight。
+struct ClientRequestFact {
+    method: String,
+    /// `session/new|load` 的归属根（params.cwd），供刷新 preamble 回传。
+    root: Option<String>,
+}
+
+/// 334（§4.6）：未应答的 agent→client permission 请求（原帧），attach 时
+/// 重放给新页面；客户端响应（同 id、无 method）到达后移除。
+struct PendingPermission {
+    id: u64,
+    frame: String,
+}
+
 struct AgentHandle {
     key: String,
     child: Mutex<Option<Child>>,
     stdin: Mutex<Option<ChildStdin>>,
     state: Mutex<SlotState>,
-    /// Client→agent request id → method (only `session/*` and `_orz/*`), used
+    /// Client→agent request id → fact (only `session/*` and `_orz/*`), used
     /// to recognise `session/new`/`session/load` responses and prompt state.
-    requests: Mutex<HashMap<u64, String>>,
+    client_requests: Mutex<HashMap<u64, ClientRequestFact>>,
+    /// Agent→client requests awaiting a response (bounded).
+    pending_permissions: Mutex<VecDeque<PendingPermission>>,
+    /// session id → workspace key（刷新页按 session 找回原 child，而不是按
+    /// 当前 cwd 另起一个）。
+    session_slots: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl AgentHandle {
-    /// Observe one agent→client frame: learn session id / prompt completion.
+    /// Observe one agent→client frame: learn session id / prompt completion,
+    /// and queue unanswered permission requests for the next attach.
     async fn observe_agent_frame(&self, text: &str) {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
             return;
         };
         let id = value.get("id").and_then(serde_json::Value::as_u64);
-        // Agent→client requests (permission etc.) also carry id+method; track
-        // them like client requests so their responses are consumed quietly.
         if let (Some(id), Some(method)) =
             (id, value.get("method").and_then(serde_json::Value::as_str))
         {
-            if tracked_method(method) {
-                self.requests.lock().await.insert(id, method.to_string());
-                if method == "session/prompt" {
-                    self.state.lock().await.prompt_in_flight = Some(id);
+            // 334：agent→client 请求单独排队；**绝不**写 client_requests。
+            // permission 是唯一需要重放给新页面的请求种类。
+            if method == "session/request_permission" {
+                let mut pending = self.pending_permissions.lock().await;
+                if !pending.iter().any(|p| p.id == id) {
+                    pending.push_back(PendingPermission {
+                        id,
+                        frame: text.to_string(),
+                    });
+                    while pending.len() > MAX_PENDING_PERMISSIONS {
+                        pending.pop_front();
+                    }
                 }
             }
             return;
@@ -222,71 +282,131 @@ impl AgentHandle {
         if value.get("result").is_none() && value.get("error").is_none() {
             return;
         }
-        let method = self.requests.lock().await.remove(&id);
-        match method.as_deref() {
-            Some("session/new") | Some("session/load") => {
+        let fact = self.client_requests.lock().await.remove(&id);
+        let Some(fact) = fact else { return };
+        match fact.method.as_str() {
+            "session/new" | "session/load" => {
                 if let Some(session_id) = value
                     .get("result")
                     .and_then(|r| r.get("sessionId"))
                     .and_then(serde_json::Value::as_str)
                 {
-                    self.state.lock().await.session_id = Some(session_id.to_string());
+                    let mut state = self.state.lock().await;
+                    state.session_id = Some(session_id.to_string());
+                    state.session_root = fact.root.clone();
+                    drop(state);
+                    // 334（§4.5）：记 session→slot，刷新页带 session 查询时
+                    // 直接 attach 到真正持有它的 child（跨区 load 也不丢）。
+                    self.session_slots
+                        .lock()
+                        .await
+                        .insert(session_id.to_string(), self.key.clone());
                 }
             }
-            Some("session/prompt") => {
-                self.state.lock().await.prompt_in_flight = None;
+            "session/prompt" => {
+                let mut state = self.state.lock().await;
+                // 只清自己那一条：同 id 的新 prompt（client id 单调，不应
+                // 发生）或别的请求不能误清新 run。
+                if state.prompt_in_flight == Some(id) {
+                    state.prompt_in_flight = None;
+                }
             }
             // 0dk S2（332）：会话关闭/删除成功后，槽不能再把这个 id 当作
             // 「可重绑的活跃会话」写进 attach preamble——刷新后的页面会拿
             // 已关闭 id 去 session/load。清掉事实即可，桥不做会话语义。
-            Some("_orz/session_close") | Some("_orz/session_delete") => {
+            "_orz/session_close" | "_orz/session_delete" => {
                 let closed_id = value
                     .get("result")
                     .and_then(|r| r.get("sessionId"))
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string);
-                let mut state = self.state.lock().await;
-                if let Some(closed_id) = closed_id
-                    && state.session_id.as_deref() == Some(closed_id.as_str())
-                {
-                    state.session_id = None;
-                    state.prompt_in_flight = None;
+                if let Some(closed_id) = closed_id {
+                    self.session_slots.lock().await.remove(&closed_id);
+                    let mut state = self.state.lock().await;
+                    if state.session_id.as_deref() == Some(closed_id.as_str()) {
+                        state.session_id = None;
+                        state.session_root = None;
+                        state.prompt_in_flight = None;
+                    }
                 }
             }
             _ => {}
         }
     }
 
-    /// Observe one client→agent frame (request id/method + prompt start).
+    /// Observe one client→agent frame (request id/method + prompt start) or a
+    /// client response to a pending agent request (permission answer).
     async fn observe_client_frame(&self, text: &str) {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
             return;
         };
-        let (Some(id), Some(method)) = (
-            value.get("id").and_then(serde_json::Value::as_u64),
-            value.get("method").and_then(serde_json::Value::as_str),
-        ) else {
+        let id = value.get("id").and_then(serde_json::Value::as_u64);
+        let method = value.get("method").and_then(serde_json::Value::as_str);
+        let Some(id) = id else { return };
+        let Some(method) = method else {
+            // 334（§4.6）：permission 响应（同 id、无 method）到达——移出
+            // 未应答队列，后续 attach 不再重放。
+            if value.get("result").is_some() || value.get("error").is_some() {
+                self.pending_permissions.lock().await.retain(|p| p.id != id);
+            }
             return;
         };
         if !tracked_method(method) {
             return;
         }
-        self.requests.lock().await.insert(id, method.to_string());
+        // 334（§4.5）：记请求的 cwd（session/new|load 的归属根）。
+        let root = value
+            .get("params")
+            .and_then(|p| p.get("cwd"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        self.client_requests.lock().await.insert(
+            id,
+            ClientRequestFact {
+                method: method.to_string(),
+                root,
+            },
+        );
         if method == "session/prompt" {
             self.state.lock().await.prompt_in_flight = Some(id);
         }
+    }
+
+    /// 334（§4.12）：当前连接取走 ingress 溢出标记（取走即清）。
+    async fn take_attached_overflow(&self) -> bool {
+        let mut state = self.state.lock().await;
+        std::mem::take(&mut state.attached_overflow)
+    }
+
+    async fn pending_permission_frames(&self) -> Vec<String> {
+        self.pending_permissions
+            .lock()
+            .await
+            .iter()
+            .map(|p| p.frame.clone())
+            .collect()
     }
 
     /// Deliver one frame to the attached WS, or buffer it while detached.
     async fn deliver(&self, line: String) {
         let mut state = self.state.lock().await;
         if let Some(sink) = state.sink.as_ref() {
-            if sink.send(line.clone()).is_ok() {
-                return;
+            match sink.try_send(line.clone()) {
+                Ok(()) => return,
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    // 334（§4.12）：attached ingress 有界——满则丢本帧并置
+                    // 标记；当前连接发 `_orz/bridge_ingress_truncated`。
+                    // 完整事实仍在 journal，通知不谎称「无丢失」。
+                    state.attached_overflow = true;
+                    return;
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    // Receiver gone (WS task vanished between close and detach).
+                    state.sink = None;
+                    state.sink_conn = None;
+                    state.detached_at = Some(Instant::now());
+                }
             }
-            // Receiver gone (WS task vanished between close and detach).
-            state.sink = None;
-            state.detached_at = Some(Instant::now());
         }
         state.push_backlog(line);
     }
@@ -296,8 +416,9 @@ impl AgentHandle {
     async fn mark_dead(&self) {
         let mut state = self.state.lock().await;
         state.dead = true;
+        state.sink_conn = None;
         if let Some(sink) = state.sink.take() {
-            let _ = sink.send(
+            let _ = sink.try_send(
                 r#"{"jsonrpc":"2.0","method":"_orz/bridge_child_exited","params":{}}"#.to_string(),
             );
         }
@@ -323,6 +444,7 @@ impl AgentHandle {
             let mut state = self.state.lock().await;
             state.dead = true;
             state.sink = None;
+            state.sink_conn = None;
             state.backlog.clear();
             state.backlog_bytes = 0;
         }
@@ -347,8 +469,16 @@ pub struct Attached {
     preamble: String,
     /// Frames emitted while detached, in order, sent right after the preamble.
     backlog: Vec<String>,
-    /// Live output for this connection.
-    ingress: mpsc::UnboundedReceiver<String>,
+    /// 334（§4.6）：未应答的 permission 请求，随 attach 重放（等客户端响应
+    /// 后才移除；若新页再次断开，下次 attach 仍会重放）。
+    permissions: Vec<String>,
+    /// Live output for this connection (bounded, 334 §4.12).
+    ingress: mpsc::Receiver<String>,
+    /// Connection generation (334 §5.7：旧 loop 不得 detach 新连接).
+    conn: u64,
+    /// Set by `run_connection`; the attach-claim watchdog uses it to release a
+    /// sink whose WS upgrade never completed.
+    started: Arc<AtomicBool>,
 }
 
 /// Why an attach could not be served.
@@ -371,12 +501,15 @@ async fn claim_attachment(
     cwd: &Path,
     expired: Option<&ExpiredSession>,
 ) -> Option<Attached> {
+    let pending_permissions = handle.pending_permission_frames().await;
+    let pending_permission_count = pending_permissions.len();
     let mut state = handle.state.lock().await;
     if state.sink.is_some() {
         return None;
     }
-    let (sink, ingress) = mpsc::unbounded_channel();
+    let (sink, ingress) = mpsc::channel(MAX_ATTACHED_INGRESS_FRAMES);
     state.sink = Some(sink);
+    state.sink_conn = Some(conn);
     state.detached_at = None;
     let truncated = std::mem::take(&mut state.truncated);
     let mut backlog: Vec<String> = state.backlog.drain(..).collect();
@@ -395,9 +528,18 @@ async fn claim_attachment(
             "keepalive_expired": expired.is_some(),
             "expired_session_id": expired.map(|e| e.session_id.clone()),
             "expired_secs_ago": expired.map(|e| e.at.elapsed().as_secs()),
+            // 334（§5.6）：dead child 也留过期事实，并带原因。
+            "expired_reason": expired.map(|e| e.reason),
             // 绑定根的真相面：刷新后的新页面还没拉到 /api/boot 时，
             // 也要能把会话根设对（否则旧工作区会话的 tail 会按新 cwd 找）。
-            "cwd": cwd.display().to_string(),
+            // 334（§4.5）：会话根（load 参数）优先于 child 启动 cwd。
+            "cwd": state
+                .session_root
+                .clone()
+                .unwrap_or_else(|| cwd.display().to_string()),
+            "session_root": state.session_root.clone(),
+            "pending_permission_count": pending_permission_count,
+            "attached_ingress_capacity": MAX_ATTACHED_INGRESS_FRAMES,
         },
     })
     .to_string();
@@ -413,7 +555,10 @@ async fn claim_attachment(
         handle: handle.clone(),
         preamble,
         backlog,
+        permissions: pending_permissions,
         ingress,
+        conn,
+        started: Arc::new(AtomicBool::new(false)),
     })
 }
 
@@ -427,6 +572,9 @@ struct BridgeInner {
     slots: Mutex<HashMap<String, Arc<AgentHandle>>>,
     /// 333：key → 最近一次因保活到期被回收的会话（下一次 attach 消费）。
     expired: Mutex<HashMap<String, ExpiredSession>>,
+    /// 334（§4.5）：session id → workspace key。刷新页带 session 查询时
+    /// 直接 attach 到真正持有它的 child（跨区 load / 切区后刷新都不丢）。
+    session_slots: Arc<Mutex<HashMap<String, String>>>,
     agent_binary: PathBuf,
     grace: Duration,
     next_conn: AtomicU64,
@@ -440,6 +588,7 @@ impl AgentBridge {
             inner: Arc::new(BridgeInner {
                 slots: Mutex::new(HashMap::new()),
                 expired: Mutex::new(HashMap::new()),
+                session_slots: Arc::new(Mutex::new(HashMap::new())),
                 agent_binary,
                 grace,
                 next_conn: AtomicU64::new(0),
@@ -465,55 +614,94 @@ impl AgentBridge {
     }
 
     async fn reap_once(&self) {
-        let mut victims: Vec<String> = Vec::new();
-        let mut expired: Vec<(String, String)> = Vec::new();
-        {
-            let slots = self.inner.slots.lock().await;
-            for (key, handle) in slots.iter() {
+        let handles: Vec<(String, Arc<AgentHandle>)> = self
+            .inner
+            .slots
+            .lock()
+            .await
+            .iter()
+            .map(|(key, handle)| (key.clone(), handle.clone()))
+            .collect();
+        // 334（§5.6）：dead child 与 grace 到期都留过期事实（带 reason）。
+        for (key, handle) in handles {
+            let (reason, session_id) = {
                 let state = handle.state.lock().await;
                 if state.dead {
-                    victims.push(key.clone());
-                    continue;
-                }
-                if state.sink.is_none()
+                    ("child_exited", state.session_id.clone())
+                } else if state.sink.is_none()
                     && let Some(at) = state.detached_at
                     && at.elapsed() >= self.inner.grace
                 {
-                    // 333：只有「曾绑定过会话」的槽才留过期事实；空槽回收
-                    // 不该在下次 attach 谎报「上一会话未恢复」。
-                    if let Some(session_id) = state.session_id.clone() {
-                        expired.push((key.clone(), session_id));
-                    }
-                    victims.push(key.clone());
+                    ("grace", state.session_id.clone())
+                } else {
+                    continue;
                 }
-            }
-        }
-        if !expired.is_empty() {
-            let mut map = self.inner.expired.lock().await;
-            for (key, session_id) in expired {
-                map.insert(
-                    key,
+            };
+            // 334（§5.7）：按 Arc 身份 + 复核条件移除，避免误删同 key 的
+            // 新槽（reap 收集 victim 后、remove 前发生重连/重建）。
+            let removed = {
+                let mut slots = self.inner.slots.lock().await;
+                let still = match slots.get(&key) {
+                    Some(current) if Arc::ptr_eq(current, &handle) => {
+                        let state = current.state.lock().await;
+                        state.dead
+                            || (state.sink.is_none()
+                                && state
+                                    .detached_at
+                                    .is_some_and(|at| at.elapsed() >= self.inner.grace))
+                    }
+                    _ => false,
+                };
+                if still { slots.remove(&key) } else { None }
+            };
+            let Some(removed) = removed else { continue };
+            if let Some(session_id) = session_id {
+                self.inner.expired.lock().await.insert(
+                    key.clone(),
                     ExpiredSession {
                         session_id,
                         at: Instant::now(),
+                        reason,
                     },
                 );
             }
+            tracing::info!(
+                key = %key,
+                reason,
+                "ACP agent child reclaimed (grace/dead); session expiry recorded"
+            );
+            removed.kill().await;
         }
-        for key in victims {
-            let handle = self.inner.slots.lock().await.remove(&key);
-            if let Some(handle) = handle {
-                tracing::info!(key = %key, "ACP keepalive grace expired; reclaiming agent child");
-                handle.kill().await;
-            }
-        }
+        self.inner
+            .expired
+            .lock()
+            .await
+            .retain(|_, expired| expired.at.elapsed() < MAX_EXPIRED_AGE);
     }
 
     /// Attach a new WS to the workspace's child, spawning one when absent.
     ///
     /// `Busy` when another WS is attached; `Ready` also tells whether the
     /// child was reused (keepalive) and which session it holds.
-    pub async fn attach(&self, key: &str, cwd: &Path) -> Attach {
+    pub async fn attach(&self, key: &str, cwd: &Path, requested_session: Option<&str>) -> Attach {
+        // 334（§4.5）：刷新页可带 session id——优先 attach 到真正持有该
+        // 会话的槽（跨工作区 load 后，会话根 ≠ 当前 cwd；按 cwd 找会失联）。
+        let owner_key = match requested_session {
+            Some(session_id) => self
+                .inner
+                .session_slots
+                .lock()
+                .await
+                .get(session_id)
+                .cloned(),
+            None => None,
+        };
+        let key: &str = owner_key.as_deref().unwrap_or(key);
+        let cwd: &Path = if owner_key.is_some() {
+            Path::new(key)
+        } else {
+            cwd
+        };
         // Single critical section: spawn (fast fork) and sink claim both
         // happen under the slots lock, so two concurrent upgrades cannot both
         // spawn or both attach.
@@ -564,11 +752,45 @@ impl AgentBridge {
         drop(slots);
         match attached {
             Some(attached) => {
+                // 334（§5.8）：升级失败回调不运行时，claim 的 sink 不能永久
+                // 占位（下一次 attach 会 409）。15 s 内 run_connection 未启动
+                // 就按连接代次安全释放。
+                let handle = attached.handle.clone();
+                let started = attached.started.clone();
+                let conn = attached.conn;
+                tokio::spawn(async move {
+                    tokio::time::sleep(ATTACH_CLAIM_TIMEOUT).await;
+                    if started.load(Ordering::Acquire) {
+                        return;
+                    }
+                    let mut state = handle.state.lock().await;
+                    if state.sink_conn == Some(conn) {
+                        state.sink = None;
+                        state.sink_conn = None;
+                        state.detached_at = Some(Instant::now());
+                        tracing::warn!(
+                            "ACP WS upgrade did not start within 15s; released the attach claim"
+                        );
+                    }
+                });
                 tracing::info!(key = %key, reused, "ACP WS attached to agent child");
                 Attach::Ready(attached)
             }
             None => Attach::Busy,
         }
+    }
+
+    /// 334（§3.2/S1）：服务端「有 run 在跑」读数——工作区切换的拒绝依据。
+    /// 旧实现只靠前端 `state.running`；假运行态/多页时门形同虚设。
+    pub async fn any_prompt_in_flight(&self) -> bool {
+        let slots: Vec<Arc<AgentHandle>> =
+            self.inner.slots.lock().await.values().cloned().collect();
+        for handle in slots {
+            if handle.state.lock().await.prompt_in_flight.is_some() {
+                return true;
+            }
+        }
+        false
     }
 
     async fn spawn_slot(&self, key: &str, cwd: &Path) -> Result<Arc<AgentHandle>, String> {
@@ -606,7 +828,9 @@ impl AgentBridge {
             child: Mutex::new(Some(child)),
             stdin: Mutex::new(Some(stdin)),
             state: Mutex::new(SlotState::default()),
-            requests: Mutex::new(HashMap::new()),
+            client_requests: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(VecDeque::new()),
+            session_slots: self.inner.session_slots.clone(),
         });
         let reader_handle = handle.clone();
         tokio::spawn(async move { read_agent_loop(reader_handle, stdout).await });
@@ -617,17 +841,27 @@ impl AgentBridge {
     pub async fn run_connection(&self, socket: WebSocket, attached: Attached) {
         let handle = attached.handle.clone();
         let key = handle.key.clone();
+        let conn = attached.conn;
+        attached.started.store(true, Ordering::Release);
         let mut socket = socket;
         // Preamble first: a refreshed page binds to the still-running session
         // before backlog/stream frames arrive (and before it decides to
         // session/new — the frontend skips creation when session_id is set).
         if socket.send(Message::text(attached.preamble)).await.is_err() {
-            self.detach(&key, &handle).await;
+            self.detach(&key, &handle, conn).await;
             return;
         }
         for line in attached.backlog {
             if socket.send(Message::text(line)).await.is_err() {
-                self.detach(&key, &handle).await;
+                self.detach(&key, &handle, conn).await;
+                return;
+            }
+        }
+        // 334（§4.6）：断线前未应答的 permission 请求重放给新页（等响应才
+        // 移除；若新页再次断开，下次 attach 仍会重放）。
+        for frame in attached.permissions {
+            if socket.send(Message::text(frame)).await.is_err() {
+                self.detach(&key, &handle, conn).await;
                 return;
             }
         }
@@ -659,6 +893,14 @@ impl AgentBridge {
                         if ws_sink.send(Message::text(line)).await.is_err() {
                             break;
                         }
+                        // 334（§4.12）：attached ingress 曾满而丢帧——当前
+                        // 连接立即收到通知，不用等到下次 attach。
+                        if handle.take_attached_overflow().await {
+                            let notice = r#"{"jsonrpc":"2.0","method":"_orz/bridge_ingress_truncated","params":{"dropped":"attached_ingress_full","detail":"浏览器接收过慢，部分流式帧已丢弃；完整事实以 journal 为准"}}"#;
+                            if ws_sink.send(Message::text(notice)).await.is_err() {
+                                break;
+                            }
+                        }
                     }
                     // Reader gone: dead child (frame already announced) or a
                     // replaced sink. Detach; nobody to serve here anymore.
@@ -667,14 +909,27 @@ impl AgentBridge {
             }
         }
         let _ = ws_sink.close().await;
-        self.detach(&key, &handle).await;
+        self.detach(&key, &handle, conn).await;
     }
 
     /// Detach the current WS without killing the child (keepalive).
-    async fn detach(&self, key: &str, handle: &Arc<AgentHandle>) {
+    ///
+    /// 334（§5.7）：带连接代次——旧 loop 退出时若新连接已 attach（同一
+    /// handle、sink 已换），旧 detach 不得把新 sink 置空（否则新连接被静音）。
+    async fn detach(&self, key: &str, handle: &Arc<AgentHandle>, conn: u64) {
         {
             let mut state = handle.state.lock().await;
+            if state.sink_conn != Some(conn) {
+                tracing::debug!(
+                    key = %key,
+                    conn,
+                    current = ?state.sink_conn,
+                    "stale ACP WS detach ignored (a newer connection owns the sink)"
+                );
+                return;
+            }
             state.sink = None;
+            state.sink_conn = None;
             state.detached_at = Some(Instant::now());
         }
         tracing::info!(key = %key, "ACP WS detached; agent child kept alive");
@@ -954,13 +1209,197 @@ mod tests {
         );
     }
 
+    /// 334（§4.1）：client 与 agent 的 id 空间独立但值域重叠。同值 id 的
+    /// permission 不得覆盖在途 prompt；prompt 响应必须仍能清 in-flight。
+    #[tokio::test]
+    async fn bridge_request_ids_do_not_collide() {
+        let handle = fake_handle();
+        handle
+            .observe_client_frame(
+                r#"{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"s","prompt":[]}}"#,
+            )
+            .await;
+        handle
+            .observe_agent_frame(
+                r#"{"jsonrpc":"2.0","id":3,"method":"session/request_permission","params":{}}"#,
+            )
+            .await;
+        // prompt 事实仍在 client 表；permission 单独排队。
+        assert_eq!(
+            handle
+                .client_requests
+                .lock()
+                .await
+                .get(&3)
+                .map(|f| f.method.as_str()),
+            Some("session/prompt")
+        );
+        assert_eq!(handle.pending_permissions.lock().await.len(), 1);
+        assert_eq!(handle.state.lock().await.prompt_in_flight, Some(3));
+
+        // agent 对 prompt 的响应按 client id 清 in-flight；permission 等
+        // 客户端响应（无 method）才移出队列。
+        handle
+            .observe_agent_frame(r#"{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}"#)
+            .await;
+        assert_eq!(handle.state.lock().await.prompt_in_flight, None);
+        assert_eq!(handle.pending_permissions.lock().await.len(), 1);
+        handle
+            .observe_client_frame(
+                r#"{"jsonrpc":"2.0","id":3,"result":{"outcome":{"outcome":"cancelled"}}}"#,
+            )
+            .await;
+        assert!(handle.pending_permissions.lock().await.is_empty());
+    }
+
+    /// 334（§4.6）：permission 已投递 → 页面消失 → 新 attach 必须重放到
+    /// 新连接（不是留在旧 WS 的已消费队列里）。
+    #[tokio::test]
+    async fn unanswered_permission_is_replayed_on_reattach() {
+        let handle = fake_handle();
+        handle
+            .observe_agent_frame(
+                r#"{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"toolCall":{"title":"bash"}}}"#,
+            )
+            .await;
+        let attached = claim_attachment(
+            &handle,
+            Duration::from_secs(60),
+            1,
+            true,
+            Path::new("C:/workspace"),
+            None,
+        )
+        .await
+        .expect("attach");
+        assert_eq!(attached.permissions.len(), 1);
+        assert!(attached.permissions[0].contains("session/request_permission"));
+        assert!(attached.preamble.contains("\"pending_permission_count\":1"));
+        drop(attached);
+        // 模拟 WS 消失：下一帧发现 receiver 已关，清 sink 后进 backlog。
+        handle
+            .deliver(r#"{"jsonrpc":"2.0","method":"session/update"}"#.to_string())
+            .await;
+        // 未应答：再次 attach 仍重放。
+        let again = claim_attachment(
+            &handle,
+            Duration::from_secs(60),
+            2,
+            true,
+            Path::new("C:/workspace"),
+            None,
+        )
+        .await
+        .expect("reattach");
+        assert_eq!(again.permissions.len(), 1);
+    }
+
+    /// 334（§4.5）：session/new|load 的归属根随响应记入槽，attach preamble
+    /// 回传 session_root（不是 child 启动 cwd）。
+    #[tokio::test]
+    async fn session_root_is_learned_from_load_params() {
+        let handle = fake_handle();
+        handle
+            .observe_client_frame(
+                r#"{"jsonrpc":"2.0","id":4,"method":"session/load","params":{"cwd":"C:/root-a","sessionId":"sess-a"}}"#,
+            )
+            .await;
+        handle
+            .observe_agent_frame(r#"{"jsonrpc":"2.0","id":4,"result":{"sessionId":"sess-a"}}"#)
+            .await;
+        assert_eq!(
+            handle.state.lock().await.session_root.as_deref(),
+            Some("C:/root-a")
+        );
+        assert_eq!(
+            handle
+                .session_slots
+                .lock()
+                .await
+                .get("sess-a")
+                .map(String::as_str),
+            Some("C:/workspace")
+        );
+        let attached = claim_attachment(
+            &handle,
+            Duration::from_secs(60),
+            1,
+            false,
+            Path::new("C:/workspace"),
+            None,
+        )
+        .await
+        .expect("attach");
+        assert!(attached.preamble.contains("\"session_root\":\"C:/root-a\""));
+        assert!(attached.preamble.contains("\"cwd\":\"C:/root-a\""));
+    }
+
+    /// 334（§4.12）：attached ingress 有界——第 257 帧触发 overflow 标记而
+    /// 不是无限缓冲。
+    #[tokio::test]
+    async fn attached_ingress_is_bounded() {
+        let handle = fake_handle();
+        let attached = claim_attachment(
+            &handle,
+            Duration::from_secs(60),
+            1,
+            true,
+            Path::new("C:/workspace"),
+            None,
+        )
+        .await
+        .expect("attach");
+        let frame = r#"{"jsonrpc":"2.0","method":"session/update"}"#.to_string();
+        for _ in 0..MAX_ATTACHED_INGRESS_FRAMES {
+            handle.deliver(frame.clone()).await;
+        }
+        assert!(
+            !handle.take_attached_overflow().await,
+            "capacity not exceeded"
+        );
+        handle.deliver(frame).await;
+        assert!(handle.take_attached_overflow().await);
+        drop(attached);
+    }
+
+    /// 334（§5.6）：detached 期 child 死亡也留过期事实（reason=child_exited），
+    /// 新 attach 的 preamble 必须报「未恢复」。
+    #[tokio::test]
+    async fn dead_child_is_reported_as_expired_on_next_attach() {
+        let bridge = AgentBridge::new(PathBuf::from("orz"), Duration::from_secs(60));
+        let handle = fake_handle();
+        {
+            let mut state = handle.state.lock().await;
+            state.session_id = Some("sess-dead".into());
+        }
+        bridge
+            .inner
+            .slots
+            .lock()
+            .await
+            .insert("C:/workspace".into(), handle.clone());
+        handle.mark_dead().await;
+        bridge.reap_once().await;
+        let expired = bridge
+            .inner
+            .expired
+            .lock()
+            .await
+            .remove("C:/workspace")
+            .expect("dead child expiry fact");
+        assert_eq!(expired.session_id, "sess-dead");
+        assert_eq!(expired.reason, "child_exited");
+    }
+
     fn fake_handle() -> Arc<AgentHandle> {
         Arc::new(AgentHandle {
             key: "C:/workspace".to_string(),
             child: Mutex::new(None),
             stdin: Mutex::new(None),
             state: Mutex::new(SlotState::default()),
-            requests: Mutex::new(HashMap::new()),
+            client_requests: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(VecDeque::new()),
+            session_slots: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 }

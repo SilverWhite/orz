@@ -84,7 +84,13 @@ export const state = {
   // 333：本会话补充队列上限（服务端 `_orz/queue_append` 响应回填；初值＝
   // orz-host `SUPPLEMENT_QUEUE_MAX_DEPTH` 的镜像，仅用于未入队前的显示）。
   queueCapacity: 16,
+  // 334（§4.10）：服务端返回的剩余额度/作用域——不做本地二次推导；切会话
+  // 或解绑时清空（旧会话的读数不得带进新会话）。
+  queueRemaining: null,
+  queueScope: null,
   backgroundTasks: 0,
+  // 334（§4.3）：`_orz/session_state` 的 closing 门——关闭期间禁用发送。
+  closingSessionId: null,
   sessionId: null,
   gateBlock: null,
   pendingPermission: null, // {request, respond} 由 acp.js 注入
@@ -98,6 +104,8 @@ export const state = {
   // 333（S12）：桥/child 版本一致性（/api/boot 的 version_skew）。
   bridgeVersion: null,
   childVersion: null,
+  // 334（§3.1）：磁盘 child 版本探针结果 'ok' | 'failed_or_timeout'。
+  childProbe: null,
   versionSkew: null,
   // 2026-10-21：本桥会话内打开过的工作区（含启动 cwd 与切换历史）。
   // 不是持久授信；用于「切出去还能切回来」与旧工作区会话回看。

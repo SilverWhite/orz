@@ -45,11 +45,15 @@ export const ERROR_COPY = {
     what: '权限请求被拒绝或超时',
     class: 'permission',
     hint: '重试并在弹窗中允许；超时按 fail-closed 处理',
+    // 当前仅前端兜底；宿主尚无稳定生产者（334 §4.4）——不要当作已接线的错误面。
+    reserved: true,
   },
   provider_error: {
     what: '模型请求失败（网络/额度/供应商）',
     class: 'provider',
     hint: '检查网络或余额后重试',
+    // 当前仅前端兜底；宿主尚无稳定生产者（334 §4.4）——不要当作已接线的错误面。
+    reserved: true,
   },
   internal: {
     what: '内部错误',
@@ -61,7 +65,14 @@ export const ERROR_COPY = {
 /** 四要素合成：发生了什么＋为什么（分类）＋下一步＋证据。 */
 export function describeError(data, fallback = 'internal') {
   const d = data && typeof data === 'object' ? data : {};
-  const entry = ERROR_COPY[d.code] || ERROR_COPY[fallback] || ERROR_COPY.internal;
+  // 334（§5.10）：不得用 `ERROR_COPY[d.code]` 直取——`code:"constructor"`
+  // 会命中原型上的 Object 构造器，渲染出 `undefined（undefined）`。
+  const known = Object.prototype.hasOwnProperty.call(ERROR_COPY, d.code);
+  const fallbackKnown = Object.prototype.hasOwnProperty.call(ERROR_COPY, fallback);
+  const entry =
+    (known ? ERROR_COPY[d.code] : null) ||
+    (fallbackKnown ? ERROR_COPY[fallback] : null) ||
+    ERROR_COPY.internal;
   const what = entry.what;
   const cls = d.class || entry.class;
   const hint = d.hint || entry.hint;

@@ -120,7 +120,13 @@ async function sendJson(method, url, body) {
   const resp = await fetch(url + sep + 'token=' + encodeURIComponent(TOKEN), init);
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
-    throw new Error(data?.error?.message || `HTTP ${resp.status}`);
+    // 334（§5.5）：桥的 409/维护面错误带四要素；把 hint/evidence 挂在
+    // Error 上，调用方不必再按文案猜。message 仍是人读主句。
+    const err = new Error(data?.error?.message || `HTTP ${resp.status}`);
+    err.hint = data?.error?.hint;
+    err.evidence = data?.error?.evidence;
+    err.data = data?.error;
+    throw err;
   }
   return data;
 }

@@ -35,6 +35,10 @@ pub struct WebConfig {
     /// 置位时桥进程设置 `ORZ_REAL=1`，spawn 的 `orz --stdio` 子进程经
     /// env 继承走真实 DeepSeek 通道（与 TUI `--real` 同一决策点）。
     pub real: bool,
+    /// 334（§3.1）：桥进程的产品版本（`orz-bin` 的 `CARGO_PKG_VERSION`）。
+    /// 不能取 `orz-web` 自身的 crate 版本（0.1.0）——那会把每次 boot 都
+    /// 误报成偏斜。
+    pub bridge_version: String,
 }
 
 /// Default bind target: loopback, survey §6 port candidate.
@@ -121,6 +125,7 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
         // 启动 cwd 即本会话第一个「打开过」的工作区（不是持久授信）。
         visited: Arc::new(std::sync::Mutex::new(vec![config.cwd.clone()])),
         agent_binary: Arc::new(agent_binary),
+        bridge_version: Arc::new(config.bridge_version.clone()),
         bridge,
     };
     server::serve(state, bind).await.map_err(|e| e.to_string())
@@ -160,7 +165,14 @@ pub fn parse_args(args: &[String]) -> Result<WebConfig, String> {
         i += 1;
     }
     let bind = bind.unwrap_or_else(|| DEFAULT_BIND.parse().expect("default bind is valid"));
-    Ok(WebConfig { bind, cwd, real })
+    Ok(WebConfig {
+        bind,
+        cwd,
+        real,
+        // 调用方（`orz-bin`）会用产品版本覆盖；这里只是 `orz-web` 独立
+        // 运行时的诚实占位（不冒充 orz 版本）。
+        bridge_version: env!("CARGO_PKG_VERSION").to_string(),
+    })
 }
 
 #[cfg(test)]

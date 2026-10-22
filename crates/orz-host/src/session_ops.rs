@@ -109,6 +109,15 @@ impl SessionCommand {
             | Self::Delete { session_id } => session_id,
         }
     }
+
+    /// 设计 §5.1 的动词名（错误证据/审计共用；ACP 适配器只做方法名映射）。
+    pub fn verb(&self) -> &'static str {
+        match self {
+            Self::Close { .. } => "close",
+            Self::State { .. } => "state",
+            Self::Delete { .. } => "delete",
+        }
+    }
 }
 
 /// close 的成功结果（设计 §5.2 线格式）。
@@ -306,6 +315,11 @@ pub trait SessionHost {
     fn run_evidence(&self, session_id: &str) -> Option<String>;
     fn is_deleted(&self, session_id: &str) -> bool;
     fn is_closed(&self, session_id: &str) -> bool;
+    /// 0cy 收卷后的归档态（包在、活区无侧车）。公开状态机要求 `archived`
+    /// 可查询/可删除；默认 `false` 让不关心归档的宿主零改动。
+    fn is_archived(&self, _session_id: &str) -> bool {
+        false
+    }
     /// 另一进程持 lease（fail-closed）。
     fn lease_held_elsewhere(&self, session_id: &str) -> bool;
 }
@@ -356,6 +370,14 @@ pub async fn close<H: SessionHost + ?Sized>(
                 return Err(SessionError::LeaseConflict {
                     session_id: session_id.to_string(),
                     detail: "lease locked by another orz process".to_string(),
+                });
+            }
+            if host.is_archived(session_id) {
+                return Ok(SessionOutcome {
+                    session_id: session_id.to_string(),
+                    state: SessionState::Archived,
+                    closed: true,
+                    already: true,
                 });
             }
             if host.is_closed(session_id) {
@@ -414,6 +436,14 @@ pub fn state_of<H: SessionHost + ?Sized>(
             already: false,
         });
     }
+    if host.is_archived(session_id) {
+        return Ok(SessionOutcome {
+            session_id: session_id.to_string(),
+            state: SessionState::Archived,
+            closed: true,
+            already: true,
+        });
+    }
     if host.is_closed(session_id) {
         return Ok(SessionOutcome::already_closed(session_id));
     }
@@ -435,6 +465,7 @@ mod tests {
         cancel_converges: Mutex<bool>,
         deleted: Mutex<bool>,
         closed_marker: Mutex<bool>,
+        archived: Mutex<bool>,
         lease_elsewhere: Mutex<bool>,
     }
 
@@ -484,6 +515,10 @@ mod tests {
 
         fn is_closed(&self, _session_id: &str) -> bool {
             *self.closed_marker.lock().unwrap()
+        }
+
+        fn is_archived(&self, _session_id: &str) -> bool {
+            *self.archived.lock().unwrap()
         }
 
         fn lease_held_elsewhere(&self, _session_id: &str) -> bool {
@@ -598,6 +633,26 @@ mod tests {
         assert!(matches!(err, SessionError::LeaseConflict { .. }));
         assert_eq!(err.code(), -32013);
         assert_eq!(err.class(), "session");
+    }
+
+    #[tokio::test]
+    async fn archived_session_is_queryable_and_closes_idempotently() {
+        let host = FakeHost::default();
+        *host.archived.lock().unwrap() = true;
+        let out = state_of(&host, "sess-a").expect("archived state");
+        assert_eq!(out.state, SessionState::Archived);
+        assert!(out.closed && out.already);
+        let closed = close(
+            &host,
+            "sess-a",
+            CloseReason::UserClose,
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("close archived is already-closed");
+        assert_eq!(closed.state, SessionState::Archived);
+        assert!(closed.closed && closed.already);
+        assert_eq!(*host.cancels.lock().unwrap(), 0, "no run to cancel");
     }
 
     #[test]

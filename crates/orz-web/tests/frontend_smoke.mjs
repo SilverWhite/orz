@@ -202,6 +202,23 @@ globalThis.location = {
   href: 'http://127.0.0.1:21487/#token=abc',
   hash: '#token=abc',
 };
+/* 334（§4.5）：main.js 用 sessionStorage 记忆绑定——浏览器 stub 没有，补
+ * 一个内存版（Node 无原生 sessionStorage）。 */
+const memoryStorage = new Map();
+globalThis.sessionStorage = {
+  getItem(key) {
+    return memoryStorage.has(key) ? memoryStorage.get(key) : null;
+  },
+  setItem(key, value) {
+    memoryStorage.set(key, String(value));
+  },
+  removeItem(key) {
+    memoryStorage.delete(key);
+  },
+  clear() {
+    memoryStorage.clear();
+  },
+};
 globalThis.WebSocket = class {
   static OPEN = 1;
   constructor(url) {
@@ -1895,6 +1912,334 @@ assert.deepEqual(
 );
 assert.ok(messageTexts().includes('旧回答二'), '无水位时保持原全量重放（旧行为不变）');
 console.log('ok  15.7 /api/recall 不可用：按无水位继续＋原全量重放');
+
+/* ── 16. 334（2026-10-21）：绑定读数归零/原型键兜底/attach 运行态/
+ *      session_root 绑定/撤回窗口缺口 ── */
+
+// 16.1 切绑定/解绑必须清零队列深度、剩余额度、后台计数（334 §4.10）——
+// 旧实现用 Math.max 且解绑不清，切会话后属性面板仍显示旧会话读数，
+// beforeunload 也会为不存在的队列弹确认。
+const mainModule = await import('../assets/app/main.js');
+const hooks = mainModule.__testHooks;
+assert.ok(hooks?.setBinding && hooks?.detachBinding, 'main.js 必须导出绑定测试钩子（冒烟可注入）');
+resetView();
+state.supplementQueueDepth = 5;
+state.queueRemaining = 9;
+state.queueScope = 'session_process';
+state.backgroundTasks = 3;
+hooks.setBinding('facefeed-1111-2222-3333-444455556666', 'D:\\CLI\\orz');
+assert.equal(state.supplementQueueDepth, 0, '新绑定不得继承旧队列深度');
+assert.equal(state.queueRemaining, null, '新绑定不得继承旧剩余额度');
+assert.equal(state.backgroundTasks, 0, '新绑定不得继承旧后台计数');
+assert.equal(
+  memoryStorage.get('orz.sessionId'),
+  'facefeed-1111-2222-3333-444455556666',
+  '绑定必须写入 sessionStorage（刷新后 attach 续接）',
+);
+assert.equal(memoryStorage.get('orz.sessionRoot'), 'D:\\CLI\\orz', '归属根必须写入 sessionStorage');
+state.supplementQueueDepth = 2;
+state.queueRemaining = 1;
+state.backgroundTasks = 4;
+state.serverBusy = true;
+hooks.detachBinding();
+assert.equal(state.supplementQueueDepth, 0, '解绑必须清零队列深度');
+assert.equal(state.queueRemaining, null, '解绑必须清零剩余额度');
+assert.equal(state.backgroundTasks, 0, '解绑必须清零后台计数');
+assert.equal(state.serverBusy, false, '解绑必须清服务端 busy 标记');
+assert.equal(memoryStorage.has('orz.sessionId'), false, '解绑必须清除 sessionStorage 的会话键');
+assert.equal(memoryStorage.has('orz.sessionRoot'), false, '解绑必须清除 sessionStorage 的根键');
+console.log('ok  16.1 queue depth resets on binding change（setBinding/detachBinding 清零＋存储同步）');
+
+// 16.2 copy.js 原型键兜底（334 §5.10）：code:"constructor" 不得命中原型上的
+// Object 构造器（旧实现输出 `undefined（undefined）`）。
+const copyMod = await import('../assets/app/copy.js');
+const ctorFour = copyMod.describeError({ code: 'constructor' });
+assert.equal(ctorFour.includes('undefined'), false, 'constructor 不得命中原型键渲染 undefined');
+assert.ok(ctorFour.includes('内部错误'), 'constructor 必须回退 internal「内部错误」');
+console.log('ok  16.2 copy.js constructor falls back to internal（原型键不命中）');
+
+// 16.3 attach 顺序（334 §4.1）：prompt_in_flight=false 时必须清掉残留的
+// 假运行态（此前 onBridgeAttached 先 setRunning(true)、resync 又首行早退）。
+const currentAcpSocket = () =>
+  socketInstances.filter((s) => s.url.includes('/ws/acp')).at(-1);
+resetView();
+state.serverBusy = false;
+vm.setRunning(true);
+assert.equal(state.running, true, '前提：先置一个残留运行态');
+currentAcpSocket().onmessage({
+  data: JSON.stringify({
+    jsonrpc: '2.0',
+    method: '_orz/bridge_attached',
+    params: {
+      session_id: 'deadc0de-1111-2222-3333-444455556666',
+      reused: true,
+      prompt_in_flight: false,
+      session_root: 'D:\\CLI\\orz',
+      cwd: 'D:\\CLI\\orz',
+      pending_permission_count: 0,
+    },
+  }),
+});
+await flush();
+assert.equal(state.running, false, 'prompt_in_flight=false 必须把假运行态清为空闲');
+assert.equal(state.serverBusy, false, 'prompt_in_flight=false 必须清服务端 busy');
+assert.equal(state.sessionId, 'deadc0de-1111-2222-3333-444455556666', 'attach 必须绑定服务端会话');
+console.log('ok  16.3 bridge_attached with prompt_in_flight false clears running（先 resync 再置态）');
+
+// 16.4 绑定根（334 §4.5）：preamble 的 session_root 优先于 child 启动 cwd。
+const ATTACHED_ROOT = 'D:\\CLI\\orz-old-root';
+currentAcpSocket().onmessage({
+  data: JSON.stringify({
+    jsonrpc: '2.0',
+    method: '_orz/bridge_attached',
+    params: {
+      session_id: 'f00dbabe-1111-2222-3333-444455556666',
+      reused: true,
+      prompt_in_flight: false,
+      session_root: ATTACHED_ROOT,
+      cwd: 'D:\\CLI\\orz',
+      pending_permission_count: 0,
+    },
+  }),
+});
+await flush();
+assert.equal(state.sessionRoot, ATTACHED_ROOT, 'session_root 必须用于绑定（不得退回 child cwd）');
+assert.equal(state.sessionId, 'f00dbabe-1111-2222-3333-444455556666');
+console.log('ok  16.4 attached session_root is used for binding（归属根优先于 cwd）');
+
+// 16.5 撤回窗口缺口（334 §4.11）：重放窗口起点（ordered[0].modified_ms）晚于
+// 撤回时刻时，撤回前段不在窗口内——必须跳过该水位的过滤并如实提示，不能把
+// 窗口内更晚的用户事件当 ordinal 目标错裁。
+resetView();
+state.sessionId = 'bcc0ffee-1111-2222-3333-444455556666';
+state.boundSession8 = 'bcc0ffee';
+state.sessionRoot = 'D:\\CLI\\orz';
+state.conversations = [
+  { session8: 'bcc0ffee', session_id: 'bcc0ffee-1111-2222-3333-444455556666', root: 'D:\\CLI\\orz' },
+];
+state.runs = [
+  // 窗口起点（最早 run 的 mtime）晚于撤回时刻 TS_BASE+6s ⇒ 撤回前段缺失。
+  { run_id: 'RUN-bcc0ffee-1', status: 'completed', modified_ms: TS_BASE + 60000 },
+];
+const gapPromptsBefore = state.content.items.length;
+await withFetch(
+  recallEventsApi(
+    { 'RUN-bcc0ffee-1': runOneEvents },
+    [{ ordinal: 2, recalled_at: TS_BASE / 1000 + 6, removed_messages: 3 }],
+  ),
+  async () => {
+    await ui.openUri('conversation://bcc0ffee');
+    await flush();
+  },
+);
+assert.deepEqual(
+  userTexts(),
+  ['旧问题一', '旧问题二'],
+  '窗口缺撤回前段时必须按原样重放（不得跨撤回点错裁）',
+);
+assert.ok(messageTexts().includes('旧回答二'), '窗口不完整时被撤回 tail 保持原样（诚实降级）');
+assert.ok(
+  messageTexts().some((t) => t.includes('journal 窗口缺撤回前段')),
+  '窗口缺口必须给出一次系统行提示',
+);
+assert.ok(state.content.items.length > gapPromptsBefore, '重放事件与提示必须落在内容面');
+console.log('ok  16.5 recall window gap skips filtering（缺撤回前段：跳过过滤＋如实提示）');
+
+// 16.6 334 通知面：`_orz/session_replay` 的「只回放正文」声明与
+// `_orz/bridge_ingress_truncated` 的当前页丢帧都必须上屏（不静默）。
+resetView();
+currentAcpSocket().onmessage({
+  data: JSON.stringify({
+    jsonrpc: '2.0',
+    method: '_orz/session_replay',
+    params: {
+      sessionId: 'f00dbabe-1111-2222-3333-444455556666',
+      mode: 'text_only',
+      tool_calls_skipped: 3,
+      policy: 'load 只回放用户/助手正文',
+    },
+  }),
+});
+await flush(2);
+assert.ok(
+  messageTexts().some((t) => t.includes('跳过工具调用 3 条')),
+  'session_replay 必须说明工具面未回放（跳过条数）',
+);
+currentAcpSocket().onmessage({
+  data: JSON.stringify({
+    jsonrpc: '2.0',
+    method: '_orz/bridge_ingress_truncated',
+    params: { dropped: 'attached_ingress_full', detail: '浏览器接收过慢' },
+  }),
+});
+await flush(2);
+assert.ok(
+  messageTexts().some((t) => t.includes('接收缓冲已满')),
+  'ingress_truncated 必须显式提示当前页丢帧',
+);
+console.log('ok  16.6 session_replay/ingress_truncated 通知如实上屏');
+
+// 16.7 `_orz/session_state` 的 closing/deleted：关闭期禁发、删除即解绑。
+resetView();
+state.sessionId = 'f00dbabe-1111-2222-3333-444455556666';
+state.boundSession8 = 'f00dbabe';
+state.sessionRoot = 'D:\\CLI\\orz';
+currentAcpSocket().onmessage({
+  data: JSON.stringify({
+    jsonrpc: '2.0',
+    method: '_orz/session_state',
+    params: { sessionId: 'f00dbabe-1111-2222-3333-444455556666', state: 'closing', reason: 'user_close' },
+  }),
+});
+await flush(2);
+assert.equal(
+  state.closingSessionId,
+  'f00dbabe-1111-2222-3333-444455556666',
+  'closing 必须置本地关闭门',
+);
+assert.equal(
+  globalThis.document.getElementById('sendBtn').disabled,
+  true,
+  'closing 期间必须禁用发送按钮',
+);
+assert.ok(
+  messageTexts().some((t) => t.includes('正在关闭')),
+  'closing 必须如实提示',
+);
+currentAcpSocket().onmessage({
+  data: JSON.stringify({
+    jsonrpc: '2.0',
+    method: '_orz/session_state',
+    params: { sessionId: 'f00dbabe-1111-2222-3333-444455556666', state: 'deleted', reason: 'delete' },
+  }),
+});
+await flush(2);
+assert.equal(state.sessionId, null, 'deleted 必须解绑本地会话');
+assert.equal(state.boundSession8, null);
+assert.equal(state.closingSessionId, null, '解绑必须清除关闭门');
+assert.equal(
+  globalThis.document.getElementById('sendBtn').disabled,
+  false,
+  '解绑后发送按钮必须恢复',
+);
+assert.ok(
+  messageTexts().some((t) => t.includes('已删除')),
+  'deleted 必须如实提示「已删除」',
+);
+console.log('ok  16.7 session_state closing 禁发＋deleted 解绑');
+
+// 16.8 空闲刷新不弹确认（334 §5.9）：无运行/队列/后台时 beforeunload 放行。
+state.running = false;
+state.serverBusy = false;
+state.supplementQueueDepth = 0;
+state.backgroundTasks = 0;
+let idlePrevented = false;
+const idleUnload = {
+  returnValue: '',
+  preventDefault() {
+    idlePrevented = true;
+  },
+};
+unloadHandlers.at(-1)(idleUnload);
+assert.equal(idlePrevented, false, '空闲刷新不得 preventDefault（旧实现无条件拦截）');
+assert.equal(idleUnload.returnValue, '', '空闲刷新不得设置确认文案');
+console.log('ok  16.8 idle beforeunload 不拦截（仅有运行/队列/后台风险时提示）');
+
+// 16.9 桥重启后的显式续接（334 §4.5）：attach 帧无 session_id 但
+// sessionStorage 有绑定时，必须 initialize + session/load（带归属根），
+// 成功后才 setBinding——不能静默当新 child。
+resetView();
+hooks.setBinding('feedbeef-1111-2222-3333-444455556666', 'D:\\CLI\\orz');
+acpMock.loadHandler = (msg, ws) =>
+  wsRespond(ws, msg.id, { session_id: 'feedbeef-1111-2222-3333-444455556666', status: 'loaded' });
+const loadsBeforeFallback = methodCalls('session/load').length;
+currentAcpSocket().onmessage({
+  data: JSON.stringify({
+    jsonrpc: '2.0',
+    method: '_orz/bridge_attached',
+    params: {
+      session_id: null,
+      reused: false,
+      prompt_in_flight: false,
+      keepalive_expired: false,
+      cwd: 'D:\\CLI\\orz',
+    },
+  }),
+});
+await flush(12);
+const fallbackLoad = methodCalls('session/load').at(-1);
+assert.equal(
+  methodCalls('session/load').length,
+  loadsBeforeFallback + 1,
+  'attach 无会话时必须显式 session/load 续接',
+);
+assert.equal(
+  fallbackLoad?.params?.sessionId,
+  'feedbeef-1111-2222-3333-444455556666',
+  'session/load 必须带 sessionStorage 记住的会话 id',
+);
+assert.equal(fallbackLoad?.params?.cwd, 'D:\\CLI\\orz', 'session/load 必须带归属根（不是猜的新 cwd）');
+assert.equal(state.sessionId, 'feedbeef-1111-2222-3333-444455556666', '续接成功后必须绑定该会话');
+console.log('ok  16.9 attach 无会话：按 sessionStorage 显式 load 续接（带归属根）');
+
+// 16.10 工作区切换（334 §4.5/§5.5）：成功切换后 WS 必须重连到新根，旧绑定
+// 会话解绑并留在旧工作区（可回看）；409 时显示服务端 message/hint。
+resetView();
+state.workspaceCwd = 'D:\\CLI\\orz';
+hooks.setBinding('feedbeef-1111-2222-3333-444455556666', 'D:\\CLI\\orz');
+const socketsBeforeSwitch = socketInstances.length;
+await withFetch(
+  fallbackApi({
+    '/api/workspace/switch': {
+      ok: true,
+      cwd: 'D:\\CLI\\orz2',
+      trusted_workspaces: [{ path: 'D:\\CLI\\orz2' }],
+      recent_workspaces: ['D:\\CLI\\orz', 'D:\\CLI\\orz2'],
+    },
+  }),
+  async () => {
+    await ui.openUri('workspace://switch/D%3A%5CCLI%5Corz2');
+    await flush();
+  },
+);
+const switchSocket = socketInstances.slice(socketsBeforeSwitch).find((s) => s.url.includes('/ws/acp'));
+assert.ok(switchSocket, '工作区切换必须重连 WS（不得继续用旧槽）');
+assert.equal(state.workspaceCwd, 'D:\\CLI\\orz2', '切换后 cwd 必须更新');
+assert.equal(state.sessionId, null, '切换后旧绑定会话必须解绑');
+assert.equal(state.sessionRoot, null, '切换后不得沿用旧会话根');
+assert.equal(state.nav.current, 'workspace://live', '切换后回归实时视图');
+assert.equal(memoryStorage.has('orz.sessionId'), false, '切换后旧绑定不得留在 sessionStorage');
+assert.ok(
+  messageTexts().some((t) => t.includes('本对话不迁移') && t.includes('D:\\CLI\\orz')),
+  '必须提示旧会话仍在旧工作区（可从探索器恢复）',
+);
+// 409：服务端有 run 在跑——显示 error.message 与同义 hint。
+await withFetch(
+  async (url, init) => {
+    if (String(url).includes('/api/workspace/switch')) {
+      return {
+        ok: false,
+        status: 409,
+        json: async () => ({
+          error: {
+            code: 'session_busy',
+            class: 'session',
+            message: '有运行在进行，不能切换工作区。',
+            hint: '等本轮结束或点「停止」后再切换；切换会改变新会话的归属根。',
+          },
+        }),
+      };
+    }
+    return jsonResponse({ runs: [], conversations: [], archives: [] });
+  },
+  async () => {
+    await ui.openUri('workspace://switch/D%3A%5CCLI%5Corz');
+    await flush();
+  },
+);
+assert.ok(connBanner.textContent.includes('有运行在进行'), '409 必须显示服务端 message');
+assert.ok(connBanner.textContent.includes('等本轮结束'), '409 必须显示可行动 hint');
+console.log('ok  16.10 工作区切换：重连新根＋旧会话留旧区＋409 显示 message/hint');
 
 console.log('\nfrontend smoke: 全部通过');
 process.exit(0);

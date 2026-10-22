@@ -31,7 +31,7 @@ pub fn context_summary(cwd: &Path, session8: &str) -> Result<Value, String> {
         return Err("无效的会话标识（session8 须为 8 位小写十六进制）".to_string());
     }
     let mut notes: Vec<String> = vec![
-        "上下文占用是消息面 chars/2 的近似估算（与 orz-loop 估算口径同源，不是模型 tokenizer 计数）；压缩读数为最近 run journal 的机械事件事实。"
+        "上下文占用是消息面 chars/2 的近似估算（与 orz-loop `estimate_messages_tokens` 同字段、同逐条除法：content＋reasoning_content＋tool_calls 的 name/arguments；不含系统 preamble，不是模型 tokenizer 计数）；压缩读数为最近 run journal 的机械事件事实。"
             .to_string(),
     ];
 
@@ -41,19 +41,19 @@ pub fn context_summary(cwd: &Path, session8: &str) -> Result<Value, String> {
         .and_then(|s| s.get("messages"))
         .and_then(Value::as_array);
     let message_count = messages.map(|m| m.len() as u64);
-    let chars: u64 = messages
+    // 334（§4.7）：镜 orz-loop `compact::estimate_message_tokens` 的字段与
+    // **逐条** `/2`。旧实现只数 content 且整体 `/2`，工具密集/推理密集会话
+    // 会低报；声明「同口径」不成立。这里保持零依赖镜像（orz-web 不 import
+    // orz-loop），字段变化时由单测对拍提醒。
+    let (chars, estimated_tokens) = messages
         .map(|m| {
             m.iter()
-                .map(|msg| {
-                    msg.get("content")
-                        .and_then(Value::as_str)
-                        .map(|c| c.chars().count() as u64)
-                        .unwrap_or(0)
+                .map(estimate_message_tokens_json)
+                .fold((0u64, 0u64), |(chars, tokens), (c, t)| {
+                    (chars.saturating_add(c), tokens.saturating_add(t))
                 })
-                .sum()
         })
-        .unwrap_or(0);
-    let estimated_tokens = chars / 2;
+        .unwrap_or((0, 0));
     let watermarks = sidecar
         .as_ref()
         .and_then(|s| s.get("context_scale_notified"))
@@ -91,7 +91,7 @@ pub fn context_summary(cwd: &Path, session8: &str) -> Result<Value, String> {
         "messages": message_count,
         "chars": chars,
         "estimated_tokens": estimated_tokens,
-        "estimate_method": "chars/2",
+        "estimate_method": "chars/2 per message (content+reasoning_content+tool_calls name/arguments; excludes system preamble)",
         "watermarks": watermarks,
         "last_compaction": last_compaction,
         "compaction_archives": archives,
@@ -99,6 +99,33 @@ pub fn context_summary(cwd: &Path, session8: &str) -> Result<Value, String> {
         "journal_truncated": journal_truncated,
         "notes": notes,
     }))
+}
+
+/// 单条消息的 `(计数字符, 估算 token)`——与 `orz-loop::compact::
+/// estimate_message_tokens` 逐字段一致：content ＋ reasoning_content ＋
+/// 每个 tool_call 的 name/arguments JSON；**每条** chars/2 后求和。
+fn estimate_message_tokens_json(message: &Value) -> (u64, u64) {
+    let mut chars = message
+        .get("content")
+        .and_then(Value::as_str)
+        .map(|c| c.chars().count() as u64)
+        .unwrap_or(0);
+    if let Some(reasoning) = message.get("reasoning_content").and_then(Value::as_str) {
+        chars = chars.saturating_add(reasoning.chars().count() as u64);
+    }
+    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+        for call in tool_calls {
+            if let Some(name) = call.get("name").and_then(Value::as_str) {
+                chars = chars.saturating_add(name.chars().count() as u64);
+            }
+            // 与 orz-loop 的 `serde_json::to_string(&tc.arguments)` 同形：
+            // 缺 arguments 时按 `null` 计 4 字符，而不是跳过。
+            let args = call.get("arguments").cloned().unwrap_or(Value::Null);
+            let rendered = serde_json::to_string(&args).unwrap_or_default();
+            chars = chars.saturating_add(rendered.chars().count() as u64);
+        }
+    }
+    (chars, chars / 2)
 }
 
 fn session8_ok(session8: &str) -> bool {
@@ -350,7 +377,14 @@ mod tests {
         assert_eq!(summary["messages"], 2);
         assert_eq!(summary["chars"], 12);
         assert_eq!(summary["estimated_tokens"], 6);
-        assert_eq!(summary["estimate_method"], "chars/2");
+        assert!(
+            summary["estimate_method"]
+                .as_str()
+                .unwrap()
+                .starts_with("chars/2 per message"),
+            "{}",
+            summary["estimate_method"]
+        );
         assert_eq!(summary["watermarks"].as_array().unwrap().len(), 2);
         assert_eq!(summary["last_compaction"]["trigger_tokens"], 900000);
         assert_eq!(summary["last_compaction"]["estimated_tokens_after"], 420000);
@@ -370,6 +404,30 @@ mod tests {
         assert_eq!(summary["compaction_archives"], 0);
         assert!(!summary["notes"].as_array().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    /// 334（§4.7）：与 orz-loop 同字段、**逐条** chars/2——reasoning 与
+    /// tool_calls 都计入；整体 /2 会产生 5 vs 4 的差。
+    #[test]
+    fn estimate_matches_loop_fields_and_per_message_division() {
+        let first = json!({
+            "role": "assistant",
+            "content": "12345",
+            "reasoning_content": "abcde",
+            "tool_calls": [{"name": "read", "arguments": {"path": "x"}, "call_id": "c1"}]
+        });
+        let second = json!({"role": "user", "content": "12345"});
+        let (chars1, tokens1) = estimate_message_tokens_json(&first);
+        // 5 content + 5 reasoning + 4 name + `{"path":"x"}` 12 = 26 → 13。
+        assert_eq!(chars1, 26);
+        assert_eq!(tokens1, 13);
+        let (chars2, tokens2) = estimate_message_tokens_json(&second);
+        assert_eq!((chars2, tokens2), (5, 2));
+        // 逐条 /2：13 + 2 + 2 = 17；若整体求和再 /2 则是 (26+5+5)/2 = 18。
+        let (c3, t3) = estimate_message_tokens_json(&json!({"content": "12345"}));
+        assert_eq!((c3, t3), (5, 2));
+        assert_eq!(tokens1 + t3 + tokens2, 17);
+        assert_eq!((chars1 + c3 + chars2) / 2, 18);
     }
 
     #[test]

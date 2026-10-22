@@ -10,20 +10,31 @@ import { describeError } from './copy.js';
 
 let ws = null;
 let nextId = 1;
+let lastToken = '';
+// 334（§5.9）：主动 close（工作区切换/重连）不得触发 closed 业务回调——
+// 每个 socket 单独标记，避免旧 socket 的迟到 onclose 误伤新连接。
+const intentionalSockets = new WeakSet();
+let connectReject = null;
 const pending = new Map(); // id -> {resolve, reject}
 const handlers = {
   update: null, // (sessionId, update) => void
   permission: null, // (request) => Promise<response>
-  closed: null, // () => void
+  // 334（§5.9）：参数是四要素对象 {code,class,hint,evidence}——调用方直接
+  // 交给 describeError；主动 close 不触发。
+  closed: null, // (facts) => void
   open: null, // () => void
   // 329（2026-10-21）：桥的 attach 前置帧——刷新/切换视图后重连到仍在跑的
-  // 会话（`{session_id, reused, prompt_in_flight, grace_secs}`）；null 表示
-  // 新 child（无会话可绑）。
+  // 会话（`{session_id, reused, prompt_in_flight, grace_secs, session_root}`）；
+  // null 表示新 child（无会话可绑）。
   attached: null, // (params) => void
-  // 329：桥主动通知（child 退出 / 断线 backlog 截断）——如实上屏，不静默。
-  notice: null, // (kind) => void
+  // 329：桥主动通知（child 退出 / 断线 backlog 截断 / 334 attached ingress
+  // 截断）——如实上屏，不静默。
+  notice: null, // (kind, params) => void
+  // 334（§4.11）：load 回放口径声明 `_orz/session_replay`
+  // （{sessionId,mode,tool_calls_skipped,policy}）。
+  replay: null, // (params) => void
   // 0dk S2（332）：会话状态转移通知 `_orz/session_state`
-  // （{sessionId,state,reason}）——关闭/驱逐的服务端事实。
+  // （{sessionId,state,reason}）——关闭/驱逐/删除的服务端事实。
   state: null, // (params) => void
 };
 
@@ -62,22 +73,80 @@ export function on(evt, fn) {
   handlers[evt] = fn;
 }
 
-export function connect(token) {
+function releasePending(message) {
+  for (const p of pending.values()) p.reject(new Error(message));
+  pending.clear();
+}
+
+/* 334（§5.9）：主动关闭——不触发重连/closed 业务回调，但必须结算在途
+ * 请求，避免调用方永远悬挂（重连时旧 prompt 已经不可能有响应）。 */
+export function close() {
+  const sock = ws;
+  ws = null;
+  if (connectReject) {
+    const reject = connectReject;
+    connectReject = null;
+    reject(new Error('桥接已关闭'));
+  }
+  releasePending('桥接已关闭');
+  if (!sock) return;
+  intentionalSockets.add(sock);
+  try {
+    sock.close();
+  } catch {
+    /* 已关闭/浏览器差异：目标已达成。 */
+  }
+}
+
+export function reconnect(token, root, sessionId) {
+  close();
+  return connect(token, root, sessionId);
+}
+
+/* 334：记住令牌供页面内重连（main.js 也自行持有 accessToken；这里保留
+ * 模块级副本，供不持有令牌的调用方兜底）。 */
+export function rememberToken(token) {
+  lastToken = token || '';
+  return lastToken;
+}
+
+export function rememberedToken() {
+  return lastToken;
+}
+
+export function connect(token, root, sessionId) {
+  if (ws) close();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  lastToken = token || '';
+  // 334（§4.5）：root＝归属工作区根（刷新页把旧会话的根带回来）；session
+  // 让桥在保活窗口内直接绑定仍在跑的会话。两者缺省时不追加参数（兼容旧桥）。
+  let url = `${proto}//${location.host}/ws/acp?token=${encodeURIComponent(token)}`;
+  if (root) url += `&root=${encodeURIComponent(root)}`;
+  if (sessionId) url += `&session=${encodeURIComponent(sessionId)}`;
   return new Promise((resolve, reject) => {
     let settled = false;
-    ws = new WebSocket(`${proto}//${location.host}/ws/acp?token=${encodeURIComponent(token)}`);
-    ws.onopen = () => {
+    let opened = false;
+    const socket = new WebSocket(url);
+    ws = socket;
+    connectReject = (err) => {
+      if (settled) return;
       settled = true;
+      connectReject = null;
+      reject(err);
+    };
+    socket.onopen = () => {
+      settled = true;
+      opened = true;
+      connectReject = null;
       handlers.open?.();
       resolve();
     };
-    ws.onerror = () => {
+    socket.onerror = () => {
       if (!settled) {
         // 四要素（0dk S2 §9）：发生了什么＋为什么＋下一步＋证据。
         // 浏览器的 WebSocket 不暴露 HTTP 409 响应体，故占用/令牌两类原因
         // 合并成一条可行动文案；具体 reason 记在桥日志。
-        reject(
+        connectReject?.(
           new Error(
             '连不上本地桥：另一个 orz 窗口可能正占用此工作区，或页面令牌已过期。' +
               '→ 关闭其他 orz 窗口后刷新本页；仍失败请重启 orz web（证据：ws /ws/acp）',
@@ -85,12 +154,33 @@ export function connect(token) {
         );
       }
     };
-    ws.onclose = () => {
-      pending.forEach((p) => p.reject(new Error('桥接已关闭')));
-      pending.clear();
-      handlers.closed?.();
+    socket.onclose = () => {
+      if (intentionalSockets.has(socket)) {
+        intentionalSockets.delete(socket);
+        return;
+      }
+      // 已被新连接取代的旧 socket：不把它的关闭当成业务事实。
+      if (ws !== socket) return;
+      ws = null;
+      const wasOpened = opened;
+      if (!settled) {
+        settled = true;
+        connectReject = null;
+        reject(new Error('桥接已关闭'));
+      }
+      releasePending('桥接已关闭');
+      // 握手期失败（从未 open）只结算 connect Promise，不算「已建立的连接
+      // 断开」——否则重连失败会被误报为一次业务 closed，重复退避。
+      if (!wasOpened) return;
+      handlers.closed?.({
+        code: 'connection_closed',
+        class: 'connection',
+        hint: '刷新页面或在保活窗口内重连',
+        evidence: 'ws /ws/acp',
+      });
     };
-    ws.onmessage = (ev) => {
+    socket.onmessage = (ev) => {
+      if (ws !== socket) return;
       let msg;
       try {
         msg = JSON.parse(ev.data);
@@ -115,6 +205,12 @@ export function connect(token) {
         handlers.notice?.('child_exited');
       } else if (msg.method === '_orz/bridge_backlog_truncated') {
         handlers.notice?.('backlog_truncated');
+      } else if (msg.method === '_orz/bridge_ingress_truncated') {
+        // 334（§4.12）：attached 期有界接收缓冲溢出——当前页丢帧。
+        handlers.notice?.('ingress_truncated');
+      } else if (msg.method === '_orz/session_replay') {
+        // 334（§4.11）：load 只回放正文的口径声明（工具面不回放）。
+        handlers.replay?.(msg.params || {});
       } else if (msg.method === '_orz/session_state') {
         handlers.state?.(msg.params || {});
       } else if (msg.method === 'session/request_permission') {
@@ -141,7 +237,7 @@ export function connect(token) {
 }
 
 export function isConnected() {
-  return ws && ws.readyState === WebSocket.OPEN;
+  return !!ws && ws.readyState === WebSocket.OPEN;
 }
 
 export async function initialize() {
