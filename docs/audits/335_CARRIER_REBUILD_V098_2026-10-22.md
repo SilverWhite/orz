@@ -1,6 +1,6 @@
 # 335 批：0.9.8 双平台载体重建＋Windows 换装（2026-10-22）
 
-> **用户令**：「请进行重建吧」。**本批**＝0.9.7→0.9.8 代窗口双平台重建（沿 320/327 形态：版本 bump→Windows release 构建→Linux musl 容器构建→ACAF 重 provision→双平台换装/清单→冒烟与 334 新面活体核证→落账）。**零源码语义改动**（仅版本号两行）；**未推送、未发行 GitHub Release、未跑 0dn S2 真机十条**；计数 64 不变。
+> **用户令**：「请进行重建吧」，随后「请先进行推送吧，安装包先不发行」。**本批**＝0.9.7→0.9.8 代窗口双平台重建（沿 320/327 形态：版本 bump→Windows release 构建→Linux musl 容器构建→ACAF 重 provision→双平台换装/清单→冒烟与 334 新面活体核证→落账→推送）。**零源码语义改动**（仅版本号两行）；**已推送父仓 `main`＋orz `cli/feat/fusion-architecture`；未建 tag、未发 GitHub Release、未跑 0dn S2 真机十条**；计数 64 不变。
 
 ## §0 结论速览
 
@@ -18,6 +18,7 @@
 | 冒烟 | WIN `RUN-CLI-6ad9eb66` rc0（11 events，`run_finished/completed`，swept 前轮＋归档 941 B）；LIN alpine `6ad9ed53→6ad9ed5b`（swept＋归档 3323 B）＋bookworm `6ad9ed64` 均 rc0 |
 | 磁盘 | 构建前 D: **6.13 GB free**；清 `target/debug/incremental` **10.12 GB**；构建后清 `target/debug` 缓存 **55.11 GB**；终态 **61.84 GB free** |
 | 门禁 | `check_repository.py` 提交后 **valid:true / error_count:0 / warning_count:4**；`orz_source_manifest.sha256` **1494 条** `--check` valid |
+| 推送 | 父仓 `main` `827ae53e..baf7260f`、orz `cli/feat/fusion-architecture` `4bf16094..c3faec70` **推送成功**；远端 ref 回读一致；**无 `v0.9.8` tag、无 Release** |
 
 ## §1 版本与源冻结
 
@@ -108,12 +109,13 @@
 - 本档：`docs/audits/335_CARRIER_REBUILD_V098_2026-10-22.md`。
 - orz：bump 提交 `c3faec70`（父仓 pin 随本档提交）。
 - 父仓：本档＋索引 v4.306＋TODO/BACKLOG 指针＋`orz_source_manifest.sha256`（1494 条）＋`orz` 子模块指针。
-- 未推送／未建 tag／未发 Release；README 发布面保持 v0.9.7 对应说明（发布批另做）。
+- **已推送**：父仓 `main` → `baf7260f`；orz `cli/feat/fusion-architecture` → `c3faec70`；远端 ref 回读一致。
+- **未建 tag／未发 Release**（用户令「安装包先不发行」）；README 发布面保持 v0.9.7 对应说明（发布批另做）。
 - 计数 64 不变；334 修复批仍 `AUTH-334-FIX-328-333`，本批新增 `AUTH-335-REBUILD-V098`（`reference`）。
 
 ## §8 边界与如实记
 
-1. **未推送/未发行**：本批只完成本地双平台重建与 Windows 换装；GitHub Release／tag／安装包打包未做。
+1. **已推送但未发行**：父仓 `main` 与 orz `cli` 分支已推送；GitHub Release／tag／安装包打包未做（按用户令「安装包先不发行」）。
 2. **0dn S2 未跑**：真机十条场景仍待 0.9.8 载体上执行；本批只证「可构建、可换装、可启动、334 新面在体」。
 3. **Linux 未换装到评测宿主机位**：产物在 `D:/tb-eval/orz-linux` 与 `/target` 缓存；评测容器/宿主换装另批。
 4. **版本偏斜探针的旧载体边界**：0.9.7 无 `--version`，3 s 超时后 `child_version=null / version_skew=null`（不妄判）；0.9.9 假探针用于证明 true 分支。
