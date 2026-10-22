@@ -425,6 +425,10 @@ async function submitPrompt(text, isRetry = false) {
     const resp = await acp.sessionPrompt(sessionId, text);
     if (currentRunSessionId === sessionId) currentRunSessionId = null;
     if (!state.serverBusy) vm.setRunning(false);
+    // 336（0dn S2）：极短回合（<1 s）可能整轮落在 1 s 跟随轮询之间，
+    // 尾随从未挂上 ⇒ 用户卡/工具行/终态事实全缺（真机 background 场景
+    // 实证）。prompt 返回后补一次清单刷新，让 journal 尾从 0 重放。
+    refreshExplorerData().catch(() => {});
     renderStatus();
     renderToolbar();
     void resp;
@@ -440,6 +444,8 @@ async function submitPrompt(text, isRetry = false) {
     // fail-closed 只留 run_preflight）——状态栏标签须就地回「空闲」，
     // 不得残留「预检/运行中」。
     vm.setRunState(state.running ? '运行中' : '空闲', true);
+    // 336（0dn S2）：失败/极短回合同样补一次尾随（journal 可能已有终态）。
+    refreshExplorerData().catch(() => {});
     // 信任窗（批七）：桥链为非交互（is_interactive=false），未授信工作区
     // 被 fail-closed 拒绝且没有 TUI 那样的信任窗——在此补上同语义流程：
     // 确认 → 桥授信（POST /api/trust）→ 自动重发一次。
@@ -1895,6 +1901,8 @@ acp.on('closed', (facts) => {
 acp.on('open', () => {
   reconnectAttempt = 0;
   flash('桥接已连接');
+  // 334：偏斜横幅必须压过连接 flash（否则 boot 后 4 s 内消失）。
+  renderVersionSkewBanner();
 });
 
 /* 329（2026-10-21）：会话保活——刷新/断线重连后的 attach 前置帧。
@@ -2116,6 +2124,23 @@ async function onBridgeAttached(params) {
 
 /* ── 启动 ── */
 
+/* 334（§3.1）：版本偏斜横幅是**持久**事实，不能被连接成功的 4 s flash
+ * 覆盖（333 落码后真机 S2 实测：boot 横幅先出，WS open 的「桥接已连接」
+ * 把它顶掉）。boot 与每次 open 都重绘；有偏斜时取消 flash 的自动隐藏。 */
+function renderVersionSkewBanner() {
+  if (state.versionSkew !== true) return;
+  const probeNote =
+    state.childProbe && state.childProbe !== 'ok'
+      ? `child 探针失败（${state.childProbe}）：磁盘二进制版本未能读出，偏斜未能确认；`
+      : '';
+  clearTimeout(flash._t);
+  connBanner.hidden = false;
+  connBanner.textContent =
+    `版本偏斜：桥 ${state.bridgeVersion || '未知'} ≠ agent 子进程 ${state.childVersion || '未知'}。` +
+    probeNote +
+    '→ 用同一版本重新换装后重启 orz web；混跑可能造成协议/字段不一致（证据：/api/boot version_skew）。';
+}
+
 /* 333（2026-10-21，S12）：boot 事实落地——工作区清单＋桥/child 版本偏斜。
  * 独立函数便于单测/冒烟直接注入 boot 载荷（不重跑整条连接链）。 */
 function applyBootFacts(b) {
@@ -2130,15 +2155,11 @@ function applyBootFacts(b) {
   if (facts.version_skew === true) {
     // 334（§3.1）：桥版本与磁盘 child 版本不一致时必须同时交代探针结果
     // ——探针失败时 child_version 为 null，「偏斜」的证据也随之弱化。
+    renderVersionSkewBanner();
     const probeNote =
       facts.child_probe && facts.child_probe !== 'ok'
         ? `child 探针失败（${facts.child_probe}）：磁盘二进制版本未能读出，偏斜未能确认；`
         : '';
-    connBanner.hidden = false;
-    connBanner.textContent =
-      `版本偏斜：桥 ${facts.bridge_version || '未知'} ≠ agent 子进程 ${facts.child_version || '未知'}。` +
-      probeNote +
-      '→ 用同一版本重新换装后重启 orz web；混跑可能造成协议/字段不一致（证据：/api/boot version_skew）。';
     vm.addSystemMessage(
       `（版本偏斜：桥 ${facts.bridge_version || '?'}，agent ${facts.child_version || '?'}${
         probeNote ? `；${probeNote}` : ''
