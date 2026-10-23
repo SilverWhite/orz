@@ -3,7 +3,7 @@
 # orz — English README (expanded edition)
 
 > LLM-assisted translation; the Chinese originals are authoritative. Corrections welcome.
-> Source: [`/README.md`](../../README.md) (Chinese, authoritative), v0.9.8 face, 2026-10-22.
+> Source: [`/README.md`](../../README.md) (Chinese, authoritative), v0.9.10 face, 2026-10-23.
 > **Expanded edition** (user adjudication 2026-10-02): the two editions mirror each other in
 > content; this one is expanded in *role*, not in coverage — it doubles as the English-language
 > umbrella stand-in for the project's design authorities
@@ -29,13 +29,13 @@ Configure Windows and Linux as follows:
 
 | Step | Windows (PowerShell) | Linux (sh) |
 |---|---|---|
-| 1. Unpack | Put `orz.exe`, `orz-signer.exe`, `orz-acaf-provision.exe` into one directory (e.g. `C:\orz`). | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.8-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
+| 1. Unpack | Put `orz.exe`, `orz-signer.exe`, `orz-acaf-provision.exe` into one directory (e.g. `C:\orz`). | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.10-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
 | 2. Configure the API key | Store it in Windows Credential Manager (Generic, target name `orz-deepseek/agent`; once only):<br>`cmdkey /generic:orz-deepseek/agent /user:agent /pass:YOUR_DEEPSEEK_API_KEY` | Use an environment variable (the explicit exception to the Windows Credential Manager channel):<br>`export ORZ_DEEPSEEK_API_KEY=YOUR_DEEPSEEK_API_KEY` |
 | 3. Initialize security signing (one-time) | `.\orz-acaf-provision.exe "$env:USERPROFILE\.orz-acaf\keystore" "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br><br>ACAF is fail-closed by default: unconfigured, it refuses to run (the process starts; runs are refused). | `./orz-acaf-provision "$HOME/.orz-acaf/keystore" "$HOME/.orz-acaf/signer-manifest.json"` |
 | 4. Set startup environment | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
 | 5. Run | `.\orz.exe` (interactive TUI)<br>`.\orz.exe -p "your task" --real` (headless)<br>`.\orz.exe web` (Web workbench; prints the local token-bearing URL) | `./orz` (interactive TUI)<br>`./orz -p "your task" --real` (headless)<br>`./orz web` (Web workbench; prints the local token-bearing URL) |
 
-Release notes and integrity verification live on GitHub Releases (latest [v0.9.8](https://github.com/SilverWhite/orz/releases/tag/v0.9.8), dual-platform packages + `SHA256SUMS`); the 0.1.0–0.5.1 trial packages are under [`releases/`](../../releases/).
+Release notes and integrity verification live on GitHub Releases (latest [v0.9.10](https://github.com/SilverWhite/orz/releases/tag/v0.9.10), dual-platform packages + `SHA256SUMS`); the 0.1.0–0.5.1 trial packages are under [`releases/`](../../releases/).
 
 ### Common entry points
 
@@ -116,15 +116,13 @@ There is no sandbox between the model and the host by default, and deliberately 
 
 Known boundaries: no defense against a compromised signer, same-user malicious processes, kernel-level compromise, or a malicious model service; a ticket proves provenance, not that a command is wise; command review is best-effort lexical matching — variable expansion, aliases, in-script commands, `.NET`/interpreter calls, encoded payloads, and Windows 8.3 short names / junctions / UNC uncreated faces are still not guaranteed; the maintenance CLI now has the bridge-injected `ORZ_MAINTENANCE_TICKET` gate plus the command-surface block, while a TTY confirmation is not implemented (`0dl` remaining); the `.gsa` shell read surface follows the read-open policy. The real machine runs without a sandbox and permissions default to yolo auto-approval.
 
-## 0.9.8 update (2026-10-22)
+## 0.9.10 update (2026-10-23)
 
-- **Session lifecycle**: the Web workbench supports close/delete/archive/restore; the session table is bounded at 32 (LRU evicts idle sessions only); `_orz/session_close|state|delete` private extensions; prompts after close are rejected with `-32010` and the four-part error; deletion writes a `.deleted` tombstone and never resurrects the session.
-- **Refresh and disconnect**: the bridge keeps the agent child alive per workspace (default 30 minutes, `ORZ_WEB_KEEPALIVE_SECS`); refresh/short disconnects re-attach to the same session; a second tab gets 409 with an occupied-workspace message; keepalive expiry is stated explicitly.
-- **Rewind and mid-run supplements**: `/rewind` truncates the user message and returns the original text to the input (audited via `recall_log`; journal history is not rolled back); input during a run enters a session-level supplement queue and is delivered at the next model-call boundary without interrupting the current turn.
-- **Web detail faces**: delivery-status panel (`/api/delivery`), context readout (`/api/context`, chars/2 approximation), approval-displacement notice, background task "model-visible only" counter, persistent version-skew banner, `orz doctor` report, `orz --version`.
-- **Reliability/security**: CLI deletion goes through the close/lease gate; bridge client/agent request ids are split, unanswered approvals are replayed across attach, and attached ingress is bounded; cross-root resolution and `closing` are observable; errors use the unified `code/class/hint/evidence` shape.
-- **Real-machine regression**: the ten 0dn S2 scenarios (refresh reconnect, two-tab 409, rewind-and-resend, delete-no-resurrection, keepalive expiry, delivery panel, approval concurrency, context readout, background visibility, version skew) all pass 10/10 on 0.9.8.
-- **Rebuild**: dual-platform 0.9.8 carriers; Windows install swap + ACAF re-provision; Linux static-pie trio.
+- **Post-restore replay order**: runs within a conversation are stably ordered by numeric sequence instead of archive-flattened file mtimes; live-tail selection, markers, and “resume and continue” agree on the newest run.
+- **Visible closed state**: the Web conversation list reads the authoritative `.closed` marker, and Explorer separates active, closed, and archived conversations; closed conversations remain available for read-only review and explicit resume.
+- **Legacy conversation identity**: when a historical conversation stores only an 8-character id, migration is allowed only if both orientation and activation sidecars point to the same full UUID; missing or conflicting evidence fails closed.
+- **Real session switching**: ORZ loads the target first, changes the frontend binding, then releases the old host session and lease with `close(switch)`; a failed load leaves the old binding intact.
+- **Rebuild and verification**: dual-platform `0.9.10` carriers; Windows install swap and ACAF re-provision; Linux static PIE; live bridge and child versions match.
 
 ## Developer entry points
 
