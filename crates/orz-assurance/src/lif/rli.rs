@@ -702,23 +702,32 @@ impl RliChannel {
     /// 闭式自由演化单点求值（不改状态）：把当前 `(u, v)` 按设计 §2 精确
     /// 推进 `dt`，返回 `(u₁, v₁, E₁)`，其中复极点分支
     /// `E₁ = φ·√(A² + B²)`、实极点分支 `E₁ = φ·(|A|·cosh + |B'|·sinh)`
-    /// 为解析包络。与 [`Self::advance`] 共用同一公式（同一次 φ/C/S 或
-    /// φ/cosh/sinh 计算），保证前推读数与后续实际推进逐字段一致（半群性）。
+    /// 为解析包络。与 [`Self::advance`] 共用同一公式，保证前推读数与后续
+    /// 实际推进逐字段一致（半群性）。
+    ///
+    /// 实极点分支按**两根指数形式**求值（`φ·cosh(μΔt) = (e^{r₁Δt} +
+    /// e^{r₂Δt})/2`，`φ·sinh(μΔt) = (e^{r₁Δt} − e^{r₂Δt})/2`，其中
+    /// `r₁ = μ − ζω ≤ 0`、`r₂ = −μ − ζω < 0` 为两特征根）：指数恒 ≤ 0，
+    /// 长间隔不再溢出。真机事故（2026-10-23，c23e0aaa／51da03ea 侧车毒化）
+    /// 根因正是旧 φ/cosh/sinh 形式——隔夜续跑 `μΔt ≳ 710` 时 `cosh →
+    /// inf`、`φ → 0`，`0·inf = NaN` 随 serde_json 落成 `null`，读取端拒绝
+    /// 整份侧车，恢复报「会话不存在」。两根形式在同点逐位等价（代数恒等）。
     fn free_evolution_at(&self, dt: f64) -> (f64, f64, f64) {
         let zeta_w = self.zeta * self.omega;
-        let phi = libm::exp(-zeta_w * dt);
         if self.is_overdamped() {
             let mu = self.mu();
-            let ch = libm::cosh(mu * dt);
-            let sh = libm::sinh(mu * dt);
+            let e_slow = libm::exp((mu - zeta_w) * dt);
+            let e_fast = libm::exp((-mu - zeta_w) * dt);
             let a = self.u;
             let b = (self.v + zeta_w * self.u) / mu;
+            let c = (zeta_w * self.v + self.omega * self.omega * a) / mu;
             return (
-                phi * (a * ch + b * sh),
-                phi * (self.v * ch - (zeta_w * self.v + self.omega * self.omega * a) / mu * sh),
-                phi * (a.abs() * ch + b.abs() * sh),
+                ((a + b) * e_slow + (a - b) * e_fast) * 0.5,
+                ((self.v - c) * e_slow + (self.v + c) * e_fast) * 0.5,
+                ((a.abs() + b.abs()) * e_slow + (a.abs() - b.abs()) * e_fast) * 0.5,
             );
         }
+        let phi = libm::exp(-zeta_w * dt);
         let wd = self.omega_d();
         let c = libm::cos(wd * dt);
         let s = libm::sin(wd * dt);
@@ -2555,7 +2564,11 @@ pub struct RliDomainRow {
     pub dwell_rounds: u64,
     /// 判决输入：RLI err 通道水平。
     pub u_err: f64,
-    /// 判决输入：RLI prog 通道水平。
+    /// 判决输入：RLI prog 通道水平。`null` 容忍见 [`f64_null_as_zero`]
+    /// （0.9.10 及更早溢出毒化：prog 过阻尼闭式解长间隔 → NaN → `null`；
+    /// 真机 c23e0aaa／51da03ea 的域行 34 处。读作 0 ＝ 长间隔衰减极限，
+    /// 不混同 FR-7 的 Option 语义面）。
+    #[serde(deserialize_with = "f64_null_as_zero")]
     pub u_prog: f64,
     /// 判决输入（0am 改造补充项②）：err 通道变化率 v——压力轴第二项的一半
     /// （v > 0 ＝ 正在恶化）。
@@ -3129,10 +3142,14 @@ pub struct RliChannelSnapshot {
     pub kind: ChannelKind,
     pub omega: f64,
     pub zeta: f64,
+    /// `null` 容忍见 [`f64_null_as_zero`]（0.9.10 及更早的溢出毒化读取修复）。
+    #[serde(deserialize_with = "f64_null_as_zero")]
     pub u: f64,
+    #[serde(deserialize_with = "f64_null_as_zero")]
     pub v: f64,
     pub theta: f64,
     pub rhythm: f64,
+    #[serde(deserialize_with = "f64_null_as_zero")]
     pub envelope: f64,
     #[serde(default)]
     pub last_step_t: Option<f64>,
@@ -3164,6 +3181,19 @@ fn is_zero_u64(v: &u64) -> bool {
 /// （宁可多报一次也不吞；域切换会重武装）。
 fn is_true_default() -> bool {
     true
+}
+
+/// 读侧容忍（2026-10-23 真机修复）：0.9.10 及更早的 φ/cosh/sinh 闭式在过
+/// 阻尼通道跨长间隔推进时溢出（`cosh(μΔt)→inf`、`φ→0`，`0·inf = NaN`），
+/// serde_json 把 NaN/±inf 落成 `null`——毒化侧车曾被读取端整份拒绝（恢复
+/// 报「会话不存在」）。此处把 `null` 读作 `0.0`：长间隔自由演化的数学极限
+/// 恰为静止水平 0（新增代码已改两根指数形式，不再产生 NaN），这不是虚构
+/// 观测；FR-7「不落假 0」约束的是 λ̂/时间戳等 Option 面，不在本列。
+fn f64_null_as_zero<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(0.0))
 }
 
 /// `skip_serializing_if`（serde 传字段引用）：`true` 不落盘（缺省即真）。
@@ -3267,6 +3297,79 @@ pub struct RliShadowSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 2026-10-23 读取容忍钉：0.9.10 及更早写入端把 NaN/±inf 落成 `null`
+    /// （过阻尼长间隔闭式解溢出，真机 c23e0aaa／51da03ea 的
+    /// prog/verify/ctx/infra 四通道全部中招）。快照读取端必须把 `null`
+    /// 状态读作静止水平 0（长间隔自由演化的数学极限），整份会话侧车
+    /// 照常解析——恢复路径不再被毒化侧车整份拒绝。
+    #[test]
+    fn rli_channel_snapshot_tolerates_nan_nullified_state_fields() {
+        let raw = serde_json::json!({
+            "kind": "prog",
+            "omega": 0.09817477042468103,
+            "zeta": 2.0,
+            "u": null,
+            "v": null,
+            "theta": 0.583,
+            "rhythm": 0.0,
+            "envelope": null,
+            "last_step_t": 270444.87,
+            "last_inject_t": null,
+            "hit_count": 0,
+            "last_hit_t": null
+        });
+        let snapshot: RliChannelSnapshot =
+            serde_json::from_value(raw).expect("nullified state must parse");
+        assert_eq!(snapshot.u, 0.0);
+        assert_eq!(snapshot.v, 0.0);
+        assert_eq!(snapshot.envelope, 0.0);
+        assert_eq!(snapshot.theta, 0.583);
+        assert_eq!(snapshot.last_step_t, Some(270444.87));
+        assert_eq!(snapshot.last_inject_t, None);
+        // 重序列化为有限数字——下一次持久化自愈侧车，毒化不复发。
+        let roundtrip = serde_json::to_value(&snapshot).unwrap();
+        assert!(roundtrip["u"].as_f64().unwrap().is_finite());
+        assert!(roundtrip["envelope"].as_f64().unwrap().is_finite());
+    }
+
+    /// 2026-10-23 溢出根因钉：过阻尼通道（ζ=2.0，真机 prog/verify/ctx/
+    /// infra 族）跨长间隔（隔夜 Δt）闭式推进必须保持有限且衰减到静止
+    /// ——旧 φ/cosh/sinh 形式在此场景产生 `0·inf = NaN`，NaN 经
+    /// serde_json 落成 `null` 毒化侧车（真机恢复报「会话不存在」）。
+    /// 两根指数形式代数恒等：小间隔与旧式逐位一致，长间隔不溢出。
+    #[test]
+    fn overdamped_free_evolution_survives_overnight_dt() {
+        let mut channel = RliChannel::new(ChannelKind::Prog, 0.09817477042468103);
+        channel.set_zeta(2.0);
+        channel.advance(100.0);
+        channel.inject(100.0, 1.0);
+        let (u1, v1, envelope1) = channel.free_evolution_at(1.0);
+        assert!(u1.is_finite() && v1.is_finite() && envelope1.is_finite());
+        // 隔夜间隔（12h）。旧形式：μΔt ≈ 0.17·43200 ≈ 7300 → cosh = inf。
+        let overnight = 60.0 * 60.0 * 12.0;
+        let (u2, v2, envelope2) = channel.free_evolution_at(overnight);
+        assert!(
+            u2.is_finite() && v2.is_finite() && envelope2.is_finite(),
+            "overnight overdamped evolution must stay finite: {u2} {v2} {envelope2}"
+        );
+        // 数学极限：两特征根皆负，长间隔自由演化衰减到静止水平。
+        assert!(u2.abs() < 1e-6, "decayed level, got {u2}");
+        assert!(envelope2.abs() < 1e-6, "decayed envelope, got {envelope2}");
+        // 小间隔代数恒等：两根形式与 φ/cosh/sinh 形式在同点一致。
+        let omega = 0.09817477042468103;
+        let mu = omega * (4.0_f64 - 1.0).sqrt();
+        let zeta_w = 2.0 * omega;
+        let phi = libm::exp(-zeta_w);
+        let ch = libm::cosh(mu);
+        let sh = libm::sinh(mu);
+        let b = (channel.v() + zeta_w * channel.u()) / mu;
+        let legacy_u = phi * (channel.u() * ch + b * sh);
+        assert!(
+            (u1 - legacy_u).abs() <= 1e-9 * legacy_u.abs().max(1.0),
+            "two-root form must match cosh/sinh form at small dt: {u1} vs {legacy_u}"
+        );
+    }
 
     /// 确定性 xorshift64（合成事件流；无新依赖，镜像 `lif_replay` 的 PRNG）。
     struct Xorshift64(u64);

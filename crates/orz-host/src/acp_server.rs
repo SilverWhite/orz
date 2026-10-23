@@ -1105,6 +1105,21 @@ fn load_conversation_sidecar_for_attach(
     }
 }
 
+/// 诊断面（2026-10-23 真机 c23e0aaa）：会话侧车文件**存在但解析失败**时
+/// 返回 serde 错误；文件缺失或可解析时返回 `None`。`session/load` 用它把
+/// 「损坏」与「不存在」分开——此前两者都报 `SessionNotFound`，前端按
+/// `session_not_found` 渲染成「该会话已删除或从未创建」，而真机恢复阻塞
+/// 的实际原因是侧车损坏（RLI 快照 NaN 落成 null 毒化信封），文案撒了谎。
+/// 只读：不改写文件（fail-closed，修复交给用户显式回档/修复版本装载）。
+fn conversation_sidecar_parse_error(base_dir: &Path, session_id: &str) -> Option<String> {
+    let path = conversation_sidecar_path(base_dir, session_id);
+    let text = std::fs::read_to_string(&path).ok()?;
+    match serde_json::from_str::<StoredConversation>(&text) {
+        Ok(_) => None,
+        Err(e) => Some(format!("{}: {e}", path.display())),
+    }
+}
+
 /// Persist the session continuation envelope（对话 + 黑板 live 视图与 LIF
 /// 会话轴）——best-effort：只读工作区绝不因侧车写失败中断 run，in-session
 /// 副本为权威写入，侧车为回退（orientation/activation 同纪律）。空对话
@@ -4180,7 +4195,17 @@ impl AcpServer {
                 );
             }
         }
+        // 2026-10-23（真机 c23e0aaa）：损坏 ≠ 不存在。侧车在盘但解析失败
+        // 属数据面故障，不得伪装成 SessionNotFound——前端会渲染成「该会话
+        // 已删除或从未创建」，而真因（如 RLI 快照 NaN→null 毒化）被文案
+        // 吞掉。四要素纪律：internal + 证据带路径与 serde 错误；fail-closed
+        // 不自动改写文件。
         if load_conversation_sidecar_for_attach(&base, session_id).is_none() {
+            if let Some(parse_error) = conversation_sidecar_parse_error(&base, session_id) {
+                return Err(AcpError::Host(format!(
+                    "会话侧车损坏，拒绝装载（sidecar corrupt，非「不存在」）：{parse_error}"
+                )));
+            }
             return Err(AcpError::SessionNotFound(session_id.to_string()));
         }
         self.attach_session_with_options(
@@ -11549,6 +11574,47 @@ mod tests {
         );
         assert!(!session_closed_marker_path(&base, full).is_file());
         drop(server);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 2026-10-23 真机 c23e0aaa 恢复阻塞钉：侧车文件在盘但**解析失败**
+    /// （RLI 快照 NaN→null 毒化信封）时，`session/load` 必须报侧车损坏
+    /// （Host 面、带 serde 证据），**不得**伪装成 `SessionNotFound`——前端
+    /// 会把后者渲染成「该会话已删除或从未创建」，文案撒谎且误导修复方向。
+    #[tokio::test]
+    async fn session_load_reports_corrupt_sidecar_not_missing() {
+        let base = test_dir();
+        let session = "c23e0aaa";
+        let path = conversation_sidecar_path(&base, session);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{\"schema_version\":\"0.2.0-draft\",\"session_id\":").unwrap();
+
+        let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![])));
+        let error = server
+            .handle_session_load_with_options(
+                session,
+                base.clone(),
+                crate::session::TrustPolicy::Skip,
+                Default::default(),
+                true,
+            )
+            .await
+            .expect_err("corrupt sidecar must fail the load");
+        drop(server);
+        let message = error.to_string();
+        assert!(
+            message.contains("侧车损坏"),
+            "error must name the corrupt sidecar, got: {message}"
+        );
+        // 证据必须落到具体解析错误，供用户拿去对照修复。
+        let parse_error =
+            conversation_sidecar_parse_error(&base, session).expect("file exists but unparseable");
+        assert!(
+            message.contains(&parse_error),
+            "error must embed the serde evidence: {message}"
+        );
+        // 文件必须原样保留（fail-closed，不自动改写）。
+        assert!(path.is_file(), "corrupt sidecar must not be rewritten");
         let _ = std::fs::remove_dir_all(&base);
     }
 
