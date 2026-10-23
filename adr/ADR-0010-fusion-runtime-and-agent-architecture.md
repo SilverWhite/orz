@@ -170,6 +170,27 @@
      `policy_denial` + exit 1 转译臂退役、`session_volume_notice` code
      保留 journal 闭集仅供历史回放；唯一不变量＝**只读不改**（写向保护、
      凭据区/逃逸恒拒不变）。见 §14.61。
+   - 冻结版本补记（2026-10-16 追加 v1.87）：**会话生命周期用户主权——
+     交互车道 run 尾自动归档退役（0dd）**，见 §14.84。
+   - 冻结版本补记（2026-10-17 追加 v1.88）：**检索启用门默认开——正常
+     版本常开**，见 §14.85。
+   - 冻结版本补记（2026-10-17 追加 v1.89）：**任务级计费机械记录点——
+     `run_usage_metered` 事件族（0df）**，见 §14.86。
+   - 冻结版本补记（2026-10-18 追加 v1.90）：**长程进程显式通道——TER
+     T1.3 受控重开＋收割语义修订＋30h 兜底（0dh）**，见 §14.87。
+   - 冻结版本补记（2026-10-18 追加 v1.92）：**消息撤回＋中途补充——
+     Claude Code 形态移植（0di）**（v1.91 空缺），见 §14.88。
+   - 冻结版本补记（2026-10-23 追加 v1.93，0do/344 批补录）：**0cz/0dm
+     治理追认**——`context_manage` 第十一主工具（方案 A，净面维持 10；
+     §14.72 条 11 列举中 `context_compress` 自此读作 `context_manage`）
+     与终态声明/反例自查 PULL 化（净 12 工具、`submit` 模型面退役、生产
+     required 路径不再自动注入反例门）两批产品级机制补写进体；随批勘正
+     子代理投影过滤器漏改。见 §14.89。
+   - 冻结版本补记（2026-10-23 追加 v1.94，0do/344 批）：**安全加固三
+     裁决**——模型写面 workspace 包含性判定、exec_policy `encoded-exec`
+     warn 臂（编码旗/管道落解释器留痕）、Windows 交互缺省 yolo 收紧
+     （headless 与非 Windows 不变）＋附随勘误（restore 面毒锁统一、
+     `find_protoc` Windows 臂、fixture 生成器 v0.2 override）。见 §14.90。
    - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -183,7 +204,7 @@
   - **取代** `存档/architecture/pre-adr-0010/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md` 的 current-authority 地位以及其中与本 ADR 冲突的 thinking、问询、session 所有权和子代理降级表述；
   - **取代** `存档/architecture/pre-adr-0010/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md` 中“Grok 完整拥有 session 持久化/恢复”的所有权裁决；其中布局和只读会话投影仍作为 UI 输入；
   - 历史融合、问询、黑板、检索、运行守卫与 Windows 文档的有效规范性内容已转录入本 ADR；原文件之后只保留为设计来源、实施记录或审计证据，不再与本文件共同构成 current design；
-  - **生产真实面裁决校准（2026-09-04 登记）**：黑板 plan-epoch 生产语义已由 §14.52 会话黑板（`AUTH-BLACKBOARD-CONVERSATION-FOLD`）取代，生产黑板为单会话作用域、折叠渲染、会话结束单包归档；生产路径工具调用由 8 工具直接执行（direct execution）承接，console 动作下单与 plan-first 生产硬门已休眠/退役；去自身硬超时，长前台命令自动后台化并由 idle-kill 兜底（§14.55）。
+  - **生产真实面裁决校准（2026-09-04 登记；2026-10-23 v1.93 就地勘误）**：黑板 plan-epoch 生产语义已由 §14.52 会话黑板（`AUTH-BLACKBOARD-CONVERSATION-FOLD`）取代，生产黑板为单会话作用域、折叠渲染、会话结束单包归档；生产路径工具调用由 8 工具直接执行（direct execution）承接——**工具面现行口径以 §14.72 条 11（10 工具冻结）与 §14.89（0cz 承继 `context_manage`／0dm 净 12）为准，本行「8 工具」为当时历史口径**；console 动作下单与 plan-first 生产硬门已休眠/退役；去自身硬超时，长前台命令自动后台化并由 idle-kill 兜底（§14.55）。
   - **v1.1 补充**：恢复显式检索模式、Diagnostic Coverage、Global Review 和 IDE 生命周期证据边界；重裁 Information Sufficiency、来源绑定、`run_tests`、UI 投影、模型/轮次与拒绝熔断语义。
   - **2026-08-09 登记**：ADR-0011 承担受信控制与动作授权面（ACAF）的决策权威；ACAF 派生自本 ADR §2.4、§3.2、§3.8、§4、§5.3、§5.4 与 §11.3，不改变本 ADR 任何既有条款；登记见 §11.8。
   - **v1.2 补充（2026-08-10）**：显式化子代理工具轮预算的 session 累计语义——`continue(requirement_delta)` 重入是同一检索 session 的延续，预算跨 dispatch 累计、不得因重入重置；仅 activation 关闭后新激活从 0 起；主 Agent 维持每 run 独立起算的既有语义。正文见 §3.4.6，索引见 §14.2；来源：GAP-SUBAGENT-RUNTIME 实施审计 D-18（用户裁决）。

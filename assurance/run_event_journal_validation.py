@@ -4197,6 +4197,9 @@ _WRITE_CONTROL_RULES = frozenset(
         "carrier-write",
         "broad-destructive",
         "elevation",
+        # 0do/344 批（2026-10-23，ADR-0010 §14.90）：编码/管道解释器执行
+        # 形态升 warn 留痕（与 Rust `exec_policy` ⑧ 臂同批四同步）。
+        "encoded-exec",
     }
 )
 
@@ -4212,6 +4215,7 @@ _WRITE_CONTROL_RULE_CATEGORIES = {
     "carrier-write": "block",
     "broad-destructive": "warn",
     "elevation": "warn",
+    "encoded-exec": "warn",
 }
 
 # legacy 回放豁免集（0cb 审查处理批，2026-09-29 用户裁决＝schema 升 v0.3

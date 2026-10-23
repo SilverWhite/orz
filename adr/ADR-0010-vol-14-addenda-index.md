@@ -5182,3 +5182,77 @@ deferred 语义／CC `/rewind` 编辑式重发）；296 批立项 64 → 65〕�
    归档竞态属正常产品拓扑不可达的登记边界，不据此扩张机制。
 7. **批序**：S1 设计稿＋S2 落码＋钉子→0dj 审查处置（305 批）→S3 载体重建（**与 0dh S3
    同车**）→S4 真机；S4 增补双入口并发、失败提示、撤回×排队、机械块菜单与极端量判据。
+
+#### §14.89 0cz/0dm 治理追认——context_manage 第十一工具与终态声明 PULL 化（0do 补录）（2026-10-23，v1.93）
+
+**来源**：2026-10-11／2026-10-21 两批产品级机制先后落码（0cz／0dm），但补写裁决未随批进
+本 ADR——344 全仓审查（2026-10-23）判定为「实现先行、设计缺位」，违反 §0.1 偏离登记纪
+律；本节随 344 处置批**追认转录**，现行法以本节＋所指设计稿为准。设计权威：
+[`MODEL_CONTEXT_CONTROL_DESIGN_2026-10-11.md`](../docs/MODEL_CONTEXT_CONTROL_DESIGN_2026-10-11.md)
+（0cz，含同日 R2）、[`TERMINAL_DECLARATION_AND_SELF_CHECK_PULL_DESIGN_2026-10-21.md`](../docs/TERMINAL_DECLARATION_AND_SELF_CHECK_PULL_DESIGN_2026-10-21.md)
+（0dm）。**本节修订 §14.72 条 11（10 工具列举）、§14.35（O1）、§14.76（反例门）**。
+
+1. **0cz 追认：`context_manage` 第十一主工具（方案 A）**——单工具带
+   `mode=compress|clear`：compress 承继 `context_compress` 全部管线（whitelist ≤16 条/16K
+   帽、PendingCheckpoint ≤3 轮、统一出口）；clear 必填 `handover`（≤8K，机械先写黑板
+   notes 再施加边界，失败中止＝防裸清），可选 `keep_recent_rounds`（默认 0）；清零＝
+   「移出视野而非销毁」（restore-retained marker、本地 messages 零改写、被清块逐字落
+   `.gsa/compaction/blocks/`）；ReadOnly 风险类、main-lane only（子代理面剔除）。**方案
+   A**＝`context_compress` 同批声明面退役、管线由本工具承继，**净面维持 10**，「第十一」
+   仅为注册史序数；§14.72 条 11 列举中的 `context_compress` 自此读作 `context_manage`。
+   实现自 2026-10-11 落码（`orz-assurance::tool_names` 单一源＋WORK_TOOLS 三处同批）。
+2. **0dm 追认：终态声明与反例自查 PULL 化**——终态由模型显式 `[RUN_END]` 声明（废除
+   「无工具调用＝终答」暗判；短聊豁免 `terminal_source=short_text`；无声明按工具轮
+   episode 最多 2 次 `[TERMINAL_NOTICE]` 后 fail-open）；`self_check` 无参工具入列
+   （**净 12 工具**）；`submit` 自模型工具面退役（`ORZ_SUBMIT_TOOL=1` 兼容）；**反例自查
+   PULL 化**——生产 required 路径删除 `[COUNTEREXAMPLE_GATE]` 自动注入与
+   `counterexample_fired`（§14.76 的触发条件收窄条款在生产面由本条取代，旧门事件保留
+   journal 回放）；`run_finished` 增 `terminal_source`（7 值闭集）／`terminal_nudged`／
+   `terminal_nudge_count`／`self_check_called`。
+3. **随批勘正（344 审查发现）**：子代理投影过滤器在 0cz 改名承继时漏同步——
+   `retrieval/projection.rs` 只剔 `context_compress` 未剔 `context_manage`，检索子代理
+   声明面一度可见该 main-lane only 工具；344 批修复＋测试钉（main-lane only 语义不变，
+   见 §14.72 条 11）。
+4. **失效标注清单（分卷正文冻结不动，勘误指针集中于此——§14.79「正文只留现行条款」
+   未落实前的过渡形态）**：
+   - vol-03 §3.4 预算条款两处「工具轮预算 120」（默认 120／Agent 级均 120）——已被
+     §14.55 条 2 取代（生产主线默认无限制 `max_tool_rounds=0`，显式配置逃生阀保留）；
+     分卷物理拆分时漏标失效，本日补录指针。
+   - vol-02 §2.4.8 条 8「主 UI 为 `orz-tui` assurance workbench」——已被 §14.78（Web
+     优先）与 0dk 稿（Web 为唯一交互面、TUI 冻结）实质取代。
+   - 入口页「生产真实面裁决校准」行「8 工具直接执行」——v1.93 已就地标注现行口径
+     （入口页为活页，不属分卷冻结正文）。
+
+#### §14.90 安全加固三裁决——写面包含性、命令面留痕、交互缺省收紧（0do/344 批）（2026-10-23，v1.94）
+
+**来源**：2026-10-23 用户裁决（344 全仓审查处置：「处置方式就按照你的建议即可」）。344
+审查判定 Windows 产品面存在三叠加暴露：沙箱 enforce 仅 `cfg(unix)` 生效（Windows 侧仅
+Job Object 生命周期包装）＋交互缺省全自动审批（2026-09-26 用户令）＋写面仅剩宿主状态
+两窄目标门。三裁决同批落码；证据与攻击路径详见
+[`docs/audits/344_GLOBAL_REVIEW_TRIAGE_AND_FIX_2026-10-23.md`](../docs/audits/344_GLOBAL_REVIEW_TRIAGE_AND_FIX_2026-10-23.md)。
+
+1. **模型写面 workspace 包含性判定**：`search_replace` 解析后目标必须落在会话工作区根
+   之内（canonical 前缀比对，Windows 大小写折叠／verbatim 前缀沿用 `path_hits_root`）；
+   越界一律 `InvalidInput` 机械拒绝（宿主状态门 C1/C1′/C2′ 照旧前置）；越界写诉求由
+   用户显式指令（`run_terminal_cmd` 走审批组件）承载。本条为 ADR-0009 之外的工具面
+   **新增**缺省拒绝层，不改变 ADR-0009 对 orz 自身写点的三分类。
+2. **exec_policy ⑧ warn 臂 `encoded-exec`**：PowerShell 系编码旗
+   （`-enc`/`-ec`/`-encoded`/`-EncodedCommand`）与管道直落 shell 解释器
+   （`| sh/bash/dash/zsh/ksh/powershell/pwsh`）升 **warn 留痕不阻断**（词法盲区形态，
+   历史上落「表外恒 Allow」零留痕）；`WARN_RULES` 封闭集 2→3 条，四同步（Rust 生产者／
+   Rust 判官 `families.rs`／Python 判官／schema v0.3 枚举＋fixture 生成器）；block 化
+   留待真机读数后续批裁决。
+3. **Windows 交互缺省 yolo 收紧**：有活审批面（gateway/hub）的会话在 **Windows 缺省
+   confirm-first**（Ask 直达交互确认，ReadOnly 读自动放行不变）；headless 车道
+   （`-p`/`--plan`，审批面皆缺席）与非 Windows **维持 yolo**（无人值守契约与 nono 沙箱
+   在场不变）。2026-09-26「直接开 auto mode」用户令自此在 Windows 交互面收窄；运行时
+   `set_yolo_mode` 与 Benchmark policy 面不受影响。
+4. **附随勘误（344 实现/文档审查）**：343 事故面（session restore）三处 LIF 锁获取统一
+   毒锁容忍（与 watchdog 同式）；`find_protoc` 补 `bin/protoc.exe` 臂（Windows vendored
+   副本此前永不命中，裸 `cargo check` 必败）；fixture 生成器补 v0.2 `run_finished`
+   0dm 五字段 override（重跑零差异恢复）；`tool_names.rs` 豁免清单「当前为空」过期注释
+   勘误。
+5. **残余登记**：LIF 复裁（§14.81 设 2026-10-11 窗口，爽约）顺延待用户裁决；Windows
+   AppContainer/受限令牌级隔离、`AgentLoopController` 拆相与 `run_agent_loop` 分相、
+   `families.rs`/`rli.rs`/`main.rs` 巨石分文件——登记为后续批 backlog（0do S2+），
+   本批不实施。

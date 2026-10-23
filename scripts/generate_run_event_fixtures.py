@@ -98,6 +98,18 @@ V02_ENVELOPE_IDENTITY_OVERRIDES = {
 # payload 最小正例分轨（信封样例保留手工捕获形态；最小正例随 schema 演进）——
 # 生成信封时优先取本表，否则回落 PAYLOAD_GOOD_V02/PAYLOAD_GOOD。
 V02_ENVELOPE_PAYLOAD_OVERRIDES: dict[str, dict] = {
+    # 0dm（2026-10-21，ADR-0010 §14.89 补录）：终态声明面五字段随批进 v0.2
+    # run_finished 信封样例（v0.1 冻结代际不含；此前 0dm 批只改了已提交
+    # fixture 未进生成器，344 批 2026-10-23 勘正补齐——重跑零差异恢复）。
+    "run_finished": {
+        "status": "completed",
+        "turn_count": 1,
+        "tool_rounds": 0,
+        "terminal_source": "short_text",
+        "terminal_nudged": False,
+        "terminal_nudge_count": 0,
+        "self_check_called": False,
+    },
     # MECHANICAL-AUDIT-LAYER (2026-08-24): 信封样例为对象键覆盖写留痕的
     # file:app/result.txt 形态（anomaly=null），与 payloads 目录最小正例
     # （cmd:call-9 / anomaly 非空）分轨。
@@ -2874,6 +2886,18 @@ EXTRA_V02_PAYLOAD_POSITIVES["write-control-review.warn.valid"] = {
     "detail": "broad-destructive: 删除类动词＋根级目标 C:\\",
     "command_sha256": DUMMY_HASH,
     "command_len": 30,
+}
+
+EXTRA_V02_PAYLOAD_POSITIVES["write-control-review.encoded-exec-warn.valid"] = {
+    # 0do/344 批（2026-10-23，ADR-0010 §14.90）：warn 第三值正例——编码/
+    # 管道解释器执行形态留痕（exec_policy ⑧ 臂；WARN_RULES 恰 3 条封闭集）。
+    "tool": "run_terminal_cmd",
+    "call_id": "call-wc-6",
+    "review": "warn",
+    "rule": "encoded-exec",
+    "detail": "encoded-exec: piped into shell interpreter (`bash`)",
+    "command_sha256": DUMMY_HASH,
+    "command_len": 47,
 }
 
 EXTRA_V02_PAYLOAD_POSITIVES["write-control-review.legacy-block.valid"] = {

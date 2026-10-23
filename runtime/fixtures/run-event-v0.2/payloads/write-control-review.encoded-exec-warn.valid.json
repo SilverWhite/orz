@@ -1,0 +1,9 @@
+{
+  "tool": "run_terminal_cmd",
+  "call_id": "call-wc-6",
+  "review": "warn",
+  "rule": "encoded-exec",
+  "detail": "encoded-exec: piped into shell interpreter (`bash`)",
+  "command_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "command_len": 47
+}
