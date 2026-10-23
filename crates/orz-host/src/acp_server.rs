@@ -1037,6 +1037,74 @@ fn load_conversation_sidecar(base_dir: &Path, session_id: &str) -> Option<Stored
     }
 }
 
+/// Load the only supported legacy identity split for an explicit attach.
+///
+/// Some pre-0.9.9 conversations contain only their 8-character file key in
+/// the envelope while both orientation and activation sidecars retain the
+/// same full ACP id.  A prefix alone is never enough to migrate: both
+/// independent companions must agree with the requested full id.  The
+/// returned boolean tells the caller to rewrite the conversation envelope
+/// after the lease has been acquired.
+fn load_conversation_sidecar_for_attach(
+    base_dir: &Path,
+    session_id: &str,
+) -> Option<(StoredConversation, bool)> {
+    let path = conversation_sidecar_path(base_dir, session_id);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(
+                "conversation sidecar unreadable ({}): {e} — attach refused",
+                path.display()
+            );
+            return None;
+        }
+    };
+    let mut stored = match serde_json::from_str::<StoredConversation>(&text) {
+        Ok(stored) => stored,
+        Err(e) => {
+            tracing::warn!(
+                "conversation sidecar corrupt ({}): {e} — attach refused",
+                path.display()
+            );
+            return None;
+        }
+    };
+    if stored.session_id == session_id {
+        return Some((stored, false));
+    }
+
+    let session8 = session_key(session_id);
+    let orientation = load_orientation_sidecar(base_dir, session_id);
+    let activation = load_activation_sidecar(base_dir, session_id);
+    let companions_match = stored.session_id == session8
+        && session_id.len() > session8.len()
+        && session_id.starts_with(&session8)
+        && orientation
+            .as_ref()
+            .is_some_and(|state| state.session_id == session_id)
+        && activation
+            .as_ref()
+            .is_some_and(|state| state.session_id == session_id);
+    if companions_match {
+        tracing::warn!(
+            session_id,
+            legacy_session_id = stored.session_id,
+            "guarded legacy conversation identity migration accepted"
+        );
+        stored.session_id = session_id.to_string();
+        Some((stored, true))
+    } else {
+        tracing::warn!(
+            "conversation sidecar session mismatch ({}): expected {session_id}, found {}; companion ids do not prove a safe migration — attach refused",
+            path.display(),
+            stored.session_id
+        );
+        None
+    }
+}
+
 /// Persist the session continuation envelope（对话 + 黑板 live 视图与 LIF
 /// 会话轴）——best-effort：只读工作区绝不因侧车写失败中断 run，in-session
 /// 副本为权威写入，侧车为回退（orientation/activation 同纪律）。空对话
@@ -3886,7 +3954,11 @@ impl AcpServer {
         // brand-new session starts an empty envelope with the会话轴原点 =
         // 本会话创建时刻（首 prompt 前无消息，不落盘——第一个成功 prompt
         // 才写侧车）。Legacy 侧车（无 session_started_at）补当前墙钟。
-        let persisted_continuation = load_conversation_sidecar(&base, session_id);
+        let (persisted_continuation, identity_migrated) =
+            match load_conversation_sidecar_for_attach(&base, session_id) {
+                Some((continuation, migrated)) => (Some(continuation), migrated),
+                None => (None, false),
+            };
         let prompt_count = next_prompt_count(&base, session_id).map_err(AcpError::Host)?;
         let restore_count = next_restore_count(&base, session_id).map_err(AcpError::Host)?;
         let mut continuation =
@@ -3957,9 +4029,10 @@ impl AcpServer {
         }
         let tool_pairing =
             crate::conversation_repair::repair_tool_pairing(&mut continuation.messages);
-        if reloaded_from_journal || tool_pairing.changed() {
+        if identity_migrated || reloaded_from_journal || tool_pairing.changed() {
             tracing::warn!(
                 session_id,
+                identity_migrated,
                 reloaded_from_journal,
                 ?tool_pairing,
                 "conversation repaired on attach (journal rebuild / tool pairing)"
@@ -4095,7 +4168,7 @@ impl AcpServer {
         // 就是显式恢复动作，按回档语义把包内缺件补回活区（只补缺、绝不
         // 覆盖），随后走同一条 attach/修复路径。包不存在才报 not found。
         let suffix: String = session_id.chars().take(8).collect();
-        if load_conversation_sidecar(&base, session_id).is_none() {
+        if load_conversation_sidecar_for_attach(&base, session_id).is_none() {
             let package = on_demand_archives_dir(&base).join(format!("{suffix}.json.gz"));
             if package.is_file() {
                 unarchive_session_on_demand(&base, &suffix)
@@ -4107,7 +4180,7 @@ impl AcpServer {
                 );
             }
         }
-        if load_conversation_sidecar(&base, session_id).is_none() {
+        if load_conversation_sidecar_for_attach(&base, session_id).is_none() {
             return Err(AcpError::SessionNotFound(session_id.to_string()));
         }
         self.attach_session_with_options(
@@ -11426,6 +11499,108 @@ mod tests {
         assert_eq!(loaded.prompt_count, 1);
         assert_eq!(loaded.restore_count, 1);
         drop(sessions);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 340：真机 c23e0aaa 形态——conversation 内为短 id，而两份独立伴随
+    /// 侧车都保留相同完整 UUID。显式 load 可在持有 lease 后把 conversation
+    /// 原地规范化，并清除 closed 标记；不得要求用户手改 `.gsa`。
+    #[tokio::test]
+    async fn session_load_migrates_legacy_short_id_when_both_companions_agree() {
+        let base = test_dir();
+        let short = "c23e0aaa";
+        let full = "c23e0aaa-e752-4215-9a4f-0e435ff09b6a";
+        let mut conversation = StoredConversation::empty(short, None);
+        conversation.messages.push(Message {
+            role: Role::User,
+            content: "legacy identity".to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        });
+        persist_conversation_sidecar(&base, &conversation).unwrap();
+        persist_orientation_sidecar(&base, full, &OrientationSessionState::new(full));
+        persist_activation_sidecar(&base, full, &StoredActivationSnapshot::for_session(full));
+        write_session_closed_marker(&base, full, crate::session_ops::CloseReason::UserClose)
+            .unwrap();
+
+        let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![])));
+        server
+            .handle_session_load_with_options(
+                full,
+                base.clone(),
+                crate::session::TrustPolicy::Skip,
+                Default::default(),
+                true,
+            )
+            .await
+            .unwrap();
+
+        let migrated = load_conversation_sidecar(&base, full).expect("canonical sidecar");
+        assert_eq!(migrated.session_id, full);
+        assert_eq!(migrated.messages.len(), 1);
+        assert!(
+            server
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(full)
+        );
+        assert!(!session_closed_marker_path(&base, full).is_file());
+        drop(server);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 340 安全钉：只有短前缀、或两份伴随侧车互相冲突，都不足以证明完整
+    /// 身份；load 必须 not_found 且不得重写 conversation。
+    #[tokio::test]
+    async fn session_load_refuses_legacy_short_id_when_companions_disagree() {
+        let base = test_dir();
+        let short = "c23e0aaa";
+        let full = "c23e0aaa-e752-4215-9a4f-0e435ff09b6a";
+        let mut conversation = StoredConversation::empty(short, None);
+        conversation.messages.push(Message {
+            role: Role::User,
+            content: "do not attach by prefix".to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        });
+        persist_conversation_sidecar(&base, &conversation).unwrap();
+        persist_orientation_sidecar(&base, full, &OrientationSessionState::new(full));
+        let conflicting = "c23e0aaa-0000-0000-0000-000000000000";
+        persist_activation_sidecar(
+            &base,
+            full,
+            &StoredActivationSnapshot::for_session(conflicting),
+        );
+
+        let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![])));
+        let error = server
+            .handle_session_load_with_options(
+                full,
+                base.clone(),
+                crate::session::TrustPolicy::Skip,
+                Default::default(),
+                true,
+            )
+            .await
+            .expect_err("conflicting companion identity must be refused");
+        assert!(matches!(error, AcpError::SessionNotFound(id) if id == full));
+        let unchanged = serde_json::from_str::<StoredConversation>(
+            &std::fs::read_to_string(conversation_sidecar_path(&base, full)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(unchanged.session_id, short);
+        assert!(
+            !server
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(full)
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 

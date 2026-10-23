@@ -928,7 +928,9 @@ async function openConversation(s8) {
   } else if (summary?.session_id) {
     state.resumeTarget = { s8, sessionId: summary.session_id, root: summary.root };
     vm.addSystemMessage(
-      `（会话 ${s8} —— 只读回看；点工具栏「恢复并继续」显式恢复后才可续接）`,
+      summary.closed
+        ? `（已关闭会话 ${s8} —— 只读回看；点工具栏「恢复并继续」重新绑定后才可续接）`
+        : `（会话 ${s8} —— 只读回看；点工具栏「恢复并继续」显式恢复后才可续接）`,
       false,
     );
     if (state.running) {
@@ -978,7 +980,8 @@ async function openConversation(s8) {
 
 /* 318 P1-B2/P1-B3：显式「恢复并继续」。唯一会执行 session/load 并切换
  * acpSessionId/sessionId/sessionRoot 的入口；await 前后复核 load token、
- * navEpoch、运行态与目标视图，加载期间再次点击＝取消本次恢复。 */
+ * navEpoch、运行态与目标视图，加载期间再次点击＝取消本次恢复。340：
+ * load 新目标成功后才切绑定并 close(switch) 旧目标；load 失败绝不牺牲旧绑定。 */
 async function resumeViewedConversation() {
   if (state.loadingSession) {
     cancelSessionLoad();
@@ -1006,6 +1009,7 @@ async function resumeViewedConversation() {
   }
   const token = ++sessionLoadToken;
   const epoch = state.navEpoch;
+  const previousSessionId = acpSessionId;
   state.loadingSession = true;
   pendingLoadSessionId = target.sessionId;
   vm.syncToolbar();
@@ -1050,6 +1054,18 @@ async function resumeViewedConversation() {
     state.resumeTarget = null;
     vm.navGo('workspace://live');
     await returnToLive();
+    // 真切换必须释放旧 host 附着与 lease。先绑定新目标，确保服务端旧会话
+    // 的 closed 通知到达时不会把新绑定误解绑；关闭失败不回滚已成功的 load，
+    // 但必须如实告知旧会话可能仍占用一个 host slot。
+    let switchCloseError = null;
+    if (previousSessionId && previousSessionId !== target.sessionId) {
+      try {
+        await acp.sessionClose(previousSessionId, 'switch');
+        await refreshExplorerData();
+      } catch (e) {
+        switchCloseError = e;
+      }
+    }
     // 334（§4.11）：session/load 的「只回放正文」声明在 load 返回前到达，
     // 随后的 clearTranscript/returnToLive 会清掉历史投影——恢复成功后补回，
     // 别让用户误以为工具历史丢失。
@@ -1058,6 +1074,12 @@ async function resumeViewedConversation() {
       lastReplayNotice = null;
     }
     vm.addSystemMessage(`（已恢复 ACP 会话 ${s8}；下一条输入将续接此会话）`, false);
+    if (switchCloseError) {
+      vm.addSystemMessage(
+        `（旧会话关闭失败：${switchCloseError.message}；新会话已绑定，旧会话可能仍占用宿主槽位）`,
+        true,
+      );
+    }
     flash(`已恢复会话 ${s8}`);
   } catch (e) {
     vm.addSystemMessage(`（会话 ${s8} 恢复失败，仍为只读回看：${e.message}）`, true);

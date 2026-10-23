@@ -44,6 +44,15 @@ pub struct ConversationSummary {
     /// Full ACP session id recovered from the bounded sidecar head.  The
     /// explorer displays `session8`, but continuation must bind the exact id.
     pub session_id: Option<String>,
+    /// A durable close marker means the sidecar is recoverable but is not an
+    /// active attachment.  The explorer must not count it as an active
+    /// session merely because the conversation sidecar still exists.
+    pub closed: bool,
+    /// Legacy builds could persist the 8-character file key inside the
+    /// conversation while the orientation + activation sidecars retained the
+    /// full ACP id.  When both companions agree, expose that full id so an
+    /// explicit session/load can perform the guarded migration.
+    pub legacy_short_id: bool,
     /// 2026-10-21：该会话的归属工作区根（列清单时的 cwd）。切换工作区后
     /// 仍打开着旧会话时，`session/load` 必须用这个根而不是新 cwd——否则
     /// 侧车在新根的 `.gsa/conversations/` 下找不到，界面报「恢复失败」。
@@ -58,6 +67,38 @@ fn runs_dir(cwd: &Path) -> PathBuf {
 
 fn conversations_dir(cwd: &Path) -> PathBuf {
     cwd.join(".gsa").join("conversations")
+}
+
+fn companion_session_id(cwd: &Path, family: &str, session8: &str) -> Option<String> {
+    conversation_session_id(
+        &cwd.join(".gsa")
+            .join(family)
+            .join(format!("{session8}.json")),
+    )
+}
+
+/// Resolve the one known legacy split-brain shape without trusting a single
+/// 8-character prefix.  Both independent companion sidecars must name the
+/// same full id and that id must belong to the file key.
+fn resolved_conversation_session_id(
+    cwd: &Path,
+    session8: &str,
+    path: &Path,
+) -> (Option<String>, bool) {
+    let stored = conversation_session_id(path);
+    if stored.as_deref() != Some(session8) {
+        return (stored, false);
+    }
+    let orientation = companion_session_id(cwd, "orientation", session8);
+    let activation = companion_session_id(cwd, "activations", session8);
+    match (orientation, activation) {
+        (Some(left), Some(right))
+            if left == right && left.len() > session8.len() && left.starts_with(session8) =>
+        {
+            (Some(left), true)
+        }
+        _ => (stored, false),
+    }
 }
 
 /// Journal file for a validated run id; `None` when the id fails the path
@@ -204,9 +245,8 @@ pub(crate) fn order_run_entries(entries: Vec<(String, u128)>) -> Vec<String> {
     groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
     let mut out: Vec<String> = Vec::new();
     for (_, _, mut members) in groups {
-        members.sort_by(|(seq_a, id_a), (seq_b, id_b)| {
-            seq_b.cmp(seq_a).then_with(|| id_b.cmp(id_a))
-        });
+        members
+            .sort_by(|(seq_a, id_a), (seq_b, id_b)| seq_b.cmp(seq_a).then_with(|| id_b.cmp(id_a)));
         out.extend(members.into_iter().map(|(_, run_id)| run_id));
     }
     out
@@ -364,9 +404,16 @@ pub fn list_conversations(cwd: &Path) -> Vec<ConversationSummary> {
         let Ok(meta) = std::fs::metadata(&path) else {
             continue;
         };
+        let (session_id, legacy_short_id) = resolved_conversation_session_id(cwd, session8, &path);
         out.push(ConversationSummary {
             session8: session8.to_string(),
-            session_id: conversation_session_id(&path),
+            session_id,
+            closed: cwd
+                .join(".gsa")
+                .join("sessions")
+                .join(format!("{session8}.closed"))
+                .is_file(),
+            legacy_short_id,
             root: cwd.display().to_string(),
             size_bytes: meta.len(),
             modified_ms: modified_ms(&meta),
@@ -567,10 +614,69 @@ mod tests {
         let convs = list_conversations(&root);
         assert_eq!(convs.len(), 1);
         assert_eq!(convs[0].session8, "6ab3dbe5");
+        assert!(!convs[0].closed);
+        assert!(!convs[0].legacy_short_id);
         assert_eq!(
             convs[0].session_id.as_deref(),
             Some("6ab3dbe5-1111-2222-3333-444455556666")
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn list_conversations_separates_closed_and_recovers_guarded_legacy_full_id() {
+        let root = temp_root("conv-closed-legacy-id");
+        for family in ["conversations", "orientation", "activations", "sessions"] {
+            std::fs::create_dir_all(root.join(".gsa").join(family)).unwrap();
+        }
+        let full = "c23e0aaa-e752-4215-9a4f-0e435ff09b6a";
+        std::fs::write(
+            root.join(".gsa/conversations/c23e0aaa.json"),
+            r#"{"session_id":"c23e0aaa","messages":[]}"#,
+        )
+        .unwrap();
+        for family in ["orientation", "activations"] {
+            std::fs::write(
+                root.join(".gsa").join(family).join("c23e0aaa.json"),
+                format!(r#"{{"session_id":"{full}"}}"#),
+            )
+            .unwrap();
+        }
+        std::fs::write(root.join(".gsa/sessions/c23e0aaa.closed"), "{}").unwrap();
+
+        let convs = list_conversations(&root);
+        assert_eq!(convs.len(), 1);
+        assert_eq!(convs[0].session_id.as_deref(), Some(full));
+        assert!(convs[0].closed);
+        assert!(convs[0].legacy_short_id);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn list_conversations_does_not_infer_legacy_id_when_companions_disagree() {
+        let root = temp_root("conv-legacy-id-conflict");
+        for family in ["conversations", "orientation", "activations"] {
+            std::fs::create_dir_all(root.join(".gsa").join(family)).unwrap();
+        }
+        std::fs::write(
+            root.join(".gsa/conversations/c23e0aaa.json"),
+            r#"{"session_id":"c23e0aaa","messages":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".gsa/orientation/c23e0aaa.json"),
+            r#"{"session_id":"c23e0aaa-e752-4215-9a4f-0e435ff09b6a"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".gsa/activations/c23e0aaa.json"),
+            r#"{"session_id":"c23e0aaa-0000-0000-0000-000000000000"}"#,
+        )
+        .unwrap();
+
+        let convs = list_conversations(&root);
+        assert_eq!(convs[0].session_id.as_deref(), Some("c23e0aaa"));
+        assert!(!convs[0].legacy_short_id);
         let _ = std::fs::remove_dir_all(&root);
     }
 

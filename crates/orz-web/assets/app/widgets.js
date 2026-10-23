@@ -299,6 +299,9 @@ export function renderExplorer() {
     latestRunMs.set(s8, Math.max(0, ...activity.map((r) => r.modified_ms || 0)));
   }
   const archiveFor = new Map((state.archives || []).map((a) => [a.session8, a]));
+  const conversationFor = new Map(
+    (state.conversations || []).map((conversation) => [conversation.session8, conversation]),
+  );
   const isArchived = (s8) => {
     const a = archiveFor.get(s8);
     return !!a && a.modified_ms >= (latestRunMs.get(s8) || 0);
@@ -336,7 +339,8 @@ export function renderExplorer() {
     return row;
   };
 
-  const activeSessions = [...groups.keys()].filter((s8) => !isArchived(s8));
+  const isClosed = (s8) => !!conversationFor.get(s8)?.closed;
+  const activeSessions = [...groups.keys()].filter((s8) => !isArchived(s8) && !isClosed(s8));
   root.appendChild(
     groupHeader(`活跃会话（${activeSessions.length}）`, 'activeCollapsed', [
       {
@@ -359,6 +363,25 @@ export function renderExplorer() {
         'active',
         s8,
         document.createTextNode(`（${runs.length} 次运行${suffix}）`),
+        `conversation://${s8}`,
+        `conversation://${s8}`,
+      );
+    }
+  }
+
+  // 340：close 保留可恢复侧车，但它不是活跃绑定。单列后，用户仍可打开
+  // 历史并用工具栏「恢复并继续」触发 session/load；成功后 host 清除
+  // `.closed`，下一次刷新自然回到活跃组。
+  const closedSessions = [...groups.keys()].filter((s8) => !isArchived(s8) && isClosed(s8));
+  root.appendChild(groupHeader(`已关闭会话（${closedSessions.length}）`, 'closedCollapsed'));
+  if (!state.explorer.closedCollapsed) {
+    if (!closedSessions.length) root.appendChild(el('div', 'explorer-sub muted', '（无）'));
+    for (const s8 of closedSessions) {
+      const runs = groups.get(s8);
+      sessionRow(
+        'closed',
+        s8,
+        document.createTextNode(`（${runs.length} 次运行 · 可恢复）`),
         `conversation://${s8}`,
         `conversation://${s8}`,
       );

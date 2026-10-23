@@ -596,6 +596,34 @@ widgets.renderExplorer();
 tree = JSON.stringify(ui.explorer.children);
 assert.ok(tree.includes('活跃会话（1）') && tree.includes('归档会话（0）'), '归档后真实新 run 仍如实回活跃组');
 
+// 340：conversation 侧车继续存在不等于活跃；`.closed` 的 API 投影必须
+// 单列为可恢复会话，避免 UI 把已关闭会话冒充当前活跃绑定。
+state.runs = [
+  { run_id: 'RUN-6aab1111-1', status: 'completed', modified_ms: 100 },
+  { run_id: 'RUN-c23e0aaa-26', status: 'completed', modified_ms: 200 },
+];
+state.conversations = [
+  {
+    session8: '6aab1111',
+    session_id: '6aab1111-1111-2222-3333-444455556666',
+    closed: false,
+  },
+  {
+    session8: 'c23e0aaa',
+    session_id: 'c23e0aaa-e752-4215-9a4f-0e435ff09b6a',
+    closed: true,
+    legacy_short_id: true,
+  },
+];
+state.archives = [];
+widgets.renderExplorer();
+tree = JSON.stringify(ui.explorer.children);
+assert.ok(tree.includes('活跃会话（1）'), '只有未关闭侧车可计入活跃会话');
+assert.ok(tree.includes('已关闭会话（1）'), 'closed 侧车必须保留独立可恢复入口');
+assert.ok(tree.includes('c23e0aaa') && tree.includes('可恢复'), '关闭会话行必须可见且如实标注');
+state.conversations = [];
+console.log('ok  closed 会话不再冒充活跃，会保留独立恢复入口');
+
 /* ── 8b. 组级功能键＋选中模型（批六用户令 2026-09-25）：
  *    「归档」与「活跃会话」组头同行、「回档」「删除」与「归档会话」
  *    组头同行；单击选中、双击打开；未选中＝禁用。 ── */
@@ -1023,6 +1051,51 @@ assert.ok(
   '恢复成功文案与状态一致',
 );
 console.log('ok  14.2 显式「恢复并继续」唯一执行 session/load 并切换绑定');
+
+/* 14.2s 真切换：新目标 load 成功后关闭旧 host 附着；顺序必须是 load→bind
+ * →close(switch)，从而 load 失败时保留旧绑定，旧 closed 通知也不会解绑新目标。 */
+resetView();
+const switchFrom = state.sessionId;
+const switchTo = 'deadbeef-aaaa-bbbb-cccc-ddddeeeeffff';
+state.conversations = [{ session8: 'deadbeef', session_id: switchTo, closed: true }];
+state.runs = [{ run_id: 'RUN-deadbeef-1', status: 'completed' }];
+await withFetch(fallbackApi(), async () => {
+  await ui.openUri('conversation://deadbeef');
+});
+acpMock.loadHandler = (msg, ws) => wsRespond(ws, msg.id, {});
+const switchCallStart = acpMock.calls.length;
+await withFetch(fallbackApi(), async () => {
+  await ui.resumeConversation();
+  await flush();
+});
+const switchCalls = acpMock.calls.slice(switchCallStart);
+const switchLoadIndex = switchCalls.findIndex((call) => call.method === 'session/load');
+const switchCloseIndex = switchCalls.findIndex((call) => call.method === '_orz/session_close');
+assert.ok(switchLoadIndex >= 0 && switchCloseIndex > switchLoadIndex, '切换必须先 load 新目标再 close 旧目标');
+assert.equal(switchCalls[switchCloseIndex]?.params?.sessionId, switchFrom, 'switch close 必须命中旧绑定');
+assert.equal(switchCalls[switchCloseIndex]?.params?.reason, 'switch');
+assert.equal(state.sessionId, switchTo, '旧会话收尾不得解绑新目标');
+// 反例：新目标 load 失败时不得关闭／丢失现绑定。
+state.conversations = [
+  { session8: 'bad0cafe', session_id: 'bad0cafe-1111-2222-3333-444455556666', closed: true },
+];
+state.runs = [{ run_id: 'RUN-bad0cafe-1', status: 'completed' }];
+await withFetch(fallbackApi(), async () => {
+  await ui.openUri('conversation://bad0cafe');
+});
+acpMock.loadHandler = (msg, ws) => wsRespondError(ws, msg.id, 'load refused');
+const failedCloseBefore = methodCalls('_orz/session_close').length;
+await withFetch(fallbackApi(), async () => {
+  await ui.resumeConversation();
+  await flush();
+});
+assert.equal(state.sessionId, switchTo, '新目标 load 失败必须保留旧绑定');
+assert.equal(
+  methodCalls('_orz/session_close').length,
+  failedCloseBefore,
+  '新目标 load 失败不得关闭旧绑定',
+);
+console.log('ok  14.2s 恢复即真切换：成功 load 后 close(switch)，失败保留旧绑定');
 
 /* 14.2a 归档视图直接恢复：不再要求先手动「回档」——归档详情带 session_id
  * 时工具栏即可恢复，host 侧 load 自动回档。 */

@@ -120,7 +120,7 @@ export const state = {
   // 会话归档清单（0br S3 新增面：.gsa/archives 只读投影）。
   archives: [],
   // 探索器选中项（批六用户令 2026-09-25：组级功能键的操作对象）——
-  // { group: 'active'|'archived', s8 }；单击选中、双击打开。
+  // { group: 'active'|'closed'|'archived', s8 }；单击选中并打开。
   selected: null,
 
   // ── 探索器（用户令 2026-09-25：三组＝工作区／活跃会话／归档会话；
@@ -130,6 +130,7 @@ export const state = {
     trustedCollapsed: true,
     recentCollapsed: true,
     activeCollapsed: false,
+    closedCollapsed: false,
     archivedCollapsed: false,
   },
 };
