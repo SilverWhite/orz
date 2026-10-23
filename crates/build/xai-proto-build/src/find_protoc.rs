@@ -49,27 +49,40 @@ pub fn find_protoc() -> anyhow::Result<Option<PathBuf>> {
     }
 
     // 2. Walk up directories looking for bin/protoc (dotslash wrapper).
+    //    344 批（2026-10-23）：Windows 的 vendored 副本是 `bin/protoc.exe`
+    //    （`build.ps1`/`build.bat` 的 PROTOC 即指向该处）；dotslash 包装
+    //    `bin/protoc` 无后缀，Windows 上 `Command::new` 永不命中——两形态
+    //    都试，按平台排优先序。
     let cwd = env::current_dir()?;
     let mut dir = cwd.clone();
     let mut dir_rel = PathBuf::new();
     loop {
-        // Return relative path to make build more deterministic.
-        let protoc = dir_rel.join("bin/protoc");
-        if protoc.try_exists()? {
+        let candidates: [PathBuf; 2] = if cfg!(windows) {
+            [dir_rel.join("bin/protoc.exe"), dir_rel.join("bin/protoc")]
+        } else {
+            [dir_rel.join("bin/protoc"), dir_rel.join("bin/protoc.exe")]
+        };
+        let mut attempted: Option<anyhow::Result<()>> = None;
+        for protoc in candidates {
+            if !protoc.try_exists()? {
+                continue;
+            }
             match check_protoc_good(&protoc) {
                 Ok(()) => return Ok(Some(protoc)),
                 Err(e) => {
                     // bin/protoc exists but can't execute — likely the dotslash wrapper
                     // in an environment without dotslash (e.g. Bazel remote execution).
                     // Fall through to PATH-based lookup below.
-                    eprintln!(
-                        "bin/protoc found at `{}` but failed to execute: {e:#}; \
-                         trying protoc from PATH as fallback",
-                        protoc.display()
-                    );
-                    break;
+                    attempted = Some(Err(e));
                 }
             }
+        }
+        if let Some(Err(e)) = attempted {
+            eprintln!(
+                "bin/protoc[.exe] found but failed to execute: {e:#}; \
+                 trying protoc from PATH as fallback"
+            );
+            break;
         }
         if !dir.pop() {
             break;
@@ -83,11 +96,12 @@ pub fn find_protoc() -> anyhow::Result<Option<PathBuf>> {
     }
 
     // 4. Not found anywhere.
+    let hint = "checked $PROTOC env, <workspace>/bin/protoc[.exe], and PATH; \
+                this repo vendors `orz/bin/protoc.exe` — run `build.ps1`/`build.bat` \
+                (they set PROTOC), or install protobuf and set PROTOC yourself";
     if is_github_actions() {
-        return Err(anyhow::anyhow!(
-            "`protoc` not found (checked $PROTOC env, bin/protoc, and PATH)"
-        ));
+        return Err(anyhow::anyhow!("`protoc` not found ({hint})"));
     }
-    eprintln!("`protoc` not found; likely it is missing in docker image");
+    eprintln!("`protoc` not found ({hint})");
     Ok(None)
 }

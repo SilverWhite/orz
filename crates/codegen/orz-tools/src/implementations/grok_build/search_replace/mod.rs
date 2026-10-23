@@ -251,6 +251,26 @@ pub(crate) async fn run_search_replace(
             ));
         }
     }
+    // 0do/344 批（2026-10-23，ADR-0010 §14.90 条 1）：模型写面 workspace
+    // 包含性判定——解析后目标必须落在会话工作区根之内（canonical 前缀
+    // 比对，Windows 大小写折叠／verbatim 前缀沿用 `path_hits_root`）。
+    // 宿主状态门（C1/C1′/C2′）照旧前置；canonicalize 失败（新建目标）
+    // 回落词法形态兜底。工作区之外的写面（绝对路径越界、上级穿越、
+    // 用户主目录配置文件等）自此机械拒绝，越界写诉求交回用户显式指令
+    // （run_terminal_cmd 走审批组件）承载。
+    {
+        let ws_root = crate::util::fs::try_canonicalize(&cwd)
+            .await
+            .unwrap_or_else(|_| cwd.clone());
+        if !crate::types::write_control::path_hits_root(&ws_root, &path) {
+            return Ok(SearchReplaceOutput::InvalidInput(format!(
+                "Error: {} is outside the session workspace ({}) and cannot be \
+                 edited by search_replace.",
+                input.file_path,
+                ws_root.display()
+            )));
+        }
+    }
     let is_legacy = SearchReplaceVersion::from_contract(contract_version.as_deref()).is_legacy();
     if !is_legacy {
         let res = resources.lock().await;
@@ -3931,6 +3951,59 @@ neutTest_set);
         assert!(
             matches!(ok, SearchReplaceOutput::EditsApplied(_)),
             "workspace write must still work, got {ok:?}"
+        );
+    }
+
+    /// 0do/344（2026-10-23，ADR-0010 §14.90 条 1）：模型写面 workspace
+    /// 包含性回归——工作区内正常编辑不受影响；工作区外绝对路径（第二个
+    /// 临时目录扮演「用户主目录」）机械拒绝。
+    #[tokio::test]
+    async fn search_replace_refuses_targets_outside_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        std::fs::write(ws.join("inside.txt"), "old text\n").unwrap();
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("escape.txt");
+        std::fs::write(&outside_file, "old text\n").unwrap();
+
+        let tool = SearchReplaceTool;
+        // 工作区内：照常生效（守卫不误伤）。
+        let ok = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(test_resources(&ws).into_shared()),
+            make_input("inside.txt", "old text", "new text"),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(ok, SearchReplaceOutput::EditsApplied(_)),
+            "in-workspace edit must still work, got {ok:?}"
+        );
+        // 工作区外绝对路径：拒绝。
+        let refused = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(test_resources(&ws).into_shared()),
+            make_input(
+                outside_file.to_string_lossy().as_ref(),
+                "old text",
+                "new text",
+            ),
+        )
+        .await
+        .unwrap();
+        match refused {
+            SearchReplaceOutput::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("outside the session workspace"),
+                    "outside-workspace write must be refused: {msg}"
+                );
+            }
+            other => panic!("Expected InvalidInput for outside-workspace write, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(&outside_file).unwrap(),
+            "old text\n",
+            "outside target must remain untouched"
         );
     }
 

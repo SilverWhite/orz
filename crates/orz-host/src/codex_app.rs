@@ -1104,6 +1104,38 @@ mod tests {
         turn
     }
 
+    /// §14.90 条 3（0do/344 批，2026-10-23）测试臂：代表「真 codex 客户端」
+    /// 应答审批——读到 `approval/request` 即回 `allow_once` 并计数，其余消
+    /// 息直通；读到 `turn/completed` 返回其状态。Windows confirm-first 缺省
+    /// 下 workspace-write 线程的订单走审批线并由此执行；非 Windows 维持初
+    /// 始 yolo（审批计数为 0，助手原样直通）。
+    async fn answer_approvals_until_turn_completed(
+        w: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>,
+        r: &mut BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
+    ) -> (u32, String) {
+        let mut approvals = 0u32;
+        loop {
+            let msg = recv(r).await;
+            if msg.method.as_deref() == Some("approval/request") {
+                approvals += 1;
+                let id = msg.id.clone().expect("approval/request carries id");
+                send(
+                    w,
+                    &JsonMessage::response(id, json!({ "decision": "allow_once" })),
+                )
+                .await;
+                continue;
+            }
+            if msg.method.as_deref() == Some("turn/completed") {
+                let status = msg.params.as_ref().unwrap()["turn"]["status"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                break (approvals, status);
+            }
+        }
+    }
+
     #[tokio::test]
     async fn framing_round_trip_and_classification() {
         let request = JsonMessage::request(json!(1), "turn/start", json!({ "a": 1 }));
@@ -1607,10 +1639,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_yolo_executes_tool_and_journals_without_approval() {
-        // 用户令 2026-09-26「直接开auto mode就行」：会话默认自动审批（初始
-        // yolo）——workspace-write 线程的终端订单不再 approval/request，
-        // 直接执行并照常落 journal；客户端沉默也不等待（无 300s 停顿）。
+    async fn workspace_write_order_executes_and_journals_following_1490() {
+        // 缺省审批姿态钉（0do/344 批，ADR-0010 §14.90 条 3）：workspace-write
+        // 线程的终端订单——Windows 缺省 confirm-first，approval/request 上线
+        // 由（测试具代答的）客户端 allow_once 后执行；非 Windows 维持初始
+        // yolo（零审批、直执行）。两臂下工具都真实执行并照常落 journal。
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
@@ -1623,30 +1656,18 @@ mod tests {
                 initialize_and_start_thread(&mut w, &mut r, "thr_perm", "workspace-write").await;
                 run_turn(&mut w, &mut r, "thr_perm", "运行 dir").await;
 
-                // Zero approval/request may appear; the turn completes on its
-                // own (the drain never answers anything — silence must not
-                // stall).
-                let mut approval_count = 0u32;
-                let mut status = String::new();
-                tokio::time::timeout(TURN_WAIT, async {
-                    loop {
-                        let msg = recv(&mut r).await;
-                        if msg.method.as_deref() == Some("approval/request") {
-                            approval_count += 1;
-                        }
-                        if msg.method.as_deref() == Some("turn/completed") {
-                            status = msg.params.as_ref().unwrap()["turn"]["status"]
-                                .as_str()
-                                .unwrap()
-                                .to_owned();
-                            break;
-                        }
-                    }
-                })
+                let (approval_count, status) = tokio::time::timeout(
+                    TURN_WAIT,
+                    answer_approvals_until_turn_completed(&mut w, &mut r),
+                )
                 .await
                 .expect("turn terminates");
-                assert_eq!(approval_count, 0, "default yolo must not prompt");
-                assert_eq!(status, "completed", "run must complete unprompted");
+                let expected_approvals = u32::from(cfg!(windows));
+                assert_eq!(
+                    approval_count, expected_approvals,
+                    "windows confirm-first prompts once; non-windows yolo prompts never (§14.90)"
+                );
+                assert_eq!(status, "completed", "run must complete");
 
                 let events = journal_events(&base, "thr_perm", 0);
                 assert!(
@@ -1821,8 +1842,9 @@ mod tests {
                 .expect("both turns complete");
                 assert_eq!(
                     approvals.len(),
-                    0,
-                    "default yolo: no approvals across the two sandboxes"
+                    usize::from(cfg!(windows)),
+                    "§14.90: windows confirm-first prompts once (ww thread order); \
+                     non-windows yolo and the ro-thread policy deny prompt never"
                 );
 
                 // Journals: the read-only thread never started its tool;
@@ -1850,14 +1872,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_yolo_repeats_identical_orders_without_prompt() {
+    async fn workspace_write_identical_orders_follow_1490_posture() {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                // Two identical workspace orders (same command args) — under
-                // the default auto-approval BOTH execute with zero
-                // approval/request on the wire (previously the first prompted
-                // and only the second rode the persisted grant).
+                // Two identical workspace orders (same command args) —
+                // §14.90 姿态钉（0do/344 批）：Windows confirm-first 缺省下
+                // 每单各走一次审批线（remember_tool_approvals=false，无持久
+                // 授予可乘），测试具逐单 allow_once 后照常执行；非 Windows
+                // 维持初始 yolo（零审批双执行）。
                 let script = vec![
                     ScriptedResponse::tool_calls(vec![terminal_call("dir", "call-act-1")]),
                     ScriptedResponse::tool_calls(vec![terminal_call("dir", "call-act-2")]),
@@ -1873,23 +1896,17 @@ mod tests {
                 initialize_and_start_thread(&mut w, &mut r, "thr_always", "workspace-write").await;
                 run_turn(&mut w, &mut r, "thr_always", "两次 dir").await;
 
-                let mut wire_approvals = 0u32;
-                let completed = loop {
-                    let msg = recv(&mut r).await;
-                    if msg.method.as_deref() == Some("approval/request") {
-                        wire_approvals += 1;
-                    }
-                    if msg.method.as_deref() == Some("turn/completed") {
-                        break msg;
-                    }
-                };
+                let (wire_approvals, status) = tokio::time::timeout(
+                    TURN_WAIT,
+                    answer_approvals_until_turn_completed(&mut w, &mut r),
+                )
+                .await
+                .expect("turn terminates");
+                assert_eq!(status, "completed");
                 assert_eq!(
-                    completed.params.as_ref().unwrap()["turn"]["status"],
-                    "completed"
-                );
-                assert_eq!(
-                    wire_approvals, 0,
-                    "default yolo must auto-allow both identical orders without prompting"
+                    wire_approvals,
+                    u32::from(cfg!(windows)) * 2,
+                    "windows confirm-first prompts per order; non-windows yolo prompts never (§14.90)"
                 );
                 let events = journal_events(&base, "thr_always", 0);
                 // 两笔直连终端调用都真实执行（tool_completed 带 exit_code=0）。

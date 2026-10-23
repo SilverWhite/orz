@@ -3225,8 +3225,10 @@ impl AgentLoopController {
     /// (cross-prompt recovery rebuilds the domain machine).
     pub fn restore_temporal_spikes(&self, spikes: Vec<orz_assurance::lif::DomainSpike>) {
         self.lif
+            // 344 批（2026-10-23）：restore 面与 watchdog/审计面统一毒锁容忍
+            // ——LifEngine 持锁线程 panic 后，恢复路径不得二次 panic。
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .temporal_mut()
             .restore_spikes(spikes);
     }
@@ -3287,7 +3289,7 @@ impl AgentLoopController {
     pub fn rli_complexity_reading(&self) -> Option<orz_assurance::lif::RliComplexityReading> {
         self.lif
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .rli_shadow()
             .map(orz_assurance::lif::RliShadow::complexity_reading)
     }
@@ -3331,8 +3333,10 @@ impl AgentLoopController {
         axis_origin_wall: Option<f64>,
     ) {
         self.lif
+            // 344 批（2026-10-23）：同 restore_temporal_spikes——会话恢复是
+            // 343 事故面，毒锁后仍须可恢复，不得二次 panic。
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .restore_temporal_session(snapshot, axis_origin_wall);
     }
 

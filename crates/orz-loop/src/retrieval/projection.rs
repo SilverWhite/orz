@@ -310,6 +310,11 @@ impl AgentLoopController {
                     // H1 开窗点与请求位消费点均 gate Main role），且 controller
                     // 请求位跨车道共享，子代理声明会在主车道误触发开窗。
                     && t.name != orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME
+                    // 0cz（2026-10-11）承继面同腕（344 批审查修复 2026-10-23，
+                    // ADR-0010 §14.89）：`context_manage` 吸收 `context_compress`
+                    // 声明位后同为 main-lane only——第九工具退役时本过滤器未
+                    // 随承继改名同步，检索子代理声明面一度可见该工具。
+                    && t.name != orz_assurance::tool_names::CONTEXT_MANAGE_TOOL_NAME
                     // P0-C S2 (2026-08-15): the console write button is
                     // main-lane only — subagents never write action orders.
                     && t.name != "blackboard_action_write"
@@ -800,6 +805,9 @@ mod tests {
             "retrieve_project_docs",
             // 0dm：主车道自查不得进入子代理声明面。
             "self_check",
+            // 0cz 承继位（344 批修复钉）：上下文管理工具与被吸收的第九
+            // 工具同为 main-lane only，子代理声明面不得可见。
+            orz_assurance::tool_names::CONTEXT_MANAGE_TOOL_NAME,
         ]
         .iter()
         .map(|n| ToolDef {

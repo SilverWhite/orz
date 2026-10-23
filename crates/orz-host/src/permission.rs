@@ -186,6 +186,14 @@ impl PermissionBridge {
         cwd: &std::path::Path,
         policy: PermissionPolicy,
     ) -> Result<Self, String> {
+        // 缺省审批姿态单一源（0do/344 批 2026-10-23，用户裁决，ADR-0010
+        // §14.90 条 3）：Windows 交互面（有活审批面 gateway/hub）缺省收回
+        // 全自动审批——Ask 直达交互确认；headless 车道（`-p`/`--plan`，
+        // 两者皆 None）维持 yolo（既有 headless 契约，无人值守自动化不破）；
+        // 非 Windows 维持 yolo（nono 沙箱在场）。2026-09-26「直接开 auto
+        // mode」用户令自此在 Windows 交互面收窄；运行时 `set_yolo_mode`
+        // 与 Benchmark policy 面不受影响。
+        let initial_yolo = Self::default_initial_yolo(gateway.is_some(), hub.is_some());
         let gateway = gateway.unwrap_or_else(dead_gateway);
         let abs_cwd = orz_paths::AbsPathBuf::new(cwd.to_path_buf())
             .map_err(|e| format!("cwd must be absolute: {e}"))?;
@@ -199,7 +207,7 @@ impl PermissionBridge {
             // subagent inheritance only; enforcement lives in
             // `access_in_scope` below (P1).
             Vec::new(), // web_fetch_allowed_domains
-            true,  // initial_yolo — 默认自动审批（用户令 2026-09-26）；policy 短路仍在 yolo 之前
+            initial_yolo,
             None,  // client_identifier
             false, // remember_tool_approvals
             hub,   // interactive prompter — codex app-server (slice #12)
@@ -209,6 +217,17 @@ impl PermissionBridge {
             cwd: abs_cwd,
             policy,
         })
+    }
+
+    /// 缺省 yolo 姿态单一源（ADR-0010 §14.90 条 3，0do/344 批）——Windows
+    /// 交互面（有活审批面）缺省关；headless（无活审批面，Ask 无从应答，
+    /// 维持无人值守契约）与非 Windows（nono 沙箱在场）维持开。
+    fn default_initial_yolo(gateway_live: bool, hub_live: bool) -> bool {
+        if cfg!(windows) {
+            !(gateway_live || hub_live)
+        } else {
+            true
+        }
     }
 
     /// Request permission for a tool call (LoopHost `request_permission`).
@@ -718,7 +737,8 @@ mod tests {
 
     #[tokio::test]
     async fn ask_auto_approves_under_default_yolo() {
-        // 用户令 2026-09-26「直接开auto mode就行」：生产 spawn 初始即 yolo，
+        // 用户令 2026-09-26「直接开auto mode就行」：headless spawn（无活
+        // 审批面）初始即 yolo，
         // Bash（SandboxEscape）等 Ask 类不再等弹窗/超时——manager 在 yolo
         // 快路径自动放行（policy 短路与无桥 fail-closed 默认不受影响）。
         // 0bt④：来源观测面同址钉——yolo 快路必须自报 `yolo`。
@@ -742,6 +762,34 @@ mod tests {
             PermitSource::Yolo,
             "0bt④: the auto-approve fast path must report source=yolo"
         );
+    }
+
+    /// §14.90 条 3（0do/344 批，2026-10-23）：缺省 yolo 姿态单一源钉——
+    /// Windows 交互面（gateway/hub 有活）缺省收回自动审批；headless（皆
+    /// None）与非 Windows 维持 yolo。
+    #[test]
+    fn default_yolo_is_confirm_first_on_windows_interactive() {
+        let interactive_default = !cfg!(windows);
+        assert_eq!(
+            PermissionBridge::default_initial_yolo(true, false),
+            interactive_default,
+            "gateway-live lane must be confirm-first on Windows (§14.90)"
+        );
+        assert_eq!(
+            PermissionBridge::default_initial_yolo(false, true),
+            interactive_default,
+            "hub-live lane must be confirm-first on Windows (§14.90)"
+        );
+        assert!(
+            PermissionBridge::default_initial_yolo(false, false),
+            "headless lane keeps the yolo contract on every platform"
+        );
+        if !cfg!(windows) {
+            assert!(
+                PermissionBridge::default_initial_yolo(true, true),
+                "non-Windows keeps yolo"
+            );
+        }
     }
 
     #[tokio::test]

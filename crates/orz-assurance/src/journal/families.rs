@@ -1962,6 +1962,9 @@ const WRITE_CONTROL_RULES: &[&str] = &[
     "carrier-write",
     "broad-destructive",
     "elevation",
+    // 0do/344 批（2026-10-23，ADR-0010 §14.90）：编码/管道解释器执行形态
+    // 升 warn 留痕（与 orz-tools `exec_policy` ⑧ 臂同批四同步）。
+    "encoded-exec",
 ];
 
 /// legacy 回放豁免集（0cb 审查处理批，2026-09-29 用户裁决＝schema 升 v0.3
@@ -1986,6 +1989,7 @@ const WRITE_CONTROL_RULE_CATEGORIES: &[(&str, &str)] = &[
     ("carrier-write", "block"),
     ("broad-destructive", "warn"),
     ("elevation", "warn"),
+    ("encoded-exec", "warn"),
 ];
 
 /// `write_control_review`: per-command L2 review record — block/warn/allow

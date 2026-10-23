@@ -8712,20 +8712,23 @@ mod tests {
             .await
     }
 
-    /// 默认自动审批（初始 yolo，用户令 2026-09-26「直接开auto mode就行」）：
-    /// 即使网关是 dead gateway（无交互客户端），mutation 订单也照常放行
-    /// 执行——不再有「无客户端 → 拒绝」路径；PermissionDecision 记录
-    /// allow_once。
+    /// 缺省审批姿态钉（0do/344 批，ADR-0010 §14.90 条 3）：装配了审批面
+    /// （含 dead gateway——结构上是交互车道）的会话，Windows 缺省
+    /// confirm-first——mutation（search_replace）不被自动放行，无客户端
+    /// 应答即 fail-closed 拒绝（PermissionDecision=deny、无 ToolStarted）；
+    /// 非 Windows 维持初始 yolo 契约（allow_once、照常执行）。2026-09-26
+    /// 「直接开 auto mode」用户令自此仅在非 Windows / headless 车道保持。
     #[tokio::test]
-    async fn session_prompt_default_yolo_auto_approves_with_dead_gateway() {
+    async fn session_prompt_mutation_posture_with_dead_gateway_follows_1490() {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
 
                 let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
                     // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
-                    // 面——模型直接调 search_replace（默认 yolo 下权限门
-                    // 自动放行，dead gateway 不再构成拒绝）。
+                    // 面——模型直接调 search_replace（§14.90：Windows 交互
+                    // 车道缺省 confirm-first，dead gateway 无应答即拒绝；
+                    // 非 Windows 维持初始 yolo 放行）。
                     ScriptedResponse::tool_calls(vec![ToolCall {
                         name: "search_replace".to_string(),
                         arguments: serde_json::json!({
@@ -8758,14 +8761,6 @@ mod tests {
 
                 let events = run_events(&base);
                 let types: Vec<EventType> = events.iter().map(|e| e.event_type.clone()).collect();
-                assert!(
-                    events.iter().any(|e| {
-                        e.event_type == EventType::ToolStarted
-                            && e.payload.get("tool").and_then(|t| t.as_str())
-                                == Some("search_replace")
-                    }),
-                    "the default-yolo order must start even with a dead gateway: {types:?}"
-                );
                 let pd = events
                     .iter()
                     .filter(|e| e.event_type == EventType::PermissionDecision)
@@ -8773,10 +8768,37 @@ mod tests {
                         e.payload.get("tool").and_then(|t| t.as_str()) == Some("search_replace")
                     })
                     .expect("permission decision");
-                assert_eq!(
-                    pd.payload.get("decision").and_then(|d| d.as_str()),
-                    Some("allow_once")
-                );
+                if cfg!(windows) {
+                    // §14.90 条 3：Windows 交互车道（含 dead gateway 装配）
+                    // 缺省 confirm-first——无客户端应答即 fail-closed 拒绝。
+                    assert!(
+                        !events.iter().any(|e| {
+                            e.event_type == EventType::ToolStarted
+                                && e.payload.get("tool").and_then(|t| t.as_str())
+                                    == Some("search_replace")
+                        }),
+                        "windows confirm-first default must not start the mutation: {types:?}"
+                    );
+                    assert_eq!(
+                        pd.payload.get("decision").and_then(|d| d.as_str()),
+                        Some("deny"),
+                        "unanswered prompt must deny on windows (§14.90): {:?}",
+                        pd.payload
+                    );
+                } else {
+                    assert!(
+                        events.iter().any(|e| {
+                            e.event_type == EventType::ToolStarted
+                                && e.payload.get("tool").and_then(|t| t.as_str())
+                                    == Some("search_replace")
+                        }),
+                        "non-windows keeps the initial-yolo contract: {types:?}"
+                    );
+                    assert_eq!(
+                        pd.payload.get("decision").and_then(|d| d.as_str()),
+                        Some("allow_once")
+                    );
+                }
 
                 let _ = std::fs::remove_dir_all(&base);
             })
@@ -8903,10 +8925,13 @@ mod tests {
             .await
     }
 
-    /// 快照时序钉（默认自动审批形态）：mutation（`search_replace`）经
-    /// 权限门放行（初始 yolo）后执行——预变更快照**必须**记录（快照只在
-    /// 权限门放行之后触发；deny 臂的「拒单不快照」时序由 ReadOnly 策略
-    /// 测试 `session_prompt_respects_session_policy` 继续钉住）。
+    /// 快照时序钉（0do/344 批适配，ADR-0010 §14.90 条 3）：mutation
+    /// （`search_replace`）经权限门**放行**后执行——预变更快照**必须**记录
+    /// （快照只在权限门放行之后触发；deny 臂的「拒单不快照」时序由
+    /// ReadOnly 策略测试 `session_prompt_respects_session_policy` 继续钉住）。
+    /// 放行来源由原「初始 yolo」改为 **Benchmark 策略**（LocalMutation 编辑
+    /// 类确定性 Policy 放行、双平台一致）——Windows 交互车道缺省
+    /// confirm-first 后不再以 yolo 作放行前提。
     #[tokio::test]
     async fn session_prompt_allowed_mutation_records_snapshot() {
         tokio::task::LocalSet::new()
@@ -8916,8 +8941,8 @@ mod tests {
 
                 let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
                     // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
-                    // 面——模型直接调 search_replace（默认 yolo 放行 → 快照
-                    // 记录）。
+                    // 面——模型直接调 search_replace（Benchmark 策略放行 →
+                    // 快照记录）。
                     ScriptedResponse::tool_calls(vec![ToolCall {
                         name: "search_replace".to_string(),
                         arguments: serde_json::json!({
@@ -8934,10 +8959,14 @@ mod tests {
                 ])));
                 server.set_gateway(dead_gateway());
                 server
-                    .handle_session_new(
+                    .handle_session_new_with_policy(
                         "sess-allow-snap",
                         Some(base.clone()),
                         crate::session::TrustPolicy::Skip,
+                        crate::permission::PermissionPolicy::Benchmark {
+                            allow_shell: false,
+                            allow_network: false,
+                        },
                     )
                     .await
                     .unwrap();
