@@ -63,6 +63,10 @@
    动作自动改判为拒绝。
 8. UI 是投影层。主 UI 为 `orz-tui` assurance workbench；Codex TUI/app-server surface 可以作为成熟的
    fallback，但两者必须消费同一 host/loop/journal 事实，不建立第二套产品 runtime。
+   〔**失效标注（345 批就地落地，2026-10-23；指针经 vol-14 §14.89 条 4 失效
+   标注清单）**：「主 UI 为 `orz-tui`」已被 **§14.78（Web 优先）**与 0dk 稿
+   （Web 为唯一交互面、TUI 冻结）实质反向取代——现行交互面以 §14.78/0dk
+   为准；「同一 host/loop/journal 事实、不建第二套产品 runtime」仍为现行。〕
 
 ### 2.5 Global Review 与 IDE 生命周期边界
 

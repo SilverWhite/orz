@@ -76,6 +76,10 @@ active -> failed/cancelled -> closing -> closed_resumable
    parent identity 与新任务合同后可以用新的 `activation_id` 恢复；
 6. 关闭、失败、取消、预算耗尽和 scope 完成必须产生不同 terminal/receipt 语义；
 7. 默认工具轮预算为 120；到限后提供一个无工具最终轮报告部分结果与明确终止原因。
+   〔**失效标注（345 批就地落地，2026-10-23；指针经 vol-14 §14.89 条 4 失效
+   标注清单）**：本款「120」默认已被 **§14.55 条 2** 取代——生产主线轮预算
+   默认无限制（`max_tool_rounds=0`），仅显式配置上限时机械闸生效；本款为
+   历史口径。〕
 
 现有 `retrieval-result-v0.1.schema.json` 与 `retrieval-session-close-receipt-v0.1.schema.json` 作为
 迁移输入；新 writer 必须使用本 ADR 对应的新版本，旧版本只用于 replay。
@@ -103,6 +107,10 @@ active -> failed/cancelled -> closing -> closed_resumable
    独立起算；检索子代理经 `continue(requirement_delta)` 重入后保持同一 session——已耗工具轮跨
    dispatch 累计，不得因重入重置；只有 activation 关闭（close/失败/取消/预算耗尽）后，下一个新
    activation 才从 0 起算（v1.2 补写，2026-08-10）。
+   〔**失效标注（345 批就地落地，2026-10-23；指针经 vol-14 §14.89 条 4 失效
+   标注清单）**：本款「预算均为 120」默认已被 **§14.55 条 2** 取代——默认
+   无限制（`max_tool_rounds=0`），预算机制仅显式配置上限时生效；「独立计数、
+   模型可见、session 连续记账、重入不重置」等结构语义仍为现行。〕
 
 ### 3.5 Tool availability、permission 与失败反馈
 
@@ -134,6 +142,9 @@ active -> failed/cancelled -> closing -> closed_resumable
    denial key 变化或 permission policy revision 变化都会重置连续计数。用户取消、timeout、tool error 与
    permission deny 分开记账。该机制只修正 tool-belief/availability，不触发 Orientation，也不承担总预算
    职责；全局 anti-runaway 已由 120 工具轮预算覆盖。
+   〔**失效标注（345 批就地落地，2026-10-23）**：「120 工具轮预算」默认已由
+   **§14.55 条 2** 取代（默认无限制）；本句的 anti-runaway 归因现由评测墙钟
+   与连续拒绝断路器承担。〕
 5. 子代理文件写域继续以 §3.2 为唯一 allowlist，并服从 ADR-0009：blackboard、检索文档与检索记录
    都是 workspace-related A 类写点，默认位于工作区 `.gsa/` 或任务合同显式指定的工作区路径；不得
    落入 B 类本体目录。B 类 runtime 配置/session/memory 仍走安装目录 `grok-home` 与既定降级链。
@@ -245,6 +256,9 @@ offset 分段）落成工具契约；与 pdf_read 的 `document_id` + `page_rang
    下载为内容寻址的本地证据，页文本、metadata 与 extraction record 可重建。
 7. 全局 `web_search = 1`、browser tab ownership、站点速率限制和下载大小限制属于检索工具合同；它们
    不削减子代理 session 的模型、thinking、transport 或 120 轮预算。
+   〔**失效标注（345 批就地落地，2026-10-23）**：「120 轮预算」默认已由
+   **§14.55 条 2** 取代（默认无限制，仅显式配置上限时存在）；本条其余合同
+   语义仍为现行。〕
 8. 主 Agent 可以直接使用同一 `web_search`，但不得绕过 source ledger/visibility 规则；通过子代理检索
    的主要价值是隔离上下文、保留原始来源和降低主对话污染，不是把无来源摘要包装成事实。
 9. 保留 FIX_PLAN D-1 的“claim-bearing 内容在使用处绑定可定位来源”原则，废止把固定

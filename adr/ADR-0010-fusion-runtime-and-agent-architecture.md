@@ -191,6 +191,13 @@
      warn 臂（编码旗/管道落解释器留痕）、Windows 交互缺省 yolo 收紧
      （headless 与非 Windows 不变）＋附随勘误（restore 面毒锁统一、
      `find_protoc` Windows 臂、fixture 生成器 v0.2 override）。见 §14.90。
+   - 冻结版本补记（2026-10-23 追加 v1.95，0do/345 批）：**344 审查发现
+     处置**——§14.89 条 4 失效标注自「集中登记」转「就地落地」（vol-03
+     四处 120 预算、vol-02 §2.4 条 8 主 UI、§14.72 条 11 十工具列举就地
+     补指针；清单两处小节号勘正＋补扫两处同语境残留）；写面包含门补
+     canonical 近祖先解析（预存链接目录穿越面）、restore/混式锁面毒锁
+     `warn` 留痕统一；CI 增 Linux 测试面（闭非 Windows 臂零执行缺口）。
+     见 §14.89 条 4 与 345 审计档。
    - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
