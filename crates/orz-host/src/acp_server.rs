@@ -5947,9 +5947,12 @@ impl AcpServer {
     /// workspace-trust observation + IP6 permission bridge.
     ///
     /// The bridge consumes the outbound ACP gateway when one is wired
-    /// (`--stdio`); otherwise a dead gateway — the manager 默认自动审批
-    /// （初始 yolo，用户令 2026-09-26），非 yolo 的 `Ask` 仍 fail closed。
-    /// `policy` fixes the
+    /// (`--stdio`); otherwise a dead gateway。初始审批姿态按 ADR-0010
+    /// §14.90 条 3（0do/344 批 2026-10-23）：Windows 下有活审批面
+    /// （gateway/hub 任一在位）缺省 confirm-first——Ask 直达交互确认，
+    /// 不再默认自动审批；headless（两者皆无）与非 Windows 维持初始 yolo
+    /// （用户令 2026-09-26 自此收窄至该两车道）。非 yolo 的 `Ask` 仍
+    /// fail closed。`policy` fixes the
     /// bridge's per-session behavior (slice #16): a read-only session denies
     /// mutation/network without prompting.
     fn build_host(

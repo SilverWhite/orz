@@ -3,11 +3,14 @@
 //! IP6 (hard-gate @ orz-workspace::permission) is the single allowed
 //! assurance injection into kept Grok providers. This bridge walks public
 //! seams only:
-//! - yolo ON by default (用户令 2026-09-26「直接开auto mode就行」：工作台
-//!   默认自动审批，手动弹窗退役为非默认路径) — the manager starts in
-//!   always-approve; policy denies (ReadOnly/Benchmark) still short-circuit
-//!   BEFORE yolo, and the no-bridge `OrzHost::new` default stays fail-closed
-//!   `Deny` (review P1-1 不动);
+//! - 默认审批姿态双轨（ADR-0010 §14.90 条 3，0do/344 批 2026-10-23）：
+//!   Windows 交互面（gateway/hub 任一在位）缺省 confirm-first（见
+//!   `default_initial_yolo`）；headless 与非 Windows 维持 yolo——the
+//!   manager starts in always-approve（用户令 2026-09-26「直接开auto
+//!   mode就行」：工作台默认自动审批、手动弹窗退役为非默认路径，该令自此
+//!   收窄至 headless/非 Windows 车道）；policy denies (ReadOnly/Benchmark)
+//!   still short-circuit BEFORE yolo, and the no-bridge `OrzHost::new`
+//!   default stays fail-closed `Deny` (review P1-1 不动);
 //! - interactive prompting (`PermissionHookTransport`) remains the manual
 //!   path; a non-yolo `Ask` still fails closed to `Deny` (timeout/cancel
 //!   included);

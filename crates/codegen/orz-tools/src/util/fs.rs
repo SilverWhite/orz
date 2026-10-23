@@ -58,6 +58,37 @@ pub(crate) async fn try_canonicalize(path: &Path) -> std::io::Result<PathBuf> {
         .map(|p| dunce::simplified(&p).to_path_buf())
 }
 
+/// Async near-ancestor canonical: when the target does not exist or fails to canonicalize, walk up to the nearest
+/// ancestor that resolves successfully and canonicalize it, joining the remaining segments lexically (mirroring
+/// the semantics of the sync variant [`crate::types::write_control::best_effort_canonical`]; tool faces
+/// run in async context, so fs calls go through this module's wrapper). Used by the write containment gate — when a pre-existing
+/// symlink/junction directory inside the workspace points outside the workspace, the lexical form determines truth while
+/// the actual disk write happens outside; the containment must resolve existing ancestors first before judging.
+pub(crate) async fn best_effort_canonical_with_timeout(path: &Path) -> PathBuf {
+    let mut probe = path.to_path_buf();
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        match try_canonicalize(&probe).await {
+            Ok(canon) => {
+                let mut out = canon;
+                for seg in tail.iter().rev() {
+                    out.push(seg);
+                }
+                return out;
+            }
+            Err(_) => match probe.parent() {
+                Some(parent) if parent != probe => {
+                    if let Some(name) = probe.file_name() {
+                        tail.push(name.to_os_string());
+                    }
+                    probe = parent.to_path_buf();
+                }
+                _ => return path.to_path_buf(),
+            },
+        }
+    }
+}
+
 /// OS-specific special characters that appear in generated filenames but that
 /// models will never produce. Each entry maps a Unicode character to its ASCII
 /// equivalent.

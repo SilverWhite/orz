@@ -22,3 +22,38 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+  # 0do/345 批（2026-10-23，全仓审查处置）：非 Windows 臂此前在全自动化
+  # 中零编译验证、零执行（fmt 不 build），`default_initial_yolo` 等
+  # `cfg!()` 双臂语义的 Linux 面回归将完全静默——本 job 补编译＋测试面。
+  # orz-host 进程树/会话卷类测试在 Linux 的姿态未经验证，先以观察模式
+  # 挂（continue-on-error），首轮读数后再转必阻断。
+  linux-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test orz-assurance (lib)
+        run: cargo test -p orz-assurance --lib
+
+      - name: Test orz-loop (lib)
+        run: cargo test -p orz-loop --lib
+
+      - name: Test orz-tools (lib)
+        run: cargo test -p orz-tools --lib
+
+      - name: Test orz-host (lib, serial)
+        run: cargo test -p orz-host --lib -- --test-threads=1
+        continue-on-error: true

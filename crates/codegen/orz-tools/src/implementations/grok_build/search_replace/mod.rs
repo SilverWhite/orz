@@ -254,15 +254,19 @@ pub(crate) async fn run_search_replace(
     // 0do/344 批（2026-10-23，ADR-0010 §14.90 条 1）：模型写面 workspace
     // 包含性判定——解析后目标必须落在会话工作区根之内（canonical 前缀
     // 比对，Windows 大小写折叠／verbatim 前缀沿用 `path_hits_root`）。
-    // 宿主状态门（C1/C1′/C2′）照旧前置；canonicalize 失败（新建目标）
-    // 回落词法形态兜底。工作区之外的写面（绝对路径越界、上级穿越、
-    // 用户主目录配置文件等）自此机械拒绝，越界写诉求交回用户显式指令
-    // （run_terminal_cmd 走审批组件）承载。
+    // 宿主状态门（C1/C1′/C2′）照旧前置。工作区之外的写面（绝对路径越界、
+    // 上级穿越、用户主目录配置文件等）自此机械拒绝，越界写诉求交回用户
+    // 显式指令（run_terminal_cmd 走审批组件）承载。
+    // 0do/345 批补口（同日，审查发现）：canonicalize 失败/新建目标不再
+    // 回落词法形态——近祖先 canonical 解析存在段后再判，防工作区内预存
+    // 符号链接/junction 目录指向区外时「词法判真、实际落盘在区外」的
+    // 穿越面（`best_effort_canonical_with_timeout`）。
     {
         let ws_root = crate::util::fs::try_canonicalize(&cwd)
             .await
             .unwrap_or_else(|_| cwd.clone());
-        if !crate::types::write_control::path_hits_root(&ws_root, &path) {
+        let canonical_target = crate::util::fs::best_effort_canonical_with_timeout(&path).await;
+        if !crate::types::write_control::path_hits_root(&ws_root, &canonical_target) {
             return Ok(SearchReplaceOutput::InvalidInput(format!(
                 "Error: {} is outside the session workspace ({}) and cannot be \
                  edited by search_replace.",
@@ -4004,6 +4008,54 @@ neutTest_set);
             std::fs::read_to_string(&outside_file).unwrap(),
             "old text\n",
             "outside target must remain untouched"
+        );
+    }
+
+    /// 0do/345（2026-10-23，审查发现补口）：包含门不得信任词法前缀——工作区
+    /// 内预存符号链接/junction 目录指向区外时，词法形态判真、实际落盘在区外；
+    /// 门须解析存在祖先后再判（`best_effort_canonical_with_timeout`）。
+    /// 目标经链接目录解析到区外，必须拒绝。
+    #[tokio::test]
+    async fn search_replace_resolves_preexisting_link_dirs_for_containment() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let outside = TempDir::new().unwrap();
+        let outside_dir = dunce::canonicalize(outside.path()).unwrap();
+        let link = ws.join("link");
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&outside_dir)
+                .status()
+                .expect("spawn cmd for junction creation");
+            assert!(status.success(), "junction creation failed");
+        }
+        #[cfg(not(windows))]
+        std::os::unix::fs::symlink(&outside_dir, &link).expect("symlink dir creation");
+
+        let tool = SearchReplaceTool;
+        // 目标经链接目录指向区外（不存在于盘上）：按真实落盘位置拒。
+        let escaped = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(test_resources(&ws).into_shared()),
+            make_input("link/escape.txt", "old text", "new text"),
+        )
+        .await
+        .unwrap();
+        match escaped {
+            SearchReplaceOutput::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("outside the session workspace"),
+                    "link-dir escape must be refused by containment, got: {msg}"
+                );
+            }
+            other => panic!("Expected containment InvalidInput through link dir, got {other:?}"),
+        }
+        assert!(
+            !outside_dir.join("escape.txt").exists(),
+            "no file may be materialized through the link dir"
         );
     }
 

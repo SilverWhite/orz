@@ -1776,10 +1776,11 @@ mod tests {
     #[tokio::test]
     async fn read_only_and_workspace_write_threads_coexist() {
         // One server, two threads with different sandboxes: the
-        // workspace-write thread executes under the default auto-approval
-        // (initial yolo — 用户令 2026-09-26); the read-only thread's
-        // same-class tool is denied by policy before the manager sees it.
-        // Zero approvals across both sandboxes.
+        // workspace-write thread executes（Windows：confirm-first 缺省下经
+        // 一次审批应答后执行——ADR-0010 §14.90；非 Windows：初始 yolo 直接
+        // 执行）; the read-only thread's same-class tool is denied by
+        // policy before the manager sees it——该 deny 在任一平台都不出
+        // 审批线。
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
@@ -1811,10 +1812,11 @@ mod tests {
                 run_turn(&mut w, &mut r, "thr_ro", "一").await;
                 run_turn(&mut w, &mut r, "thr_ww", "二").await;
 
-                // Drain to both terminals; nothing should ever ask (yolo on
-                // the ww thread, policy deny on the ro thread) — the responder
-                // below stays defensive: an unexpected approval would mean a
-                // default regression.
+                // Drain to both terminals; the responder below is a
+                // load-bearing path, not a defensive net（Windows：ww 线程
+                // 恰一次审批经其应答，ro 线程 policy deny 零审批；非
+                // Windows：零审批维持 yolo）——unexpected extra approvals
+                // would still mean a default regression.
                 let mut approvals: Vec<JsonMessage> = Vec::new();
                 let mut completed = 0u32;
                 tokio::time::timeout(TURN_WAIT, async {
@@ -1852,7 +1854,7 @@ mod tests {
                 let ro_events = journal_events(&base, "thr_ro", 0);
                 assert!(
                     !ro_events.contains(
-                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"call-act-1\",\"exit_code\""
+                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"call-act-ro\",\"exit_code\""
                     ),
                     "read-only thread never writes: {ro_events}"
                 );
@@ -1865,6 +1867,12 @@ mod tests {
                 assert!(
                     ww_events.contains("\"tool_started\""),
                     "workspace-write thread executed: {ww_events}"
+                );
+                assert!(
+                    ww_events.contains(
+                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"call-act-ww\",\"exit_code\":0"
+                    ),
+                    "workspace-write completion pinned to its real call id: {ww_events}"
                 );
                 assert_eq!(journal_terminal(&base, "thr_ww", 0), "run_finished");
             })

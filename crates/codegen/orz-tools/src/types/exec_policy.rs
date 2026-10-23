@@ -82,6 +82,11 @@ pub const BLOCK_RULES: [&str; 5] = [
 ];
 
 /// warn 规则封闭集（纯留痕、不阻断；恰 3 条——新增表项必改本表与测试）。
+///
+/// 已知残余（warn 级，登记待 block 化读数）：误报族＝引号散文（`echo "-enc"`、
+/// `grep "a|bash"`——旗臂不看 fully_quoted、管道臂原串扫描不识别引号）与
+/// `grep -ec` 组合短旗；漏报族＝`iex`/`Invoke-Expression`、`python -c`/`perl -e`、
+/// `|&`、`-command -`、pwsh 旗缩写只收 4 形态。block 化批处理时一并收敛。
 pub const WARN_RULES: [&str; 3] = ["broad-destructive", "elevation", "encoded-exec"];
 
 /// 命中事实（block／warn 共用）。

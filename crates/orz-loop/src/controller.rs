@@ -52,6 +52,14 @@ use crate::prompt::{
 use crate::retrieval::activation::{ActivationRegistry, StoredActivation};
 use crate::retrieval::evidence::EvidenceRecord;
 
+/// 毒锁容忍取内值（0do/345 批统一形态）：持锁线程 panic 后继续取内部值
+/// （343 事故面纪律——恢复/继续路径不得二次 panic），但必须 `warn` 留痕
+/// ——静默 `into_inner` 让中毒根因不可观测。新锁面一律经本助手。
+fn poison_proceed<T>(what: &'static str, err: std::sync::PoisonError<T>) -> T {
+    tracing::warn!(mutex = what, "lock poisoned; proceeding with inner state");
+    err.into_inner()
+}
+
 /// Cap on model↔tool rounds per turn (anti-runaway backstop).
 ///
 /// TER T1.7 (2026-09-04, ADR-0010 §14.53 / 设计稿 §3.8)：默认 **无硬限**
@@ -1434,7 +1442,7 @@ impl AgentLoopController {
                     // run start when the journal writer exists.
                     self.epoch_archive_errors
                         .lock()
-                        .unwrap()
+                        .unwrap_or_else(|e| poison_proceed("epoch_archive_errors", e))
                         .push((snapshot.plan_epoch, EpochArchiveWriteKind::Rotated));
                 }
             }
@@ -1450,7 +1458,7 @@ impl AgentLoopController {
                 );
                 self.epoch_archive_errors
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(|e| poison_proceed("epoch_archive_errors", e))
                     .push((current.plan_epoch, EpochArchiveWriteKind::Current));
             }
         }
@@ -1483,7 +1491,7 @@ impl AgentLoopController {
                     );
                     self.epoch_archive_errors
                         .lock()
-                        .unwrap()
+                        .unwrap_or_else(|e| poison_proceed("epoch_archive_errors", e))
                         .push((snapshot.plan_epoch, EpochArchiveWriteKind::Rotated));
                 }
             }
@@ -1499,7 +1507,7 @@ impl AgentLoopController {
                 );
                 self.epoch_archive_errors
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(|e| poison_proceed("epoch_archive_errors", e))
                     .push((current.plan_epoch, EpochArchiveWriteKind::Current));
             }
         }
@@ -1899,7 +1907,7 @@ impl AgentLoopController {
         let trace = self
             .console_traces
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| poison_proceed("console_traces", e))
             .new_trace(Some(call_id.to_string()));
         let stamp = crate::console_mode::DirectStamp {
             transition_id,
@@ -1932,7 +1940,7 @@ impl AgentLoopController {
             .commit(&trace);
         self.console_mode_state
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| poison_proceed("console_mode_state", e))
             .record_direct_trace(&stamp.trace_id);
     }
 
@@ -3227,8 +3235,9 @@ impl AgentLoopController {
         self.lif
             // 344 批（2026-10-23）：restore 面与 watchdog/审计面统一毒锁容忍
             // ——LifEngine 持锁线程 panic 后，恢复路径不得二次 panic。
+            // 345 批：经 `poison_proceed` 补 `warn` 留痕（静默吞毒根因不可观测）。
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(|e| poison_proceed("lif", e))
             .temporal_mut()
             .restore_spikes(spikes);
     }
@@ -3289,7 +3298,7 @@ impl AgentLoopController {
     pub fn rli_complexity_reading(&self) -> Option<orz_assurance::lif::RliComplexityReading> {
         self.lif
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(|e| poison_proceed("lif", e))
             .rli_shadow()
             .map(orz_assurance::lif::RliShadow::complexity_reading)
     }
@@ -3334,9 +3343,10 @@ impl AgentLoopController {
     ) {
         self.lif
             // 344 批（2026-10-23）：同 restore_temporal_spikes——会话恢复是
-            // 343 事故面，毒锁后仍须可恢复，不得二次 panic。
+            // 343 事故面，毒锁后仍须可恢复，不得二次 panic。345 批经
+            // `poison_proceed` 补 `warn` 留痕。
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(|e| poison_proceed("lif", e))
             .restore_temporal_session(snapshot, axis_origin_wall);
     }
 
@@ -3367,7 +3377,7 @@ impl AgentLoopController {
     pub(crate) fn effective_blackboard_stamp(&self) -> (u64, Domain) {
         self.board_stamp_pin
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| poison_proceed("board_stamp_pin", e))
             .unwrap_or_else(|| self.blackboard_stamp())
     }
 
