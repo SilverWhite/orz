@@ -35,7 +35,7 @@ Configure Windows and Linux as follows:
 | 4. Set startup environment | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
 | 5. Run | `.\orz.exe` (interactive TUI)<br>`.\orz.exe -p "your task" --real` (headless)<br>`.\orz.exe web` (Web workbench; prints the local token-bearing URL) | `./orz` (interactive TUI)<br>`./orz -p "your task" --real` (headless)<br>`./orz web` (Web workbench; prints the local token-bearing URL) |
 
-Release notes and integrity verification live on GitHub Releases (latest [v0.9.12](https://github.com/SilverWhite/orz/releases/tag/v0.9.12), dual-platform packages + `SHA256SUMS`); the 0.1.0–0.5.1 trial packages are under [`releases/`](../../releases/).
+Release notes and integrity verification live on GitHub Releases (latest [v0.9.12-1](https://github.com/SilverWhite/orz/releases/tag/v0.9.12-1), dual-platform packages + `SHA256SUMS`; the tag carries a re-release suffix `-1` while the packaged version remains 0.9.12 — the first tag `v0.9.12` became unreusable after its immutable release was deleted, see the [346 audit](../../docs/audits/346_CARRIER_REBUILD_AND_RELEASE_V0912_2026-10-24.md) (Chinese)); the 0.1.0–0.5.1 trial packages are under [`releases/`](../../releases/).
 
 ### Common entry points
 
