@@ -17,13 +17,13 @@
 
 | 步骤 | Windows（PowerShell） | Linux（sh） |
 |---|---|---|
-| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.10-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
+| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.12-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
 | 2. 配置 API Key | 存入 Windows 凭据管理器（Generic，目标名 `orz-deepseek/agent`；一次即可）：<br>`cmdkey /generic:orz-deepseek/agent /user:agent /pass:你的DeepSeek_API_Key` | 用环境变量（Windows 凭据管理器通道的显式例外）：<br>`export ORZ_DEEPSEEK_API_KEY=你的DeepSeek_API_Key` |
 | 3. 初始化安全签发（一次性） | `.\orz-acaf-provision.exe "$env:USERPROFILE\.orz-acaf\keystore" "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br><br>ACAF 默认 fail-closed，未配置会拒绝启动 run（进程可用、run 拒绝执行）。 | `./orz-acaf-provision "$HOME/.orz-acaf/keystore" "$HOME/.orz-acaf/signer-manifest.json"` |
 | 4. 设置启动环境 | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
 | 5. 运行 | `.\orz.exe`（交互 TUI）<br>`.\orz.exe -p "你的任务" --real`（无头模式）<br>`.\orz.exe web`（Web 工作台，打印本地带令牌地址） | `./orz`（交互 TUI）<br>`./orz -p "你的任务" --real`（无头模式）<br>`./orz web`（Web 工作台，打印本地带令牌地址） |
 
-发布包说明与完整性校验见 GitHub Release（最新 [v0.9.10](https://github.com/SilverWhite/orz/releases/tag/v0.9.10)，双平台包＋`SHA256SUMS`）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
+发布包说明与完整性校验见 GitHub Release（最新 [v0.9.12](https://github.com/SilverWhite/orz/releases/tag/v0.9.12)，双平台包＋`SHA256SUMS`）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
 
 ### 常用入口
 
@@ -103,15 +103,15 @@ orz 直接运行在真机上是设计选择。
 3. **灾难写保底——写入管控**：封闭枚举恰好五条拦截规则，只接住不可逆的毁灭形态——根级递归删除、裸设备／卷毁写、引导固件与安全机制翻转、注册表蜂巢删除、宿主状态写（`.gsa` 会话卷与其祖先目录、ACAF 密钥库根／签名器清单及其祖先链）。319 修复批把规则 1 扩到工作区根／祖先／无约束通配／`find -delete`／`xargs rm`／`cd` 受护目录后 `rm -rf *`，并新增维护子命令命令面 block（最终以 319 报告为准；余项 0dl）。一般写动作照常放行、归审批组件。三道实施面＝工具面、命令词法审查、Linux Landlock 内核守卫（仅子进程写面；内核 <5.13 或不可用时 fail-open 跳过）。→ 设计见 [`写控设计档`](docs/WRITE_CONTROL_BACKSTOP_REVISION_DESIGN_2026-09-29.md)，对外口径见 [`orz/SECURITY.md`](orz/SECURITY.md)。
 4. **审计与恢复**：hash-chained journal（事件 schema v0.2）加 verifier 交叉校验、只读 `--replay`、编辑面回退窗口（`orz rollback list`／`orz rollback restore` 撤销 CLI）、载体完整性自检。
 
-已知边界：不防已失陷的签发器、同用户恶意进程、内核级失陷与恶意模型服务；票据证明来源与授权，不证明命令明智；命令审查是尽力而为的词法匹配——变量拼接、别名、脚本内命令、`.NET`/解释器直调、编码混淆、Windows 短名／junction／UNC 未存在面仍不保证覆盖；维护 CLI 已有桥注入的 `ORZ_MAINTENANCE_TICKET` 令牌门＋命令面 block，TTY 确认未落（0dl 余项）；`.gsa` shell 读面为读全开放口径。真机默认无沙箱、权限 yolo 自动放行。
+已知边界：不防已失陷的签发器、同用户恶意进程、内核级失陷与恶意模型服务；票据证明来源与授权，不证明命令明智；命令审查是尽力而为的词法匹配——变量拼接、别名、脚本内命令、`.NET`/解释器直调、编码混淆、Windows 短名／junction／UNC 未存在面仍不保证覆盖；维护 CLI 已有桥注入的 `ORZ_MAINTENANCE_TICKET` 令牌门＋命令面 block，TTY 确认未落（0dl 余项）；`.gsa` shell 读面为读全开放口径。真机默认无沙箱；权限自 0.9.12 起缺省双轨——Windows 桌面形态（有活审批面）缺省逐次确认（confirm-first），无人值守与 Linux/macOS 维持自动审批（0.9.11 及更早为全缺省自动审批）。
 
-## 0.9.10 更新（2026-10-23）
+## 0.9.12 更新（2026-10-24）
 
-- **恢复后的回放顺序**：会话内 run 按数值序号稳定排序，不再依赖回档时可能被压平的文件 mtime；实时尾、标记栏与“恢复并继续”统一选择最新 run。
-- **关闭态可见**：Web 会话清单读取权威 `.closed` 标记，Explorer 把“活跃会话”“已关闭会话”“归档会话”分开；已关闭会话仍可只读查看并显式恢复。
-- **旧会话身份兼容**：历史 conversation 只有 8 位短 ID 时，仅在 orientation 与 activation 两份侧车都指向同一完整 UUID 时允许迁移；冲突或证据不全即 fail-closed。
-- **真实会话切换**：先载入新会话、再切换前端绑定、最后以 `close(switch)` 释放旧 host 会话和 lease；新会话载入失败时保留旧绑定，避免两头落空。
-- **重建与核证**：Windows／Linux `0.9.10` 双平台载体；Windows 装机位换装并重 provision ACAF，Linux 为 static PIE；活体 bridge/child 版本一致。
+- **会话恢复自愈**：跨隔夜续跑不再毒化会话侧车——RLI 过阻尼闭式解改两根指数形式（数值不再溢出）；已被毒化的历史会话在装载时按静止水平自动清零自愈；侧车损坏时如实报「损坏」并给证据，不再谎报「会话不存在」。
+- **写面越界防护**：`search_replace` 只可编辑会话工作区内的文件，越界机械拒绝；工作区内预存符号链接/junction 目录按真实落盘位置判定，不可借道穿越。
+- **命令面留痕**：PowerShell 编码执行旗（`-enc` 等）与管道直落 shell 解释器（`curl … | sh` 等）现在留痕告警（不阻断，阻断化待真机读数）。
+- **交互缺省收紧**：Windows 桌面形态（存在审批面）缺省逐次确认（confirm-first）；无人值守与 Linux/macOS 维持自动审批；已批准面重 provision 后照常使用。
+- **重建与核证**：Windows／Linux `0.9.12` 双平台载体；Windows 装机位换装并重 provision ACAF，Linux 为 static PIE；活体 bridge/child 版本一致。
 
 ## 开发者入口
 
