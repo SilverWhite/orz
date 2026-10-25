@@ -28,7 +28,7 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::{SecondsFormat, Utc};
+use chrono::SecondsFormat;
 use orz_assurance::credential::zeroize_bytes;
 use orz_assurance::journal::{canonical_json, sha256_hex};
 use orz_assurance::permit::{HmacSha256Signer, PermitError, PermitSigner};
@@ -243,7 +243,7 @@ impl WindowsDpapiInstallationKeyStore {
                 schema_version: "0.1.0-draft".to_string(),
                 metadata_kind: "installation_key_metadata".to_string(),
                 key_id: key_id.clone(),
-                created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+                created_at: orz_assurance::clock::now_opts(SecondsFormat::Secs),
                 key_algorithm: "hmac-sha256".to_string(),
                 key_bytes: KEY_BYTES as u32,
                 storage: STORAGE_ID.to_string(),
@@ -412,7 +412,7 @@ impl FileInstallationKeyStore {
                 schema_version: "0.1.0-draft".to_string(),
                 metadata_kind: "installation_key_metadata".to_string(),
                 key_id: key_id.clone(),
-                created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+                created_at: orz_assurance::clock::now_opts(SecondsFormat::Secs),
                 key_algorithm: "hmac-sha256".to_string(),
                 key_bytes: KEY_BYTES as u32,
                 storage: FILE_STORAGE_ID.to_string(),

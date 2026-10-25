@@ -7,6 +7,7 @@
 
 pub mod acaf;
 pub mod candidate_prefilter;
+pub mod clock;
 pub mod credential;
 pub mod gates;
 pub mod journal;

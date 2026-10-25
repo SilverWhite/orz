@@ -293,7 +293,7 @@ pub(crate) fn build_evidence_record(
         missing_scope: missing_scope.to_string(),
         candidate_urls,
         search_query,
-        accessed_at: chrono::Utc::now().to_rfc3339(),
+        accessed_at: orz_assurance::clock::now(),
     })
 }
 
@@ -463,7 +463,7 @@ pub(crate) fn build_structured_result(
                     "url": removed.url,
                     "reason": removed.reason.as_str(),
                     "action": "removed",
-                    "filtered_at": chrono::Utc::now().to_rfc3339(),
+                    "filtered_at": orz_assurance::clock::now(),
                 });
                 if let Some(canonical_url) = &removed.canonical_url {
                     log_entry["canonical_url"] = serde_json::Value::String(canonical_url.clone());
@@ -484,7 +484,7 @@ pub(crate) fn build_structured_result(
             "source_url_or_ref": doc,
             "source_type": "project_doc",
             "visibility": "metadata_only",
-            "accessed_at": chrono::Utc::now().to_rfc3339(),
+            "accessed_at": orz_assurance::clock::now(),
             "observed_scope": "declaration only",
             "missing_scope": "content",
             "relevance": "direct",
@@ -506,7 +506,7 @@ pub(crate) fn build_structured_result(
             "source_url_or_ref": source_url_or_ref,
             "source_type": fallback_source_type,
             "visibility": "metadata_only",
-            "accessed_at": chrono::Utc::now().to_rfc3339(),
+            "accessed_at": orz_assurance::clock::now(),
             "observed_scope": "declaration only",
             "missing_scope": "content",
             "relevance": "direct",

@@ -5167,7 +5167,7 @@ impl<'a> EventWriter<'a> {
 
 /// Get current UTC timestamp in ISO 8601 format.
 pub(crate) fn chrono_utc_now() -> String {
-    chrono::Utc::now().to_rfc3339()
+    orz_assurance::clock::now()
 }
 
 #[cfg(test)]

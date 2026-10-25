@@ -24,7 +24,7 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use chrono::{SecondsFormat, Utc};
+use chrono::SecondsFormat;
 use wildmatch::WildMatch;
 
 /// Minimum length for a candidate credential-like string (avoids false
@@ -80,7 +80,7 @@ pub fn get_scrub_audit() -> Vec<ScrubRecord> {
 }
 
 fn utc_now_iso() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+    crate::clock::now_opts(SecondsFormat::Millis)
 }
 
 /// Sequence counter so each guard can be identified in the audit log.

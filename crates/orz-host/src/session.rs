@@ -210,7 +210,7 @@ pub async fn bootstrap_session(
     // `schema_version` flips to 0.2.0-draft (Python canonical_cli parity).
     let manifest = serde_json::json!({
         "run_id": run_id,
-        "created_at": chrono::Utc::now().to_rfc3339(),
+        "created_at": orz_assurance::clock::now(),
         "schema_version": "0.1.0-draft",
     });
     let manifest_sha256 =
@@ -226,7 +226,7 @@ pub async fn bootstrap_session(
         EventTrack::V02.payload_schema_id().into(),
         manifest,
         Redaction::None,
-        chrono::Utc::now().to_rfc3339(),
+        orz_assurance::clock::now(),
     );
     // 0v-C（2026-09-12）：不在漏斗外预封印——record_async 先对 payload 做
     // 机械脱敏再封印，并返回**落盘**的 event_sha256。链首链接必须取这个

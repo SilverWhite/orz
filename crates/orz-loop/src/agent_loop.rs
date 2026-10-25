@@ -2218,10 +2218,14 @@ impl PlanBaseline {
 /// 才允许再提示一次；用尽后 fail-open 接受（不再无限加轮）。
 pub(crate) const TERMINAL_NUDGE_MAX: u32 = 2;
 
-/// 0dm：终态声明是否生效＝controller 车道位 && env 开关。两者必须同时为
-/// 真；任一关闭都退回旧反例门，避免「既不要求声明也不注入旧门」的弱化。
+/// 353 批：终态声明是否生效＝controller 车道位 **或** 全局 env 开关。
+///
+/// 两者缺省皆关：交互车道零声明（文本轮无条件交付），benchmark/headless
+/// 车道用 `ORZ_TERMINAL_DECLARATION=required` 或 controller 车道位开启。
+/// 任一为真即要求——0dm 的 AND 语义会让 env 缺省关闭时把 benchmark 车道
+/// 一起拖死，这里改成"各自能独立打开"。
 fn declaration_required_for(controller_required: bool, env_required: bool) -> bool {
-    controller_required && env_required
+    controller_required || env_required
 }
 
 /// 0dm：终答来源的纯映射（声明 > 有执行事实 > 短聊）。`declaration_required`
@@ -3274,10 +3278,18 @@ pub(crate) async fn run_agent_loop(
         // 0dm（2026-10-21）：主车道常驻软提示（用户指定文案，逐字）＋终态
         // 语法短行。放系统提示（不进对话侧车、不增加模型面消息条数）。
         let system = if profile.self_check_prompt {
+            // 353：终态声明缺省关闭——只有显式 required 的车道才在系统提示
+            // 里挂"结束前输出"这一句（它每轮都在把"继续"翻译成"收尾"）。
+            let declaration = if crate::model_stop::terminal_declaration_required() {
+                "\n结束前输出 [RUN_END]（intent/reason/summary）。"
+            } else {
+                ""
+            };
             format!(
-                "{}\n\n{}\n结束前输出 [RUN_END]（intent/reason/summary）。",
+                "{}\n\n{}{}",
                 system,
-                crate::prompt::SELF_CHECK_RESIDENT_LINE
+                crate::prompt::SELF_CHECK_RESIDENT_LINE,
+                declaration
             )
         } else {
             system
@@ -5918,16 +5930,11 @@ pub(crate) async fn run_agent_loop(
             if messages.iter().rev().any(|m| m.role == Role::Tool) {
                 let notices = controller.take_pending_rli_notices();
                 if !notices.is_empty() {
-                    let mut block = String::new();
-                    for notice in &notices {
-                        block.push_str("\nRLI提醒: ");
-                        block.push_str(&notice.text);
-                    }
-                    if let Some(last_tool) =
-                        messages.iter_mut().rev().find(|m| m.role == Role::Tool)
-                    {
-                        last_tool.content.push_str(&block);
-                    }
+                    // 353 批（2026-10-25 用户裁决）：**RLI 推送面删除**——
+                    // 只保留 `blackboard_read section=rli` 的拉取面。推送把
+                    // "读数"污染成"评价"（每几轮一次 stuck/low_progress），
+                    // 且 `T̂(秒)` 是整套系统里唯一的秒级信号，与"无墙钟"
+                    // 的设计意图直接冲突。观测面仍逐条落 journal（模型不可见）。
                     for notice in &notices {
                         let payload = mechanical_audit.record(
                             format!(
@@ -6384,8 +6391,8 @@ mod tests {
         assert!(!grill.terminal_declaration);
         assert!(!grill.self_check_prompt);
         assert!(declaration_required_for(true, true));
-        assert!(!declaration_required_for(true, false));
-        assert!(!declaration_required_for(false, true));
+        assert!(declaration_required_for(true, false));
+        assert!(declaration_required_for(false, true));
         assert!(!declaration_required_for(false, false));
         assert_eq!(terminal_source_for(true, true), "run_end");
         assert_eq!(terminal_source_for(false, true), "text_without_terminal");

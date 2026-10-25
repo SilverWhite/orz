@@ -229,7 +229,7 @@ fn write_terminal_sidecar(
 
 /// Compact UTC timestamp for the sidecar.
 fn chrono_now_compact() -> String {
-    chrono::Utc::now().to_rfc3339()
+    crate::clock::now()
 }
 
 /// The shared handle to the journal recorder.

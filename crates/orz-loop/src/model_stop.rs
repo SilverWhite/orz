@@ -84,20 +84,25 @@ pub fn model_stop_await_enabled() -> bool {
         .unwrap_or(true)
 }
 
-/// 0dm（2026-10-21）：主车道「有执行事实」的终态声明要求开关。
+/// 353 批（2026-10-25 用户裁决）：主车道「有执行事实」的终态声明要求开关。
 ///
-/// `ORZ_TERMINAL_DECLARATION=off|0|false|no` 显式关闭（跑分装置/外部 ACP
-/// 客户端）；缺省 `required`。开关只影响**是否要求** `[RUN_END]`，不影响
-/// 声明本身的解析与落账。
+/// **缺省关闭**——交互车道的文本轮无条件交付（无 `tool_calls` 即回合结束），
+/// 声明只作可选元数据：出现就剥离并落账，不出现不阻断、不催收。理由见
+/// `docs/audits/353_TURN_ATOMICITY_AND_TERMINAL_CONTRACT_2026-10-25.md`：
+/// 文本契约的失败是静默的，代价是丢一轮交付（RUN-51da03ea-11 实证）。
+///
+/// `ORZ_TERMINAL_DECLARATION=required|on|1|true|yes` 显式开启（benchmark /
+/// headless / 外部 ACP 客户端——那里确实需要机器可读终态）。开关只影响
+/// **是否要求** `[RUN_END]`，不影响声明本身的解析与落账。
 pub fn terminal_declaration_required() -> bool {
     std::env::var("ORZ_TERMINAL_DECLARATION")
         .map(|v| {
-            !matches!(
+            matches!(
                 v.trim().to_ascii_lowercase().as_str(),
-                "off" | "0" | "false" | "no"
+                "required" | "on" | "1" | "true" | "yes"
             )
         })
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 /// 从模型收束文本里提取**最后一段**声明块（旧在前；取最后一段＝最终意图）。
@@ -222,6 +227,14 @@ pub fn model_stop_syntax_line() -> String {
 /// 开关口径同 [`model_stop_syntax_line`]：`ORZ_MODEL_STOP_AWAIT=0` 只关暂停
 /// 广告，不影响声明记录本身。
 pub fn model_stop_resident_line() -> String {
+    if !terminal_declaration_required() {
+        return String::new();
+    }
+    model_stop_resident_line_unconditional()
+}
+
+/// 无条件形态：仅供测试与 `required` 车道装配使用。
+pub fn model_stop_resident_line_unconditional() -> String {
     let intent = if model_stop_await_enabled() {
         "`intent: conclude`（或 `pause`＝暂停/待回应——续跑由外部入口发起）"
     } else {
@@ -336,7 +349,8 @@ mod tests {
     /// 取值枚举均取自本模块常量）；文本有界（常驻成本可核）。
     #[test]
     fn resident_line_carries_the_channel_syntax_from_single_source() {
-        let line = model_stop_resident_line();
+        // 353：公开面在非 required 车道返回空串；语法本体由无条件形态承载。
+        let line = model_stop_resident_line_unconditional();
         assert!(line.starts_with("【结束自述通道】"));
         assert!(line.contains(MODEL_STOP_PREFIX));
         assert!(line.contains(MODEL_STOP_END));

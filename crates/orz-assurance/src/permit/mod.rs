@@ -626,7 +626,9 @@ fn canonical_body(receipt: &SensitiveActionPermit) -> Result<Vec<u8>, PermitErro
 }
 
 fn format_utc(value: DateTime<Utc>) -> String {
-    value.to_rfc3339_opts(SecondsFormat::Micros, true)
+    value
+        .with_timezone(&crate::clock::beijing())
+        .to_rfc3339_opts(SecondsFormat::Micros, false)
 }
 
 fn parse_utc(value: &str) -> Result<DateTime<Utc>, PermitError> {

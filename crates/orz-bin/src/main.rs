@@ -1856,7 +1856,7 @@ fn plan_artifact_from_prompt(run_id: &str, prompt: &str) -> orz_assurance::plan:
 }
 
 fn chrono_utc_now() -> String {
-    chrono::Utc::now().to_rfc3339()
+    orz_assurance::clock::now()
 }
 
 /// Scripted provider: default = plain text response; ORZ_FAKE_TOOL=1

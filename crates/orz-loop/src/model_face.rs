@@ -753,9 +753,10 @@ pub fn build_model_face(
     // `model_stop`；每轮尾随（分块表之后＝窗口最末消息）。0bz S3 后的口径：
     // 头部结构消息（指针/D4）已常驻，尾部两行仍待分块出现——尾部追加不破
     // 前缀，无分块会话不注入。0bz S3′ 后指针常驻头部、D4 落尾部（均常驻）。
-    view.push(mechanical_message(
-        crate::model_stop::model_stop_resident_line(),
-    ));
+    let stop_line = crate::model_stop::model_stop_resident_line();
+    if !stop_line.is_empty() {
+        view.push(mechanical_message(stop_line));
+    }
     Ok(view)
 }
 
@@ -797,9 +798,10 @@ fn build_cleared_face(
         view.push(mechanical_message(render_block_table(
             &blocks, markers, params,
         )));
-        view.push(mechanical_message(
-            crate::model_stop::model_stop_resident_line(),
-        ));
+        let stop_line = crate::model_stop::model_stop_resident_line();
+        if !stop_line.is_empty() {
+            view.push(mechanical_message(stop_line));
+        }
     }
     Ok(view)
 }
@@ -919,7 +921,9 @@ pub fn model_face_message_count(messages: &[Message], params: &ModelFaceParams) 
         count += 1;
     }
     // 0bs ①：尾部追加＝分块表 ＋ 结束自述通道行（与 build_model_face 同口径）。
-    count + 2
+    // 353：通道行在非 required 车道不装配（`model_stop_resident_line` 返回空串）。
+    let channel = usize::from(!crate::model_stop::model_stop_resident_line().is_empty());
+    count + 1 + channel
 }
 
 // 0bc S2④ 测试缝（`#[cfg(test)]`，线程本地）：构造性注入「装配路径分配
@@ -2377,16 +2381,15 @@ mod tests {
         };
         let face = build_model_face(&messages, &params).expect("face");
         let tail = face.last().expect("非空模型面");
-        assert_eq!(
-            tail.content,
-            crate::model_stop::model_stop_resident_line(),
-            "尾行＝结束自述通道（单一来源）"
-        );
-        let before = &face[face.len() - 2];
+        // 353：非 required 车道不装配结束自述通道行——尾行即分块表。
         assert!(
-            before.content.starts_with(BLOCK_TABLE_PREFIX),
-            "通道行紧随分块表之后：{}",
-            before.content
+            crate::model_stop::model_stop_resident_line().is_empty(),
+            "缺省车道通道行必须为空串"
+        );
+        assert!(
+            tail.content.starts_with(BLOCK_TABLE_PREFIX),
+            "缺省车道尾行＝分块表：{}",
+            tail.content
         );
         assert_eq!(
             face.iter()

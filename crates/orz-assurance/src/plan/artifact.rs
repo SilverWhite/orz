@@ -53,7 +53,7 @@ impl PlanArtifact {
             task_id: task_id.into(),
             run_id: run_id.into(),
             workspace_root: workspace_root.into(),
-            created_at: chrono::Utc::now().to_rfc3339(),
+            created_at: crate::clock::now(),
             planning_policy: planning_policy.into(),
             sections,
             version: 1,

@@ -830,19 +830,14 @@ mod tests {
         // ——历史重放同一份内容，末请求内恰一次出现（不重复注入）。
         let requests = fake.received_requests();
         let last = requests.last().expect("requests captured");
-        let pushed: Vec<&crate::gateway::model::Message> = last
+        // 353（2026-10-25 用户裁决）：**推送面删除**——工具回传不再携带
+        // 「RLI提醒」附注行；拉取面 `blackboard_read section=rli` 保留。
+        let pushed = last
             .messages
             .iter()
-            .filter(|m| m.role == Role::Tool && m.content.contains("RLI提醒: 持续越线"))
-            .collect();
-        assert_eq!(pushed.len(), 1, "恰一轮回传携带附注行");
-        let line_start = pushed[0].content.find("RLI提醒:").unwrap();
-        let line = &pushed[0].content[line_start..];
-        assert!(line.contains(RLI_T_HAT_ANNOTATION), "D6 注解在行内: {line}");
-        assert!(
-            line.len() <= RLI_NOTICE_TEXT_BUDGET + "\n".len(),
-            "行宽 ≤320B（0am P8-b 重订）纪律: {line}"
-        );
+            .filter(|m| m.role == Role::Tool && m.content.contains("RLI提醒:"))
+            .count();
+        assert_eq!(pushed, 0, "工具回传不得再携带 RLI 附注行");
 
         // journal：kind=rli_notice、key=rli.notice.streak_crossed、盲区闭环。
         let events = events(&dir);

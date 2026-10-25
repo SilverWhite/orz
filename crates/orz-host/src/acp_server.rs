@@ -128,7 +128,7 @@ fn append_grill_record(
                 "turn": turn,
                 "user_input": user_input,
                 "response": response,
-                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "timestamp": orz_assurance::clock::now(),
             });
             if let Some(err) = error {
                 record["error"] = serde_json::json!(err);
@@ -158,7 +158,7 @@ fn append_grill_terminal(log_path: &Path, episode: u32, summary: &str) {
                 "terminal": "finished",
                 "episode": episode,
                 "summary": summary,
-                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "timestamp": orz_assurance::clock::now(),
             });
             // 0p S2 复审 P2 修复（B5 第 5 漏斗，2026-09-07）：同 grill 记录。
             orz_secrets::redact_json_string_values(&mut record);
@@ -210,7 +210,7 @@ impl<'a> RunRecorder<'a> {
             EventTrack::V02.payload_schema_id().into(),
             payload,
             Redaction::None,
-            chrono::Utc::now().to_rfc3339(),
+            orz_assurance::clock::now(),
         );
         // 0v-C（2026-09-12）：不在漏斗外预封印——记录器先做 payload 脱敏
         // （sk-shape / URL 归一化等确定性改写）再封印，并返回**落盘**哈希。

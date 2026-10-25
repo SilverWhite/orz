@@ -128,7 +128,7 @@ impl PlanStateMachine {
             plan_id,
             decision: PlanApprovalDecision::Approve,
             authority: authority.to_string(),
-            timestamp: chrono::Utc::now().to_rfc3339(),
+            timestamp: crate::clock::now(),
         };
         if let Some(plan) = self.current_plan.as_mut() {
             plan.approval_decision = "approve".to_string();
@@ -156,7 +156,7 @@ impl PlanStateMachine {
                 .clone(),
             decision: PlanApprovalDecision::Revise,
             authority: authority.to_string(),
-            timestamp: chrono::Utc::now().to_rfc3339(),
+            timestamp: crate::clock::now(),
         };
         // Mirror approve(): write the decision back to the artifact so the
         // artifact state matches the approval history (Python parity).
@@ -183,7 +183,7 @@ impl PlanStateMachine {
                 .clone(),
             decision: PlanApprovalDecision::Reject,
             authority: authority.to_string(),
-            timestamp: chrono::Utc::now().to_rfc3339(),
+            timestamp: crate::clock::now(),
         };
         // Mirror approve(): write the decision back to the artifact (Python
         // parity — the artifact hash includes the approval fields).
