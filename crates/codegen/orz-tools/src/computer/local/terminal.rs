@@ -3816,6 +3816,14 @@ fn apply_child_env(
     let active_policy = policy.filter(|p| !p.is_noop());
     // 1. Base env: cleared and rebuilt from the policy only when one is active.
     crate::util::shell_env_policy::install_policy_base_env(cmd, active_policy);
+    // 354a T1（2026-10-25）：子进程 stdio 编码统一 UTF-8。
+    // PowerShell 5.1 用控制台代码页（cp936）解码原生命令输出再转码，会把
+    // Python 写的 UTF-8 变成"UTF-8 字节被当 GBK"的乱码（本会话 5 次返工）。
+    // 这三个变量是这条链上能由我们单方面保证的一环；放在基础层，允许
+    // login/request 层覆盖。
+    cmd.env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONLEGACYWINDOWSSTDIO", "0");
     // 2. Login-shell capture (filtered). 3. Grok control vars. 4. Request env
     // (filtered). 5. Pager vars. 6. Login PATH last. 7. Agent marker wins.
     layer_login_env_vars(cmd, login_env, active_policy);

@@ -566,11 +566,21 @@ pub(crate) fn format_default_prompt(bash: &BashOutput, append_noop_reminder: boo
             Some(reason) => format!("exit: killed ({}){}", reason, annotations(bash)),
             None => format!("exit: {}{}", bash.exit_code, annotations(bash)),
         };
+        // 354a T2：终端回执三读数——chars / lines / FFFD。
+        // `FFFD > 0` 即"解码可疑"的机械信号（PowerShell 代码页把 UTF-8 转成
+        // GBK 时，解码梯只能解出替换字符），提示模型改用"写文件 + read_file"
+        // 绕行，而不是反复重跑同一条命令。独占一行，保持 `exit: N` 头行原样。
+        let readings = {
+            let chars = output_str.chars().count();
+            let lines = output_str.lines().count();
+            let fffd = output_str.chars().filter(|c| *c == '\u{FFFD}').count();
+            format!("[output] chars={chars} lines={lines} FFFD={fffd}")
+        };
         // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计
         // §3.1/§3.2): 截断末尾机械附加补读闭环指针（非模型生成）——
         // 完整内容见落盘路径，请使用 read_file（offset/limit 分页）；
         // 路径经 display 规范化（工作区相对路径优先）。
-        let mut prompt = format!("{}\n{}", header, output_str);
+        let mut prompt = format!("{}\n{}\n{}", header, readings, output_str);
         if bash.truncated {
             prompt.push_str(&format!(
                 "\n\n{}",
