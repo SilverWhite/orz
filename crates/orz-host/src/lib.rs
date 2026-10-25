@@ -1805,7 +1805,8 @@ fn terminal_idle_kill_facts_from(
 /// [`OrzHost::ensure_browser_launched`] 真实派生会话级浏览器后端进程**
 /// （`probe_launch`：发现浏览器二进制→无头启动→等 DevTools 端点），该
 /// 进程由会话句柄持有、随会话清理路径收尾，**不随本次超时杀灭**——
-/// 本次调用超时不代表浏览器后端未被拉起。
+/// 本次调用超时不代表浏览器后端未被拉起。356 批（2026-10-25，用户裁决）：
+/// 超时回执文案按工具族如实分流（browser 族不再宣称"无子进程树"）。
 async fn bounded_host_owned<T, F>(
     name: &str,
     budget: std::time::Duration,
@@ -1817,14 +1818,26 @@ where
     match tokio::time::timeout(budget, fut).await {
         Ok(result) => result,
         Err(_) => {
+            // 356 批（2026-10-25，用户裁决）：超时文案按工具族如实分流——
+            // browser 族首调可能已派生会话级浏览器后端（会话句柄持有、随
+            // 会话清理，不随本次超时杀灭）；其余早退路径确无派生子进程。
+            // 文案进模型面（ToolError::Timeout），不许对 browser 族再说
+            // "无子进程树"。
+            let detail = if matches!(name, "browser_read" | "browser_control") {
+                "the call did not complete; a session-level browser backend may \
+                 have been launched by this call and stays session-owned (this \
+                 timeout does not kill it)"
+                    .to_string()
+            } else {
+                "host-owned path (no child process tree); the call did not complete".to_string()
+            };
             tracing::warn!(
                 tool = name,
                 timeout = ?budget,
-                "host-owned tool TIMED OUT — early-exit path has no child process tree to kill"
+                "host-owned tool TIMED OUT — {detail}"
             );
             Err(ToolError::Timeout(format!(
-                "tool '{name}' TIMED OUT after {budget:?} wall-clock budget — \
-                 host-owned path (no child process tree); the call did not complete"
+                "tool '{name}' TIMED OUT after {budget:?} wall-clock budget — {detail}"
             )))
         }
     }
@@ -2420,6 +2433,26 @@ mod tests {
             ToolError::Timeout(msg) => {
                 assert!(msg.contains("TIMED OUT"), "{msg}");
                 assert!(msg.contains("no child process tree"), "{msg}");
+            }
+            other => panic!("expected Timeout, got {other:?}"),
+        }
+        // 356 批（2026-10-25，用户裁决）：browser 族超时文案如实分流——
+        // 不再宣称"无子进程树"，改述会话级后端归属。
+        let browser_err = bounded_host_owned(
+            "browser_read",
+            std::time::Duration::from_millis(20),
+            async {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                Ok::<_, ToolError>(ToolResult::default())
+            },
+        )
+        .await
+        .expect_err("browser-family hung call times out");
+        match browser_err {
+            ToolError::Timeout(msg) => {
+                assert!(msg.contains("browser backend"), "{msg}");
+                assert!(msg.contains("session-owned"), "{msg}");
+                assert!(!msg.contains("no child process tree"), "{msg}");
             }
             other => panic!("expected Timeout, got {other:?}"),
         }

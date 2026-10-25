@@ -1827,16 +1827,6 @@ impl AgentLoopController {
                 .unwrap_or(false)
     }
 
-    /// 0dm：`self_check` 是主车道能力——生产 console 面与终态声明车道都
-    /// 需要它；不再单独绑定 console（`--plan` 生产路径也要可用）。
-    /// 355 批注（2026-10-25）：终态声明位改随 env（缺省 off）后，`orz plan`
-    /// （无 console 面）的 self_check 工具随位缺省关闭——PULL 自查工具的
-    /// 可用性在 headless 族由此与 ORZ_TERMINAL_DECLARATION 同源；教学面
-    /// 常驻行不受影响。耦合去留待裁决（见 355 报告）。
-    pub(crate) fn self_check_enabled(&self) -> bool {
-        self.console_default_enabled || self.terminal_declaration_required
-    }
-
     /// 0p S1 / W2 D-2 (2026-09-07, ADR-0010 §14.61 设计 D)：注入真实会话
     /// 轮计数——`run_finished.turn_count` 数据源。ACP prompt 路径传会话内
     /// 第 N 个用户 prompt（1 起算）；CLI 单 run / grill / restore 不调用
@@ -4292,8 +4282,14 @@ impl AgentLoopController {
             });
         }
         // 0dm（2026-10-21）：反例自查 PULL 工具——无参，返回三问模板；不
-        // 阻断、不判定，只把检查交还模型。主车道（console 默认态）声明。
-        if self.self_check_enabled() && !tool_defs.iter().any(|t| t.name == "self_check") {
+        // 阻断、不判定，只把检查交还模型。
+        // 356 批（2026-10-25 用户裁决）：无条件在位——教学面常驻行
+        // （SELF_CHECK_RESIDENT_LINE）本就不门控，可用性若随
+        // ORZ_TERMINAL_DECLARATION 同源关闭即成"教而不给"（355 批 §6.3
+        // 登记、controller.rs 留痕处）；355 前生产位恒真时本工具恒在
+        // 声明面，此处恢复并固化为无条件。拒绝语义仅存"main-lane only"
+        // 一臂（子代理上下文，tool_run.rs）。
+        if !tool_defs.iter().any(|t| t.name == "self_check") {
             tool_defs.push(ToolDef {
                 name: "self_check".to_string(),
                 description: "Run the counterexample self-check before ending a \
@@ -5866,15 +5862,19 @@ mod tests {
 
     /// 0dm：被拒绝的 self_check 不算「调用过」——self_check_called 必须由
     /// 成功完成的 tool_completed 派生。
+    /// 356 批改判（2026-10-25 用户裁决"无条件在位"）：缺省控制器上
+    /// self_check 不再被拒（self_check_enabled 谓词与 self_check_disabled
+    /// 拒绝臂退役）——同一脚本现在执行成功并计数；拒绝语义仅存
+    /// "main-lane only"臂（子代理上下文）。
     #[tokio::test]
-    async fn refused_self_check_is_not_counted_as_called() {
+    async fn self_check_available_on_default_controller_counts_as_called() {
         let dir = test_dir();
         let host = TestHost {
             journal: JournalRecorder::new(dir.clone()),
             tool_result: None,
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![tool_call("self_check", "call-refused")]),
+            ScriptedResponse::tool_calls(vec![tool_call("self_check", "call-ck")]),
             // 355 批改判（2026-10-25，353 §5.1）：原脚本"草稿→终答"两轮中
             // 的"草稿"轮由反例门消费——门退役后首个纯文本候选即终答。
             ScriptedResponse::text("完成"),
@@ -5884,7 +5884,7 @@ mod tests {
             .run_turn(
                 &host,
                 "任务",
-                "RUN-SELF-REFUSED",
+                "RUN-SELF-DEFAULT",
                 MANIFEST,
                 0,
                 None,
@@ -5900,7 +5900,7 @@ mod tests {
             .expect("run_finished");
         assert_eq!(
             finished.payload["self_check_called"],
-            serde_json::json!(false)
+            serde_json::json!(true)
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

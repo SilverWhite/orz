@@ -3606,21 +3606,10 @@ impl AgentLoopController {
         // P0-1 per-call timeout).
         // 0dm（2026-10-21）：反例自查 PULL——无参工具只返回三问模板，无
         // 文件/网络/外部副作用；不阻断、不判定，由模型据此修订或确认终答。
+        // 356 批（2026-10-25 用户裁决）：无条件在位——"self_check_disabled"
+        // 拒绝臂随 self_check_enabled 谓词一并退役（教学常驻行不门控，
+        // 拒绝即"教而不给"）；拒绝语义仅存"main-lane only"臂。
         if tc.name == "self_check" {
-            if !self.self_check_enabled() {
-                return Ok((
-                    self.refuse_console_tool(
-                        writer,
-                        messages,
-                        &tc.name,
-                        &tc.call_id,
-                        "self_check_disabled",
-                        "self_check refused — the self-check lane is disabled",
-                    )
-                    .await?,
-                    None,
-                ));
-            }
             if activation_id.is_some() {
                 return Ok((
                     self.refuse_console_tool(
@@ -6264,6 +6253,11 @@ mod tests {
                 "grep",
                 "read_file",
                 "search_replace",
+                // 356 批（2026-10-25 用户裁决）：self_check 无条件在位——
+                // 缺省控制器（无 console 面、env 缺省 off）此前被
+                // self_check_enabled 谓词挡在声明面外，现恒在（规则式
+                // 非工作族，与 bash 同腕）。
+                "self_check",
             ],
             "single-face projection under Benchmark (R1 封存 list_dir/compaction_whitelist_add，mode=off 移除检索族): {declared:?}"
         );
@@ -6315,6 +6309,9 @@ mod tests {
                 "context_manage",
                 "grep",
                 "read_file",
+                // 356 批（2026-10-25 用户裁决）：self_check 无条件在位（同
+                // benchmark 面钉改判注）。
+                "self_check",
             ],
             "ReadOnly single-face projection (R1 封存 list_dir/compaction_whitelist_add，写/执行工具探针不完整移除): {declared:?}"
         );

@@ -665,6 +665,10 @@ mod tests {
                 // ⇒ 面名单随批改指 context_manage（第十一主工具）。
                 "context_manage", // 0cz: context manage (ReadOnly class)
                 "read_file",      // read chain complete
+                // 356 批（2026-10-25 用户裁决）：self_check 无条件在位——
+                // 缺省控制器上不再被 self_check_enabled 谓词挡在声明面外
+                // （规则式非工作族，与 bash 同腕）。
+                "self_check",
             ],
             "R1 single-face list projection (todo_write / compaction_whitelist_add \
              sealed): {declared:?}"
@@ -1186,6 +1190,10 @@ mod tests {
                 // 工作区 `.gsa/` 下，与 `blackboard_read` 同判据）⇒ 工作区
                 // 不可读时与其余工作工具一同从可见面移除，不再豁免。
                 "bash", // non-work tool — untouched
+                // 356 批（2026-10-25 用户裁决）：self_check 无条件在位——
+                // 规则式非工作族，不参与工作工具探针投影，工作区不可读时
+                // 与 bash 同腕保留声明。
+                "self_check",
             ],
             "unreadable workspace removes every work tool: {declared:?}"
         );
