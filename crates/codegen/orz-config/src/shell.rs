@@ -387,6 +387,32 @@ pub fn shell_command_argv(command: &str) -> ShellInvocation {
     invocation_for(detect_windows_shell(), command)
 }
 
+// 355 批（2026-10-25，354a 审查处置）：启动器侧代码页统一——PS 5.1 以控制台
+// 代码页（cp936）解码原生命令输出再转码，UTF-8 被 GBK 转码（354 设计
+// §1.1/§4.1）；GitBash 不需要。前置在 -Command/-C 串内，对模型面命令回显
+// 透明（journal 仍记原命令——包装只发生在 spawn 组装层）。
+//
+// PowerShell 族引导段：`$OutputEncoding` 管管道写出方向，`[Console]::Output/
+// InputEncoding` 管控制台两向，`chcp 65001` 垫住代码页。各 setter 独立
+// try/catch——无控制台句柄（CREATE_NO_WINDOW）时 `[Console]::*` 的 setter 会
+// 抛错，不能让整条命令链中断；chcp 的 stdout/stderr 都吞掉（`> $null 2>&1`），
+// 避免污染工具输出。引导段不含双引号，单 argv 元素的引号封装不受影响。
+#[cfg(not(unix))]
+const POWERSHELL_UTF8_PREAMBLE: &str = "try{$OutputEncoding=[Text.Encoding]::UTF8}catch{}; try{[Console]::OutputEncoding=[Text.Encoding]::UTF8}catch{}; try{[Console]::InputEncoding=[Text.Encoding]::UTF8}catch{}; chcp 65001 > $null 2>&1; ";
+// cmd.exe 变体：`chcp 65001` 把代码页切到 UTF-8，`>nul` 吞掉它自己的输出。
+#[cfg(not(unix))]
+const CMD_UTF8_PREAMBLE: &str = "chcp 65001 >nul & ";
+
+/// 355 批：把编码引导段前置到命令串前。空命令跳过（避免 `cmd /C "… & "` 的
+/// 悬空 `&` 语法错）；引导段只发生在 spawn 组装层，journal/模型面仍记原命令。
+#[cfg(not(unix))]
+fn prepend_utf8_preamble(preamble: &str, command: &str) -> String {
+    if command.trim().is_empty() {
+        return command.to_string();
+    }
+    format!("{preamble}{command}")
+}
+
 /// Pure builder split out of `shell_command_argv` so tests can exercise every
 /// `WindowsShell` variant, not just the one installed on the test host.
 #[cfg(not(unix))]
@@ -421,7 +447,7 @@ fn invocation_for(shell: &WindowsShell, command: &str) -> ShellInvocation {
                 "-NoProfile".to_string(),
                 "-NonInteractive".to_string(),
                 "-Command".to_string(),
-                command.to_string(),
+                prepend_utf8_preamble(POWERSHELL_UTF8_PREAMBLE, command),
             ],
             env: utf8_env.to_vec(),
         },
@@ -431,13 +457,16 @@ fn invocation_for(shell: &WindowsShell, command: &str) -> ShellInvocation {
                 "-NoProfile".to_string(),
                 "-NonInteractive".to_string(),
                 "-Command".to_string(),
-                command.to_string(),
+                prepend_utf8_preamble(POWERSHELL_UTF8_PREAMBLE, command),
             ],
             env: utf8_env.to_vec(),
         },
         WindowsShell::Cmd => ShellInvocation {
             program: "cmd".to_string(),
-            args: vec!["/C".to_string(), command.to_string()],
+            args: vec![
+                "/C".to_string(),
+                prepend_utf8_preamble(CMD_UTF8_PREAMBLE, command),
+            ],
             env: utf8_env.to_vec(),
         },
     }
@@ -778,6 +807,65 @@ mod tests {
             inv.env.contains(&("MSYS2_ARG_CONV_EXCL", "*")),
             "{:?}",
             inv.env
+        );
+    }
+
+    /// 355 批（2026-10-25，354a 审查处置）：PowerShell/Pwsh/Cmd 三变体的命令
+    /// 元素前置 UTF-8 引导段（chcp 65001 标记）；GitBash 以 UTF-8 为本位，
+    /// 不前置。前置后命令仍是**单 argv 元素**（-Command 单串语义不变，无新
+    /// 注入面——引导段本身不含双引号），且以模型原命令结尾。
+    #[cfg(not(unix))]
+    #[test]
+    fn invocation_for_prepends_utf8_preamble_on_powershell_and_cmd() {
+        const COMMAND: &str = "Write-Output hi";
+        for shell in [WindowsShell::Pwsh, WindowsShell::PowerShell] {
+            let inv = invocation_for(&shell, COMMAND);
+            // 仍为单命令元素：[-NoProfile, -NonInteractive, -Command, <串>]。
+            assert_eq!(inv.args.len(), 4, "{shell:?}");
+            let command_arg = inv.args.last().unwrap();
+            assert!(
+                command_arg.starts_with(POWERSHELL_UTF8_PREAMBLE),
+                "{shell:?}: {command_arg}"
+            );
+            assert!(command_arg.contains("chcp 65001"), "{command_arg}");
+            assert!(command_arg.ends_with(COMMAND), "{command_arg}");
+            let preamble = &command_arg[..command_arg.len() - COMMAND.len()];
+            assert!(
+                !preamble.contains('"'),
+                "引导段不得引入双引号（-Command 单元素封装面）：{preamble}"
+            );
+        }
+        let inv = invocation_for(&WindowsShell::Cmd, "echo hi");
+        assert_eq!(inv.args.len(), 2, "cmd: [/C, <串>]");
+        let command_arg = inv.args.last().unwrap();
+        assert!(
+            command_arg.starts_with(CMD_UTF8_PREAMBLE),
+            "cmd: {command_arg}"
+        );
+        assert!(command_arg.contains("chcp 65001"), "{command_arg}");
+        assert!(command_arg.ends_with("echo hi"), "{command_arg}");
+        // GitBash 不前置：args 原样为 [-c, 原命令]。
+        let inv = invocation_for(
+            &WindowsShell::GitBash("C:\\Program Files\\Git\\bin\\bash.exe".into()),
+            "echo hi",
+        );
+        assert_eq!(
+            inv.args,
+            vec!["-c".to_string(), "echo hi".to_string()],
+            "GitBash 是 UTF-8 本位，不加引导段"
+        );
+    }
+
+    /// 355 批：空命令跳过前置——避免 `cmd /C "chcp 65001 >nul & "` 的悬空
+    /// `&` 语法错；PowerShell 的 `-Command "…; "` 虽合法，两变体保持同形。
+    #[cfg(not(unix))]
+    #[test]
+    fn prepend_utf8_preamble_skips_empty_command() {
+        assert_eq!(prepend_utf8_preamble(POWERSHELL_UTF8_PREAMBLE, ""), "");
+        assert_eq!(prepend_utf8_preamble(CMD_UTF8_PREAMBLE, "   "), "   ");
+        assert_eq!(
+            prepend_utf8_preamble(CMD_UTF8_PREAMBLE, "echo hi"),
+            format!("{}{}", CMD_UTF8_PREAMBLE, "echo hi")
         );
     }
 }

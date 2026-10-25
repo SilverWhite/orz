@@ -948,9 +948,16 @@ impl ToolOutput {
                         Some(offset) => format!("read_file(offset={offset})"),
                         None => "end of file".to_string(),
                     };
+                    // 355 批（2026-10-25，审查条目 5）：大文件 ReadHandle 信封
+                    // 臂补同一行敏感面提示——该臂拿得到路径（handle.path），
+                    // 判定可达，与 FileContent 两臂同源同文案（只提示不拦截）。
+                    let notice = crate::types::resources::sensitive_path_notice(&handle.path)
+                        .map(|n| format!("{n}\n"))
+                        .unwrap_or_default();
                     format!(
-                        "[read handle] path={} size={} encoding={} sha256={}{mtime} lines=1..={} \
-                         preview_lines={preview_range} truncated={} continue={continuation}\n{}",
+                        "{notice}[read handle] path={} size={} encoding={} sha256={}{mtime} \
+                         lines=1..={} preview_lines={preview_range} truncated={} \
+                         continue={continuation}\n{}",
                         handle.path.display(),
                         handle.size,
                         handle.encoding,
@@ -1887,6 +1894,36 @@ mod tests {
         assert!(prompt.contains("mtime=1720000000"));
         assert!(prompt.contains("continue=read_file(offset=26)"));
         assert!(prompt.contains("1→line one"));
+    }
+    /// 355 批（2026-10-25，审查条目 5）：ReadHandle 信封臂与 FileContent
+    /// 臂同源——路径命中敏感面（如 SSH 私钥裸名）时同一行提示前置
+    /// （只提示不拦截）；非敏感路径不带提示（既有钉不变）。
+    #[test]
+    fn read_handle_envelope_carries_sensitive_path_notice() {
+        let handle = ReadHandleEnvelope {
+            path: PathBuf::from("/tmp/home/.ssh/id_rsa"),
+            size: 65_536,
+            encoding: "utf-8".to_string(),
+            content_sha256: "a".repeat(64),
+            mtime: None,
+            available_range: LineRange {
+                start_line: 1,
+                end_line: 4096,
+            },
+            preview_range: LineRange {
+                start_line: 1,
+                end_line: 25,
+            },
+            preview: "1→PRIVATE KEY".to_string(),
+            truncated: true,
+            offset: Some(26),
+        };
+        let prompt = ToolOutput::ReadFile(ReadFileOutput::ReadHandle(handle)).to_prompt_format();
+        assert!(
+            prompt.starts_with("[敏感面]"),
+            "sensitive notice must ride the first line, got: {prompt}"
+        );
+        assert!(prompt.contains("[read handle]"), "envelope body intact");
     }
     /// Review fix (2026-08-17, P2-1): a past-EOF empty envelope window must
     /// render the real line count (mirroring the FileContent path), never a

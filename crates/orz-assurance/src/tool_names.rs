@@ -59,6 +59,9 @@ mod tests {
     /// 0da S2（2026-10-11）补登记：黑板 guide「清空黑板分区」教学句
     /// （`board_guide_body` 单点文案；该 guide 同段已有
     /// blackboard_write 的 format! 常量拼接位，教学句为行内工具名直呼）。
+    /// 355 批（2026-10-25）补登记：capabilities `CAPABILITY_COVERAGE`
+    /// 未覆盖面文案（第 ④ 段如实点名 loop 侧条件声明工具；const 串无
+    /// 插值位，文案面直呼不引常量）。
     const LITERAL_EXEMPTS: &[(&str, &str, &str)] = &[
         (
             "codegen/orz-tools/src/types/exec_policy.rs",
@@ -69,6 +72,12 @@ mod tests {
             "orz-loop/src/controller.rs",
             "清空黑板分区＝blackboard_write \\",
             "0da S2 黑板 guide 清空教学句（文案面直呼工具名；同段已有常量拼接位）",
+        ),
+        (
+            "orz-host/src/tools.rs",
+            "(blackboard_write/context_manage/",
+            "355 批 capabilities coverage 未覆盖面文案（CAPABILITY_COVERAGE 第④段\
+             如实点名 loop 侧条件声明工具；const 串无插值位，文案面直呼不引常量）",
         ),
     ];
 

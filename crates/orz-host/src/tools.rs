@@ -479,13 +479,32 @@ pub fn build_toolset(
 
 /// Adapt `FinalizedToolset` definitions to the orz-loop `ToolRegistry` view.
 /// 354b（0dr §3.1，2026-10-25）：`orz capabilities` 能力清单——工具面
-/// 元数据的单一出口（help/guide 同源）。枚举生产工具集（与 run 同一
-/// `build_toolset` 装配；web_search 凭据缺席＝`Disabled` 形态，web_search
-/// 仍在面上、readiness 是配置态），每个工具一条
-/// `{name, kind, params_schema, needs_approval, readonly, one_line_usage}`：
-/// kind/readonly 来自 [`orz_loop::tool::ToolDispatcher::risk_class`] 机械
-/// 判定（ReadOnly→read、LocalMutation→write、SandboxEscape/NetworkCall→
-/// exec）；needs_approval＝非只读（yolo 姿态是运行态，不进清单）。
+/// 元数据的单一出口（help/guide 同源）。355 批（2026-10-25，审查条目 3）
+/// 面补全——此前只枚举 `build_toolset().tool_definitions()`（8 件），漏
+/// 真实模型面的另两族：
+///
+/// - **browser 两件**（browser_read/browser_control）：schema 单一源在
+///   host（[`crate::local_browser::browser_read_tool_def`] /
+///   [`crate::local_browser::browser_control_tool_def`]）——按「web_search
+///   凭据缺席＝Disabled 形态仍在面上」先例列出；声明门
+///   （`browser_declared`，检索启用门置位）在独立 CLI 下不可判定 →
+///   `availability: "gated"` 如实标注。
+/// - **loop 侧四件**（blackboard_read／run_tests／pdf_read／
+///   project_doc_index）：声明与 schema 都在 orz-loop 控制器装配处
+///   （controller.rs 内联 ToolDef），host 无机器可读单源 → **策展条目**
+///   （`schema_source: "curated"`、`params_schema: null`，宁缺毋假——不
+///   虚构看起来像派生的 schema）；其中 run_tests/pdf_read/project_doc_index
+///   现为 R1 封存（handler 保留、当前声明面不含）→
+///   `availability: "sealed"`，blackboard_read 主面无条件声明 →
+///   `"declared"`。
+///
+/// 每条 `{name, kind, params_schema, needs_approval, readonly,
+/// one_line_usage, schema_source, availability}`：kind/readonly 来自
+/// [`orz_loop::tool::ToolDispatcher::risk_class`] 机械判定（ReadOnly→read、
+/// LocalMutation→write、SandboxEscape/NetworkCall→exec）；needs_approval＝
+/// 非只读（yolo 姿态是运行态，不进清单）。覆盖范围经
+/// [`CAPABILITY_COVERAGE`] 随 Envelope meta `coverage` 如实输出；未覆盖
+/// 面（loop 侧其余条件声明工具）登记 0dr 剩余边界。
 /// 只读：不写盘、不触网（凭据读取缺席走 Disabled 分支）。
 pub fn capability_list(cwd: &Path) -> Result<serde_json::Value, String> {
     let toolset = build_toolset(
@@ -494,35 +513,95 @@ pub fn capability_list(cwd: &Path) -> Result<serde_json::Value, String> {
         None,
         Arc::new(orz_tools::computer::local::LocalTerminalBackend::new()),
     )?;
-    let tools: Vec<serde_json::Value> = toolset
+    let face = |name: &str| match orz_loop::tool::ToolDispatcher::risk_class(name) {
+        orz_loop::host::RiskClass::ReadOnly => ("read", true),
+        orz_loop::host::RiskClass::LocalMutation => ("write", false),
+        orz_loop::host::RiskClass::SandboxEscape | orz_loop::host::RiskClass::NetworkCall => {
+            ("exec", false)
+        }
+    };
+    let usage_first_line = |description: Option<&str>| -> String {
+        description
+            .unwrap_or("")
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string()
+    };
+    // ① toolset 八件——schema 派生自 run 同一装配。
+    let mut tools: Vec<serde_json::Value> = toolset
         .tool_definitions()
         .into_iter()
         .map(|d| {
             let name = d.function.name.clone();
-            let risk = orz_loop::tool::ToolDispatcher::risk_class(&name);
-            let (kind, readonly) = match risk {
-                orz_loop::host::RiskClass::ReadOnly => ("read", true),
-                orz_loop::host::RiskClass::LocalMutation => ("write", false),
-                orz_loop::host::RiskClass::SandboxEscape
-                | orz_loop::host::RiskClass::NetworkCall => ("exec", false),
-            };
-            let one_line_usage = d
-                .function
-                .description
-                .as_deref()
-                .and_then(|desc| desc.lines().next())
-                .unwrap_or("")
-                .to_string();
+            let (kind, readonly) = face(&name);
             serde_json::json!({
                 "name": name,
                 "kind": kind,
                 "params_schema": d.function.parameters,
                 "needs_approval": !readonly,
                 "readonly": readonly,
-                "one_line_usage": one_line_usage,
+                "one_line_usage": usage_first_line(d.function.description.as_deref()),
+                "schema_source": "derived",
+                "availability": "declared",
             })
         })
         .collect();
+    // ② browser 两件——host 车道声明的真实 schema，门态如实标注。
+    for def in [
+        crate::local_browser::browser_read_tool_def(),
+        crate::local_browser::browser_control_tool_def(),
+    ] {
+        let (kind, readonly) = face(&def.name);
+        tools.push(serde_json::json!({
+            "name": def.name,
+            "kind": kind,
+            "params_schema": def.parameters,
+            "needs_approval": !readonly,
+            "readonly": readonly,
+            "one_line_usage": usage_first_line(Some(&def.description)),
+            "schema_source": "derived",
+            "availability": "gated",
+        }));
+    }
+    // ③ loop 侧四件——策展条目（one_line_usage 从实际行为概括；schema
+    // 无 host 单源 → params_schema 置 null，不虚构）。
+    let curated: &[(&str, &str, &str)] = &[
+        (
+            "blackboard_read",
+            "read",
+            "Read one blackboard partition (plan/notes/findings/exec/actions/session/entities/deps/processes/env) — the loop's fold-proof memory; PULL face declared unconditionally by the loop controller.",
+        ),
+        (
+            "run_tests",
+            "write",
+            "Run the workspace test runner via the host-owned fixed command and report a pass/fail summary with a workspace delta; R1-sealed from the declaration face (reachable through run_terminal_cmd).",
+        ),
+        (
+            "pdf_read",
+            "read",
+            "Read a page range from the local PDF evidence store (fetched-PDF evidence under the workspace); R1-sealed from the declaration face (handler retained).",
+        ),
+        (
+            "project_doc_index",
+            "read",
+            "Discover and query the workspace project-doc index (retrieval-lane read); R1-sealed from the declaration face (handler retained).",
+        ),
+    ];
+    for (name, kind, usage) in curated {
+        let readonly =
+            orz_loop::tool::ToolDispatcher::risk_class(name) == orz_loop::host::RiskClass::ReadOnly;
+        tools.push(serde_json::json!({
+            "name": name,
+            "kind": kind,
+            "params_schema": serde_json::Value::Null,
+            "needs_approval": !readonly,
+            "readonly": readonly,
+            "one_line_usage": usage,
+            "schema_source": "curated",
+            "availability": if *name == "blackboard_read" { "declared" } else { "sealed" },
+        }));
+    }
     Ok(serde_json::json!({
         "orz_version": env!("CARGO_PKG_VERSION"),
         "web_search_credentials": false,
@@ -530,6 +609,28 @@ pub fn capability_list(cwd: &Path) -> Result<serde_json::Value, String> {
         "tools": tools,
     }))
 }
+
+/// 355 批（2026-10-25，审查条目 3）：能力清单的覆盖面说明——随 Envelope
+/// meta `coverage` 输出（`--json` 面）。如实口径：①toolset 八件 schema
+/// 派生自 run 同一装配；②browser 两件 schema 派生自 host 车道声明，声明
+/// 门（检索启用门置位 `browser_declared`）在独立 CLI 不可判定 → gated；
+/// ③loop 侧四件为策展条目（schema 声明在 orz-loop controller，host 无
+/// 机器可读单源 → params_schema=null；其中三件 R1 封存休眠）；
+/// ④未覆盖：loop 侧其余条件声明工具（blackboard_write／context_manage／
+/// plan_write／self_check／submit）——同无 host 单源，宁缺毋假，剩余
+/// 边界登记 0dr（SYSTEM_CONSOLE_DESIGN §3.1）。
+pub const CAPABILITY_COVERAGE: &str = "coverage: (1) the 8 toolset entries are derived from the \
+     same build_toolset assembly as a live run (schema = the declared model face); \
+     (2) browser_read/browser_control are derived from the host browser-lane declarations, \
+     availability=gated — declared per session by the retrieval enable gate, which this \
+     standalone CLI cannot observe; \
+     (3) blackboard_read/run_tests/pdf_read/project_doc_index are CURATED loop-side entries \
+     (schemas live in the loop controller with no host-side machine-readable source, \
+     params_schema=null on purpose — nothing fabricated); run_tests/pdf_read/project_doc_index \
+     are R1-sealed from the current declaration face (handlers retained); \
+     (4) NOT covered: remaining conditional loop-side tools (blackboard_write/context_manage/\
+     plan_write/self_check/submit) — same lack of a host-side source; boundary registered \
+     as 0dr (SYSTEM_CONSOLE_DESIGN §3.1).";
 
 pub struct ToolsetRegistry {
     toolset: Arc<FinalizedToolset>,
@@ -816,6 +917,115 @@ mod tests {
     #[test]
     fn web_fetch_config_is_always_enabled() {
         assert!(web_fetch_config_default(std::path::Path::new(".")).is_enabled());
+    }
+
+    /// 355 批（2026-10-25，审查条目 3）能力清单面补全钉——旧「8 工具」
+    /// 口径改判：清单＝toolset 8（derived/declared）∪ browser 2（derived/
+    /// gated）∪ loop 侧策展 4（curated；blackboard_read declared、其余三
+    /// 件 R1 封存 sealed）。策展条目 params_schema 必须 null（宁缺毋假），
+    /// 派生条目必须带真 schema。
+    #[tokio::test]
+    async fn capability_list_covers_toolset_browser_and_curated_loop_tools() {
+        let tmp = std::env::temp_dir().join(format!("orz-capability-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let data = capability_list(&tmp).expect("capability_list builds");
+        let tools = data["tools"].as_array().expect("tools array");
+        let entry = |name: &str| -> serde_json::Value {
+            tools
+                .iter()
+                .find(|t| t["name"] == name)
+                .unwrap_or_else(|| panic!("tool {name} must be listed"))
+                .clone()
+        };
+        // ① toolset 八件：派生 schema、恒在面。
+        for name in [
+            "run_terminal_cmd",
+            "read_file",
+            "grep",
+            "search_replace",
+            "web_search",
+            "web_fetch",
+            "get_task_output",
+            "kill_task",
+        ] {
+            let e = entry(name);
+            assert_eq!(e["schema_source"], "derived", "{name}");
+            assert_eq!(e["availability"], "declared", "{name}");
+            assert!(
+                !e["params_schema"].is_null(),
+                "{name} must carry the real schema"
+            );
+        }
+        // ② browser 两件：host 车道真 schema，门控如实标注。
+        for name in ["browser_read", "browser_control"] {
+            let e = entry(name);
+            assert_eq!(e["schema_source"], "derived", "{name}");
+            assert_eq!(e["availability"], "gated", "{name}");
+            assert_eq!(e["kind"], "read", "{name} is ReadOnly-classed");
+            assert_eq!(e["readonly"], true);
+            assert!(
+                !e["params_schema"].is_null(),
+                "{name} must carry the real schema"
+            );
+        }
+        // ③ loop 侧四件：策展——schema 置 null，不虚构。
+        let blackboard = entry("blackboard_read");
+        assert_eq!(blackboard["schema_source"], "curated");
+        assert_eq!(blackboard["availability"], "declared");
+        assert_eq!(blackboard["kind"], "read");
+        assert_eq!(blackboard["readonly"], true);
+        assert!(blackboard["params_schema"].is_null());
+        assert!(!blackboard["one_line_usage"].as_str().unwrap().is_empty());
+        for name in ["run_tests", "pdf_read", "project_doc_index"] {
+            let e = entry(name);
+            assert_eq!(e["schema_source"], "curated", "{name}");
+            assert_eq!(e["availability"], "sealed", "{name}（R1 封存休眠）");
+            assert!(e["params_schema"].is_null(), "{name} 不虚构 schema");
+        }
+        // 机械判定一致性：run_tests = LocalMutation → write、需审批。
+        assert_eq!(entry("run_tests")["kind"], "write");
+        assert_eq!(entry("run_tests")["readonly"], false);
+        assert_eq!(entry("run_tests")["needs_approval"], true);
+        // 清单总数＝8+2+4；web_search 凭据面保持如实缺省。
+        assert_eq!(tools.len(), 14, "toolset 8 + browser 2 + curated 4");
+        assert_eq!(data["web_search_credentials"], false);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 355 批（2026-10-25，审查条目 3）：coverage 单源非空且如实点名四族
+    /// 覆盖形态（derived/gated/curated/sealed）与未覆盖边界（0dr）。
+    #[test]
+    fn capability_coverage_names_every_face_honestly() {
+        for needle in [
+            "build_toolset",
+            "gated",
+            "CURATED",
+            "R1-sealed",
+            "NOT covered",
+            "blackboard_write",
+            "0dr",
+        ] {
+            assert!(
+                CAPABILITY_COVERAGE.contains(needle),
+                "coverage must mention {needle}"
+            );
+        }
+    }
+
+    /// 355 批（2026-10-25，审查条目 3）：envelope_for 把 coverage 载入
+    /// meta（capabilities 面）；None 序列化为 null（inspect 四面形态）。
+    #[test]
+    fn envelope_for_carries_coverage_in_meta() {
+        let with = crate::inspect::envelope_for(
+            &serde_json::json!({"x": 1}),
+            7,
+            Some("cov-text".to_string()),
+        );
+        assert_eq!(with["meta"]["coverage"], "cov-text");
+        assert_eq!(with["meta"]["took_ms"], 7);
+        let without = crate::inspect::envelope_for(&serde_json::json!({"x": 1}), 7, None);
+        assert_eq!(without["meta"]["coverage"], serde_json::Value::Null);
     }
 
     /// GAP-WEB-SEARCH-SEMAPHORE (2026-08-10): the semaphore matches the

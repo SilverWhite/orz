@@ -27,6 +27,12 @@ pub const BASE_SYSTEM_PROMPT: &str = "";
 
 /// Counterexample gate block — 正式答案输出前, fires once per run and the
 /// block explicitly tells the model it appears only once (§4.6.5 verbatim).
+///
+/// 355 批（2026-10-25，353 §5.1 处置）：终答前反例门随 0dm 兼容分支退役，
+/// 生产**不再生成**本块。常量保留为**历史识别单一来源**——旧侧车/旧事件流
+/// 里的既有块仍需被 [`is_injected_block_text`]（前缀族快筛）与
+/// [`is_generated_injected_block`]（写回/撤回过滤）识别，删除会让历史
+/// `[COUNTEREXAMPLE_GATE]` 块改判为用户文本、重回 `/rewind` 菜单。
 pub const COUNTEREXAMPLE_GATE_PREFIX: &str = "[COUNTEREXAMPLE_GATE";
 
 pub const COUNTEREXAMPLE_GATE_BLOCK: &str = "[COUNTEREXAMPLE_GATE v0.1]\n\
@@ -36,6 +42,8 @@ pub const COUNTEREXAMPLE_GATE_BLOCK: &str = "[COUNTEREXAMPLE_GATE v0.1]\n\
 3. 结论强度是否超出证据支持？\n\
 注意：本反例询问仅出现一次，请在最终回答前完成全部反例自查。\n\
 [/COUNTEREXAMPLE_GATE]";
+// 355 批（2026-10-25）：本块已退役不再生成（见 `COUNTEREXAMPLE_GATE_PREFIX`
+// 文档）——仅作历史侧车识别与 SELF_CHECK 三问的既有对照面保留。
 
 /// 0dm（2026-10-21）：反例自查 PULL 化后的模型工具结果块。三问与旧
 /// `COUNTEREXAMPLE_GATE_BLOCK` 同文（由 `self_check_and_gate_share_questions`
@@ -813,6 +821,9 @@ mod tests {
         assert!(block.contains('3'));
     }
 
+    /// 355 批改判（2026-10-25，353 §5.1）：终答前反例门已退役、生产不再
+    /// 生成 `COUNTEREXAMPLE_GATE_BLOCK`；本钉改判为**历史识别格式钉**——
+    /// 旧侧车/旧事件流中的既有块仍须被注入块过滤面识别，格式不得漂移。
     #[test]
     fn counterexample_blocks_match_adr0010_v1_1_s4_5() {
         // COUNTEREXAMPLE_GATE — final-answer variant carries the once-only note.
@@ -911,11 +922,13 @@ mod tests {
 
     /// 318 审查 P1-C2（2026-10-19）：所有实际生成的框架块都必须同时命中
     /// 前缀表与**结构化生成形态**判据；漏登记会在写回时污染侧车/`/rewind`。
+    /// 355 批改判（2026-10-25）：`counterexample` 块退役不再生成，从
+    /// "生成形态全覆盖"清单摘除——其历史识别由
+    /// `counterexample_blocks_match_adr0010_v1_1_s4_5` 单独钉住。
     #[test]
     fn injected_block_registry_covers_all_generated_forms() {
         let status = build_status_line(Some("目标"), &[]);
         let blocks: Vec<(&str, String)> = vec![
-            ("counterexample", COUNTEREXAMPLE_GATE_BLOCK.to_string()),
             ("self-check", SELF_CHECK_BLOCK.to_string()),
             ("terminal-notice", TERMINAL_NOTICE_BLOCK.to_string()),
             (
@@ -1016,12 +1029,14 @@ mod tests {
         }
     }
 
-    /// 0dm：SELF_CHECK 与旧 gate 的三问必须同文（两份字面量由本测试钉住，
-    /// 防止后续只改一边造成漂移）。
+    /// 0dm：SELF_CHECK 三问与 SELF_CHECK_BLOCK 同源同文（本测试钉住字面量，
+    /// 防止后续只改一边造成漂移）。355 批改判（2026-10-25）：旧
+    /// `COUNTEREXAMPLE_GATE_BLOCK` 已退役不再生成，三问同文钉收敛到
+    /// PULL 块自身；历史 gate 块的格式另由
+    /// `counterexample_blocks_match_adr0010_v1_1_s4_5` 钉住。
     #[test]
-    fn self_check_and_gate_share_questions() {
+    fn self_check_block_carries_shared_questions() {
         for question in SELF_CHECK_QUESTIONS.lines() {
-            assert!(COUNTEREXAMPLE_GATE_BLOCK.contains(question), "{question}");
             assert!(SELF_CHECK_BLOCK.contains(question), "{question}");
         }
     }

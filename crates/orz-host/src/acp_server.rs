@@ -1792,7 +1792,14 @@ impl SessionFootprint {
             })
             .collect();
         serde_json::json!({
-            "collected_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            // 355 批（2026-10-25，353 §9.1 漏网收口）：北京时间秒级 RFC3339
+            // （`+08:00`）。消费面勘定：footprint 的 `collected_at` 无任何
+            // 字符串比较/前缀匹配消费点（merge_footprint 整键覆盖、包内
+            // 段仅供人读），偏移改写不影响任何行为。
+            "collected_at": orz_assurance::clock::to_beijing_opts(
+                chrono::Utc::now(),
+                chrono::SecondsFormat::Secs,
+            ),
             "ledger": self.ledger.as_ref().map(|f| footprint_file_json(base_dir, f)),
             "orientation": self.orientation.as_ref().map(|f| footprint_file_json(base_dir, f)),
             "activation": self.activation.as_ref().map(|f| footprint_file_json(base_dir, f)),
@@ -3176,9 +3183,17 @@ fn package_archive_raw(
     let suffix: String = session_id.chars().take(8).collect();
     let archive_dir = archives_root(base_dir);
     let final_path = archive_dir.join(format!("{suffix}.json.gz"));
+    // 355 批（2026-10-25，353 §9.1 漏网收口）：时间戳转北京时间。消费面
+    // 勘定：archive_id 只进 `session_archive` journal 事件载荷（审计标签）
+    // 与本函数的 tmp 文件名（写时唯一性）——无任何排序/取最新消费点
+    // （成品包恒为单个覆盖写文件 `{s8}.json.gz`，列表排序用文件 mtime）。
+    // 用紧凑 `%z`（`+0800`）而非 RFC3339 `+08:00`：archive_id 会嵌进 tmp
+    // 文件名，冒号在 Windows 文件名非法；紧凑形仍显式携带偏移、无歧义。
     let archive_id = format!(
         "{session_id}-{}",
-        chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
+        chrono::Utc::now()
+            .with_timezone(&orz_assurance::clock::beijing())
+            .format("%Y%m%dT%H%M%S%z")
     );
     // 动态上下文滑块 S1（2026-09-15，设计 §3.5）：包内容改为信封——
     // `conversation` 成员＝磁盘 sidecar 的原始字节（零内容变换），
@@ -3553,7 +3568,15 @@ fn record_archived_tokens(base_dir: &Path, session_id: &str, tokens: u64) {
     }
     let payload = serde_json::json!({
         "archived_tokens": tokens,
-        "archived_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        // 355 批（2026-10-25，353 §9.1 漏网收口）：北京时间秒级 RFC3339。
+        // 消费面勘定：唯一读者 orz-web `archives.rs::milestone_facts` 把
+        // `archived_at` 当不透明展示串透传（列表排序用文件 mtime，
+        // `last_archived_tokens` 只读 `archived_tokens`），无字符串比较，
+        // 偏移改写不影响行为。
+        "archived_at": orz_assurance::clock::to_beijing_opts(
+            chrono::Utc::now(),
+            chrono::SecondsFormat::Secs,
+        ),
     });
     if let Err(e) = std::fs::write(&path, payload.to_string()) {
         tracing::warn!("archive milestone write failed ({}): {e}", path.display());
@@ -4714,9 +4737,19 @@ impl AcpServer {
         // 侧车可能由旧进程/旧归档写入，或 `session/new` 直接复用了坏侧车。
         // 修正在成功 run 后随 continuation 一并回写；失败 run 保持原侧车，
         // 下一轮再修（不丢事实）。
+        // 355 批（2026-10-25，353 P2 残余项④）：修复口径按
+        // `reconstructed_from_journal` 旗标分流，与 attach 路径（journal
+        // 重放后的配对修复）同判据——旗标随 StoredConversation 持久化
+        // （serde `#[serde(default)]`）并在 take-out 现场仍在作用域，journal
+        // 重建产物（不存工具输出）绕过 attach 直达 prompt 时不再被 Sidecar
+        // 口径误注入「[上次 run 中断]」的假中断噪音。
         let tool_pairing = crate::conversation_repair::repair_tool_pairing(
             &mut conversation,
-            crate::conversation_repair::RepairMode::Sidecar,
+            if continuation.reconstructed_from_journal {
+                crate::conversation_repair::RepairMode::JournalRebuild
+            } else {
+                crate::conversation_repair::RepairMode::Sidecar
+            },
         );
         if tool_pairing.changed() {
             tracing::warn!(
@@ -4814,8 +4847,14 @@ impl AcpServer {
             // 结构）；`plan_first` 仅作休眠开关保留（测试/回退），生产
             // 不再启用。console 默认面随生产路径保留（与 CLI 一致）。
             .with_console_default_enabled(true)
-            // 0dm（2026-10-21）：主车道有执行事实时，终答必须带 [RUN_END]。
-            .with_terminal_declaration_required(true)
+            // 355 批（2026-10-25，353 审查处置）：交互/CLI 主车道终态声明随
+            // ORZ_TERMINAL_DECLARATION 单源——缺省 off＝文本轮无条件交付
+            // （353 §5.1）；机器可读终态（benchmark/headless/外部 ACP）由
+            // env 显式开启。0dm 时代此处硬编码 true 使"缺省关闭"名不符实
+            // （强制面存活、告知面被拔＝强制而不教）。
+            .with_terminal_declaration_required(
+                orz_loop::model_stop::terminal_declaration_required(),
+            )
             // 0p S1 / W2 D-2 (2026-09-07)：真实会话轮计数——本 run 是会话
             // 内第 N 个用户 prompt（prompt_number 0 起算，事件面 1 起算）。
             .with_session_turn(prompt_number + 1)
@@ -6523,6 +6562,51 @@ mod tests {
         dir
     }
 
+    /// `ORZ_TERMINAL_DECLARATION` 测试卫生（permission `YoloEnvGuard` 同式，
+    /// 355 批引入）：捕获旧值、drop 时恢复。本文件测试按家规串行跑
+    /// （`--test-threads=1`），env 是进程全局——并联调试时需自担 env 竞态。
+    struct TerminalDeclarationEnvGuard {
+        old: Option<std::ffi::OsString>,
+    }
+
+    impl TerminalDeclarationEnvGuard {
+        fn capture() -> Self {
+            Self {
+                old: std::env::var_os("ORZ_TERMINAL_DECLARATION"),
+            }
+        }
+
+        fn set(value: &str) -> Self {
+            let guard = Self::capture();
+            // SAFETY: test-only, single-threaded under the lock.
+            unsafe {
+                std::env::set_var("ORZ_TERMINAL_DECLARATION", value);
+            }
+            guard
+        }
+
+        fn cleared() -> Self {
+            let guard = Self::capture();
+            // SAFETY: test-only, single-threaded under the lock.
+            unsafe {
+                std::env::remove_var("ORZ_TERMINAL_DECLARATION");
+            }
+            guard
+        }
+    }
+
+    impl Drop for TerminalDeclarationEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: test-only, single-threaded under the lock.
+            unsafe {
+                match &self.old {
+                    Some(v) => std::env::set_var("ORZ_TERMINAL_DECLARATION", v),
+                    None => std::env::remove_var("ORZ_TERMINAL_DECLARATION"),
+                }
+            }
+        }
+    }
+
     /// THIN-HARNESS-REDESIGN R2a 审查处理 (P3-1)：检索分区随快照 serde
     /// 往返（sidecar 持久化/恢复不丢全文与条目）；旧版快照（无该字段）
     /// 反序列化为 None——恢复时保持空分区而非报错。
@@ -6656,6 +6740,161 @@ mod tests {
                 // （287 批读数未含 orz-host lib），本批仅对齐实现事实。
                 assert_eq!(replay.event_count, 11);
                 assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// 355 批（2026-10-25，353 审查处置）验收钉：交互会话（ACP＝Web/TUI
+    /// 主车道）的终态声明随 `ORZ_TERMINAL_DECLARATION` 单源——**env unset
+    /// （缺省 off）时，有执行事实的完整文本答复无条件交付**：零
+    /// `[TERMINAL_NOTICE]`、零 nudge，`run_finished.terminal_nudged=false`、
+    /// `terminal_source=text_without_terminal`。0dm 时代生产入口硬编码
+    /// controller 位 true，同一形态会被扣留一轮（草稿入列＋催收＋逼轮）
+    /// ——本钉即 353 §5.1"回合原子性"的回归闸门。
+    #[tokio::test]
+    async fn session_text_reply_delivers_without_terminal_notice_by_default() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let _env = TerminalDeclarationEnvGuard::cleared();
+                let base = test_dir();
+                let target = base.join("sample.txt");
+                std::fs::write(&target, "wired file content").unwrap();
+
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
+                    // 工具轮提供执行事实（run_has_substance=true——缺省关
+                    // 语义下唯一会被旧硬编码扣留的形态）。
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "read_file".to_string(),
+                        arguments: serde_json::json!({ "target_file": target }),
+                        call_id: "call-read-1".to_string(),
+                    }]),
+                    // 开局问询回答轮（0x S1 软门消费）。
+                    ScriptedResponse::text("已收到问询。"),
+                    // 终答候选：完整正文、不带 [RUN_END]——必须无条件交付。
+                    ScriptedResponse::text("完整正文答复：文件已读取。"),
+                ])));
+                server
+                    .handle_session_new(
+                        "sess-term-default",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                let result = server
+                    .handle_session_prompt("sess-term-default", "读取 sample.txt")
+                    .await
+                    .unwrap();
+                assert_eq!(result["status"], "completed");
+                assert!(
+                    result["response"]
+                        .as_str()
+                        .unwrap()
+                        .contains("完整正文答复"),
+                    "完整文本答复必须无条件交付: {result}"
+                );
+
+                let events = run_events(&base);
+                let finished = events
+                    .iter()
+                    .find(|e| e.event_type == orz_assurance::EventType::RunFinished)
+                    .expect("run_finished");
+                assert_eq!(
+                    finished.payload["terminal_nudged"],
+                    serde_json::json!(false),
+                    "缺省 off 不得催收: {:?}",
+                    finished.payload
+                );
+                assert_eq!(
+                    finished.payload["terminal_nudge_count"],
+                    serde_json::json!(0)
+                );
+                assert_eq!(
+                    finished.payload["terminal_source"],
+                    serde_json::json!("text_without_terminal")
+                );
+                assert!(
+                    events
+                        .iter()
+                        .all(|e| e.event_type != orz_assurance::EventType::GateDecision
+                            || e.payload.get("gate").and_then(|v| v.as_str())
+                                != Some("terminal_declaration")),
+                    "不得出现 terminal_declaration GateDecision（nudge 已退役于此车道）: {events:?}"
+                );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// 355 批验收钉（env 面）：`ORZ_TERMINAL_DECLARATION=required` 显式
+    /// 开启后，同一形态（有执行事实、文本候选不带 [RUN_END]）回到 nudge
+    /// 路径——草稿入列＋`[TERMINAL_NOTICE]` 一次，第二次候选 fail-open
+    /// 接受并如实落账 `terminal_nudged=true`。机器可读终态车道由 env
+    /// 显式开启（353 §5.2），强制面只在这类车道存活。
+    #[tokio::test]
+    async fn session_text_reply_nudges_when_terminal_declaration_required_by_env() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let _env = TerminalDeclarationEnvGuard::set("required");
+                let base = test_dir();
+                let target = base.join("sample.txt");
+                std::fs::write(&target, "wired file content").unwrap();
+
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "read_file".to_string(),
+                        arguments: serde_json::json!({ "target_file": target }),
+                        call_id: "call-read-1".to_string(),
+                    }]),
+                    // 开局问询回答轮（0x S1 软门消费）。
+                    ScriptedResponse::text("已收到问询。"),
+                    // 终答候选（无声明）⇒ nudge（草稿入列＋TERMINAL_NOTICE）。
+                    ScriptedResponse::text("完整正文答复：文件已读取。"),
+                    // 无新动作的第二次候选 ⇒ fail-open 接受。
+                    ScriptedResponse::text("完整正文答复：文件已读取。"),
+                ])));
+                server
+                    .handle_session_new(
+                        "sess-term-required",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                let result = server
+                    .handle_session_prompt("sess-term-required", "读取 sample.txt")
+                    .await
+                    .unwrap();
+                assert_eq!(result["status"], "completed");
+
+                let events = run_events(&base);
+                let finished = events
+                    .iter()
+                    .find(|e| e.event_type == orz_assurance::EventType::RunFinished)
+                    .expect("run_finished");
+                assert_eq!(finished.payload["terminal_nudged"], serde_json::json!(true));
+                assert_eq!(
+                    finished.payload["terminal_nudge_count"],
+                    serde_json::json!(1)
+                );
+                assert_eq!(
+                    finished.payload["terminal_source"],
+                    serde_json::json!("text_without_terminal")
+                );
+                assert!(
+                    events
+                        .iter()
+                        .any(|e| e.event_type == orz_assurance::EventType::GateDecision
+                            && e.payload.get("gate").and_then(|v| v.as_str())
+                                == Some("terminal_declaration")
+                            && e.payload.get("decision").and_then(|v| v.as_str()) == Some("nudge")),
+                    "required 车道必须 nudge: {events:?}"
+                );
 
                 let _ = std::fs::remove_dir_all(&base);
             })
@@ -9086,8 +9325,9 @@ mod tests {
                 let base_ro = test_dir();
                 let base_ww = test_dir();
                 // Two sequential prompts share the one FakeProvider — each
-                // run pulls [直调工具, 开局问询回答, 草稿, 终答]（0x S1：
-                // 首个动作批次结束后多一轮开局问询回答，软门消费）。
+                // run pulls [直调工具, 开局问询回答, 终答]（0x S1：首个动作
+                // 批次结束后多一轮开局问询回答，软门消费）。355 批：原
+                // "草稿（门候选）＋终答"两轮收敛为一轮——门已退役。
                 let script = vec![
                     // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
                     // 面——模型直接调 search_replace。
@@ -9102,7 +9342,6 @@ mod tests {
                     }]),
                     ScriptedResponse::text("完成。"),
                     ScriptedResponse::text("完成。"),
-                    ScriptedResponse::text("完成。"),
                     ScriptedResponse::tool_calls(vec![ToolCall {
                         name: "search_replace".to_string(),
                         arguments: serde_json::json!({
@@ -9112,7 +9351,6 @@ mod tests {
                         }),
                         call_id: "call-edit-ww".to_string(),
                     }]),
-                    ScriptedResponse::text("完成。"),
                     ScriptedResponse::text("完成。"),
                     ScriptedResponse::text("完成。"),
                 ];
@@ -10515,9 +10753,10 @@ mod tests {
                         arguments: serde_json::json!({ "target_file": target }),
                         call_id: format!("call-{marker}"),
                     }]));
+                    // 0x S1：开局问询回答轮（软门消费）＋终答轮。355 批：
+                    // 原"门候选轮＋fail-open 接受轮"两轮收敛为一轮——每
+                    // prompt 恰两文本，跨 prompt 脚本游标不再错位。
                     script.push(ScriptedResponse::text(format!("{marker} 完成")));
-                    script.push(ScriptedResponse::text(format!("{marker} 完成")));
-                    // 0x S1：首个动作批次结束后的开局问询回答轮（软门消费）。
                     script.push(ScriptedResponse::text(format!("{marker} 完成")));
                 }
                 let fake = Arc::new(FakeProvider::new(script));
@@ -10874,6 +11113,138 @@ mod tests {
                         .iter()
                         .all(|m| !m.content.contains("[上次 run 中断]")),
                     "结果已回写，事实注入不触发"
+                );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
+    }
+
+    /// 355 批（2026-10-25，353 P2 残余项④）：prompt 路径防御性配对修复按
+    /// `reconstructed_from_journal` 旗标分流（与 attach 路径同判据）。journal
+    /// 重建产物（不存工具输出）的整轮悬挂声明按重建口径**剥离**——不注入
+    /// 「[上次 run 中断]」假中断噪音；旗标未置的普通侧车仍按 Sidecar 口径
+    /// 补事实化结果（既有语义，对照面）。
+    #[tokio::test]
+    async fn prompt_repair_branches_on_reconstructed_from_journal_flag() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                // ① 旗标在位（journal 重建产物）：悬挂声明按重建口径剥离。
+                let base = test_dir();
+                let fake = Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::text("重建口径答"),
+                    ScriptedResponse::text("侧车口径答"),
+                ]));
+                let server = shadow_server_with_gateway(fake.clone());
+                server
+                    .handle_session_new(
+                        "sess-flg-rj",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                {
+                    let mut sessions = server
+                        .sessions
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let continuation = sessions
+                        .get_mut("sess-flg-rj")
+                        .expect("session")
+                        .continuation
+                        .as_mut()
+                        .expect("continuation");
+                    continuation.reconstructed_from_journal = true;
+                    continuation.messages = vec![orz_loop::gateway::model::Message {
+                        role: orz_loop::gateway::model::Role::Assistant,
+                        content: "我调过工具了".to_string(),
+                        tool_call_id: None,
+                        tool_calls: vec![ToolCall {
+                            name: "read_file".to_string(),
+                            arguments: serde_json::json!({"target_file": "a.md"}),
+                            call_id: "call-rj-1".to_string(),
+                        }],
+                        reasoning_content: None,
+                        round: None,
+                    }];
+                }
+                server
+                    .handle_session_prompt("sess-flg-rj", "问一")
+                    .await
+                    .unwrap();
+                let reqs = fake.received_requests();
+                assert!(
+                    reqs[0]
+                        .messages
+                        .iter()
+                        .all(|m| !m.content.contains("[上次 run 中断]")),
+                    "重建产物不得注入假中断噪音：{:?}",
+                    reqs[0].messages
+                );
+                assert!(
+                    reqs[0].messages.iter().all(|m| m.tool_calls.is_empty()),
+                    "重建口径剥离悬挂声明（tool_calls 清空）"
+                );
+                assert!(
+                    reqs[0].messages.iter().any(|m| m.content == "我调过工具了"),
+                    "剥离保留有正文的声明文本"
+                );
+
+                // ② 旗标未置（普通侧车）：同形悬挂声明按 Sidecar 口径补
+                // 事实化结果——「[上次 run 中断]」是**真中断**事实，保留。
+                let fake2 = Arc::new(FakeProvider::new(vec![ScriptedResponse::text(
+                    "侧车口径答",
+                )]));
+                let server2 = shadow_server_with_gateway(fake2.clone());
+                server2
+                    .handle_session_new(
+                        "sess-pln-rj",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                {
+                    let mut sessions = server2
+                        .sessions
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let continuation = sessions
+                        .get_mut("sess-pln-rj")
+                        .expect("session")
+                        .continuation
+                        .as_mut()
+                        .expect("continuation");
+                    continuation.messages = vec![orz_loop::gateway::model::Message {
+                        role: orz_loop::gateway::model::Role::Assistant,
+                        content: "我调过工具了".to_string(),
+                        tool_call_id: None,
+                        tool_calls: vec![ToolCall {
+                            name: "read_file".to_string(),
+                            arguments: serde_json::json!({"target_file": "a.md"}),
+                            call_id: "call-rj-2".to_string(),
+                        }],
+                        reasoning_content: None,
+                        round: None,
+                    }];
+                }
+                server2
+                    .handle_session_prompt("sess-pln-rj", "问二")
+                    .await
+                    .unwrap();
+                let reqs2 = fake2.received_requests();
+                assert_eq!(reqs2.len(), 1, "one model call for prompt 2");
+                let msgs2 = reqs2[0].messages.clone();
+                assert!(
+                    msgs2.iter().any(|m| m.content.contains("[上次 run 中断]")),
+                    "未置旗标的侧车悬挂调用仍按真中断补事实化结果"
+                );
+                assert!(
+                    msgs2
+                        .iter()
+                        .any(|m| m.tool_calls.iter().any(|c| c.call_id == "call-rj-2")),
+                    "Sidecar 口径保留声明"
                 );
 
                 let _ = std::fs::remove_dir_all(&base);

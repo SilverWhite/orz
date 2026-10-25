@@ -1804,8 +1804,11 @@ impl AgentLoopController {
         self
     }
 
-    /// 0dm：主车道有执行事实时要求终答携带 `[RUN_END]`。生产 builder
-    /// 显式开启；测试默认关闭以保持旧文本终答形态。
+    /// 0dm：主车道有执行事实时要求终答携带 `[RUN_END]`。355 批
+    /// （2026-10-25，353 审查处置）：生产入口改传
+    /// `model_stop::terminal_declaration_required()`（env 单源，缺省 off）；
+    /// 本位保留给测试/benchmark 构造显式置位（OR 语义见
+    /// `declaration_required_for`）。
     pub fn with_terminal_declaration_required(mut self, required: bool) -> Self {
         self.terminal_declaration_required = required;
         self
@@ -1826,6 +1829,10 @@ impl AgentLoopController {
 
     /// 0dm：`self_check` 是主车道能力——生产 console 面与终态声明车道都
     /// 需要它；不再单独绑定 console（`--plan` 生产路径也要可用）。
+    /// 355 批注（2026-10-25）：终态声明位改随 env（缺省 off）后，`orz plan`
+    /// （无 console 面）的 self_check 工具随位缺省关闭——PULL 自查工具的
+    /// 可用性在 headless 族由此与 ORZ_TERMINAL_DECLARATION 同源；教学面
+    /// 常驻行不受影响。耦合去留待裁决（见 355 报告）。
     pub(crate) fn self_check_enabled(&self) -> bool {
         self.console_default_enabled || self.terminal_declaration_required
     }
@@ -3303,11 +3310,12 @@ impl AgentLoopController {
             .map(orz_assurance::lif::RliShadow::complexity_reading)
     }
 
-    /// **0cp S2（D2/D4，2026-10-03）**：RLI 提醒附注式直投——取走全部未
-    /// 投递提醒（触发时定格文案；取走即置位 `delivered`＝附注行已装配）。
-    /// 消费方（agent_loop 工具批回传装配点）据此把行文附于回传内容后并写
-    /// `mechanical_audit_update{kind:"rli_notice"}` journal 行（盲区闭环）。
-    /// 影子未启用 / 无未投递提醒 = 空表。
+    /// **0cp S2（D2/D4，2026-10-03）**：取走全部未投递 RLI 提醒（触发时
+    /// 定格文案；取走即置位 `delivered`）。353 P2-1／355 批（2026-10-25）
+    /// 语义勘定：`delivered` ＝已被取走并落
+    /// `mechanical_audit_update{kind:"rli_notice"}` journal 行（盲区闭环），
+    /// **模型不可见**——RLI 推送面已删（353 §9.3），旧「把行文附于工具
+    /// 结果尾部」的直投契约不再成立。影子未启用 / 无未投递提醒 = 空表。
     pub(crate) fn take_pending_rli_notices(&self) -> Vec<orz_assurance::lif::RliNotice> {
         let mut lif = self.lif.lock().unwrap_or_else(|e| e.into_inner());
         lif.rli_shadow_mut()
@@ -5867,7 +5875,8 @@ mod tests {
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("self_check", "call-refused")]),
-            ScriptedResponse::text("草稿"),
+            // 355 批改判（2026-10-25，353 §5.1）：原脚本"草稿→终答"两轮中
+            // 的"草稿"轮由反例门消费——门退役后首个纯文本候选即终答。
             ScriptedResponse::text("完成"),
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
@@ -6601,11 +6610,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 2026-10-21（RUN-c23e0aaa 摩擦）：候选终答已自带「反例自查」段时
-    /// 不再注入 gate——否则同一 run 产出两份完整终答，且候选里的语义摘要
-    /// 会在「门 → 终答」之间被提前消费（终答在刚压缩过的上下文里重写）。
+    /// 355 批改判（2026-10-25，353 §5.1；原钉
+    /// `counterexample_gate_skipped_when_draft_already_has_selfcheck` 断言
+    /// "候选自带反例自查段 ⇒ 跳过门"——0dm 兼容门随批退役，跳过条件不复
+    /// 存在）。新钉：携带反例自查段 的文本候选**无条件交付**、恰一轮模型
+    /// 调用、无 CounterexampleGate 事件。
     #[tokio::test]
-    async fn counterexample_gate_skipped_when_draft_already_has_selfcheck() {
+    async fn text_draft_with_selfcheck_section_delivers_in_one_round() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -6643,7 +6654,7 @@ mod tests {
                 .filter(|t| **t == EventType::CounterexampleGate)
                 .count(),
             0,
-            "self-check already present ⇒ no second gate: {types:?}"
+            "反例门已退役（355 批）：任何文本候选都不得触发: {types:?}"
         );
         assert_eq!(
             types
@@ -6658,11 +6669,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 0bi ⑩（ADR-0010 §14.76）：answer 门收窄——纯文本短答（无工具轮、
-    /// 无编辑记录、无未完成 plan）跳过反例门：首轮文本即终答，不再多花
-    /// 一轮模型调用，也不注入 [COUNTEREXAMPLE_GATE]。
+    /// 0bi ⑩（ADR-0010 §14.76）＋355 批改判（2026-10-25，353 §5.1）：纯文本
+    /// 短答（无工具轮）无条件交付——一轮模型调用、不注入
+    /// [COUNTEREXAMPLE_GATE]（原"门收窄跳过"随 0dm 兼容门退役成为恒真，
+    /// 本钉改判为退役后的无条件交付钉）。
     #[tokio::test]
-    async fn counterexample_gate_skipped_for_text_only_short_run() {
+    async fn text_only_short_run_delivers_in_one_model_round() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {

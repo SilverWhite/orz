@@ -1,15 +1,19 @@
 //! 北京时间（UTC+8）单一时间源——353 批（2026-10-25 用户裁决）。
 //!
-//! 全仓时间戳统一为**本机时钟的北京时间表示**（RFC 3339，`+08:00` 偏移）：
-//! 日志面（journal / session / 通知）、模型面（时间轴读数）、安全材料
-//! （credential / permit / ACAF）一律走这里，不再混用 UTC `Z` 与文件
-//! mtime 的本地基准——用户 2026-10-25 裁决："时间混乱确实麻烦，统一使用
-//! 本机时间戳，北京时间"。
+//! 时间戳统一为**本机时钟的北京时间表示**（RFC 3339，`+08:00` 偏移）。
+//! 范围（如实收口，355 批 2026-10-25 勘定）＝353 §9.1 列举的 21 处生产者
+//! 及其后续批次的漏网收口，分布在 assurance / orz-loop / orz-host /
+//! orz-bin 四个子树：日志面（journal / session / 通知）、模型面（时间轴
+//! 读数）、安全材料（credential / permit / ACAF）。**不回写**的范围：
+//! `crates/codegen` 子树（orz-config shell.rs 的 PYTHON env 等 config 层、
+//! orz-workspace 等工具自身的内嵌时间戳）与一切历史落盘件（历史
+//! `events.jsonl` 仍为 UTC `+00:00`，如实保留）——用户 2026-10-25 裁决：
+//! "时间混乱确实麻烦，统一使用本机时间戳，北京时间"。
 //!
 //! 用固定偏移而非 `chrono::Local`：中国无夏令时，固定 +08:00 结果确定、
 //! 跨机器一致、不依赖 `TZ` 环境变量；同一时刻的 `Z` 串与 `+08:00` 串是
-//! 同一瞬时，`DateTime::parse_from_rfc3339` 比较面不受影响（安全材料
-//! 的比较一律解析而非字典序，见 `acaf::predates_restart_cutoff`）。
+//! 同一瞬时，`DateTime::parse_from_rfc3339` 比较面不受影响（**安全比较面
+//! 一律解析后比较**、绝不做字符串字典序，见 `acaf::predates_restart_cutoff`）。
 
 use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
 

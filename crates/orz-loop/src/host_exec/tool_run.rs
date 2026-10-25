@@ -4961,9 +4961,11 @@ mod tests {
     #[tokio::test]
     async fn text_deltas_forwarded_in_order_before_model_output() {
         // Streaming slice: the controller forwards gateway chunks to the host
-        // hook in order, across both counterexample-gate rounds, while the
-        // journal sequence stays exactly the non-streaming 9-event chain
+        // hook in order, across the tool round and the terminal text round,
+        // while the journal sequence stays exactly the non-streaming chain
         // (deltas are live-only, never journaled).
+        // 355 批改判（2026-10-25，353 §5.1）：原"跨两轮门文本"（门拦截轮＋
+        // 门后终答轮）随反例门退役收敛为单文本终答轮。
         struct RecordingHost {
             journal: JournalRecorder,
             deltas: Arc<Mutex<Vec<String>>>,
@@ -4999,8 +5001,8 @@ mod tests {
             journal: JournalRecorder::new(dir.clone()),
             deltas: deltas.clone(),
         };
-        // CJK chunks across both gate rounds — the first text is intercepted
-        // by the counterexample gate, the second is the final answer.
+        // CJK chunks across the tool round and the terminal text round
+        // （355 批：门拦截轮退役——"你好世界"只发一次，即终答）。
         // 0dm：用一次拒绝的 self_check 提供本 run 工具轮（旧的未完成 plan
         // 不再算本 run 执行事实）。
         let gateway: Arc<dyn ModelGateway> = Arc::new(
@@ -5010,7 +5012,6 @@ mod tests {
                     arguments: serde_json::json!({}),
                     call_id: "call-delta-self".to_string(),
                 }]),
-                ScriptedResponse::text("你好世界"),
                 ScriptedResponse::text("你好世界"),
             ])
             .with_chunk_size(2),
@@ -5042,12 +5043,14 @@ mod tests {
             *deltas
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
-            vec!["你好", "世界", "你好", "世界"],
-            "chunks must arrive in order and cover both gate rounds"
+            vec!["你好", "世界"],
+            "chunks must arrive in order and cover the terminal text round"
         );
 
         // Journal unchanged: streaming adds no events. GAP-INQUIRY-SPLIT:
         // no per-turn orientation event (fires only on the 7-round trigger).
+        // 355 批（2026-10-25，353 §5.1）：门拦截轮退役——事件流少了
+        // CounterexampleGate 与第三轮 ModelOutput/FaceFingerprint。
         let types = event_types(&dir);
         assert_eq!(
             types,
@@ -5072,9 +5075,6 @@ mod tests {
                 EventType::ToolCompleted,
                 EventType::FaceFingerprint,
                 EventType::ModelOutput,
-                EventType::CounterexampleGate,
-                EventType::FaceFingerprint,
-                EventType::ModelOutput,
                 // 0df (2026-10-17, ADR-0010 §14.86): the per-run usage
                 // metering row lands once, immediately before the terminal.
                 EventType::RunUsageMetered,
@@ -5086,6 +5086,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 355 批改判（2026-10-25，353 §5.1）：原钉"三轮"＝工具轮＋门拦截文本轮
+    /// ＋门后终答轮——门退役后为两轮（工具轮＋终答轮）。
     #[tokio::test]
     async fn tool_call_round_trips_through_dispatcher() {
         let dir = test_dir();
@@ -5103,7 +5105,6 @@ mod tests {
 
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-1")]),
-            ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
@@ -5134,13 +5135,13 @@ mod tests {
             "unclassified hosts must keep the old payload shape: {}",
             pd.payload
         );
-        // Three model rounds: tool-call round + text round (gate-intercepted)
-        // + post-gate final text round.
+        // Two model rounds: tool-call round + terminal text round
+        // （355 批：反例门拦截轮退役）.
         let model_outputs = types
             .iter()
             .filter(|t| **t == EventType::ModelOutput)
             .count();
-        assert_eq!(model_outputs, 3);
+        assert_eq!(model_outputs, 2);
 
         // Exec section received the tool result.
         let bb = controller.blackboard();

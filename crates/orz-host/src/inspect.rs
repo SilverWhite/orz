@@ -20,6 +20,8 @@ use serde_json::{Value, json};
 
 /// Envelope v1 meta（§5 字段表）。`encoding` 对本模块恒 `utf-8`（输出面
 /// 即 serde 文本）；`next_cursor` 目前只有 `events --limit` 分页使用。
+/// 355 批（2026-10-25，审查条目 3）：`coverage` 携带能力清单的覆盖面
+/// 说明（capabilities 专用；inspect 四面不携带，序列化为 null）。
 #[derive(Debug)]
 pub struct EnvelopeMeta {
     pub chars: usize,
@@ -28,6 +30,7 @@ pub struct EnvelopeMeta {
     pub next_cursor: Option<String>,
     pub sha256: Option<String>,
     pub took_ms: u128,
+    pub coverage: Option<String>,
 }
 
 impl EnvelopeMeta {
@@ -40,6 +43,7 @@ impl EnvelopeMeta {
             "next_cursor": self.next_cursor,
             "sha256": self.sha256,
             "took_ms": self.took_ms,
+            "coverage": self.coverage,
         })
     }
 }
@@ -169,8 +173,9 @@ fn message_stats(messages: &[Value]) -> (usize, usize, usize) {
 }
 
 /// capabilities 等 host 侧面的 Envelope v1 组装（inspect 四面同构——
-/// 字段表 §5；took_ms 由调用方自带）。
-pub fn envelope_for(data: &Value, took_ms: u128) -> Value {
+/// 字段表 §5；took_ms 由调用方自带）。355 批（2026-10-25，审查条目 3）：
+/// `coverage` 进 meta——能力清单如实标注覆盖面（inspect 调用方传 None）。
+pub fn envelope_for(data: &Value, took_ms: u128, coverage: Option<String>) -> Value {
     let rendered = serde_json::to_string_pretty(data).unwrap_or_default();
     envelope(
         true,
@@ -183,6 +188,7 @@ pub fn envelope_for(data: &Value, took_ms: u128) -> Value {
             next_cursor: None,
             sha256: None,
             took_ms,
+            coverage,
         },
     )
 }
@@ -255,6 +261,7 @@ pub fn session_overview(base_dir: &Path, session_id: &str) -> Value {
             next_cursor: None,
             sha256: None,
             took_ms: started.elapsed().as_millis(),
+            coverage: None,
         },
     )
 }
@@ -362,6 +369,7 @@ pub fn run_timeline(base_dir: &Path, run_id: &str) -> Value {
                     next_cursor: None,
                     sha256: None,
                     took_ms: started.elapsed().as_millis(),
+                    coverage: None,
                 },
             )
         }
@@ -376,6 +384,7 @@ pub fn run_timeline(base_dir: &Path, run_id: &str) -> Value {
                 next_cursor: None,
                 sha256: None,
                 took_ms: started.elapsed().as_millis(),
+                coverage: None,
             },
         ),
     }
@@ -401,6 +410,7 @@ pub fn context_view(base_dir: &Path, session_id: &str) -> Value {
                     next_cursor: None,
                     sha256: None,
                     took_ms: started.elapsed().as_millis(),
+                    coverage: None,
                 },
             );
         }
@@ -421,17 +431,26 @@ pub fn context_view(base_dir: &Path, session_id: &str) -> Value {
         })
         .count();
     // 最近 run 的 face_fingerprint（窗口读数的机械事实源）。run 目录序
-    // `RUN-<s8>-<n>`——按字典序取最大（序数同尺）。
+    // `RUN-<s8>-<n>`（acp_server `format!("RUN-{key}-{n}")`，序数不补零）。
+    // 355 批（2026-10-25，审查条目 2）：字典序取最大在会话 ≥10 个 run 后
+    // 失真（RUN-…-9 排在 RUN-…-10 之后）——按「前缀剥离后的尾段 u64 数字
+    // 序」取最大；任一侧尾段解析失败（异形目录名）回退整名字典序。
     let runs_dir = base_dir.join(".gsa").join("runs");
     let mut latest_fingerprint: Value = Value::Null;
     let mut latest_run: Option<String> = None;
     if let Ok(entries) = std::fs::read_dir(&runs_dir) {
+        let run_ordinal = |name: &str| -> Option<u64> {
+            name.rsplit('-').next().and_then(|t| t.parse::<u64>().ok())
+        };
         let mut names: Vec<String> = entries
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.starts_with(&format!("RUN-{session_id}-")))
             .collect();
-        names.sort();
+        names.sort_by(|a, b| match (run_ordinal(a), run_ordinal(b)) {
+            (Some(x), Some(y)) => x.cmp(&y).then_with(|| a.cmp(b)),
+            _ => a.cmp(b),
+        });
         if let Some(latest) = names.last().cloned() {
             latest_run = Some(latest.clone());
             if let Ok(events) = read_events(base_dir, &latest) {
@@ -471,12 +490,21 @@ pub fn context_view(base_dir: &Path, session_id: &str) -> Value {
             next_cursor: None,
             sha256: None,
             took_ms: started.elapsed().as_millis(),
+            coverage: None,
         },
     )
 }
 
 /// `inspect events <id> [--limit N] [--kind TYPE]`：结构化事件流（稳定
-/// schema passthrough）＋`next_cursor` 分页（游标＝已读行数）。
+/// schema passthrough）＋`next_cursor` 分页。
+///
+/// 355 批（2026-10-25，审查条目 1）：游标语义＝**绝对事件行号**（0 基，
+/// 下一页读取起点）。此前实现按「本页已消费的匹配数」回写游标，而
+/// `skip(cursor)` 按绝对行跳过——带 `--kind` 过滤时两把尺错位，第 2 页会
+/// 重发第 1 页的匹配（构造 [Y,X,Y,X]、kind=X、limit=1：两页都发 X@1）。
+/// 现改为按索引遍历：发满 `limit` 条后取「最后发出事件的下一索引」为
+/// `consumed_cursor`；`has_more`＝其后是否仍有匹配（文件有界，扫到首个
+/// 后续匹配即判定）。
 pub fn events_stream(
     base_dir: &Path,
     run_id: &str,
@@ -487,19 +515,28 @@ pub fn events_stream(
     let started = Instant::now();
     match read_events(base_dir, run_id) {
         Ok(events) => {
-            let matched: Vec<&Value> = events
-                .iter()
-                .skip(cursor)
-                .filter(|e| {
-                    kind_filter.is_none_or(|kind| {
-                        e.get("event_type").and_then(Value::as_str) == Some(kind)
-                    })
-                })
-                .collect();
-            let take = limit.unwrap_or(matched.len());
-            let page: Vec<Value> = matched.iter().take(take).map(|e| (*e).clone()).collect();
-            let consumed_cursor = cursor + matched.iter().take(take).count();
-            let has_more = matched.len() > take;
+            let take = limit.unwrap_or(events.len());
+            let mut page: Vec<Value> = Vec::new();
+            let mut consumed_cursor = cursor;
+            let mut has_more = false;
+            for (idx, event) in events.iter().enumerate() {
+                if idx < cursor {
+                    continue;
+                }
+                let kind_matches = kind_filter.is_none_or(|kind| {
+                    event.get("event_type").and_then(Value::as_str) == Some(kind)
+                });
+                if !kind_matches {
+                    continue;
+                }
+                if page.len() < take {
+                    page.push(event.clone());
+                    consumed_cursor = idx + 1;
+                } else {
+                    has_more = true;
+                    break;
+                }
+            }
             let next_cursor = has_more.then(|| consumed_cursor.to_string());
             let data = json!({
                 "run_id": run_id,
@@ -518,6 +555,7 @@ pub fn events_stream(
                     next_cursor,
                     sha256: None,
                     took_ms: started.elapsed().as_millis(),
+                    coverage: None,
                 },
             )
         }
@@ -532,6 +570,7 @@ pub fn events_stream(
                 next_cursor: None,
                 sha256: None,
                 took_ms: started.elapsed().as_millis(),
+                coverage: None,
             },
         ),
     }
@@ -664,6 +703,80 @@ mod tests {
         // kind 过滤。
         let beats = events_stream(&base, "RUN-s2-1", None, Some("tool_heartbeat"), 0);
         assert_eq!(beats["data"]["events"].as_array().unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 355 批（2026-10-25，审查条目 1）交错过滤钉：events=[Y,X,Y,X]、
+    /// kind=X、limit=1 → 两页各发一条、不重不漏、cursor 2/4。旧实现按
+    /// 匹配数回写游标，两页会重发 X@1。
+    #[test]
+    fn events_stream_kind_filter_pages_do_not_overlap() {
+        let base = tempdir();
+        seed_run(
+            &base,
+            "RUN-s3-1",
+            &[
+                event("other_y", json!({"n": 1})),
+                event("target_x", json!({"n": 1})),
+                event("other_y", json!({"n": 2})),
+                event("target_x", json!({"n": 2})),
+            ],
+        );
+        let page0 = events_stream(&base, "RUN-s3-1", Some(1), Some("target_x"), 0);
+        let page0_events = page0["data"]["events"].as_array().unwrap();
+        assert_eq!(page0_events.len(), 1);
+        assert_eq!(page0_events[0]["payload"]["n"], 1, "首页发 X@1");
+        assert_eq!(page0["meta"]["next_cursor"], "2", "游标＝X@1 的下一索引");
+        assert_eq!(page0["meta"]["truncated"], true);
+
+        let page1 = events_stream(&base, "RUN-s3-1", Some(1), Some("target_x"), 2);
+        let page1_events = page1["data"]["events"].as_array().unwrap();
+        assert_eq!(page1_events.len(), 1);
+        assert_eq!(page1_events[0]["payload"]["n"], 2, "续页发 X@3，不重发");
+        assert_eq!(page1["meta"]["next_cursor"], Value::Null, "无更多匹配");
+        assert_eq!(page1["meta"]["truncated"], false);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 355 批（2026-10-25，审查条目 2）：run 序数不补零——RUN-s9-9 与
+    /// RUN-s9-10 并存时最新 run 必须选 -10（数字序），face_fingerprint
+    /// 从 -10 的 journal 回读。
+    #[test]
+    fn context_view_latest_run_follows_numeric_ordinal() {
+        let base = tempdir();
+        let gsa = base.join(".gsa");
+        let conv_dir = gsa.join("conversations");
+        std::fs::create_dir_all(&conv_dir).unwrap();
+        std::fs::write(
+            conv_dir.join("s9.json"),
+            serde_json::to_string_pretty(&json!({
+                "schema_version": "0.2.0-draft",
+                "messages": [],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let fingerprint_new = json!({"model": "test", "round": 10});
+        seed_run(
+            &base,
+            "RUN-s9-9",
+            &[event(
+                "face_fingerprint",
+                json!({"model": "test", "round": 9}),
+            )],
+        );
+        seed_run(
+            &base,
+            "RUN-s9-10",
+            &[event("face_fingerprint", fingerprint_new.clone())],
+        );
+        let out = context_view(&base, "s9");
+        assert_eq!(out["ok"], true, "error: {}", out["error"]);
+        assert_eq!(
+            out["data"]["latest_run"], "RUN-s9-10",
+            "数字序取最大：-10 > -9"
+        );
+        assert_eq!(out["data"]["face_fingerprint"], fingerprint_new);
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -429,6 +429,27 @@ pub fn merge_encoding_labels<'a>(labels: impl IntoIterator<Item = &'a str>) -> O
     }
 }
 
+/// 355 批（2026-10-25，354a 审查处置）：FFFD 失明修复——解码可疑判据扩展。
+/// UTF-8 输出被 PS 5.1 按控制台代码页（GBK）收下再转码后，到达字节常是
+/// **合法 GBK**，解码梯"干净"解出乱码文本（"鎴戜滑"型，FFFD=0），设计 §4.1
+/// 的"FFFD>0 才提示解码可疑"判不中。
+///
+/// 判定原理：若 `text` 是"UTF-8 字节被当 GBK 解出"的产物，则其 GBK 重编码
+/// 恰等于原 UTF-8 字节——该字节串既是合法 GBK 又是合法 UTF-8，且按 UTF-8
+/// 解出的文本 ≠ `text`。真 GBK 文本重编码出的字节极少恰为合法 UTF-8；
+/// 纯 ASCII 因重编码 == 原字节、UTF-8 解码 == 原文而自然排除。
+/// GBK 不可编码的码点（如 U+FFFD 自身）按"编码失败 → 不是本型乱码"处理。
+pub fn looks_like_utf8_misdecoded_as_gbk(text: &str) -> bool {
+    let (gbk_bytes, _, had_errors) = encoding_rs::GBK.encode(text);
+    if had_errors {
+        return false;
+    }
+    match std::str::from_utf8(&gbk_bytes) {
+        Ok(decoded) => decoded != text,
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -736,5 +757,48 @@ mod tests {
             decode_text(&[0x84, 0x31, 0xa5, 0x30]),
             ("\u{fffd}".to_string(), "utf-8-lossy:25.00%".to_string())
         );
+    }
+
+    // ── 355 批（2026-10-25，354a 审查处置）：FFFD 失明修复·detector 三钉 ──
+
+    /// 钉一（命中臂）："我们"的 UTF-8 字节（e6 88 91 e4 bb ac）被当 GBK
+    /// 解码是**干净**的（FFFD=0）→ "鎴戜滑"型乱码——正是动机场景。该乱码的
+    /// GBK 重编码 == 原 UTF-8 字节，detector 必须判 true。
+    /// 注意：mojibake 发生在 PS 收码侧（PowerShell 以 GBK 收下 Python 的
+    /// UTF-8 字节），工具侧解码梯拿到的是"鎴戜滑"的 GBK/UTF-8 形态字节——
+    /// 这里用 GBK 解码器直接构造该乱码，模拟 PS 的转码产物。
+    #[test]
+    fn misdecoded_gbk_detector_hits_utf8_read_as_gbk_mojibake() {
+        let (mojibake, had_errors) =
+            encoding_rs::GBK.decode_without_bom_handling("我们".as_bytes());
+        assert!(!had_errors, "动机场景：UTF-8 被 GBK 干净解出（FFFD=0）");
+        assert_eq!(mojibake, "鎴戜滑");
+        assert!(looks_like_utf8_misdecoded_as_gbk(&mojibake));
+        // 重编码等值是判定原理本身，一并钉死。
+        let (reencoded, _, had_errors) = encoding_rs::GBK.encode(&mojibake);
+        assert!(!had_errors);
+        assert_eq!(reencoded, "我们".as_bytes());
+    }
+
+    /// 钉二（真 GBK 排除臂）：真中文经 GBK round-trip（编码→解码→编码）
+    /// 得回非 UTF-8 的 GBK 字节，detector 必须判 false——不能把正常 GBK
+    /// 输出误报为解码可疑。
+    #[test]
+    fn misdecoded_gbk_detector_rejects_genuine_gb_text() {
+        let (text, label) = decode_text(&[0xd6, 0xd0, 0xce, 0xc4]); // GBK "中文"
+        assert_eq!(label, "gb18030");
+        assert_eq!(text, "中文");
+        assert!(!looks_like_utf8_misdecoded_as_gbk(&text));
+        assert!(!looks_like_utf8_misdecoded_as_gbk(
+            "包含标点、与数字 123 的中文"
+        ));
+    }
+
+    /// 钉三（ASCII 排除臂）：纯 ASCII 重编码 == 原字节，UTF-8 解码 == 原文，
+    /// detector 自然判 false；空串同理。
+    #[test]
+    fn misdecoded_gbk_detector_rejects_plain_ascii_and_empty() {
+        assert!(!looks_like_utf8_misdecoded_as_gbk("plain ascii output\r\n"));
+        assert!(!looks_like_utf8_misdecoded_as_gbk(""));
     }
 }

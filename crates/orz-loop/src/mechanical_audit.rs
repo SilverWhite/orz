@@ -88,17 +88,17 @@ pub(crate) const KIND_RETRIEVAL_BATCH: &str = "retrieval_batch";
 /// **只记不发模型**、逐次历史由 journal 事件流（本 kind 的覆盖写＋LIF
 /// 事件面）可离线复算。payload 形状＝均一四键（同 tool_result 族）。
 pub(crate) const KIND_LIF_DOMAIN: &str = "lif_domain";
-/// **0cp S2（D4，2026-10-03，163 批立项）**：RLI 提醒**附注式直投**留痕
-/// ——三类 RliNotice（StreakCrossed／MigrationConfirmed／CoverageGap）与
-/// 0cp D7 新增 DomainSpikeEntry 在**触发当刻**转附注式直投：agent_loop 于
-/// 下一工具批回传装配点取走（`take_pending_rli_notices`，取走即置位
-/// `delivered`），把行文附于回传内容后（行 ≤320B（0am P8-b 重订）、只读
-/// 数无建议）并落本
-/// kind 一条 journal 行——162 批 §3.1「提醒面 journal 盲区」闭环（fire
-/// 全集可由 journal 独立复算）。key＝`rli.notice.<kind>`（每键覆盖写，逐
-/// 次历史由 journal 事件流可复算）、anomaly＝null（不进报告块）。取代
-/// 152 批 §5.2「注入不再增加」的**局部**取代声明见 ADR-0010 §14.83：fire
-/// 当刻事件附注放行、周期性读数注入维持出局。
+/// **0cp S2（D4，2026-10-03，163 批立项）**：RLI 提醒留痕——三类
+/// RliNotice（StreakCrossed／MigrationConfirmed／CoverageGap）与 0cp D7
+/// 新增 DomainSpikeEntry 在**触发当刻**入队：agent_loop 于下一工具批回传
+/// 装配点取走（`take_pending_rli_notices`，取走即置位 `delivered`）并落
+/// 本 kind 一条 journal 行——162 批 §3.1「提醒面 journal 盲区」闭环（fire
+/// 全集可由 journal 独立复算）。353 P2-1／355 批（2026-10-25）语义勘定：
+/// `delivered` ＝已被取走落 journal，**模型不可见**（RLI 推送面已删，
+/// 353 §9.3——旧「把行文附于回传内容后」的直投契约不再成立；行 ≤320B
+/// 的文案约束随推送面一并失效，留痕面文案仍只读数无建议）。key＝
+/// `rli.notice.<kind>`（每键覆盖写，逐次历史由 journal 事件流可复算）、
+/// anomaly＝null（不进报告块）。
 pub(crate) const KIND_RLI_NOTICE: &str = "rli_notice";
 
 /// 一条对象键的审查结果（每键至多一条，新结果覆盖旧结果）。
@@ -186,8 +186,11 @@ impl MechanicalAuditState {
     /// 无建议、无引导）。`wallclock` 为 run 已用墙钟。0cn S2 起预算行
     /// 退役（ADR-0010 §14.82）：不再渲染轮数记次，墙钟行保留。
     ///
-    /// 0dm（2026-10-21）：反例门退役后终答前不再自动注入审计报告；本方法
-    /// 保留为旧 `ORZ_TERMINAL_DECLARATION=off` 兼容路径与 S2 UI 单一来源。
+    /// 0dm（2026-10-21）：反例门退役后终答前不再自动注入审计报告。
+    /// 355 批（2026-10-25，353 §5.1 处置）：最后的调用方（0dm 兼容分支，
+    /// 即 env/controller 均未开终态声明的车道）已随反例门一并退役，本方法
+    /// 在生产暂无调用点——保留为 S2 UI 单一来源与既有单测/注册表钉的渲染面。
+    #[allow(dead_code)] // 355 批退役后仅存于测试与 S2 UI 预留消费
     pub(crate) fn report(&self, wallclock: Option<std::time::Duration>) -> String {
         let mut lines = vec![format!("{MECHANICAL_AUDIT_PREFIX} v0.1]")];
         let exec: Vec<&AuditEntry> = self
@@ -657,14 +660,14 @@ mod tests {
 
     // ── MECHANICAL-AUDIT-LAYER S2 (2026-08-24, ADR-0010 §14.39 / 设计 §5) ──
 
-    /// 设计 §2.4/§5 验收 4：终答前反例自查轮同轮注入 [MECHANICAL_AUDIT
-    /// v0.1] 独立块——报告收敛为执行事实摘要（动作/文件 delta/墙钟/异常
-    /// 事实；0cn S2 起预算行退役），无建议；journal 以
-    /// `mechanical_audit_update` 轻量事件留痕（plan_gate + tool_result）。
-    /// **0cn S2 零写入钉子（ADR-0010 §14.82）**：budget 轮数记次注入撤除
-    /// ⇒ 本 run 不得出现 `kind=budget` 事件（枚举值仅供历史 journal 校验）。
+    /// 355 批改判（2026-10-25，353 §5.1 处置；原钉
+    /// `mechanical_audit_report_injected_with_final_answer_gate` 断言"终答前
+    /// 反例门轮同轮注入 [MECHANICAL_AUDIT v0.1]"——0dm 兼容门随批退役，
+    /// 终答前不再有注入面）。新钉：反例门与审计报告块**均不再注入**终答
+    /// 请求；`mechanical_audit_update` 轻量事件留痕（plan_gate/tool_result）
+    /// 与 0cn S2 零写入钉子（无 `kind=budget`）保持不变。
     #[tokio::test]
-    async fn mechanical_audit_report_injected_with_final_answer_gate() {
+    async fn final_answer_request_carries_no_gate_or_audit_after_retirement() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -684,7 +687,7 @@ mod tests {
                 arguments: serde_json::json!({ "command": "dir" }),
                 call_id: "call-term-1".to_string(),
             }]),
-            ScriptedResponse::text("草稿"),
+            // 355 批：工具轮后的首个纯文本候选即终答（原"草稿"门轮删除）。
             ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
@@ -704,37 +707,16 @@ mod tests {
             .unwrap();
         assert_eq!(response, "终答");
 
-        // 终答前中立问询轮同时携带 [MECHANICAL_AUDIT v0.1] 与
-        // [COUNTEREXAMPLE_GATE]（同轮独立块）。
+        // 终答请求不再携带 [MECHANICAL_AUDIT v0.1] 与 [COUNTEREXAMPLE_GATE]
+        // （355 批：两块的同轮注入面随 0dm 兼容门退役）。
         let requests = fake.received_requests();
-        let gate_round = requests
-            .iter()
-            .find(|r| {
-                r.messages
-                    .iter()
-                    .any(|m| m.content.contains("[COUNTEREXAMPLE_GATE v0.1]"))
-            })
-            .expect("counterexample gate round");
-        let audit_msg = gate_round
-            .messages
-            .iter()
-            .find(|m| m.content.contains("[MECHANICAL_AUDIT v0.1]"))
-            .expect("audit report injected in the same round");
-        assert!(audit_msg.content.contains("执行事实"), "{audit_msg:?}");
-        assert!(audit_msg.content.contains("墙钟约"), "{audit_msg:?}");
-        assert!(audit_msg.content.contains("异常事实"), "{audit_msg:?}");
-        // 0cn S2：预算行（轮数记次）退役——报告块不得再出现。
         assert!(
-            !audit_msg.content.contains("预算") && !audit_msg.content.contains("已用"),
-            "budget line retired (0cn S2): {audit_msg:?}"
-        );
-        assert!(
-            audit_msg.content.contains("cmd:call-term-1"),
-            "the cmd object key carries the latest result: {audit_msg:?}"
-        );
-        assert!(
-            !audit_msg.content.contains("建议"),
-            "audit report must never carry advice: {audit_msg:?}"
+            requests
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .all(|m| !m.content.contains("[COUNTEREXAMPLE_GATE v0.1]")
+                    && !m.content.contains("[MECHANICAL_AUDIT v0.1]")),
+            "退役块不得再注入终答请求: {requests:?}"
         );
 
         // journal 留痕：plan_gate / tool_result 两类机械审查事件；
@@ -793,7 +775,7 @@ mod tests {
             }),
         };
         // plan 轮（首轮计划门）→ 三轮失败命令（streak 第 3 个动作样凑满）
-        // → 终答。
+        // → 终答（355 批：原"草稿"门轮退役，一轮即收）。
         let mut scripts = vec![ScriptedResponse::tool_calls(vec![plan_write_call(
             "call-plan-1",
             valid_plan_json(),
@@ -805,7 +787,6 @@ mod tests {
                 call_id: format!("call-term-{i}"),
             }]));
         }
-        scripts.push(ScriptedResponse::text("草稿"));
         scripts.push(ScriptedResponse::text("终答"));
         let fake = Arc::new(FakeProvider::new(scripts));
         let gateway: Arc<dyn ModelGateway> = fake.clone();

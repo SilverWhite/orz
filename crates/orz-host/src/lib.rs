@@ -1231,10 +1231,13 @@ impl OrzHost {
         // 走**同一面墙钟**（`effective_timeout`）——此前四条早退在统一窗
         // （下方 `tokio::time::timeout`）之前 return，是仅有的无界车道
         // （353 取证：所有 loop 车道本就收敛同一 wrapper，这里是最后四条
-        // 缺口）。差异只在一处：早退路径无 per-call 子进程树可杀（索引是
-        // 同步读、PDF 是本地证据库、浏览器进程属会话 backend 非本次派生），
-        // 超时只解卡 run、不做定向杀树。run_tests 保留独立 30min 预算
-        // （TestRunner.timeout，by-design 分账）。
+        // 缺口）。差异只在一处：超时不做定向杀树、只解卡调用方——355 批
+        // （2026-10-25，审查条目 6）措辞如实化：索引是同步读、PDF 是本地
+        // 证据库，确无子进程；**browser_read/browser_control 首调会经
+        // `ensure_browser_launched`（→ local_browser `probe_launch`）真实
+        // 派生会话级浏览器后端进程**——该进程由会话句柄持有、随会话清理，
+        // 不随本次超时杀灭（本次调用可能已经把它拉起来了）。run_tests 保留
+        // 独立 30min 预算（TestRunner.timeout，by-design 分账）。
         let effective_timeout = timeout_override
             .map(|t| t.min(self.tool_timeout))
             .unwrap_or(self.tool_timeout);
@@ -1795,10 +1798,14 @@ fn terminal_idle_kill_facts_from(
 
 /// P0-3（0dq 收口，2026-10-25）：host-owned 早退工具的统一墙钟——与
 /// toolset 路径的统一窗（`tokio::time::timeout(effective_timeout, fut)`）
-/// 同一预算、同一错误形状（`ToolError::Timeout`）。差异如实：早退路径
-/// （project_doc_index／pdf_read／browser 族／web_fetch PDF 路由）无本次
-/// 派生的子进程树（同步读／本地证据库／浏览器进程属会话 backend），
-/// 超时不做定向杀树，只把挂死调用换成模型可继续的错误。
+/// 同一预算、同一错误形状（`ToolError::Timeout`）。355 批（2026-10-25，
+/// 审查条目 6）差异说明如实化：超时**只解卡调用方**，不做定向杀树——
+/// project_doc_index／pdf_read／web_fetch PDF 路由确无派生子进程（同步读
+/// ／本地证据库）；**browser_read/browser_control 的首调会经
+/// [`OrzHost::ensure_browser_launched`] 真实派生会话级浏览器后端进程**
+/// （`probe_launch`：发现浏览器二进制→无头启动→等 DevTools 端点），该
+/// 进程由会话句柄持有、随会话清理路径收尾，**不随本次超时杀灭**——
+/// 本次调用超时不代表浏览器后端未被拉起。
 async fn bounded_host_owned<T, F>(
     name: &str,
     budget: std::time::Duration,

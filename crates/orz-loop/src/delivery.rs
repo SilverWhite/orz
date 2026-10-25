@@ -145,12 +145,12 @@ mod tests {
                 arguments: serde_json::json!({}),
                 call_id: "call-cite-self".to_string(),
             }]),
-            ScriptedResponse::text("草稿"),
+            // 355 批改判（2026-10-25，353 §5.1）：原"草稿"轮由反例门消费
+            // ——门退役后首个纯文本候选即终答（原样交付语义不变）。
             ScriptedResponse::text("结论 [来源: SRC-999]"),
         ]));
-        // 0bi ⑩（ADR-0010 §14.76）：纯文本短答不再触发门——以未完成 plan
-        // 作为执行事实，保持「草稿 → 门 → 终答」序列（本钉子要验证的是
-        // 终答原样交付）。
+        // 0bi ⑩（ADR-0010 §14.76）＋355 批：反例门已退役——保留未完成 plan
+        // 与 self_check 工具轮的执行事实形态（本钉子要验证的是终答原样交付）。
         let controller = AgentLoopController::with_gateway(gateway).with_plan(
             "PLAN-CITE-GONE".to_string(),
             1,

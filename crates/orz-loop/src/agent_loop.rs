@@ -2,10 +2,10 @@
 //!
 //! GAP-SUBAGENT-RUNTIME (2026-08-10): ADR-0010 §3.1 isomorphism — the main
 //! agent and both retrieval subagents run the SAME agent loop code; the
-//! per-role semantics (which lane counts, whether the final-answer
-//! counterexample gate applies, the budget) are carried by `LoopProfile`,
-//! and the per-role surface (system prompt, tools, blackboard partition)
-//! by the callers. The loop body here was extracted verbatim from
+//! per-role semantics (which lane counts, whether the terminal-declaration
+//! contract applies, the budget) are carried by `LoopProfile`, and the
+//! per-role surface (system prompt, tools, blackboard partition) by the
+//! callers. The loop body here was extracted verbatim from
 //! `AgentLoopController::run_turn_inner` (M1, 2026-08-10) — the main
 //! profile must keep byte-identical event sequences with the pre-split
 //! code (locked by `EXPECTED_SEQUENCES_V02` + conformance capture).
@@ -35,7 +35,6 @@ use crate::gateway::model::{
 };
 use crate::host::{LoopHost, RiskClass, ToolDef, ToolResult};
 use crate::orientation::{AgentRole, ORIENTATION_POST_TOOL_BATCH_GAP, OrientationSessionState};
-use crate::prompt::COUNTEREXAMPLE_GATE_BLOCK;
 use crate::relay::{DispatchTarget, route};
 use crate::tool::ToolDispatcher;
 
@@ -552,10 +551,6 @@ pub(crate) struct LoopProfile {
     pub terminal_declaration: bool,
     /// 0dm：本车道是否注入常驻反例自查软提示 / 暴露 `self_check` 语义。
     pub self_check_prompt: bool,
-    /// §4.5: legacy counterexample gate (only when
-    /// `ORZ_TERMINAL_DECLARATION=off` compatibility mode is in force; the
-    /// production 0dm path retires it). Grill turns false.
-    pub counterexample_gate: bool,
     /// 0di（2026-10-18，ADR-0010 §14.88）：本车道是否在 loop-top drain 会话
     /// 级中途补充队列——**主 run 车道独占**。grill 轮的 `role` 也是 Main，
     /// 不能作判别（grill 自有 history 面、不接队列）；检索车道天然 false。
@@ -613,7 +608,6 @@ impl LoopProfile {
             role: AgentRole::Main,
             terminal_declaration: true,
             self_check_prompt: true,
-            counterexample_gate: true,
             drain_user_supplements: true,
             orientation_role: Some(AgentRole::Main),
             system_kind: SystemPromptKind::Main,
@@ -631,14 +625,13 @@ impl LoopProfile {
     }
 
     /// Grill-mode turn (2026-08-08): full loop, no final-answer gate
-    /// (the grill answer is not a run-semantic; same reasoning as the
-    /// counterexample skip comment in `run_turn_inner`).
+    /// (the grill answer is not a run-semantic)。355 批（2026-10-25）：
+    /// 终答前反例门随 0dm 兼容分支退役，grill 与主车道在本面上不再有别。
     pub(crate) fn grill(max_tool_rounds: u32) -> Self {
         Self {
             role: AgentRole::Main,
             terminal_declaration: false,
             self_check_prompt: false,
-            counterexample_gate: false,
             drain_user_supplements: false,
             orientation_role: Some(AgentRole::Main),
             system_kind: SystemPromptKind::Main,
@@ -684,7 +677,6 @@ impl LoopProfile {
             role: agent_role,
             terminal_declaration: false,
             self_check_prompt: false,
-            counterexample_gate: false,
             drain_user_supplements: false,
             orientation_role: Some(agent_role),
             system_kind: SystemPromptKind::Retrieval {
@@ -2224,6 +2216,11 @@ pub(crate) const TERMINAL_NUDGE_MAX: u32 = 2;
 /// 车道用 `ORZ_TERMINAL_DECLARATION=required` 或 controller 车道位开启。
 /// 任一为真即要求——0dm 的 AND 语义会让 env 缺省关闭时把 benchmark 车道
 /// 一起拖死，这里改成"各自能独立打开"。
+///
+/// 355 批（2026-10-25，353 审查处置）补注：生产主车道位＝env 值——
+/// 三个生产入口（ACP 会话 / CLI 两路）的 controller 位自 355 批起改由
+/// `model_stop::terminal_declaration_required()` 装配，env 是交互车道
+/// 单一事实源；controller 位保留给测试/benchmark 构造显式置位。
 fn declaration_required_for(controller_required: bool, env_required: bool) -> bool {
     controller_required || env_required
 }
@@ -2260,17 +2257,6 @@ fn mark_deliver_done(svc: &SharedLoopServices<'_>, run_id: &str) {
     ) {
         bb.bump_plan();
     }
-}
-
-/// 0dm 兼容门（`ORZ_TERMINAL_DECLARATION=off`）：候选已自带反例自查段时
-/// 跳过旧 gate，避免重复终答（0.9.5 的修复保留在兼容路径）。
-fn candidate_has_counterexample_selfcheck(text: &str) -> bool {
-    text.lines().any(|line| {
-        line.trim_start()
-            .trim_start_matches(|c: char| c == '#' || c == '*')
-            .trim_start()
-            .starts_with("反例自查")
-    })
 }
 
 /// 0cp S2（D2，2026-10-03）：RLI 卡死看门狗的轮询间隔（秒）——设计口径
@@ -2338,7 +2324,7 @@ fn spawn_rli_watchdog(
 /// Semantics preserved verbatim from `run_turn_inner`'s loop body:
 /// pacing → compaction → orientation loop-top gap → system assembly →
 /// model round → model_output journal → orientation feed → budget
-/// exhaustion / final answer / counterexample gate / IPG → tool dispatch
+/// exhaustion / final answer / terminal-declaration contract / IPG → tool dispatch
 /// (role-gated) → batch injections (denial breaker / edit push /
 /// orientation post-tool-batch gap) → budget exhaustion check (the live
 /// remaining count is read on demand via `blackboard_read section=session`,
@@ -2412,8 +2398,8 @@ pub(crate) async fn run_agent_loop(
     // with a NEW activation (Closed → next creation starts at 0). The main
     // agent keeps the inherited per-run semantic (`initial_tool_rounds` 0).
     let mut tool_rounds = profile.initial_tool_rounds;
-    // 0dm 兼容门/审计报告的墙钟起点。
-    let run_started_at = std::time::Instant::now();
+    // 355 批：0dm 兼容门随批退役——其审计报告墙钟起点（run_started_at）
+    // 一并删除；MechanicalAuditState 仍供 mechanical_audit_update 事件面。
     let mut mechanical_audit = crate::mechanical_audit::MechanicalAuditState::new();
     // The `None` seed is required by Rust's initialization rules (the
     // value is overwritten on every break path before the read at the
@@ -2439,14 +2425,11 @@ pub(crate) async fn run_agent_loop(
     // 仍按「每次派发新激活」语义执行）。
     let mut lane_dispatched_queries: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
-    // §4.6 wiring state: the final-answer counterexample gate fires once
-    // per run. The old mixed inquiry counters are gone (GAP-INQUIRY-SPLIT
-    // 2026-08-09) — orientation counts live in the session-level
-    // `OrientationSessionState` threaded through the turn chain; output
-    // repetition is handled by the generation-time output-health guard.
-    // 0dm：旧反例门仅作 `ORZ_TERMINAL_DECLARATION=off` 兼容路径；
-    // 生产新路径不触发（见终答候选分支）。
-    let mut counterexample_fired = false;
+    // §4.6 wiring state: the final-answer counterexample gate fired once per
+    // run — 355 批（2026-10-25，353 §5.1 处置）随 0dm 兼容分支一并退役，
+    // 计数面并入既有的会话级 orientation 状态（GAP-INQUIRY-SPLIT 2026-08-09
+    // 起 mixed inquiry counters 已不在本层）；输出重复由生成期 output-health
+    // guard 处理。
     // 0dm（2026-10-21）：终态声明状态。`terminal_source` 在各类出口赋值；
     // `terminal_nudge_count` 限制 nudge 次数，工具轮后有新动作才允许再提示；
     // `self_check_called` 由**成功完成**的工具调用派生；`terminal_declaration`
@@ -4190,8 +4173,8 @@ pub(crate) async fn run_agent_loop(
         // D-8: the post-exhaustion final round may only produce TEXT — a
         // tool request there is refused (no execution after the budget is
         // gone) and the run ends with the partial result. Checked BEFORE
-        // the final-answer path so the exhaustion round never triggers
-        // the counterexample gate's extra model round.
+        // the final-answer path（355 批注：终答前反例门已退役，此序仅剩
+        // 终态声明契约的语义边界意义——耗尽轮文本不再触发任何加轮）。
         if budget_exhausted {
             if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
                 messages.push(Message {
@@ -4253,48 +4236,9 @@ pub(crate) async fn run_agent_loop(
                 controller.terminal_declaration_required(),
                 crate::model_stop::terminal_declaration_required(),
             );
-            // 0dm 兼容路径：`ORZ_TERMINAL_DECLARATION=off`（或 controller 未
-            // 启用终态声明）时保留旧反例门；生产 required 路径不走这里。
-            if !declaration_required
-                && profile.counterexample_gate
-                && !counterexample_fired
-                && run_has_substance(svc, tool_rounds, &current_run_id, &plan_baseline)
-                && !response
-                    .text
-                    .as_deref()
-                    .is_some_and(candidate_has_counterexample_selfcheck)
-            {
-                writer
-                    .record(
-                        EventType::CounterexampleGate,
-                        serde_json::json!({
-                            "position": "final_answer",
-                            "message_block": COUNTEREXAMPLE_GATE_BLOCK,
-                            "once_only": true,
-                        }),
-                    )
-                    .await?;
-                let audit_report = mechanical_audit.report(Some(run_started_at.elapsed()));
-                messages.push(Message {
-                    role: Role::User,
-                    content: audit_report,
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                    round: None,
-                });
-                messages.push(Message {
-                    role: Role::User,
-                    content: COUNTEREXAMPLE_GATE_BLOCK.to_string(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                    round: None,
-                });
-                counterexample_fired = true;
-                defer_semantic_once = true;
-                continue;
-            }
+            // 0dm 兼容路径（无声明车道反例门）已于 355 批退役（353 §5.1：
+            // 文本轮无条件交付）——主车道缺省关声明后该分支会在生产复活
+            // 扣留终答，故随 0dm 契约一并退场。
             // 0dm（2026-10-21）：终态声明契约——不再在终答前自动注入反例门。
             // 主车道有执行事实时，纯文本必须带 [RUN_END]；否则在**新的实质
             // 动作**之后可再 nudge（最多 TERMINAL_NUDGE_MAX 次），用尽后
@@ -4737,7 +4681,11 @@ pub(crate) async fn run_agent_loop(
                         writer.record(event_type, payload).await?;
                     }
                     if budget_refused {
-                        let (_, f) = refuse_inject_budget(
+                        // 355 批（2026-10-25，353 P2 残余项②）：折回段的 `?`
+                        // 早退会绕过批次检查点、丢掉已折回结果——改为显式
+                        // match：先落批次检查点再上抛原错误（不吞错、不改
+                        // 错误形状）。
+                        let (_, f) = match refuse_inject_budget(
                             controller,
                             writer,
                             messages,
@@ -4753,7 +4701,17 @@ pub(crate) async fn run_agent_loop(
                             // 一条完成事件；S4 实机复验 2026-08-31 发现）。
                             false,
                         )
-                        .await?;
+                        .await
+                        {
+                            Ok(pair) => pair,
+                            Err(e) => {
+                                checkpoint_conversation_sidecar(
+                                    host, controller, profile, messages,
+                                )
+                                .await;
+                                return Err(e);
+                            }
+                        };
                         // P2-10 R2 (2026-08-31): inject-budget refusal = deny.
                         // 0am 审查处置（2026-10-03）：拒绝码喂入点解析 →
                         // GateGuard（码与 `refuse_inject_budget` 内字面量同源）。
@@ -4817,7 +4775,9 @@ pub(crate) async fn run_agent_loop(
                         self_check_called = true;
                     }
                     if profile.role == AgentRole::Main {
-                        crate::mechanical_audit::record_tool_result(
+                        // 355 批（2026-10-25，353 P2 残余项②）：同上——`?`
+                        // 早退改显式分支，先落批次检查点再上抛原错误。
+                        if let Err(e) = crate::mechanical_audit::record_tool_result(
                             &mut mechanical_audit,
                             writer,
                             &tc,
@@ -4825,7 +4785,12 @@ pub(crate) async fn run_agent_loop(
                             tool_rounds,
                             controller.retrieval_candidate_count(),
                         )
-                        .await?;
+                        .await
+                        {
+                            checkpoint_conversation_sidecar(host, controller, profile, messages)
+                                .await;
+                            return Err(e);
+                        }
                     }
                     match feedback {
                         Some(PolicyFeedback::Denied(key)) => round_denials.push(key),
@@ -5058,6 +5023,11 @@ pub(crate) async fn run_agent_loop(
                     reasoning_content: None,
                     round: None,
                 });
+                // 355 批（2026-10-25，353 P1 残余项①）：回执已入列即落盘——
+                // 本分支原本 `continue` 绕过逐调用检查点，硬杀 run 时侧车
+                // 只剩「结果未知」注入而丢真实回执；与正常路径（P0-1 0dq
+                // 回写）同调用，对齐逐调用落盘纪律。
+                checkpoint_conversation_sidecar(host, controller, profile, messages).await;
                 tool_idx += 1;
                 continue;
             }
@@ -5114,6 +5084,10 @@ pub(crate) async fn run_agent_loop(
                     reasoning_content: None,
                     round: None,
                 });
+                // 355 批（2026-10-25，353 P1 残余项②）：合并回执已入列即
+                // 落盘——同分支①，`continue` 前补逐调用检查点，硬杀时保留
+                // 真实回执而非「结果未知」注入。
+                checkpoint_conversation_sidecar(host, controller, profile, messages).await;
                 tool_idx += 1;
                 continue;
             }
@@ -5174,6 +5148,10 @@ pub(crate) async fn run_agent_loop(
                     reasoning_content: None,
                     round: None,
                 });
+                // 355 批（2026-10-25，353 P1 残余项③）：溢出拒绝回执已入列
+                // 即落盘——同分支①②，`continue` 前补逐调用检查点，硬杀时
+                // 保留真实拒绝回执而非「结果未知」注入。
+                checkpoint_conversation_sidecar(host, controller, profile, messages).await;
                 tool_idx += 1;
                 continue;
             }
@@ -5966,15 +5944,17 @@ pub(crate) async fn run_agent_loop(
                     )
                     .await?;
             }
-            // 0cp S2（D4，2026-10-03，ADR-0010 §14.83）：RLI 提醒**附注式
-            // 直投**——触发当刻的未投递 RliNotice 在本工具批回传装配点取走
-            // （取走即置位 `delivered`），行文以「RLI提醒: …」行附于回传内容
-            // 后（模型面），并逐条落 `mechanical_audit_update{kind:
-            // rli_notice}` journal 行（盲区闭环：fire 全集可由 journal 复算；
-            // 本批无 blackboard_read 时行文是唯一模型面，有读取时直投与其
-            // 头段互斥——`delivered` 先到先置位）。触发为稀有事件（recli
-            // 实测 3 fire／5,166s），零周期注入（152 批 §5.2 出局面不动）。
-            // 若触发后无后续工具批（会话即终止）＝不跨会话补投（队列留痕）。
+            // 0cp S2（D4，2026-10-03，ADR-0010 §14.83）：RLI 提醒取走与
+            // 留痕——触发当刻的未投递 RliNotice 在本工具批回传装配点取走
+            // （取走即置位 `delivered`）。353 P2-1／355 批（2026-10-25）
+            // 语义勘定：`delivered` ＝已被取走落 `mechanical_audit_update
+            // {kind: rli_notice}` journal 行（盲区闭环：fire 全集可由
+            // journal 复算），**模型不可见**——RLI 推送面已删（353 §9.3），
+            // 旧「『RLI提醒: …』行附于回传内容后（模型面）」的直投契约
+            // 不再成立，本装配点只剩 journal 留痕半边。触发为稀有事件
+            // （recli 实测 3 fire／5,166s），零周期注入（152 批 §5.2 出局
+            // 面不动）。若触发后无后续工具批（会话即终止）＝不跨会话补投
+            // （队列留痕）。
             if messages.iter().rev().any(|m| m.role == Role::Tool) {
                 let notices = controller.take_pending_rli_notices();
                 if !notices.is_empty() {
@@ -7886,10 +7866,11 @@ mod tests {
             // 窗口调用 ⇒ 延迟收口（无写入/无摘要 ⇒ model_participated=false
             // 如实落账——防抖调用不构成参与）。
             ScriptedResponse::tool_calls(vec![context_compress_call("call-c2")]),
-            // 第 4 轮（已出窗，普通面）：模型产出语义摘要块。
+            // 第 4 轮（已出窗，普通面）：模型产出语义摘要块——355 批（353
+            // §5.1）：无 tool_calls 的文本＝回合结束，本轮即终答（原"反例门
+            // 消费轮＋第 5 轮收尾"两轮收敛为一轮），摘要由 run 尾消费点按块
+            // 压缩（run 尾＝安全间隙，v8 语义不变）。
             ScriptedResponse::text(semantic_block),
-            // 第 5 轮 loop-top 按块压缩落地后的收尾。
-            ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway)
@@ -7914,7 +7895,9 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(answer, "终答");
+        // 355 批：终答候选无条件交付——语义摘要块不再是门轮前置，随终答
+        // 原文交付（不剥离；[RUN_END] 才剥离），压缩在 run 尾落地。
+        assert_eq!(answer, semantic_block);
 
         // ① 两次调用都 exit 0（fail-soft 三态信封）。0cz S2：事件工具名
         // 随方案 A 改指 context_manage。
@@ -8126,8 +8109,10 @@ mod tests {
         }
     }
 
-    /// 参与路径：窗口轮声明 blackboard_write → 落穿正常派发执行 → 下一
-    /// loop-top 延迟收口（model_participated=true，无异常事实）。
+    /// 参与路径：窗口轮声明 blackboard_write → 落穿正常派发执行 → 延迟
+    /// 收口（model_participated=true，无异常事实）。355 批改判（2026-10-25，
+    /// 353 §5.1）：原"下一 loop-top 延迟收口"依赖的反例门轮已退役——
+    /// 窗口轮后的文本即终答，收口由 run 尾兜底（finalize 落账不变）。
     #[tokio::test]
     async fn compression_window_participates_via_blackboard_write_and_closes_deferred() {
         let fake = Arc::new(FakeProvider::new(vec![
@@ -8137,8 +8122,8 @@ mod tests {
                 .with_prompt_tokens(100),
             ScriptedResponse::tool_calls(vec![window_write_call("call-w1")])
                 .with_prompt_tokens(100),
+            // 355 批：窗口轮后的文本＝终答候选，无条件交付（原门消费轮删除）。
             ScriptedResponse::text("已固化；可弃范围：第 1 轮读数"),
-            ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         // 阶梯缝隙：本钉只管**窗口语义**——H1 钉在 2K（模型面估算），第 2 轮
@@ -8168,7 +8153,8 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(answer, "终答");
+        // 355 批：窗口轮后的文本即终答（原"终答"门轮删除）。
+        assert_eq!(answer, "已固化；可弃范围：第 1 轮读数");
 
         // 窗口轮请求面：**常规面**（FR-3，0bc 长杂轮：硬提醒不锁工具面——
         // 与上一常规轮工具面一致），任务块注入且携带水位（0AE-C6）。
@@ -8275,8 +8261,8 @@ mod tests {
                 window_write_call("call-w1"),
             ])
             .with_prompt_tokens(100),
+            // 355 批：窗口轮后的文本＝终答候选，无条件交付（原门消费轮删除）。
             ScriptedResponse::text("固化完成"),
-            ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         // v8：H1 打断档钉在 2K（模型面估算），T1 抬到不可达。0de D1：小轮在
@@ -8309,16 +8295,19 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(answer, "终答");
+        // 355 批：窗口轮后的文本即终答（原"终答"门轮删除）。
+        assert_eq!(answer, "固化完成");
 
-        // 无丢弃提示：窗口轮不再注入「窗口内仅 … 可执行」话术（FR-3）。
+        // 无丢弃提示：FR-3 的「窗口内仅 … 可执行」话术注入在窗口轮**之后**
+        // 的请求面——355 批起窗口轮后的文本即终答、无后续请求，本断言转为
+        // 全请求面皆无该话术（派发事实由下方 read_file_completions==3 钉）。
         let requests = fake.received_requests();
-        let round_after_window = &requests[3].messages;
         assert!(
-            !round_after_window
+            requests
                 .iter()
-                .any(|m| m.content.contains("窗口内仅")),
-            "no drop notice: {round_after_window:?}"
+                .flat_map(|r| r.messages.iter())
+                .all(|m| !m.content.contains("窗口内仅")),
+            "no drop notice: {requests:?}"
         );
 
         // 窗口轮声明的 read_file（call-r3-window）照常派发：全程执行三次
@@ -8968,10 +8957,11 @@ mod tests {
 
     /// 审查修正批（2026-09-15，审查 P1②）：**终止轮的语义摘要必须在 run 尾
     /// 被消费**。此前 `pending_semantic` 只有 loop-top 一个消费点 ⇒ 模型把
-    /// `[SEMANTIC_SUMMARY]` 放在**最后一次终答**（反例门已用过、无工具轮）
-    /// 时，run 直接 break、摘要静默丢弃（无事件、无 marker）。本钉把摘要块
-    /// 放在「反例门触发后的那次终答」⇒ 断言 run 尾补齐一次语义压缩
-    /// （`mode=model_summary`／被压区移出／存档落盘）。
+    /// `[SEMANTIC_SUMMARY]` 放在最后一次终答时，run 直接 break、摘要静默
+    /// 丢弃（无事件、无 marker）。355 批改判（2026-10-25，353 §5.1）：
+    /// 原钉把摘要块放在「反例门触发后的那次终答」——门轮已退役，改放
+    /// **首个纯文本终答候选**（无工具轮）⇒ 断言 run 尾补齐一次语义压缩
+    /// （`mode=model_summary`／被压区移出／存档落盘）不变。
     #[tokio::test]
     async fn final_answer_semantic_summary_is_consumed_at_the_run_tail() {
         let semantic_block = "[SEMANTIC_SUMMARY]\n目标: 收尾压缩\n已完成: 台账接线\n\
@@ -9028,13 +9018,12 @@ mod tests {
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
                 .with_prompt_tokens(100),
-            // 首次终答候选（无工具轮）⇒ 反例门 fire + continue（该轮文本不携带
-            // 摘要块，避免被 loop-top 提前消费）。两个工具轮是必需的：驻留带
-            // 恒含最新一轮，只有 ≥2 个完整轮时「最旧轮」才可能被移出。
+            // 355 批：反例门轮退役——两个工具轮提供执行事实与可压分块后，
+            // 首个纯文本候选即终答；**摘要块就在这里** ⇒ 本 run 只有 run 尾
+            // 能消费它（loop-top 消费点不会再经过）。驻留带恒含最新一轮，
+            // 只有 ≥2 个完整轮时「最旧轮」才可能被移出。
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
                 .with_prompt_tokens(100),
-            ScriptedResponse::text("终答初稿"),
-            // 门之后的终答：**摘要块就在这里** ⇒ 本 run 只有 run 尾能消费它。
             ScriptedResponse::text(semantic_block),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
@@ -9449,6 +9438,17 @@ mod tests {
     #[tokio::test]
     async fn mandatory_window_summary_that_fails_to_land_still_escalates_and_does_not_stall() {
         let old_round = "T".repeat(6_000);
+        // 355 批改判（2026-10-25，353 §5.1）：原脚本用纯文本轮承载升级链
+        // （"不压"×3＋门轮）——纯文本轮现即终答、循环不再经过后续 loop-top。
+        // 改为"文本＋工具"混合轮（语义摘要随文本识别、工具调用维持循环），
+        // 升级链语义（未落地→再询问→第三次机械截断）不翻。
+        let no_compress_round = |call_id: &str| {
+            ScriptedResponse {
+                text: Some("不压".to_string()),
+                ..ScriptedResponse::tool_calls(vec![tool_call("read_file", call_id)])
+            }
+            .with_prompt_tokens(100)
+        };
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
                 .with_prompt_tokens(100),
@@ -9456,16 +9456,19 @@ mod tests {
                 .with_prompt_tokens(100),
             // 第一次强制窗：产出**语义摘要**但区间不可识别 ⇒ 摘要「有产出」
             // 而压缩未落地（`compress_blocks_now` 返回 None ＋ 0bk 告知块）。
-            ScriptedResponse::text(
-                "工作照常。\n[SEMANTIC_SUMMARY]\n压缩块: 全部\n目标: x\n已完成: y\n[/SEMANTIC_SUMMARY]",
-            )
+            ScriptedResponse {
+                text: Some(
+                    "工作照常。\n[SEMANTIC_SUMMARY]\n压缩块: 全部\n目标: x\n已完成: y\n[/SEMANTIC_SUMMARY]"
+                        .to_string(),
+                ),
+                ..ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r3")])
+            }
             .with_prompt_tokens(100),
-            // 第二次窗口（升级再询问）：三轮全不产出。
-            ScriptedResponse::text("不压").with_prompt_tokens(100),
-            ScriptedResponse::text("不压").with_prompt_tokens(100),
-            ScriptedResponse::text("不压").with_prompt_tokens(100),
-            // 第三步机械截断后的终答（＋反例门轮）。
-            ScriptedResponse::text("终答").with_prompt_tokens(100),
+            // 第二次窗口（升级再询问）：三轮全不产出（无摘要文本）。
+            no_compress_round("call-r4"),
+            no_compress_round("call-r5"),
+            no_compress_round("call-r6"),
+            // 第三步机械截断后的终答（355 批：门轮退役，一轮即收）。
             ScriptedResponse::text("终答").with_prompt_tokens(100),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
@@ -9963,13 +9966,14 @@ mod tests {
             };
             async move {
                 // 首轮带工具轮（终态判据 `run_has_substance` 需本 run 执行
-                // 事实）——次轮文本即终答候选 ⇒ 旧门 fire ⇒ 下一 loop-top
-                // 消费摘要（事发同形）。
+                // 事实）。355 批改判（2026-10-25，353 §5.1）：原"次轮文本
+                // ⇒ 旧反例门 fire ⇒ 下一 loop-top 消费摘要"的门轮已退役
+                // ——次轮文本（摘要＋STOP 同消息）即终答，摘要由 run 尾
+                // 消费（事发同形：STOP 声明不作收束用）。
                 let fake = Arc::new(FakeProvider::new(vec![
                     ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
                         .with_prompt_tokens(100),
                     ScriptedResponse::text(text),
-                    ScriptedResponse::text("终答"),
                 ]));
                 let gateway: Arc<dyn ModelGateway> = fake.clone();
                 let controller = AgentLoopController::with_gateway(gateway);
@@ -9994,13 +9998,14 @@ mod tests {
             .collect();
         assert_eq!(landed.len(), 1, "未落地审计须照落: {landed:?}");
         let requests = fake.received_requests();
-        // 279 处置 N3 锐化：脚本 3 响应（工具轮→摘要+STOP→反例门逼轮→终答）
-        // ⇒ 请求数确定＝3（STOP 声明不作收束用——extract_model_stop 仅在
-        // 摘要识别点消费），显式钉死；豁免若失效即多出一次逼轮请求。
+        // 279 处置 N3 锐化＋355 批改判（2026-10-25）：脚本 2 响应（工具轮→
+        // 摘要+STOP 即终答）⇒ 请求数确定＝2（STOP 声明不作收束用——
+        // extract_model_stop 仅在摘要识别点消费），显式钉死；豁免若失效即
+        // 多出逼轮请求。
         assert_eq!(
             requests.len(),
-            3,
-            "脚本 3 响应 ⇒ 恰 3 次请求（实测 {}）",
+            2,
+            "脚本 2 响应 ⇒ 恰 2 次请求（实测 {}）",
             requests.len()
         );
         assert!(
@@ -10016,8 +10021,8 @@ mod tests {
     /// 0de N4（D7，设计 §5/§7）：**分块压缩事件计数器非零**——
     /// `rounds_since_last_compaction` 由 `rounds_since_compact` 真值承载
     /// （此前 v8 写点硬编码 0＝遥测失真；0de 事发 5/5 事件恒 0）。
-    /// 驱动形态 1:1 复刻 `final_answer_semantic_summary_is_consumed_at_the_run_tail`
-    /// （两工具轮成块＋门轮＋终轮摘要走 run 尾消费）。
+    /// 驱动形态复刻 `final_answer_semantic_summary_is_consumed_at_the_run_tail`
+    /// （两工具轮成块＋终轮摘要走 run 尾消费；355 批：门轮退役后由三轮承载）。
     #[tokio::test]
     async fn block_compaction_event_carries_the_true_rounds_since_counter() {
         let semantic_block = "[SEMANTIC_SUMMARY]\n目标: 收尾压缩\n已完成: 台账接线\n\
@@ -10075,7 +10080,8 @@ mod tests {
                 .with_prompt_tokens(100),
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
                 .with_prompt_tokens(100),
-            ScriptedResponse::text("终答初稿"),
+            // 355 批改判（2026-10-25，353 §5.1）：原"门轮＋终轮摘要走 run 尾
+            // 消费"中的门轮已退役——首个纯文本候选即终答，摘要由 run 尾消费。
             ScriptedResponse::text(semantic_block),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
@@ -10118,8 +10124,8 @@ mod tests {
             "计数器须贯通真值（≥1），不得恒 0: {rounds_since}"
         );
         assert_eq!(
-            rounds_since, 4,
-            "4 个已完成模型轮（两工具轮＋门轮＋终轮）后消费: {rounds_since}"
+            rounds_since, 3,
+            "3 个已完成模型轮（两工具轮＋终轮）后消费: {rounds_since}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

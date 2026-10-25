@@ -3816,11 +3816,16 @@ fn apply_child_env(
     let active_policy = policy.filter(|p| !p.is_noop());
     // 1. Base env: cleared and rebuilt from the policy only when one is active.
     crate::util::shell_env_policy::install_policy_base_env(cmd, active_policy);
-    // 354a T1（2026-10-25）：子进程 stdio 编码统一 UTF-8。
-    // PowerShell 5.1 用控制台代码页（cp936）解码原生命令输出再转码，会把
-    // Python 写的 UTF-8 变成"UTF-8 字节被当 GBK"的乱码（本会话 5 次返工）。
-    // 这三个变量是这条链上能由我们单方面保证的一环；放在基础层，允许
-    // login/request 层覆盖。
+    // 355 批（2026-10-25，354a 审查处置·注释勘误）：Unix 侧这三个变量只是
+    // Python stdio 规范化——PYTHONIOENCODING/PYTHONUTF8 管 Python 自己的
+    // stdio 与区域探测；PYTHONLEGACYWINDOWSSTDIO 仅 Windows 语义，在这里
+    // 无害（Unix 上 Python 不读它）。354a T1 注释写的「PowerShell 5.1 用
+    // cp936 解码原生命令输出再转码」链**不在本函数的平台**：该链只发生在
+    // Windows，由 shell.rs 启动器前置（chcp 65001 ＋ [Console]::Output/
+    // InputEncoding ＋ $OutputEncoding）＋ inv.env（PYTHONUTF8/
+    // PYTHONIOENCODING，可信层可覆盖前两变量）＋ spawn 处的
+    // PYTHONLEGACYWINDOWSSTDIO=0 承担——见 `spawn_shell_command` 的
+    // not-unix 臂。
     cmd.env("PYTHONIOENCODING", "utf-8")
         .env("PYTHONUTF8", "1")
         .env("PYTHONLEGACYWINDOWSSTDIO", "0");
@@ -3924,6 +3929,13 @@ fn spawn_shell_command(
         // `inv.env` is grok's trusted shell setup, so it is not filtered.
         let active_policy = shell_env_policy.filter(|p| !p.is_noop());
         crate::util::shell_env_policy::install_policy_base_env(&mut cmd, active_policy);
+        // 355 批（2026-10-25，354a 审查处置）：PYTHONLEGACYWINDOWSSTDIO=0 是
+        // 354a 三变量中唯一带 Windows 语义者，此前落在 `#[cfg(unix)]` 的
+        // `apply_child_env` 内（terminal.rs）在 Windows 永不生效，在此补齐。
+        // 置于 install_policy_base_env 之后、cmd.envs(inv.env) 之前：inv.env
+        // 属可信层，其中的 PYTHONUTF8/PYTHONIOENCODING 按同序可覆盖前两变量；
+        // 本变量 inv.env 不含，无冲突。
+        cmd.env("PYTHONLEGACYWINDOWSSTDIO", "0");
         cmd.envs(inv.env);
         layer_request_env(&mut cmd, env, active_policy);
         cmd.envs(crate::util::pager_env());

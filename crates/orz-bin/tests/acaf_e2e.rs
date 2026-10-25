@@ -1055,18 +1055,17 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
     // R1 (2026-08-27, 设计 §4.4): disposition 往返退役——GoalRevisionV1 仅
     // 经跨 run 恢复的 AwaitingDisposition 激活（休眠 handler）可达。种子
     // 一个上一 run 遗留的待决激活，脚本：continue（DispositionV1 +
-    // GoalRevisionV1，旧 goal 上下文）→ 父代理 wrap-up → 重新派发
-    // （continue 语义复用同一激活）→ 新结果 auto_close（CloseV1，新 goal
-    // 上下文，K_session 重派生后序列重启）。
+    // GoalRevisionV1，旧 goal 上下文）→ 父代理重新派发（continue 语义复用
+    // 同一激活）→ 新结果 auto_close（CloseV1，新 goal 上下文，K_session
+    // 重派生后序列重启）。355 批改判（2026-10-25，353 §5.1）：原"父代理
+    // wrap-up 文本轮"由反例门扣留才让重派轮可达——门退役后纯文本即终答，
+    // 重派改由父代理工具轮直接承载。
     let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
         ScriptedResponse::tool_calls(vec![disposition_call("continue", Some(delta), "call-d1")]),
-        ScriptedResponse::text("继续"), // parent wrap-up after the accepted continue
         // Re-entry into the same activation (continue semantics).
         ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
         ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s2")]),
         ScriptedResponse::text("[DOC] a.md\n第二批"), // subagent result → auto_close
-        ScriptedResponse::text("完成"),
-        // counterexample gate round
         ScriptedResponse::text("完成"),
     ]));
 

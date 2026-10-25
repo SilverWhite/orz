@@ -782,9 +782,12 @@ pub fn is_path_allowed_for_read(
 }
 
 /// 敏感路径提示（354c §4.3，只提示不拦截）：密钥材料的常见宿主——
-/// `.ssh`／`.aws` 目录、`.env`（含 `.env.local` 等 `.env*`）、
-/// `*.pem`／`*.key` 文件、文件名含 `keystore`。命中时返回一行回执提示
-/// 文案（由 read_file/grep 拼在输出首行）；审计面照常（journal 已载）。
+/// `.ssh`／`.aws` 目录、`.env`（含 `.env.local` 等 `.env*`）与 `.envrc`、
+/// `*.pem`／`*.key` 文件、文件名含 `keystore`、SSH 私钥裸名 `id_rsa`/
+/// `id_dsa`/`id_ecdsa`/`id_ed25519`（355 批补，2026-10-25 审查条目 5；
+/// 按文件名 stem 匹配——带扩展形式如 `id_rsa.old`/`id_ed25519.pem` 同样
+/// 命中）。命中时返回一行回执提示文案（由 read_file/grep 拼在输出首行）；
+/// 审计面照常（journal 已载）。
 pub fn sensitive_path_notice(path: &std::path::Path) -> Option<String> {
     for component in path.components() {
         let std::path::Component::Normal(part) = component else {
@@ -792,10 +795,23 @@ pub fn sensitive_path_notice(path: &std::path::Path) -> Option<String> {
         };
         let Some(name) = part.to_str() else { continue };
         let lower = name.to_ascii_lowercase();
+        // 文件名 stem（去最后一个扩展名）——SSH 私钥裸名含带扩展形式。
+        let stem = std::path::Path::new(name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase());
         let what: String = if lower == ".ssh" || lower == ".aws" {
             lower
-        } else if lower == ".env" || lower.starts_with(".env.") {
+        } else if lower == ".env" || lower.starts_with(".env.") || lower == ".envrc" {
             ".env*".to_string()
+        } else if matches!(
+            stem.as_deref(),
+            Some("id_rsa") | Some("id_dsa") | Some("id_ecdsa") | Some("id_ed25519")
+        ) {
+            // 355 批：stem 分支先于扩展名分支——`id_ed25519.pem` 这类
+            // SSH 私钥带扩展形式取更特异的 `id_*` 标签（非裸名 *.pem/
+            // *.key 的既有覆盖不变）。
+            "id_*".to_string()
         } else if lower.ends_with(".pem") {
             "*.pem".to_string()
         } else if lower.ends_with(".key") {
@@ -2667,6 +2683,9 @@ mod tests {
 
     /// 354c（0dr §4.3）敏感路径提示钉：`.ssh`/`.aws` 目录、`.env*`、
     /// `*.pem`/`*.key`、`keystore` 命中即提示；普通路径 `None`。
+    /// 355 批（2026-10-25，审查条目 5）补：`.envrc` 组件、SSH 私钥裸名
+    /// `id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`（stem 匹配——带扩展形式
+    /// 同样命中）；大小写不敏感（`.ENVRC`/`ID_RSA`）。
     #[test]
     fn sensitive_path_notice_matches_key_material_hosts() {
         let tmp = TempDir::new().unwrap();
@@ -2683,6 +2702,18 @@ mod tests {
         );
         assert!(hit("src/main.rs").is_none());
         assert!(hit("notes.md").is_none());
+        // 355 批：`.envrc` 组件与 SSH 私钥裸名（含带扩展 stem 形式）。
+        assert!(hit(".envrc").unwrap().contains(".env*"));
+        assert!(hit("keys/id_rsa").unwrap().contains("id_*"));
+        assert!(hit("keys/id_dsa").unwrap().contains("id_*"));
+        assert!(hit("keys/id_ecdsa").unwrap().contains("id_*"));
+        assert!(hit("keys/id_ed25519").unwrap().contains("id_*"));
+        assert!(hit("keys/id_ed25519.pem").unwrap().contains("id_*"));
+        assert!(hit("keys/id_rsa.old").unwrap().contains("id_*"));
+        assert!(hit("keys/ID_RSA").unwrap().contains("id_*"));
+        // 裸名是长名子串/前缀拼贴时不算命中（stem 全字匹配）。
+        assert!(hit("keys/my_id_rsa_backup").is_none());
+        assert!(hit("keys/id_rsa2").is_none());
     }
 
     /// 矩阵 #3/#4：`.gsa` 真实目录（cwd 内）+ 两个白名单窗口 → 放行。

@@ -816,12 +816,22 @@ pub fn issued_payload(ticket: &ControlTicket) -> Value {
 }
 
 /// Build the `control_ticket_consumed` event payload.
+///
+/// 355 批（2026-10-25，353 §9.1 漏网收口）：`consumed_at` 走
+/// `orz_assurance::clock` 北京时间（`+08:00`）——353 批只收口了
+/// orz-assurance 侧 `acaf/mod.rs` 的一处，本文件三处 RFC3339 生产者漏网。
+/// 精度保持 `AutoSi`（与 `to_rfc3339()` 同精度语义），仅换偏移；消费面
+/// （journal 载荷与父仓 assurance/ Python parity 契约测试）按 RFC3339
+/// 解析，`+08:00` 合法、同一瞬时解析相等。
 pub fn consumed_payload(outcome: &TicketOutcome, now: &chrono::DateTime<chrono::Utc>) -> Value {
     match outcome {
         TicketOutcome::Consumed { ticket_id, kind } => serde_json::json!({
             "ticket_id": ticket_id,
             "ticket_kind": kind.as_str(),
-            "consumed_at": now.to_rfc3339(),
+            "consumed_at": orz_assurance::clock::to_beijing_opts(
+                *now,
+                chrono::SecondsFormat::AutoSi,
+            ),
             "outcome": "accepted",
         }),
         _ => Value::Null,
@@ -829,6 +839,8 @@ pub fn consumed_payload(outcome: &TicketOutcome, now: &chrono::DateTime<chrono::
 }
 
 /// Build the `control_ticket_rejected` event payload.
+///
+/// `rejected_at` 时间基准同 [`consumed_payload`]（355 批：北京时间单一源）。
 pub fn rejected_payload(outcome: &TicketOutcome, now: &chrono::DateTime<chrono::Utc>) -> Value {
     match outcome {
         TicketOutcome::Rejected {
@@ -839,14 +851,20 @@ pub fn rejected_payload(outcome: &TicketOutcome, now: &chrono::DateTime<chrono::
         } => serde_json::json!({
             "ticket_id": ticket_id,
             "ticket_kind": kind.as_str(),
-            "rejected_at": now.to_rfc3339(),
+            "rejected_at": orz_assurance::clock::to_beijing_opts(
+                *now,
+                chrono::SecondsFormat::AutoSi,
+            ),
             "reject_code": code.as_str(),
             "detail": detail,
         }),
         TicketOutcome::SignerUnreachable { kind, detail } => serde_json::json!({
             "ticket_id": Value::Null,
             "ticket_kind": kind.as_str(),
-            "rejected_at": now.to_rfc3339(),
+            "rejected_at": orz_assurance::clock::to_beijing_opts(
+                *now,
+                chrono::SecondsFormat::AutoSi,
+            ),
             "reject_code": "signer_unreachable",
             "detail": detail,
         }),

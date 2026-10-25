@@ -821,15 +821,20 @@ mod tests {
             prior.tools.iter().map(|t| &t.name).collect::<Vec<_>>(),
             trigger.tools.iter().map(|t| &t.name).collect::<Vec<_>>()
         );
-        // 周期问询在阈值处提交后归零，只剩反例门轮 + 终答轮两轮。
-        assert_eq!(orientation.main.completed_rounds, 2);
+        // 周期问询在阈值处提交后归零，只剩终答轮一轮（355 批：反例门轮
+        // 退役，原"反例门轮＋终答轮"两轮、断言 2）。
+        assert_eq!(orientation.main.completed_rounds, 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 集成：终答前的机械审查报告与反例质询行为完全不变——两块照旧同轮
-    /// 注入，且都不携带初始轮三问（审查依旧是结尾的事）。
+    /// 355 批改判（2026-10-25，353 §5.1 处置；原钉
+    /// `final_answer_audit_blocks_unchanged_and_carry_no_inquiry` 断言
+    /// "终答前机械审查报告＋反例门两块照旧同轮注入"——该兼容门随 0dm
+    /// 契约退役，生产不再有终答前注入面）。新钉：反例门退役后终答候选
+    /// **无条件交付**——无 CounterexampleGate 事件、无 [MECHANICAL_AUDIT]/
+    /// [COUNTEREXAMPLE_GATE] 注入轮、初始轮问询仍不持久化回会话。
     #[tokio::test]
-    async fn final_answer_audit_blocks_unchanged_and_carry_no_inquiry() {
+    async fn final_answer_delivers_without_gate_or_audit_after_retirement() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -846,14 +851,13 @@ mod tests {
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-0")]),
             // 初始轮问询的回答（软门消费）。
             ScriptedResponse::text("完成"),
-            // 终答候选 → 反例门 + 审查报告。
-            ScriptedResponse::text("完成"),
+            // 终答候选——355 批起无条件交付，不再有反例门/审查报告轮。
             ScriptedResponse::text("完成"),
         ]));
         let controller = AgentLoopController::with_gateway(fake.clone());
         let mut orientation = OrientationSessionState::new_with_threshold("sess-0x-audit", 50);
         let mut conversation: Vec<crate::gateway::model::Message> = Vec::new();
-        controller
+        let (response, _, _) = controller
             .run_turn(
                 &host,
                 "任务",
@@ -866,16 +870,16 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(response, "完成", "终答候选必须无条件交付");
 
-        let gate_block = crate::prompt::COUNTEREXAMPLE_GATE_BLOCK;
         let events = events(&dir);
-        let gate = events
-            .iter()
-            .find(|e| e.event_type == EventType::CounterexampleGate)
-            .expect("counterexample gate fires once");
-        assert_eq!(gate.payload["position"], "final_answer");
-        assert_eq!(gate.payload["once_only"], serde_json::json!(true));
-        assert_eq!(gate.payload["message_block"], gate_block);
+        assert!(
+            events
+                .iter()
+                .all(|e| e.event_type != EventType::CounterexampleGate),
+            "反例门已退役：不得再有 CounterexampleGate 事件: {:?}",
+            event_types(&dir)
+        );
 
         // 机械注入文本绝不持久化回会话（初始轮问询同待遇）。
         assert!(
@@ -887,41 +891,22 @@ mod tests {
         assert!(
             conversation
                 .iter()
-                .all(|m| m.content != gate_block && !m.content.starts_with("[MECHANICAL_AUDIT")),
-            "audit report / gate block must not persist into the conversation"
+                .all(|m| !m.content.starts_with("[MECHANICAL_AUDIT")
+                    && !m.content.starts_with("[COUNTEREXAMPLE_GATE")),
+            "retired gate / audit blocks must not persist into the conversation"
         );
 
-        // 终答前那一轮的请求：审查报告 + 反例门各自独立成块，且都不含三问。
+        // 终答轮的请求：除问询/投递类注入外，不得再携带反例门或审查报告块。
         let requests = fake.received_requests();
-        let final_idx = requests
-            .iter()
-            .rposition(|req| {
-                req.messages
-                    .iter()
-                    .any(|m| m.role == Role::User && m.content == gate_block)
-            })
-            .expect("final-answer round carries the gate block");
-        let final_req = &requests[final_idx];
-        let audit_msg = final_req
-            .messages
-            .iter()
-            .find(|m| {
-                m.role == Role::User
-                    && m.content
-                        .starts_with(crate::mechanical_audit::MECHANICAL_AUDIT_PREFIX)
-            })
-            .expect("mechanical audit report rides the same round");
-        for probe in [
-            "[INITIAL_ROUND_INQUIRY",
-            "本任务实际要交付什么",
-            "大方向是什么",
-            "当前做法优劣如何",
-        ] {
+        let final_req = requests.last().expect("final request present");
+        for probe in ["[COUNTEREXAMPLE_GATE", "[MECHANICAL_AUDIT"] {
             assert!(
-                !audit_msg.content.contains(probe),
-                "审查报告不得携带问询: {probe}"
+                !final_req
+                    .messages
+                    .iter()
+                    .any(|m| m.content.starts_with(probe)),
+                "退役块不得出现在终答轮请求: {probe}"
             );
-            assert!(!gate_block.contains(probe), "反例门块不得携带问询: {probe}");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -955,8 +940,8 @@ mod tests {
         }
         // 触发后的第一轮：纯文本回答被软消费（续跑），不计为终答。
         script.push(ScriptedResponse::text("完成"));
-        // 反例门轮 + 最终答案轮。
-        script.push(ScriptedResponse::text("完成"));
+        // 最终答案轮（355 批：终答前反例门退役——原"反例门轮 + 最终答案轮"
+        // 两轮收敛为一轮，纯文本候选无条件交付）。
         script.push(ScriptedResponse::text("完成"));
         let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
         let mut orientation =
@@ -1005,8 +990,8 @@ mod tests {
             .collect();
         assert_eq!(responses.len(), 0, "{:?}", event_types(&dir));
         // 软门延迟 commit：第 8 轮（纯文本回答）feed 后 commit 归 0；
-        // 反例门轮 + 最终答案轮再喂 2。
-        assert_eq!(orientation.main.completed_rounds, 2);
+        // 最终答案轮再喂 1（355 批：反例门轮退役，原断言 2）。
+        assert_eq!(orientation.main.completed_rounds, 1);
         assert_eq!(
             events.last().unwrap().event_type,
             EventType::RunFinished,
@@ -1044,7 +1029,7 @@ mod tests {
             "read_file",
             "call-7",
         )]));
-        script.push(ScriptedResponse::text("完成"));
+        // 355 批（2026-10-25，353 §5.1）：门拦截轮退役——单个"完成"文本即终答。
         script.push(ScriptedResponse::text("完成"));
         let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
         let mut orientation =
@@ -1091,8 +1076,8 @@ mod tests {
             "the tool round after the fire must execute normally"
         );
         // 延迟 commit：第 8 轮（call-7 工具轮）feed 后 commit 归 0；
-        // 反例门轮 + 最终答案轮再喂 2。
-        assert_eq!(orientation.main.completed_rounds, 2);
+        // 最终答案轮再喂 1（355 批：反例门轮退役，原断言 2）。
+        assert_eq!(orientation.main.completed_rounds, 1);
         assert_eq!(events.last().unwrap().event_type, EventType::RunFinished);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1129,7 +1114,7 @@ mod tests {
             "read_file",
             "call-7",
         )]));
-        script.push(ScriptedResponse::text("完成"));
+        // 355 批（2026-10-25，353 §5.1）：门拦截轮退役——单个"完成"文本即终答。
         script.push(ScriptedResponse::text("完成"));
         let fake = Arc::new(FakeProvider::new(script));
         let controller = AgentLoopController::with_gateway(fake.clone());

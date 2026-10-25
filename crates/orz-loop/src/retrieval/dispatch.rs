@@ -1709,12 +1709,11 @@ mod tests {
 
         // main declares retrieval → subagent round 1 calls read_file (host
         // tool, allowed in the lane) → subagent round 2 forms the result →
-        // main concludes (gate + final).
+        // main concludes（355 批：反例门轮退役——终答一轮即收）.
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-2")]),
             ScriptedResponse::text("[DOC] design.md\n检索完成"),
-            ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
@@ -1739,7 +1738,7 @@ mod tests {
             .iter()
             .filter(|t| **t == EventType::ModelOutput)
             .count();
-        assert_eq!(sub_outputs, 5, "{types:?}"); // main 3 (decl/gate-answer/final) + subagent 2
+        assert_eq!(sub_outputs, 4, "{types:?}"); // main 2 (decl/final) + subagent 2（355 批：门轮退役）
         assert_eq!(
             types
                 .iter()
@@ -5060,8 +5059,7 @@ mod tests {
         script.push(ScriptedResponse::text("[DOC] doc.md\n检索完成"));
         // 主车道：初始轮问询的回答（软门消费后续跑）。
         script.push(ScriptedResponse::text("完成"));
-        // 主车道：反例门轮 + 终答轮。
-        script.push(ScriptedResponse::text("完成"));
+        // 主车道终答轮（355 批：反例门轮退役，原"门轮＋终答轮"两轮收敛）。
         script.push(ScriptedResponse::text("完成"));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
             FakeProvider::new(script),
@@ -5145,7 +5143,9 @@ mod tests {
         // Main lane: 4 completed generations; the initial-round commit did
         // NOT reset its periodic counter (0x S1 设计 §3.2).
         assert_eq!(orientation.internal.completed_rounds, 1);
-        assert_eq!(orientation.main.completed_rounds, 4);
+        // 355 批（2026-10-25，353 §5.1）：主车道原 4 轮（decl/问询回答/门轮/
+        // 终答）收敛为 3 轮——反例门轮退役。
+        assert_eq!(orientation.main.completed_rounds, 3);
         assert_eq!(orientation.external.completed_rounds, 0);
         assert!(orientation.initial_round_fired);
         // §14.16 检索车道不变: the subagent lane keeps the legacy
@@ -5179,8 +5179,7 @@ mod tests {
             ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-w2")]),
             // 子代理车道第 2 轮：形成检索结果并关闭。
             ScriptedResponse::text("检索完成"),
-            // 主车道：终答前反例自查轮 + 终答。
-            ScriptedResponse::text("草稿"),
+            // 主车道终答（355 批：反例门自查轮退役，一轮即收）。
             ScriptedResponse::text("终答"),
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
@@ -5265,8 +5264,7 @@ mod tests {
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-rpd-2")]),
             // 子代理车道第 2 轮：形成结构化结果并关闭。
             ScriptedResponse::text("[DOC] src/cache.rs 缓存回归定位"),
-            // 主车道：终答前反例自查轮 + 终答。
-            ScriptedResponse::text("草稿"),
+            // 主车道终答（355 批：反例门自查轮退役，一轮即收）。
             ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();

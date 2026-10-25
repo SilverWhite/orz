@@ -94,6 +94,11 @@ pub fn model_stop_await_enabled() -> bool {
 /// `ORZ_TERMINAL_DECLARATION=required|on|1|true|yes` 显式开启（benchmark /
 /// headless / 外部 ACP 客户端——那里确实需要机器可读终态）。开关只影响
 /// **是否要求** `[RUN_END]`，不影响声明本身的解析与落账。
+///
+/// 355 批（2026-10-25，353 审查处置）补注：生产入口（ACP 会话/CLI）的
+/// controller 位自 355 批起同样取自本函数，env 是交互车道单一事实源——
+/// 此前三处生产入口硬编码 `true`，使本函数的"缺省关闭"只在告知面成立
+/// （强制面照常扣留交付）。
 pub fn terminal_declaration_required() -> bool {
     std::env::var("ORZ_TERMINAL_DECLARATION")
         .map(|v| {

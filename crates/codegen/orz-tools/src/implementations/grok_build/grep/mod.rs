@@ -188,6 +188,8 @@ const FILE_COUNT_LIMIT: usize = 10_000;
 const FILE_COUNT_DEFAULT: usize = 500;
 
 /// 354b：分页 offset 上限（防滥用——rg 仍要真实读到 offset+limit）。
+/// 355 批（2026-10-25，审查条目 4）：越过上限不再静默钳制——
+/// `prepare_grep` 入口显式报错（钳制会使 next_cursor 绕回同页）。
 const MAX_PAGE_OFFSET: usize = 100_000;
 pub const DEFAULT_MAX_CHARS_PER_LINE: usize = 1_000;
 
@@ -865,6 +867,28 @@ async fn prepare_grep(
     ctx: &xai_tool_runtime::ToolCallContext,
     input: &GrepSearchInput,
 ) -> Result<GrepStep, xai_tool_runtime::ToolError> {
+    // 355 批（2026-10-25，审查条目 4）：offset 越界显式报错——此前
+    // `offset.min(MAX_PAGE_OFFSET)` 静默钳制，offset=100_001 时 next_cursor
+    // =offset+limit 又被钳回，同页重发无限绕圈。边界值本身（100_000）合法；
+    // 错误文案携带上限值。跟随本文件既有错误回传形状（Early 短路 + 退出
+    // 码 2 + 正文文案，同 path-not-found 预检）。
+    if let Some(offset) = input.offset
+        && offset > MAX_PAGE_OFFSET
+    {
+        return Ok(GrepStep::Early(GrepSearchOutput {
+            stdout: format!(
+                "Error calling tool: invalid offset {offset} — the maximum page offset is \
+                 {MAX_PAGE_OFFSET}. Re-read from a smaller offset (page forward from 0 via \
+                 the previous page's next_cursor)."
+            )
+            .into_bytes(),
+            stderr: Vec::new(),
+            exit_code: 2,
+            match_count: 0,
+            file_matches: Vec::new(),
+            files_searched: None,
+        }));
+    }
     use crate::types::tool_metadata::{resolve_cwd, shared_resources};
     let resources = shared_resources(ctx)?;
     let cwd = resolve_cwd(ctx, &resources).await?;
@@ -1237,8 +1261,10 @@ async fn prepare_grep(
             sensitive_notice: crate::types::resources::sensitive_path_notice(&workdir)
                 .map(|n| format!("{n}\n"))
                 .unwrap_or_default(),
-            // 354b (0dr S4.2) pagination cursor (0-based; capped -- rg still reads to offset+limit).
-            page_offset: input.offset.unwrap_or(0).min(MAX_PAGE_OFFSET),
+            // 354b (0dr S4.2) pagination cursor (0-based) — 355 批（审查条目
+            // 4）：越界值已在 prepare_grep 入口显式报错，此处不再钳制
+            // （钳制会把 next_cursor 拉回同一起点、无限重发同页）。
+            page_offset: input.offset.unwrap_or(0),
         },
     }))
 }
@@ -3381,6 +3407,61 @@ mod tests {
                 "{needle} 恰一次, seen: {seen:?}"
             );
         }
+    }
+
+    /// 355 批（2026-10-25，审查条目 4）：offset 越界显式报错——退出码 2、
+    /// 文案携带上限值，不再静默钳制（旧钳制使 next_cursor 绕回同页无限
+    /// 重发）。
+    #[tokio::test]
+    async fn grep_offset_overflow_reports_explicit_error() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("a.txt"), "findme\n").unwrap();
+        let mut input = make_grep_input("findme");
+        input.offset = Some(MAX_PAGE_OFFSET + 1);
+        let mut resources = Resources::new();
+        resources.insert(Cwd(tmp.path().to_path_buf()));
+        let tool = GrepTool;
+        let output = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        assert_eq!(output.exit_code, 2, "越界＝显式错误退出码");
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            text.contains("invalid offset 100001"),
+            "文案点名越界值: {text}"
+        );
+        assert!(text.contains("100000"), "文案携带上限值: {text}");
+    }
+
+    /// 355 批（2026-10-25，审查条目 4）：边界值 100_000 本身合法——不报
+    /// 错，照常分页（命中数少于 offset 时窗口为空、无 next_cursor）。
+    #[tokio::test]
+    async fn grep_offset_at_cap_still_valid() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("a.txt"), "findme\n").unwrap();
+        let mut input = make_grep_input("findme");
+        input.offset = Some(MAX_PAGE_OFFSET);
+        let mut resources = Resources::new();
+        resources.insert(Cwd(tmp.path().to_path_buf()));
+        let tool = GrepTool;
+        let output = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        assert_eq!(
+            output.exit_code,
+            0,
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let card = String::from_utf8_lossy(&output.stdout);
+        let page_line = card
+            .lines()
+            .find(|l| l.starts_with("[page] "))
+            .expect("[page] trailer present at the cap");
+        assert!(
+            page_line.contains("offset 100000") && !page_line.contains("next_cursor"),
+            "上限值合法且无续页: {page_line}"
+        );
     }
 
     /// 354c（0dr §4.3，2026-10-25）读面开放：workspace 外相对路径搜索

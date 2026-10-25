@@ -1180,7 +1180,14 @@ fn run_capabilities(rest: &[String]) {
     let mut data = data;
     data["orz_version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
     if json_mode {
-        let envelope = orz_host::inspect::envelope_for(&data, took);
+        // 355 批（2026-10-25，审查条目 3）：coverage 进 Envelope meta——
+        // 能力清单如实标注覆盖面（toolset 派生 / browser 门控 / loop 侧
+        // 策展与封存 / 未覆盖边界）。
+        let envelope = orz_host::inspect::envelope_for(
+            &data,
+            took,
+            Some(orz_host::tools::CAPABILITY_COVERAGE.to_string()),
+        );
         println!(
             "{}",
             serde_json::to_string_pretty(&envelope).unwrap_or_default()
@@ -1605,9 +1612,14 @@ fn run_plan(prompt: &str, wallclock: Option<Duration>, stall_timeout: Option<Dur
             // (plan artifacts are mechanically derived today; model-generated
             // plans later keep the same ingestion point).
             let controller = orz_loop::AgentLoopController::with_gateway(gateway)
-                // 0dm（2026-10-21）：plan-approved CLI 也是主车道生产入口，
-                // 同样要求终态声明并暴露 self_check（不启用 console 面）。
-                .with_terminal_declaration_required(true)
+                // 355 批（2026-10-25，353 审查处置）：交互/CLI 主车道终态声明随
+                // ORZ_TERMINAL_DECLARATION 单源——缺省 off＝文本轮无条件交付
+                // （353 §5.1）；机器可读终态（benchmark/headless/外部 ACP）由
+                // env 显式开启。0dm 时代此处硬编码 true 使"缺省关闭"名不符实
+                // （强制面存活、告知面被拔＝强制而不教）。
+                .with_terminal_declaration_required(
+                    orz_loop::model_stop::terminal_declaration_required(),
+                )
                 .with_snapshot_store(Some(handle.snapshot_store.clone()))
                 .with_blackboard_archive_dir(Some(blackboard_archive_dir))
                 .with_plan(
@@ -2272,9 +2284,16 @@ async fn run(
             // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console
             // default + direct 受控降级（双模式）随生产路径启用。
             .with_console_default_enabled(true)
-            // 0dm（2026-10-21）：主车道有执行事实时，终答必须带 [RUN_END]；
-            // 无声明先 nudge 一次，第二次 fail-open（ORZ_TERMINAL_DECLARATION=off 关）。
-            .with_terminal_declaration_required(true)
+            // 355 批（2026-10-25，353 审查处置）：交互/CLI 主车道终态声明随
+            // ORZ_TERMINAL_DECLARATION 单源——缺省 off＝文本轮无条件交付
+            // （353 §5.1）；机器可读终态（benchmark/headless/外部 ACP）由
+            // env 显式开启。0dm 时代此处硬编码 true 使"缺省关闭"名不符实
+            // （强制面存活、告知面被拔＝强制而不教）。
+            // （0dm 旧注勘误："ORZ_TERMINAL_DECLARATION=off 关"已非开关
+            // 语义——off 自 355 批起是缺省态，env 是交互车道唯一开关。）
+            .with_terminal_declaration_required(
+                orz_loop::model_stop::terminal_declaration_required(),
+            )
             .with_snapshot_store(Some(handle.snapshot_store.clone()))
             .with_retrieval_enabled(retrieval_enabled)
             // ACAF Slice 1 (ADR-0011 §4.4): optional signer-process client
@@ -3213,8 +3232,9 @@ mod conformance_capture {
                         // request_header_change（S2 Task 1 起）。
                         "request_header_change",
                         "model_output",
-                        "counterexample_gate",
-                        "model_output",
+                        // 355 批（2026-10-25，353 §5.1）：反例门轮退役——
+                        // 终答文本轮即收，原"门轮＋终答轮"双 model_output
+                        // 收敛为单条。
                         "run_finished",
                     ],
                     "run_finished",
@@ -3315,8 +3335,9 @@ mod conformance_capture {
                         // 2026-10-02 起 budget 轮数记次撤除 ⇒ 单条）。
                         "mechanical_audit_update",
                         "model_output",
-                        "counterexample_gate",
-                        "model_output",
+                        // 355 批（2026-10-25，353 §5.1）：反例门轮退役——
+                        // 终答文本轮即收，原"门轮＋终答轮"双 model_output
+                        // 收敛为单条。
                         "run_finished",
                     ],
                     "run_finished",
@@ -3377,8 +3398,9 @@ mod conformance_capture {
                         "prompt_submitted",
                         "request_header_change",
                         "model_output",
-                        "counterexample_gate",
-                        "model_output",
+                        // 355 批（2026-10-25，353 §5.1）：反例门轮退役——
+                        // 终答文本轮即收，原"门轮＋终答轮"双 model_output
+                        // 收敛为单条。
                         "run_finished",
                     ],
                     "run_finished",
@@ -3683,9 +3705,9 @@ mod conformance_capture {
                 expected.extend([
                     "model_output",
                     // 2026-09-09：checkpoint 注入后的回答轮先行，随后才是
-                    // 反例门与终答（注入回答 → 汇总轮 → 反例门 → 终答）。
-                    "model_output",
-                    "counterexample_gate",
+                    // 汇总轮与终答（注入回答 → 汇总轮 → 终答）。355 批
+                    // （2026-10-25，353 §5.1）：反例门轮退役——汇总轮后的
+                    // 文本即终答，双 model_output 收敛为单条。
                     "model_output",
                     "run_finished",
                 ]);
@@ -3821,8 +3843,9 @@ mod conformance_capture {
                         // budget 覆盖写）。
                         "mechanical_audit_update",
                         "model_output",
-                        "counterexample_gate",
-                        "model_output",
+                        // 355 批（2026-10-25，353 §5.1）：反例门轮退役——
+                        // 终答文本轮即收，原"门轮＋终答轮"双 model_output
+                        // 收敛为单条。
                         "run_finished",
                     ],
                     "run_finished",
@@ -3936,8 +3959,9 @@ mod conformance_capture {
                         "mechanical_audit_update",
                         "mechanical_audit_update",
                         "model_output",
-                        "counterexample_gate",
-                        "model_output",
+                        // 355 批（2026-10-25，353 §5.1）：反例门轮退役——
+                        // 终答文本轮即收，原"门轮＋终答轮"双 model_output
+                        // 收敛为单条。
                         "run_finished",
                     ],
                     "run_finished",
@@ -4086,8 +4110,9 @@ mod conformance_capture {
                         "mechanical_audit_update",
                         "mechanical_audit_update",
                         "model_output",
-                        "counterexample_gate",
-                        "model_output",
+                        // 355 批（2026-10-25，353 §5.1）：反例门轮退役——
+                        // 终答文本轮即收，原"门轮＋终答轮"双 model_output
+                        // 收敛为单条。
                         "run_finished",
                     ],
                     "run_finished",
@@ -4220,8 +4245,9 @@ mod conformance_capture {
                         "mechanical_audit_update",
                         "mechanical_audit_update",
                         "model_output",
-                        "counterexample_gate",
-                        "model_output",
+                        // 355 批（2026-10-25，353 §5.1）：反例门轮退役——
+                        // 终答文本轮即收，原"门轮＋终答轮"双 model_output
+                        // 收敛为单条。
                         "run_finished",
                     ],
                     "run_finished",
@@ -4327,8 +4353,9 @@ mod conformance_capture {
                         // disposition 工具单条——无普通工具审计对）。
                         "mechanical_audit_update",
                         "model_output",
-                        "counterexample_gate",
-                        "model_output",
+                        // 355 批（2026-10-25，353 §5.1）：反例门轮退役——
+                        // 终答文本轮即收，原"门轮＋终答轮"双 model_output
+                        // 收敛为单条。
                         "run_finished",
                     ],
                     "run_finished",

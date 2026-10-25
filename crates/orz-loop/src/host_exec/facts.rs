@@ -543,13 +543,13 @@ mod tests {
                 arguments: serde_json::json!({ "command": "sleep 300" }),
                 call_id: "call-t1".to_string(),
             }]),
-            ScriptedResponse::text("继续"),
+            // 355 批改判（2026-10-25，353 §5.1）：原"继续"文本轮由反例门
+            // 消费——门退役后纯文本即终答，后续工具轮改由连续工具轮承载。
             ScriptedResponse::tool_calls(vec![ToolCall {
                 name: "read_file".to_string(),
                 arguments: serde_json::json!({ "path": "a.txt" }),
                 call_id: "call-t2".to_string(),
             }]),
-            ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
         let controller = AgentLoopController::with_gateway(fake);

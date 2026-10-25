@@ -580,13 +580,25 @@ pub(crate) fn format_default_prompt(
             let fffd = output_str.chars().filter(|c| *c == '\u{FFFD}').count();
             // 354a T4a（2026-10-25）：补静默时长——回执原本不给任何时间读数，
             // 模型无法区分「长命令在跑」与「挂死等 stdin」。与三读数同行，
-            // 守住 §7.5「每工具结果至多追加 1 行」预算。
+            // 守住 §7.5「每工具结果至多 1 行」预算。
+            // 355 批（2026-10-25，354a 审查处置）：FFFD 失明修复——UTF-8 被
+            // PS 5.1 转码后常以**合法 GBK 字节**到达，解码梯干净解出
+            // （FFFD=0）的乱码文本（"鎴戜滑"型），仅看 FFFD 判不中；补
+            // looks_like_utf8_misdecoded_as_gbk 判据（354 设计 §4.1）。命中
+            // 任一判据时**同行**追加改道提示（§7.5 每工具结果至多 1 行预算）。
+            let decode_suspect =
+                fffd > 0 || crate::util::encoding::looks_like_utf8_misdecoded_as_gbk(&output_str);
+            let suspect_hint = if decode_suspect {
+                "（解码可疑：建议改用写 UTF-8 文件＋read_file 复核）"
+            } else {
+                ""
+            };
             match elapsed {
                 Some(elapsed) => format!(
-                    "[output] chars={chars} lines={lines} FFFD={fffd} took={:.1}s",
+                    "[output] chars={chars} lines={lines} FFFD={fffd} took={:.1}s{suspect_hint}",
                     elapsed.as_secs_f64()
                 ),
-                None => format!("[output] chars={chars} lines={lines} FFFD={fffd}"),
+                None => format!("[output] chars={chars} lines={lines} FFFD={fffd}{suspect_hint}"),
             }
         };
         // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计
@@ -4308,6 +4320,62 @@ mod tests {
             "got: {without}"
         );
         assert!(!without.contains("took="), "got: {without}");
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // 355 批（2026-10-25，354a 审查处置）：[output] 行解码可疑提示两臂
+    // ───────────────────────────────────────────────────────────────────
+
+    /// 提示文案（与实现共用同一常量语义，钉字面）：命中时同行追加。
+    const SUSPECT_HINT: &str = "（解码可疑：建议改用写 UTF-8 文件＋read_file 复核）";
+
+    /// 臂一：FFFD>0（经典替换字符信号）→ 提示在场。
+    #[test]
+    fn default_prompt_hints_on_fffd_signal() {
+        let body = "Error: code point \u{FFFD} in stream\r\n";
+        let mut bash = make_bash_output(0, "raw");
+        bash.output_for_prompt = BashOutput::make_output_for_prompt(body);
+        let prompt = format_default_prompt(&bash, /* append_noop_reminder */ false, None);
+        assert!(
+            prompt.contains(SUSPECT_HINT),
+            "FFFD>0 必须提示解码可疑: {prompt}"
+        );
+        // 同行预算：提示紧跟读数行，不另起一行。
+        let readings_line = prompt.lines().find(|l| l.starts_with("[output]")).unwrap();
+        assert!(readings_line.ends_with(SUSPECT_HINT), "{readings_line}");
+    }
+
+    /// 臂二：FFFD=0 但 "鎴戜滑" 型乱码（UTF-8 被 GBK 转码后以合法 GBK 字节
+    /// 到达、解码梯干净解出）→ detector 命中，同样提示——354a 只看 FFFD
+    /// 在动机场景失明的修复点。
+    #[test]
+    fn default_prompt_hints_on_utf8_misdecoded_as_gbk_detector() {
+        let body = "鎴戜滑 bug\r\n"; // 不含 U+FFFD；GBK 重编码恰为 "我们 bug" 的 UTF-8 字节
+        let mut bash = make_bash_output(0, "raw");
+        bash.output_for_prompt = BashOutput::make_output_for_prompt(body);
+        let fffd = body.chars().filter(|c| *c == '\u{FFFD}').count();
+        assert_eq!(fffd, 0);
+        assert!(crate::util::encoding::looks_like_utf8_misdecoded_as_gbk(
+            body
+        ));
+        let prompt = format_default_prompt(&bash, /* append_noop_reminder */ false, None);
+        assert!(
+            prompt.contains(SUSPECT_HINT),
+            "detector 命中必须提示解码可疑: {prompt}"
+        );
+    }
+
+    /// 未命中臂：干净输出不追加提示（读数行保持 354a 原样）。
+    #[test]
+    fn default_prompt_omits_hint_on_clean_output() {
+        let mut bash = make_bash_output(0, "hello\n");
+        bash.output_for_prompt = BashOutput::make_output_for_prompt("hello 世界\n");
+        let prompt = format_default_prompt(&bash, /* append_noop_reminder */ false, None);
+        assert!(!prompt.contains("解码可疑"), "干净输出不得提示: {prompt}");
+        assert!(
+            prompt.contains("[output] chars=9 lines=1 FFFD=0"),
+            "got: {prompt}"
+        );
     }
 
     #[test]

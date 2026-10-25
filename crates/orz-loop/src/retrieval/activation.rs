@@ -899,15 +899,15 @@ mod tests {
         };
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![continue_call]),
-            // Parent wrap-up after the accepted disposition.
-            ScriptedResponse::text(""),
+            // 355 批改判（2026-10-25，353 §5.1）：父车道"空文本收尾轮＋门轮"
+            // 原由反例门/扣留路径消费——门退役后纯文本即终答。子代理重派后
+            // 直接收工具轮（恢复历史随该请求可见），一轮文本即子代理终答，
+            // 父车道一轮文本收尾。
             // The parent re-dispatches the subagent (continue) — the
             // subagent's requests follow.
             ScriptedResponse::tool_calls(vec![retrieve_call]),
             ScriptedResponse::text("子代理继续完成"),
-            ScriptedResponse::text("子代理继续完成"),
             // The parent's wrap-up round after the subagent returns.
-            ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(fake.clone()))
