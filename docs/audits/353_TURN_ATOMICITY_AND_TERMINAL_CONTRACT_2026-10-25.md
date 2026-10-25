@@ -162,7 +162,9 @@
 ### §9.6 仍未实施（下一批）
 
 - **P0-1／P0-3**：回合级写前落盘、单工具无输出超时——本事故"上下文回退"的直接修复面，本批未动 host 持久化路径。
-  P0-3 取证结论：host 已有默认 300s 的 `tool_timeout`／`ORZ_TOOL_TIMEOUT_SECS`（`acp_server.rs:6184`、`lib.rs:458`），
-  故该项先查"超时为何没救回该 run"（车道是否同一 wrapper、kill 后结果是否回写），不重复造超时。
+  P0-3 取证（2026-10-25）：host 已有默认 300s 的 `tool_timeout`／`ORZ_TOOL_TIMEOUT_SECS`（`acp_server.rs:6184`、`lib.rs:458`、`lib.rs:1484-1487` 的 `tokio::time::timeout` 包裹），
+  且同会话 `RUN-0` 存在多条 `tool_completed{status:error}`（机制本身会落账）。复核 `RUN-51da03ea-11/12` 事件流：末事件均为 `tool_started`（04:55:00.828Z／05:23:55.498Z），
+  **此后到下一次 run 之间没有任何收尾事件**——即 300s 预算并未走到（否则 04:59:58 应有 `tool_completed`）。结论：进程在预算内终止，**进程内看门狗救不了这类事故**；
+  唯一有效面是 P0-1（执行前落盘）＋P0-2（下一轮对账，已落），P0-3 只剩"车道是否同一 wrapper"的剩余核查。
 - `finish()` 收尾工具：八工具面冻结，暂由 `ORZ_TERMINAL_DECLARATION` 承载机器可读终态。
 
