@@ -787,13 +787,187 @@ fn validate_session_id(session_id: &str) -> Result<(), AcpError> {
 }
 
 fn session_lease_path(base_dir: &Path, session_id: &str) -> PathBuf {
-    // Use the full id, not the 8-char display prefix: two sessions may share
-    // a prefix (`sess-idle` / `sess-idle2`), and a shared lease would make the
-    // second attachment fail with a false cross-process conflict.
+    // Use the full id here so this lock precisely represents one attachment.
+    // The separate persistent s8-owner claim below intentionally rejects a
+    // different full id before it can touch the legacy shared namespace.
     base_dir
         .join(".gsa")
         .join("sessions")
         .join(format!("{session_id}.lease"))
+}
+
+/// Persistent owner of the legacy 8-character storage namespace.
+///
+/// Conversation/orientation/activation sidecars and run journals predate the
+/// full-id lease and are still keyed by `s8`.  The owner claim makes that
+/// namespace single-owner while preserving the 8-character CLI surface.
+#[derive(Debug, Serialize, Deserialize)]
+struct SessionPrefixOwner {
+    schema: String,
+    session8: String,
+    session_id: String,
+}
+
+fn session_prefix_owner_path(base_dir: &Path, session_id: &str) -> PathBuf {
+    base_dir
+        .join(".gsa")
+        .join("sessions")
+        .join(format!("{}.owner.json", session_key(session_id)))
+}
+
+fn session_prefix_owner_lock_path(base_dir: &Path, session_id: &str) -> PathBuf {
+    base_dir
+        .join(".gsa")
+        .join("sessions")
+        .join(format!("{}.owner.lock", session_key(session_id)))
+}
+
+fn legacy_artifact_session_ids(base_dir: &Path, session_id: &str) -> Vec<String> {
+    let session8 = session_key(session_id);
+    let mut ids = Vec::new();
+    let mut collect_json_id = |path: PathBuf| {
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            return;
+        };
+        if let Some(id) = value.get("session_id").and_then(|v| v.as_str())
+            && id != session8
+            && !ids.iter().any(|known| known == id)
+        {
+            ids.push(id.to_string());
+        }
+    };
+
+    collect_json_id(conversation_sidecar_path(base_dir, session_id));
+    collect_json_id(orientation_sidecar_path(base_dir, session_id));
+    collect_json_id(activation_sidecar_path(base_dir, session_id));
+    collect_json_id(session_closed_marker_path(base_dir, session_id));
+    collect_json_id(session_tombstone_path(base_dir, session_id));
+
+    // A hygiene sweep can leave the archive as the only recoverable identity
+    // evidence.  Read it before allowing a new full id to claim the same s8.
+    if let Some(document) = read_archive_document(base_dir, &session8) {
+        let conversation = document.get("conversation").unwrap_or(&document);
+        if let Some(id) = conversation.get("session_id").and_then(|v| v.as_str())
+            && id != session8
+            && !ids.iter().any(|known| known == id)
+        {
+            ids.push(id.to_string());
+        }
+    }
+    ids
+}
+
+/// Claim the shared `s8` namespace for one full session id.
+///
+/// The separate lock serializes first attachment by colliding full-id leases.
+/// Existing pre-claim workspaces are migrated from embedded sidecar/archive
+/// identities.  Ambiguous evidence and a different existing owner both fail
+/// closed before any shared sidecar or run ordinal is read or written.
+fn claim_session_prefix(base_dir: &Path, session_id: &str) -> Result<(), AcpError> {
+    let owner_path = session_prefix_owner_path(base_dir, session_id);
+    let lock_path = session_prefix_owner_lock_path(base_dir, session_id);
+    let Some(parent) = lock_path.parent() else {
+        return Err(AcpError::Host(
+            "session owner path has no parent".to_string(),
+        ));
+    };
+    std::fs::create_dir_all(parent).map_err(|e| {
+        AcpError::Host(format!(
+            "cannot create session owner dir ({}): {e}",
+            parent.display()
+        ))
+    })?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|e| {
+            AcpError::Host(format!(
+                "cannot open session owner lock ({}): {e}",
+                lock_path.display()
+            ))
+        })?;
+    lock.lock_exclusive().map_err(|e| {
+        AcpError::Host(format!(
+            "cannot lock session owner claim ({}): {e}",
+            lock_path.display()
+        ))
+    })?;
+
+    if owner_path.is_file() {
+        let bytes = std::fs::read(&owner_path).map_err(|e| {
+            AcpError::Host(format!(
+                "cannot read session owner claim ({}): {e}",
+                owner_path.display()
+            ))
+        })?;
+        let owner: SessionPrefixOwner = serde_json::from_slice(&bytes).map_err(|e| {
+            AcpError::Host(format!(
+                "session owner claim is corrupt ({}): {e}; attach refused",
+                owner_path.display()
+            ))
+        })?;
+        if owner.schema != "orz-session-prefix-owner-v1"
+            || owner.session8 != session_key(session_id)
+        {
+            return Err(AcpError::Host(format!(
+                "session owner claim is invalid ({}); attach refused",
+                owner_path.display()
+            )));
+        }
+        if owner.session_id != session_id {
+            return Err(AcpError::InvalidRequest(format!(
+                "session prefix collision: {} is owned by {}; refusing attachment of {session_id}",
+                owner.session8, owner.session_id
+            )));
+        }
+        return Ok(());
+    }
+
+    let legacy_ids = legacy_artifact_session_ids(base_dir, session_id);
+    if legacy_ids.iter().any(|id| id != session_id) || legacy_ids.len() > 1 {
+        return Err(AcpError::InvalidRequest(format!(
+            "session prefix collision: {} has legacy artifacts owned by {}; refusing attachment of {session_id}",
+            session_key(session_id),
+            legacy_ids.join(", ")
+        )));
+    }
+
+    let owner = SessionPrefixOwner {
+        schema: "orz-session-prefix-owner-v1".to_string(),
+        session8: session_key(session_id),
+        session_id: session_id.to_string(),
+    };
+    let bytes = serde_json::to_vec_pretty(&owner)
+        .map_err(|e| AcpError::Host(format!("cannot serialize session owner claim: {e}")))?;
+    let tmp = owner_path.with_file_name(format!(
+        ".{}.tmp.{}",
+        owner_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("session-owner"),
+        std::process::id()
+    ));
+    let write_result = (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, &owner_path)
+    })();
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(AcpError::Host(format!(
+            "cannot persist session owner claim ({}): {e}",
+            owner_path.display()
+        )));
+    }
+    Ok(())
 }
 
 /// Take an exclusive OS lock for a writable attachment. The lock is released
@@ -2586,6 +2760,13 @@ pub async fn delete_session_on_demand(base_dir: &Path, session8: &str) -> Result
     if closed_marker.is_file() {
         paths.push(closed_marker);
     }
+    // The destructive CLI remains keyed by s8. Deleting that namespace also
+    // removes its full-id owner claim; the tombstone written below prevents
+    // the deleted namespace from being silently re-created.
+    let owner = session_prefix_owner_path(base_dir, session8);
+    if owner.is_file() {
+        paths.push(owner);
+    }
     // 334（§3.3/§5.13）：lease 文件也在「彻底移除」口径内。只清未被任何
     // 进程持有的 lease（名字是完整 session id + `.lease`，按 s8 前缀扫描）。
     // 被持有的 lease 不删——那是另一个进程的存活会话，调用方应先被拒。
@@ -3875,6 +4056,7 @@ impl AcpServer {
             retrieval_enabled,
             // Only a real session/new starts the hygiene sweep.
             true,
+            None,
         )
         .await
     }
@@ -3898,6 +4080,7 @@ impl AcpServer {
             policy,
             retrieval_enabled,
             false,
+            None,
         )
         .await
     }
@@ -3910,6 +4093,7 @@ impl AcpServer {
         policy: PermissionPolicy,
         retrieval_enabled: bool,
         sweep_enabled: bool,
+        preacquired_lease: Option<std::fs::File>,
     ) -> Result<serde_json::Value, AcpError> {
         validate_session_id(session_id)?;
         // Journals are created per-run at `session/prompt` time — the session
@@ -3921,7 +4105,15 @@ impl AcpServer {
         if session_tombstoned(&base, session_id) {
             return Err(AcpError::SessionNotFound(session_id.to_string()));
         }
-        let lease = acquire_session_lease(&base, session_id)?;
+        let lease = match preacquired_lease {
+            Some(lease) => lease,
+            None => acquire_session_lease(&base, session_id)?,
+        };
+        // The full-id lease prevents duplicate attachment of one identity;
+        // this persistent claim additionally prevents two different full ids
+        // with the same legacy s8 key from sharing/overwriting sidecars and
+        // run journals. It must precede every shared-path read and sweep.
+        claim_session_prefix(&base, session_id)?;
         // 0cy（docs/GSA_SESSION_HYGIENE_DESIGN_2026-10-11.md）：新会话起点＝
         // 空台账＋无前档足迹——非存活、非当前的会话足迹先收卷进
         // `archives/`（先写包后删源；唯一删改路径），再装载本会话侧车。
@@ -4178,13 +4370,22 @@ impl AcpServer {
                 "status": "loaded",
             }));
         }
+        // Establish both layers of ownership before reading or materializing
+        // any s8-keyed state. Merely probing a missing session must not create
+        // an owner claim, so first check path existence without opening data.
+        let suffix = session_key(session_id);
+        let conversation_path = conversation_sidecar_path(&base, session_id);
+        let package = on_demand_archives_dir(&base).join(format!("{suffix}.json.gz"));
+        if !conversation_path.is_file() && !package.is_file() {
+            return Err(AcpError::SessionNotFound(session_id.to_string()));
+        }
+        let lease = acquire_session_lease(&base, session_id)?;
+        claim_session_prefix(&base, session_id)?;
         // 2026-10-21 恢复修复：0cy 收卷后侧车随包移出活区，旧 load 直接
         // 报 `session not found`——真机只能「存档再回档」才恢复。load 本身
         // 就是显式恢复动作，按回档语义把包内缺件补回活区（只补缺、绝不
         // 覆盖），随后走同一条 attach/修复路径。包不存在才报 not found。
-        let suffix: String = session_id.chars().take(8).collect();
         if load_conversation_sidecar_for_attach(&base, session_id).is_none() {
-            let package = on_demand_archives_dir(&base).join(format!("{suffix}.json.gz"));
             if package.is_file() {
                 unarchive_session_on_demand(&base, &suffix)
                     .await
@@ -4215,6 +4416,7 @@ impl AcpServer {
             policy,
             retrieval_enabled,
             false,
+            Some(lease),
         )
         .await?;
         let replay = self.replay_session_history(session_id);
@@ -6772,7 +6974,7 @@ mod tests {
                     .with_session_cap(2),
                 );
                 server.set_gateway(dead_gateway());
-                let active = "sess-cap-active";
+                let active = "sess-act-active";
                 server
                     .handle_session_new(
                         active,
@@ -6787,7 +6989,7 @@ mod tests {
                 });
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
                 // Active 会话是最旧的；若按纯 LRU 会先驱逐它——必须跳过。
-                for id in ["sess-cap-b", "sess-cap-c"] {
+                for id in ["sess-idb-b", "sess-idc-c"] {
                     server
                         .handle_session_new(
                             id,
@@ -6799,14 +7001,14 @@ mod tests {
                 }
                 let live = server.list_sessions();
                 assert!(live.contains(&active.to_string()), "active must survive");
-                assert!(live.contains(&"sess-cap-c".to_string()));
+                assert!(live.contains(&"sess-idc-c".to_string()));
                 assert!(
-                    !live.contains(&"sess-cap-b".to_string()),
+                    !live.contains(&"sess-idb-b".to_string()),
                     "the oldest idle session must be evicted, not the active one"
                 );
                 assert_eq!(live.len(), 2, "cap is enforced after insertion");
                 assert!(
-                    session_closed_marker_path(&base, "sess-cap-b").is_file(),
+                    session_closed_marker_path(&base, "sess-idb-b").is_file(),
                     "evicted sessions keep a durable closed marker"
                 );
 
@@ -6985,6 +7187,10 @@ mod tests {
                     "archive package must be removed"
                 );
                 assert!(session_tombstoned(&base, id));
+                assert!(
+                    !session_prefix_owner_path(&base, id).exists(),
+                    "s8 delete must remove the full-id owner claim"
+                );
                 let _ = std::fs::remove_dir_all(&base);
             })
             .await
@@ -9073,13 +9279,13 @@ mod tests {
                 // Fresh session, never ran: also false (no in-flight run).
                 server
                     .handle_session_new(
-                        "sess-idle2",
+                        "sess-new2",
                         Some(base.clone()),
                         crate::session::TrustPolicy::Skip,
                     )
                     .await
                     .unwrap();
-                assert!(!server.cancel_current_run("sess-idle2"));
+                assert!(!server.cancel_current_run("sess-new2"));
 
                 let _ = std::fs::remove_dir_all(&base);
             })
@@ -11575,6 +11781,10 @@ mod tests {
         let migrated = load_conversation_sidecar(&base, full).expect("canonical sidecar");
         assert_eq!(migrated.session_id, full);
         assert_eq!(migrated.messages.len(), 1);
+        let owner: SessionPrefixOwner =
+            serde_json::from_slice(&std::fs::read(session_prefix_owner_path(&base, full)).unwrap())
+                .unwrap();
+        assert_eq!(owner.session_id, full, "legacy identity becomes the owner");
         assert!(
             server
                 .sessions
@@ -11664,7 +11874,10 @@ mod tests {
             )
             .await
             .expect_err("conflicting companion identity must be refused");
-        assert!(matches!(error, AcpError::SessionNotFound(id) if id == full));
+        assert!(
+            matches!(error, AcpError::InvalidRequest(ref detail) if detail.contains("session prefix collision")),
+            "conflicting durable identities must fail closed: {error}"
+        );
         let unchanged = serde_json::from_str::<StoredConversation>(
             &std::fs::read_to_string(conversation_sidecar_path(&base, full)).unwrap(),
         )
@@ -11848,6 +12061,137 @@ mod tests {
         assert!(leased_sessions(&base).iter().any(|s| s == "sess-lea"));
         drop(first);
         assert!(acquire_session_lease(&base, "sess-lease").is_ok());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn colliding_full_session_ids_fail_closed_before_shared_sidecar_access() {
+        let base = test_dir();
+        let first = "aaaaaaaa-1111-2222-3333-444455556666";
+        let collision = "aaaaaaaa-9999-8888-7777-666655554444";
+        let server_a = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![])));
+        server_a
+            .handle_session_new_with_options_no_sweep(
+                first,
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+                Default::default(),
+                true,
+            )
+            .await
+            .expect("first id owns its s8 namespace");
+
+        let mut conversation = StoredConversation::empty(first, None);
+        conversation.messages.push(Message {
+            role: Role::User,
+            content: "owned history".to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        });
+        persist_conversation_sidecar(&base, &conversation).unwrap();
+        let before = std::fs::read(conversation_sidecar_path(&base, first)).unwrap();
+
+        let server_b = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![])));
+        let load_error = server_b
+            .handle_session_load_with_options(
+                collision,
+                base.clone(),
+                crate::session::TrustPolicy::Skip,
+                Default::default(),
+                true,
+            )
+            .await
+            .expect_err("colliding load must fail before reading/materializing shared state");
+        assert!(
+            load_error.to_string().contains("session prefix collision"),
+            "{load_error}"
+        );
+        assert_eq!(
+            std::fs::read(conversation_sidecar_path(&base, first)).unwrap(),
+            before,
+            "rejected load must not alter the owner's sidecar"
+        );
+        let error = server_b
+            .handle_session_new_with_options_no_sweep(
+                collision,
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+                Default::default(),
+                true,
+            )
+            .await
+            .expect_err("same-s8 different full id must be rejected");
+        assert!(
+            error.to_string().contains("session prefix collision"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read(conversation_sidecar_path(&base, first)).unwrap(),
+            before,
+            "rejected attachment must not overwrite the owner's sidecar"
+        );
+        assert!(
+            !server_b
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(collision)
+        );
+        drop(server_a);
+        drop(server_b);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn concurrent_colliding_full_ids_choose_exactly_one_prefix_owner() {
+        let base = test_dir();
+        let first = "bbbbbbbb-1111-2222-3333-444455556666";
+        let collision = "bbbbbbbb-9999-8888-7777-666655554444";
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let ((a, lease_a), (b, lease_b)) = std::thread::scope(|scope| {
+            let barrier_a = Arc::clone(&barrier);
+            let base_a = base.clone();
+            let a = scope.spawn(move || {
+                let lease = acquire_session_lease(&base_a, first).unwrap();
+                barrier_a.wait();
+                (claim_session_prefix(&base_a, first), lease)
+            });
+            let barrier_b = Arc::clone(&barrier);
+            let base_b = base.clone();
+            let b = scope.spawn(move || {
+                let lease = acquire_session_lease(&base_b, collision).unwrap();
+                barrier_b.wait();
+                (claim_session_prefix(&base_b, collision), lease)
+            });
+            (a.join().unwrap(), b.join().unwrap())
+        });
+        assert_ne!(a.is_ok(), b.is_ok(), "exactly one colliding claim may win");
+        let (expected, loser, winning_lease) = if let Err(error) = a {
+            drop(lease_a);
+            (collision, error, lease_b)
+        } else {
+            drop(lease_b);
+            (first, b.unwrap_err(), lease_a)
+        };
+        assert!(
+            loser.to_string().contains("session prefix collision"),
+            "{loser}"
+        );
+
+        let owner: SessionPrefixOwner = serde_json::from_slice(
+            &std::fs::read(session_prefix_owner_path(&base, first)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(owner.session_id, expected);
+        assert_eq!(
+            usize::from(session_lease_held_elsewhere(&base, first))
+                + usize::from(session_lease_held_elsewhere(&base, collision)),
+            1,
+            "only the winning attachment may retain a live full-id lease"
+        );
+        drop(winning_lease);
         let _ = std::fs::remove_dir_all(&base);
     }
 
