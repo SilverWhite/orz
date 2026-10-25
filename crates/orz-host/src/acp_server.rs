@@ -6288,6 +6288,9 @@ impl AcpServer {
         if let Some(timeout) = tool_timeout {
             host = host.with_tool_timeout(timeout);
         }
+        // 354c（0dr §4.6）：审批模式一行事实——装配期由 policy＋ORZ_YOLO
+        // 姿态算好（permission.rs 单一实现），主车道每 run 拼进系统提示。
+        host = host.with_permission_mode_line(crate::permission::permission_mode_line(&policy));
         Ok(host)
     }
 }

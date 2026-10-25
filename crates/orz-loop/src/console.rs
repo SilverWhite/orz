@@ -223,6 +223,11 @@ pub fn default_service_registry() -> ServiceRegistry {
                         "minimum": 1,
                         "description": "输出条数上限。",
                     },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "分页游标：0 基行偏移（354b）。读取预算＝offset+head_limit，续页不重不漏；结果带 [page] trailer（total/shown/next_cursor）。",
+                    },
                     "case_insensitive": {
                         "type": "boolean",
                         "description": "大小写不敏感（rg -i）。",

@@ -894,24 +894,34 @@ impl ToolOutput {
             ToolOutput::ReadFile(read_file_output) => match read_file_output {
                 ReadFileOutput::FileContent(file_content) if file_content.content.is_empty() => {
                     let footer = anchor_footer(file_content.read_anchor.as_ref());
+                    // 354c（0dr §4.3）：敏感路径一行提示——只提示不拦截。
+                    let notice =
+                        crate::types::resources::sensitive_path_notice(&file_content.absolute_path)
+                            .map(|n| format!("{n}\n"))
+                            .unwrap_or_default();
                     if file_content.total_lines == 0 {
-                        format!("File is empty.{footer}")
+                        format!("{notice}File is empty.{footer}")
                     } else if file_content
                         .offset
                         .is_some_and(|offset| offset > file_content.total_lines)
                     {
                         format!(
-                            "(no lines returned: the requested window is past the end of the \
-                             file; the file has {} lines){footer}",
+                            "{notice}(no lines returned: the requested window is past the end of \
+                             the file; the file has {} lines){footer}",
                             file_content.total_lines,
                         )
                     } else {
-                        format!("(no lines returned){footer}")
+                        format!("{notice}(no lines returned){footer}")
                     }
                 }
                 ReadFileOutput::FileContent(file_content) => {
                     let footer = anchor_footer(file_content.read_anchor.as_ref());
-                    format!("{}{footer}", file_content.content)
+                    // 354c（0dr §4.3）：敏感路径一行提示——只提示不拦截。
+                    let notice =
+                        crate::types::resources::sensitive_path_notice(&file_content.absolute_path)
+                            .map(|n| format!("{n}\n"))
+                            .unwrap_or_default();
+                    format!("{notice}{}{footer}", file_content.content)
                 }
                 ReadFileOutput::ReadHandle(handle) => {
                     let mtime = handle

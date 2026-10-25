@@ -255,26 +255,130 @@ fn extract_pptx_text(file_bytes: Vec<u8>) -> Result<ReadFileOutput, String> {
     Ok(raw_text_to_file_content(text))
 }
 
+/// 名词提取：从关键词后的第一个词切到首个结构性字符（泛型/参数表/
+/// 语句边界）——`struct Foo<T>` → `Foo`、`fn fmt(&self, …)` → `fmt`。
+fn outline_take_name(word: &str) -> &str {
+    let stop = word
+        .find(|c: char| matches!(c, '<' | '(' | '{' | '[' | ':' | ';' | '='))
+        .unwrap_or(word.len());
+    word[..stop].trim_end()
+}
+
 /// 0bh ⑫（2026-09-22，按节定位）：`outline=true` 的章节索引生成器。逐行
 /// 扫描 Markdown ATX 标题（`#`~`######`，后随空白或行尾），输出
 /// `L<行号>: <标题>`；条目上限 300 条，超出显式省略；无标题时如实告知。
-fn build_outline(file_content: &str, total_lines: usize) -> String {
+///
+/// 354c（0dr §4.7，2026-10-25）：按扩展名分流四族语言——Rust（`fn`/
+/// `struct`/`enum`/`impl`/`mod`/`trait`，容忍 `pub`/`async`/`unsafe` 等
+/// 前缀）、Python（`def`/`class`）、TS/JS（`function`/`class`/
+/// `interface`，容忍 `export`/`async`）、Markdown（标题，缺省）。纯文本
+/// 行扫描、零正则零语法树——outline 是导航提示，不是编译器。
+fn build_outline(file_content: &str, total_lines: usize, extension: Option<&str>) -> String {
     const MAX_OUTLINE_ENTRIES: usize = 300;
+    const MAX_ENTRY_CHARS: usize = 80;
+    #[derive(Clone, Copy, PartialEq)]
+    enum OutlineLang {
+        Markdown,
+        Rust,
+        Python,
+        TsJs,
+    }
+    let lang = match extension.unwrap_or_default().to_ascii_lowercase().as_str() {
+        "rs" => OutlineLang::Rust,
+        "py" | "pyi" => OutlineLang::Python,
+        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" => OutlineLang::TsJs,
+        _ => OutlineLang::Markdown,
+    };
     let mut entries: Vec<String> = Vec::new();
     let mut omitted = 0usize;
     for (idx, line) in file_content.lines().enumerate() {
         let trimmed = line.trim_start();
-        let hashes = trimmed.chars().take_while(|c| *c == '#').count();
-        let heading_rest = &trimmed[hashes..];
-        let is_heading = (1..=6).contains(&hashes)
-            && matches!(heading_rest.chars().next(), None | Some(' ' | '\t'));
-        if !is_heading {
-            continue;
-        }
-        if entries.len() < MAX_OUTLINE_ENTRIES {
-            entries.push(format!("L{}: {}", idx + 1, trimmed.trim_end()));
-        } else {
-            omitted += 1;
+        let entry = match lang {
+            OutlineLang::Markdown => {
+                let hashes = trimmed.chars().take_while(|c| *c == '#').count();
+                let heading_rest = &trimmed[hashes..];
+                let is_heading = (1..=6).contains(&hashes)
+                    && matches!(heading_rest.chars().next(), None | Some(' ' | '\t'));
+                is_heading.then(|| trimmed.trim_end().to_string())
+            }
+            OutlineLang::Rust => {
+                let mut rest = trimmed;
+                loop {
+                    let after_pub = rest
+                        .strip_prefix("pub(")
+                        .and_then(|r| r.split_once(')'))
+                        .map(|(_, tail)| tail)
+                        .or_else(|| rest.strip_prefix("pub "));
+                    if let Some(tail) = after_pub
+                        .or_else(|| rest.strip_prefix("async "))
+                        .or_else(|| rest.strip_prefix("unsafe "))
+                        .or_else(|| rest.strip_prefix("const "))
+                    {
+                        rest = tail.trim_start();
+                    } else {
+                        break;
+                    }
+                }
+                let head = rest.split_whitespace().next().unwrap_or("");
+                if matches!(head, "fn" | "struct" | "enum" | "trait" | "mod") {
+                    rest.split_whitespace()
+                        .nth(1)
+                        .map(outline_take_name)
+                        .filter(|w| !w.is_empty())
+                        .map(|n| format!("{head} {n}"))
+                } else if head == "impl" || head.starts_with("impl<") {
+                    // impl 头部携带完整泛型/trait 形态（截断在入列统一做）。
+                    let trimmed_rest = rest.trim_end_matches(|c: char| c == '{').trim_end();
+                    (!trimmed_rest.is_empty()).then(|| trimmed_rest.to_string())
+                } else {
+                    None
+                }
+            }
+            OutlineLang::Python => {
+                let rest = trimmed.strip_prefix("async ").unwrap_or(trimmed);
+                let head = rest.split_whitespace().next().unwrap_or("");
+                if matches!(head, "def" | "class") {
+                    rest.split_whitespace()
+                        .nth(1)
+                        .map(outline_take_name)
+                        .filter(|w| !w.is_empty())
+                        .map(|n| format!("{head} {n}"))
+                } else {
+                    None
+                }
+            }
+            OutlineLang::TsJs => {
+                let mut rest = trimmed;
+                loop {
+                    let Some(tail) = rest.strip_prefix("export ").or_else(|| {
+                        rest.strip_prefix("default ")
+                            .or_else(|| rest.strip_prefix("async "))
+                    }) else {
+                        break;
+                    };
+                    rest = tail.trim_start();
+                }
+                let head = rest.split_whitespace().next().unwrap_or("");
+                if matches!(head, "function" | "class" | "interface") {
+                    rest.split_whitespace()
+                        .nth(1)
+                        .map(outline_take_name)
+                        .filter(|w| !w.is_empty())
+                        .map(|n| format!("{head} {n}"))
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(mut text) = entry {
+            if text.chars().count() > MAX_ENTRY_CHARS {
+                text = text.chars().take(MAX_ENTRY_CHARS).collect();
+            }
+            if entries.len() < MAX_OUTLINE_ENTRIES {
+                entries.push(format!("L{}: {}", idx + 1, text));
+            } else {
+                omitted += 1;
+            }
         }
     }
     if entries.is_empty() {
@@ -291,7 +395,7 @@ pub(crate) const DESCRIPTION_FULL: &str = r#"Read a file.
 Usage:
 - The ${{ params.read.target_file }} parameter can be a relative path in the workspace or an absolute path
 - By default, it reads up to {max_lines_read} lines starting from the beginning of the file
-- Pass `outline=true` (text files only) to get a section outline — one `L<line>: <heading>` entry per Markdown heading — instead of the content; use it to locate a section before reading a range
+- Pass `outline=true` (text files only) to get a section outline — one `L<line>: <item>` entry per declaration — instead of the content; use it to locate a section before reading a range. Languages: Rust (fn/struct/enum/impl/mod/trait), Python (def/class), TS/JS (function/class/interface), Markdown (headings; fallback for other extensions)
 - Line numbers (1-based) appear as anchors in the format LINE_NUMBER→LINE_CONTENT on the first returned line and on every 10th line of the file; the lines in between show content only. Count from the nearest anchor when referring to a specific line
 - Text files larger than the coarse gate (default 64 KiB, configurable 8–64 KiB via ORZ_READ_FILE_COARSE_GATE_BYTES — TER T1.10 W-F13a) return a read-handle envelope — path / size / encoding / content_sha256 / available range / bounded preview (≤4 KiB) / truncated / offset — instead of full content. Continue with offset=… (1-based line) or switch to grep/structure-first.
 - For one specific line — including a very long line that a normal read truncates (index/ledger rows, single-line JSON) — pass `line=<N>` (1-based; negative counts from the end, -1 = last line) to get that line's bounded character window instead; `offset`/`limit`/`outline` are ignored in this mode. The response ends with a `[line N: …]` marker carrying the line's total character count; when more of the line remains the marker shows the exact `line=<L>, char_offset=<C>` continuation to page through it (`char_limit` = window size, default 4000, max 16000).
@@ -1011,7 +1115,11 @@ pub(crate) async fn run_read_file(
     // 章节索引（`L<行号>: <标题>`；Markdown ATX 标题）——大文件也能先定位再按
     // offset/limit 读段；非文本路径在更早分支已分流。
     if input.outline == Some(true) {
-        let outline = build_outline(&file_content, total_lines);
+        let extension = path
+            .extension()
+            .map(|e| e.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let outline = build_outline(&file_content, total_lines, Some(&extension));
         return Ok(ReadFileOutput::FileContent(FileContent {
             content: outline.clone(),
             content_concise: Some(outline),
@@ -2615,14 +2723,15 @@ mod tests {
     /// 旧 OUTPUT-DEGENERATION-GUARD 回归测试曾预期 `.gsa` 符号链接越出
     /// git root 仍可读；Task C（2026-09-04）canonical 沙箱后按解析落点
     /// fail-closed 拒读。本测试锁定该安全语义：工作区内 reparse 点解析到
-    /// 工作区外必须拒绝，即使 `.gsa/` 与 `*.log` 都在 gitignore 模式内。
+    /// 354c（0dr §4.3）读面开放语义翻转：越界 `.gsa` symlink（canonical
+    /// 落点在 git root 外、`.gsa/`/`*.log` 都在 gitignore 模式内）读取
+    /// 照常成功——读面限制只增摩擦不构成防线；会话卷域的内部面窗口
+    /// 契约（资源在场时的 branch 2）不受本翻转影响（负测见
+    /// `read_file_denies_gsa_symlink_to_non_volume_with_resource_present`）。
     /// 形态注记（S1 复审处理 P3-⑥，2026-09-07）：本测试**不注入**
-    /// SessionVolumeRoot——行使的是资源缺席回退路径（Task C 纯 workspace
-    /// 二元判定，矩阵 #11 形态）；资源在场的等价负测（symlink→非卷目录、
-    /// 域内白名单形态仍拒）见
-    /// `read_file_denies_gsa_symlink_to_non_volume_with_resource_present`。
+    /// SessionVolumeRoot——资源缺席回退路径已随 354c 开放。
     #[tokio::test]
-    async fn read_file_rejects_gsa_symlink_resolving_outside_git_root_even_when_gitignored() {
+    async fn read_file_opens_gsa_symlink_resolving_outside_git_root_even_when_gitignored() {
         let tmp = TempDir::new().unwrap();
         let canonical_root = dunce::canonicalize(tmp.path()).unwrap();
         // `.gsa` 符号链接指向 git root 之外的真实目录（越界重解析形态）。
@@ -2658,15 +2767,15 @@ mod tests {
             .await
             .unwrap();
         match result {
-            ReadFileOutput::PermissionDenied(message) => {
+            ReadFileOutput::FileContent(content) => {
                 assert!(
-                    message.contains("path escapes workspace sandbox"),
-                    "out-of-root .gsa symlink must be denied by canonical sandbox, got {message}"
+                    content.content.contains("terminal output line"),
+                    "354c read opening must surface the symlinked log: {content:?}"
                 );
             }
             other => {
                 panic!(
-                    "Expected PermissionDenied for symlinked .gsa log outside root, got {:?}",
+                    "Expected FileContent for symlinked .gsa log outside root (354c), got {:?}",
                     other
                 )
             }
@@ -3922,6 +4031,71 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         }
     }
 
+    /// 354c（0dr §4.7）：Rust outline——`fn/struct/enum/impl/mod/trait`，
+    /// 容忍 `pub`/`async`/`unsafe`/`pub(...)` 前缀；impl 携带完整头部。
+    #[tokio::test]
+    async fn read_file_outline_lists_rust_items() {
+        let src = b"\
+use std::fmt;\npub struct Foo<T> {\n    x: T,\n}\nimpl<T> fmt::Display for Foo<T> {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        write!(f, \"foo\")\n    }\n}\npub(crate) async fn run_job() {}\nenum State { A, B }\nunsafe trait Raw {}\nmod inner;\n";
+        let result = run_read_file_outline_on("lib.rs", src).await;
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert_eq!(
+                    content.content,
+                    "L2: struct Foo\n\
+                     L5: impl<T> fmt::Display for Foo<T>\n\
+                     L6: fn fmt\n\
+                     L10: fn run_job\n\
+                     L11: enum State\n\
+                     L12: trait Raw\n\
+                     L13: mod inner",
+                    "outline: {}",
+                    content.content
+                );
+            }
+            other => panic!("Expected FileContent, got {:?}", other),
+        }
+    }
+
+    /// 354c：Python outline——`def`/`class`（含 `async def`）。
+    #[tokio::test]
+    async fn read_file_outline_lists_python_items() {
+        let src = b"\
+import os\nclass Pipeline:\n    def step(self):\n        pass\n    async def drain_all(self):\n        pass\ndef main():\n    pass\n";
+        let result = run_read_file_outline_on("pipeline.py", src).await;
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert_eq!(
+                    content.content,
+                    "L2: class Pipeline\nL3: def step\nL5: def drain_all\nL7: def main",
+                    "outline: {}",
+                    content.content
+                );
+            }
+            other => panic!("Expected FileContent, got {:?}", other),
+        }
+    }
+
+    /// 354c：TS/JS outline——`function`/`class`/`interface`（容忍
+    /// `export`/`default`/`async` 前缀）。
+    #[tokio::test]
+    async fn read_file_outline_lists_ts_js_items() {
+        let src = b"\
+import { x } from 'x';\nexport interface Config {\n  name: string;\n}\nexport default class App {}\nasync function load() {}\nfunction anonymous(a, b) {}\n";
+        let result = run_read_file_outline_on("app.ts", src).await;
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert_eq!(
+                    content.content,
+                    "L2: interface Config\nL5: class App\nL6: function load\nL7: function anonymous",
+                    "outline: {}",
+                    content.content
+                );
+            }
+            other => panic!("Expected FileContent, got {:?}", other),
+        }
+    }
+
     #[tokio::test]
     async fn read_file_outline_bypasses_coarse_gate() {
         // >64 KiB text with headings: outline path returns an index, not a
@@ -4569,8 +4743,13 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         assert_eq!(stored_read_offset(None), None);
     }
 
+    /// 354c（0dr §4.3，2026-10-25，用户裁决方向）读面开放：workspace 外
+    /// 相对路径（`../`）读取成功——`run_terminal_cmd` 本可读任意路径，
+    /// 读面限制只增加摩擦；敏感面（文件名/路径命中密钥材料）只加一行
+    /// 提示，不拦截。旧钉 `read_file_rejects_path_escaping_workspace`
+    /// 语义就此翻转。
     #[tokio::test]
-    async fn read_file_rejects_path_escaping_workspace() {
+    async fn read_file_opens_path_escaping_workspace() {
         let tmp = TempDir::new().unwrap();
         let sub = tmp.path().join("workspace");
         std::fs::create_dir_all(&sub).unwrap();
@@ -4592,20 +4771,24 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             .await
             .unwrap();
         match result {
-            ReadFileOutput::PermissionDenied(msg) => {
-                assert!(msg.contains("escapes workspace sandbox"), "msg: {msg}");
+            ReadFileOutput::FileContent(content) => {
+                assert!(content.content.contains("sensitive"), "{content:?}");
             }
-            other => panic!("Expected PermissionDenied, got {:?}", other),
+            other => panic!("Expected FileContent (354c read opening), got {:?}", other),
         }
     }
 
+    /// 354c 读面开放：workspace 外绝对路径读取成功；`.pem` 等密钥材料
+    /// 命中敏感面提示（回执首行 `[敏感面] …`，内容照常返回）。
     #[tokio::test]
-    async fn read_file_rejects_absolute_path_outside_workspace() {
+    async fn read_file_opens_absolute_path_outside_workspace_with_sensitive_notice() {
         let tmp = TempDir::new().unwrap();
         let sub = tmp.path().join("workspace");
         std::fs::create_dir_all(&sub).unwrap();
-        let outside_file = tmp.path().join("secret.txt");
-        std::fs::write(&outside_file, "sensitive").unwrap();
+        let certs = tmp.path().join("certs");
+        std::fs::create_dir_all(&certs).unwrap();
+        let outside_file = certs.join("server.pem");
+        std::fs::write(&outside_file, "-----BEGIN CERTIFICATE-----").unwrap();
 
         let tool = ReadFileTool;
         let resources = test_resources(&sub);
@@ -4622,10 +4805,16 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             .await
             .unwrap();
         match result {
-            ReadFileOutput::PermissionDenied(msg) => {
-                assert!(msg.contains("escapes workspace sandbox"), "msg: {msg}");
+            ReadFileOutput::FileContent(content) => {
+                assert!(content.content.contains("BEGIN CERTIFICATE"), "{content:?}");
+                let prompt =
+                    ToolOutput::ReadFile(ReadFileOutput::FileContent(content)).to_prompt_format();
+                assert!(
+                    prompt.starts_with("[敏感面]") && prompt.contains("*.pem"),
+                    "prompt: {prompt}"
+                );
             }
-            other => panic!("Expected PermissionDenied, got {:?}", other),
+            other => panic!("Expected FileContent (354c read opening), got {:?}", other),
         }
     }
 
@@ -4664,10 +4853,12 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         }
     }
 
-    /// P0-GOV GLM F1（2026-09-06）：未注册的技能目录/任意 SKILL.md 不再拥有
-    /// 越界只读通道——无注册根时工作区外读取必须 PermissionDenied。
+    /// 354c（0dr §4.3）读面开放后语义翻转：未注册的技能目录/任意
+    /// SKILL.md 与普通文件同权——读取照常成功（GLM F1 的技能根豁免面
+    /// 保留但不再承担「唯一越界读通道」角色；本钉由旧「必须拒」翻转为
+    /// 「读面同权」。写面门禁与本测无关）。
     #[tokio::test]
-    async fn read_file_rejects_unregistered_skills_outside_workspace() {
+    async fn read_file_opens_unregistered_skills_outside_workspace() {
         let tmp = TempDir::new().unwrap();
         let sub = tmp.path().join("workspace");
         std::fs::create_dir_all(&sub).unwrap();
@@ -4677,7 +4868,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         std::fs::write(&skill_file, "secret skill content").unwrap();
 
         let tool = ReadFileTool;
-        // 无 SkillRoots 注入（orz-host 现状：skills 为空 = fail-closed）。
+        // 无 SkillRoots 注入（orz-host 现状）——354c 读面开放后照常可读。
         let resources = test_resources(&sub);
         let input = ReadFileInput {
             path: "../bundled/SKILL.md".to_string(),
@@ -4692,10 +4883,13 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             .await
             .unwrap();
         match result {
-            ReadFileOutput::PermissionDenied(msg) => {
-                assert!(msg.contains("escapes workspace sandbox"), "msg: {msg}");
+            ReadFileOutput::FileContent(content) => {
+                assert!(
+                    content.content.contains("secret skill content"),
+                    "{content:?}"
+                );
             }
-            other => panic!("Expected PermissionDenied, got {:?}", other),
+            other => panic!("Expected FileContent (354c read opening), got {:?}", other),
         }
     }
 }

@@ -39,6 +39,24 @@ fn readout_conversation<'a>(
     conversation.unwrap_or(messages)
 }
 
+/// 354a T4b（0dr，2026-10-25，设计稿 §4.5①）：在途工具墙钟心跳的默认节
+/// 拍——20s（设计稿 §4.5「默认 20s」）；`ORZ_TOOL_HEARTBEAT_SECS` 可调，
+/// 0＝禁用（负值/非法值按默认走）。心跳只落 journal（`tool_heartbeat`，
+/// payload: tool/call_id/elapsed_ms），模型面零注入（§7.5 预算：B 暴露
+/// 失败，不动每工具结果行数）。
+const TOOL_HEARTBEAT_TICK_MS: u64 = 20_000;
+
+fn tool_heartbeat_tick_ms() -> u64 {
+    match std::env::var("ORZ_TOOL_HEARTBEAT_SECS")
+        .ok()
+        .map(|s| s.trim().parse::<u64>())
+    {
+        Some(Ok(0)) => 0,
+        Some(Ok(secs)) => secs.saturating_mul(1_000),
+        _ => TOOL_HEARTBEAT_TICK_MS,
+    }
+}
+
 impl AgentLoopController {
     /// Run a host tool call through the permission and execution gates.
     /// (IP3a IPG evaluation is hoisted to the controller's tool phase — a
@@ -4203,6 +4221,15 @@ impl AgentLoopController {
         // 只覆盖**子进程族**，其余调用面的取消响应仍与工具超时耦合（如实
         // 记录，0bm 复审更正措辞）。
         let mut cancel_kill_done = false;
+        // 354a T4b（0dr）：在途工具墙钟心跳——默认 20s 一条
+        // `tool_heartbeat{tool,call_id,elapsed_ms}`，只落 journal（模型面
+        // 零注入）。`None`＝禁用（ORZ_TOOL_HEARTBEAT_SECS=0）。select 条件
+        // 臂 `if journal_tick.is_some()`：Option 进臂，tick 走 Interval。
+        let heartbeat_instant = std::time::Instant::now();
+        let journal_tick_ms = tool_heartbeat_tick_ms();
+        let mut journal_tick = (journal_tick_ms > 0)
+            .then(|| tokio::time::interval(std::time::Duration::from_millis(journal_tick_ms)));
+        let mut journal_ticks: u32 = 0;
         let call_result = loop {
             tokio::select! {
                 r = &mut call => break r,
@@ -4219,6 +4246,31 @@ impl AgentLoopController {
                 }, if !cancel_kill_done => {
                     cancel_kill_done = true;
                     orz_tools::util::global_process_scope().kill_active();
+                }
+                // 354a T4b：墙钟心跳臂——interval 首 tick 立即就绪，首条
+                // 会落在 elapsed≈0；跳过首 tick（tool_started 已是 0 点事
+                // 实，心跳从第二个节拍起计数）。
+                _ = async {
+                    journal_tick
+                        .as_mut()
+                        .expect("armed only when journal_tick is Some")
+                        .tick()
+                        .await
+                }, if journal_tick.is_some() => {
+                    journal_ticks = journal_ticks.wrapping_add(1);
+                    if journal_ticks >= 2 {
+                        let elapsed_ms = heartbeat_instant.elapsed().as_millis() as u64;
+                        writer
+                            .record(
+                                EventType::ToolHeartbeat,
+                                serde_json::json!({
+                                    "tool": tc.name,
+                                    "call_id": tc.call_id,
+                                    "elapsed_ms": elapsed_ms,
+                                }),
+                            )
+                            .await?;
+                    }
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_millis(heartbeat_ms)) => {
                     if tick_ms > 0 {
@@ -8030,5 +8082,133 @@ mod tests {
         assert!(!types.contains(&EventType::ToolStarted), "{types:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 354a T4b（0dr，2026-10-25）：在途工具墙钟心跳——慢工具（2.3s）在
+    /// 1s 节拍（env 调低）下留下 `tool_heartbeat` 轨迹：≥1 条、elapsed_ms
+    /// 单调不减、事件序 started→heartbeats→completed。env=0 禁用面由
+    /// [`tool_heartbeat_tick_ms` 解析钉]（下一测）承载。
+    /// T4b 心跳两测共享的 env 锁——本地 static 互不排斥，并发下
+    /// 解析测试会把 env 改成 0、journal 测试因此零心跳（flaky 根因）。
+    static HEARTBEAT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[tokio::test]
+    async fn tool_heartbeat_journaled_while_tool_in_flight() {
+        let _env_guard = HEARTBEAT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: single-threaded env mutation under the shared test lock.
+        unsafe { std::env::set_var("ORZ_TOOL_HEARTBEAT_SECS", "1") };
+
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        struct SlowHost {
+            journal: JournalRecorder,
+        }
+        #[async_trait::async_trait]
+        impl LoopHost for SlowHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                tokio::time::sleep(std::time::Duration::from_millis(2_300)).await;
+                Ok(ToolResult {
+                    output: "slow ok".to_string(),
+                    exit_code: Some(0),
+                    ..Default::default()
+                })
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let host = SlowHost { journal };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-hb-1")]),
+            ScriptedResponse::text("慢工具完成"),
+            ScriptedResponse::text("慢工具完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        let result = controller
+            .run_turn(
+                &host,
+                "跑个慢命令",
+                "RUN-HEARTBEAT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await;
+        assert!(result.is_ok(), "{result:?}");
+
+        let all = events(&dir);
+        let beats: Vec<&RunEvent> = all
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolHeartbeat)
+            .collect();
+        assert!(
+            !beats.is_empty(),
+            "慢工具必须留下心跳轨迹: {:?}",
+            all.iter().map(|e| e.event_type.clone()).collect::<Vec<_>>()
+        );
+        // elapsed_ms 单调不减、载荷键齐。
+        let mut last: u64 = 0;
+        for beat in &beats {
+            let elapsed = beat.payload["elapsed_ms"].as_u64().expect("elapsed_ms");
+            assert!(elapsed >= last, "elapsed_ms 单调不减: {elapsed} < {last}");
+            assert_eq!(beat.payload["tool"], "read_file");
+            assert_eq!(beat.payload["call_id"], "call-hb-1");
+            last = elapsed;
+        }
+        // 事件序：started 在前、completed 在后（心跳夹在中间）。
+        let pos = |t: EventType| {
+            all.iter()
+                .position(|e| e.event_type == t)
+                .unwrap_or_else(|| panic!("{t:?} not journaled"))
+        };
+        assert!(pos(EventType::ToolStarted) < pos(EventType::ToolCompleted));
+        assert!(
+            beats.iter().all(
+                |b| all.iter().position(|e| e.event_id == b.event_id).unwrap()
+                    > pos(EventType::ToolStarted)
+                    && all.iter().position(|e| e.event_id == b.event_id).unwrap()
+                        < pos(EventType::ToolCompleted)
+            ),
+            "心跳必须夹在 started 与 completed 之间"
+        );
+
+        unsafe { std::env::remove_var("ORZ_TOOL_HEARTBEAT_SECS") };
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 354a T4b：节拍解析钉——缺省 20s、env=0 禁用、env=5 → 5000ms、
+    /// 非法值回退缺省。
+    #[test]
+    fn tool_heartbeat_tick_ms_parses_env() {
+        let _env_guard = HEARTBEAT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: single-threaded env mutation under the shared test lock.
+        unsafe { std::env::remove_var("ORZ_TOOL_HEARTBEAT_SECS") };
+        assert_eq!(tool_heartbeat_tick_ms(), 20_000, "缺省 20s");
+        unsafe { std::env::set_var("ORZ_TOOL_HEARTBEAT_SECS", "5") };
+        assert_eq!(tool_heartbeat_tick_ms(), 5_000);
+        unsafe { std::env::set_var("ORZ_TOOL_HEARTBEAT_SECS", "0") };
+        assert_eq!(tool_heartbeat_tick_ms(), 0, "0=禁用");
+        unsafe { std::env::set_var("ORZ_TOOL_HEARTBEAT_SECS", "junk") };
+        assert_eq!(tool_heartbeat_tick_ms(), 20_000, "非法值回退缺省");
+        unsafe { std::env::remove_var("ORZ_TOOL_HEARTBEAT_SECS") };
     }
 }

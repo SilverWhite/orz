@@ -178,6 +178,7 @@ mod tests {
             context: None,
             case_insensitive: false,
             head_limit: None,
+            offset: None,
             multiline: false,
             r#type: None,
             hidden: false,

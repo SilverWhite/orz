@@ -432,6 +432,17 @@ fn main_inner() {
         run_doctor(&args[2..]);
         return;
     }
+    // 354b（0dr §3.1/§3.2，2026-10-25）：系统控制台——capabilities（能
+    // 力清单）与 inspect（只读诊断族）。数据源全部落盘工件/工具面元
+    // 数据，只读、零审批、不装配会话；JSON 输出走 Envelope v1。
+    if args.get(1).map(String::as_str) == Some("capabilities") {
+        run_capabilities(&args[2..]);
+        return;
+    }
+    if args.get(1).map(String::as_str) == Some("inspect") {
+        run_inspect(&args[2..]);
+        return;
+    }
     if args.get(1).map(String::as_str) == Some("web") {
         run_web(&args[2..]);
         return;
@@ -1145,6 +1156,111 @@ fn doctor_report(cwd: &Path) -> DoctorReport {
 }
 
 /// 333：`orz doctor` 入口——报告式，不自动修复；有 fail ⇒ exit 1。
+/// 354b（0dr §3.1）：`orz capabilities [--json]`——能力清单。默认人读
+/// 表格，`--json` 给 Envelope v1 全型（管道/jq 消费）。
+fn run_capabilities(rest: &[String]) {
+    let json_mode = rest.iter().any(|flag| flag == "--json");
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let started = std::time::Instant::now();
+    // TerminalBackend 装配需要 tokio 上下文——capabilities 在自有
+    // runtime 内枚举（只读元数据，无网络）。
+    let data = match tokio::runtime::Runtime::new()
+        .expect("tokio runtime")
+        .block_on(async { orz_host::tools::capability_list(&cwd) })
+    {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("capabilities: toolset build failed: {e}");
+            std::process::exit(2);
+        }
+    };
+    let took = started.elapsed().as_millis();
+    // 版本以 bin 为准（capability_list 位于 orz-host，其 CARGO_PKG_VERSION
+    // 是库版本）——清单面向的是「这个 orz 二进制」的能力。
+    let mut data = data;
+    data["orz_version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
+    if json_mode {
+        let envelope = orz_host::inspect::envelope_for(&data, took);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&envelope).unwrap_or_default()
+        );
+        return;
+    }
+    let tools = data["tools"].as_array().cloned().unwrap_or_default();
+    println!(
+        "orz {} — {} tools declared (workspace: {})",
+        data["orz_version"].as_str().unwrap_or("?"),
+        tools.len(),
+        cwd.display()
+    );
+    for tool in &tools {
+        println!(
+            "  {:<18} {:<6} {}{}",
+            tool["name"].as_str().unwrap_or("?"),
+            tool["kind"].as_str().unwrap_or("?"),
+            tool["one_line_usage"].as_str().unwrap_or(""),
+            if tool["readonly"].as_bool().unwrap_or(false) {
+                "  [readonly]"
+            } else {
+                ""
+            },
+        );
+    }
+    println!(
+        "
+web_search readiness: runtime credentials (declared regardless); approval posture is runtime state — see the [permission] line in each run."
+    );
+}
+
+/// 354b（0dr §3.2）：`orz inspect session|run|context|events <id>`——
+/// 只读诊断族；输出恒为 Envelope v1 JSON。
+fn run_inspect(rest: &[String]) {
+    let face = match rest.first() {
+        Some(face) => face.as_str(),
+        None => {
+            eprintln!(
+                "usage: orz inspect session|run|context|events <id> [--limit N] [--kind TYPE] [--cursor N]"
+            );
+            std::process::exit(2);
+        }
+    };
+    let target = match rest.get(1) {
+        Some(id) => id.clone(),
+        None => {
+            eprintln!("usage: orz inspect {face} <id>");
+            std::process::exit(2);
+        }
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let flag = |name: &str| -> Option<String> {
+        rest.iter()
+            .position(|a| a == name)
+            .and_then(|i| rest.get(i + 1))
+            .cloned()
+    };
+    let envelope = match face {
+        "session" => orz_host::inspect::session_overview(&cwd, &target),
+        "run" => orz_host::inspect::run_timeline(&cwd, &target),
+        "context" => orz_host::inspect::context_view(&cwd, &target),
+        "events" => orz_host::inspect::events_stream(
+            &cwd,
+            &target,
+            flag("--limit").and_then(|v| v.parse().ok()),
+            flag("--kind").as_deref(),
+            flag("--cursor").and_then(|v| v.parse().ok()).unwrap_or(0),
+        ),
+        other => {
+            eprintln!("unknown inspect face: {other} (session|run|context|events)");
+            std::process::exit(2);
+        }
+    };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&envelope).unwrap_or_default()
+    );
+}
+
 fn run_doctor(rest: &[String]) {
     let _ = rest;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));

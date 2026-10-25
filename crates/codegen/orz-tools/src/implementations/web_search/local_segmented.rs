@@ -1615,6 +1615,7 @@ mod tests {
         assert_eq!(ids, vec!["github", "arxiv"]);
     }
 
+    #[test]
     fn parse_bing_serp_reads_current_structure_and_skips_ads() {
         let hits = parse_bing_serp(SERP_FIXTURE);
         assert_eq!(hits.len(), 2, "ad block must be excluded: {hits:?}");

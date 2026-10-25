@@ -87,6 +87,15 @@ pub enum EventType {
     // call_id).
     ToolRunning,
 
+    // 354a T4b（0dr，2026-10-25，设计稿 §4.5①/§7.5 预算内）：在途工具
+    // 墙钟心跳——tool_started 后每 N 秒（默认 20s，0=禁用）若无完成事实
+    // 即落一条（payload: tool/call_id/elapsed_ms），使「启动即静默」的
+    // 挂死工具在 journal 留下活跃度轨迹（B 暴露失败；模型面零注入）。
+    // 无法官族、无 Python 镜像新族（prompt_submitted／supplement_delivered
+    // 同姿态）：每 call_id 多条合法（每 N s 一条），payload 形状由 schema
+    // 钉死，时间线投影（inspect run）按 started→heartbeats→completed 聚合。
+    ToolHeartbeat,
+
     // TER T0.2/T1.9 (2026-09-03/04, TODO2 T0.2 §2 / 设计稿 §3.3): F6 push
     // 档机械注入留痕——剩余评测墙钟跨 <600/<300/<120s 阈值时记一条
     // （payload: remaining_seconds / rounds_used / threshold_seconds；

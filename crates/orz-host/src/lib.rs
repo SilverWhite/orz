@@ -17,6 +17,7 @@ mod conversation_repair;
 pub mod credentials;
 mod env_snapshot;
 pub mod grok_home;
+pub mod inspect;
 pub mod keystore;
 pub mod local_browser;
 pub mod pdf_evidence;
@@ -250,6 +251,10 @@ pub struct OrzHost {
     /// 检查点。生产装配点＝`acp_server` prompt 路径 take-out 后挂载；
     /// `None`（测试/一次性宿主）＝trait 默认 no-op，零行为变化。
     conversation_checkpoint: Option<Arc<ConversationCheckpointSink>>,
+    /// 354c（0dr §4.6）：审批模式一行事实——`build_host` 装配期由
+    /// PermissionPolicy＋ORZ_YOLO 姿态算好（permission.rs 单一实现）；
+    /// 主车道每 run 拼进系统提示。空串＝未装配（默认 no-op）。
+    permission_mode_line: String,
 }
 
 /// P0-1（0dq，2026-10-25）：检查点回调签名——当前消息切片＋LIF 会话轴
@@ -492,6 +497,7 @@ impl OrzHost {
             commit_hint_emitted: std::sync::atomic::AtomicBool::new(false),
             supplement_queue: None,
             conversation_checkpoint: None,
+            permission_mode_line: String::new(),
         })
     }
 
@@ -512,6 +518,15 @@ impl OrzHost {
         sink: Arc<ConversationCheckpointSink>,
     ) {
         self.conversation_checkpoint = Some(sink);
+    }
+
+    /// 354c（0dr §4.6）：装配审批模式一行事实（builder 式 setter——
+    /// 生产装配点＝`build_host` 由 PermissionPolicy＋ORZ_YOLO 算好后
+    /// 注入；permission.rs [`crate::permission::permission_mode_line`]
+    /// 单一实现）。
+    pub fn with_permission_mode_line(mut self, line: String) -> Self {
+        self.permission_mode_line = line;
+        self
     }
 
     /// 0aw（2026-09-20，HOST_RESOURCE_OS_DELEGATION_DESIGN §6；原 0z S1
@@ -1212,8 +1227,22 @@ impl OrzHost {
         // GAP-RETRIEVAL-TOOLS (2026-08-10): the project-doc index is a
         // host-owned tool (run_tests precedent) — routed before the
         // finalize toolset; synchronous and workspace-local.
+        // P0-3（0dq 收口，2026-10-25）：host-owned 早退路径与 toolset 路径
+        // 走**同一面墙钟**（`effective_timeout`）——此前四条早退在统一窗
+        // （下方 `tokio::time::timeout`）之前 return，是仅有的无界车道
+        // （353 取证：所有 loop 车道本就收敛同一 wrapper，这里是最后四条
+        // 缺口）。差异只在一处：早退路径无 per-call 子进程树可杀（索引是
+        // 同步读、PDF 是本地证据库、浏览器进程属会话 backend 非本次派生），
+        // 超时只解卡 run、不做定向杀树。run_tests 保留独立 30min 预算
+        // （TestRunner.timeout，by-design 分账）。
+        let effective_timeout = timeout_override
+            .map(|t| t.min(self.tool_timeout))
+            .unwrap_or(self.tool_timeout);
         if name == "project_doc_index" {
-            return self.project_doc_index.query(&args);
+            return bounded_host_owned(name, effective_timeout, async {
+                self.project_doc_index.query(&args)
+            })
+            .await;
         }
         // local_browser (2026-08-10) + 0t (2026-09-09, ADR-0010 §14.65 /
         // 设计 §3.3/§3.5) + S2-R P3 / P1-2b：`browser_read` / `browser_control`
@@ -1225,24 +1254,32 @@ impl OrzHost {
         // 回传）。P1-2a：启动尝试事实独立于动作结果——启动成功但动作失败
         // 也落 success fact（`BrowserStepFailed` 携带，设计 §3.2 场景 S3）。
         if matches!(name, "browser_read" | "browser_control") {
-            let launch_attempted = self.ensure_browser_launched().await?;
-            let browser = self
-                .browser
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-            let result = match name {
-                "browser_read" => {
-                    crate::local_browser::handle_browser_read(browser.as_ref(), &args).await
-                }
-                _ => crate::local_browser::handle_browser_control(browser.as_ref(), &args).await,
-            };
-            return finish_browser_call(launch_attempted, result);
+            return bounded_host_owned(name, effective_timeout, async {
+                let launch_attempted = self.ensure_browser_launched().await?;
+                let browser = self
+                    .browser
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                let result = match name {
+                    "browser_read" => {
+                        crate::local_browser::handle_browser_read(browser.as_ref(), &args).await
+                    }
+                    _ => {
+                        crate::local_browser::handle_browser_control(browser.as_ref(), &args).await
+                    }
+                };
+                finish_browser_call(launch_attempted, result)
+            })
+            .await;
         }
         // PDF evidence (2026-08-11): `pdf_read` reads the local evidence
         // store — synchronous, workspace-local (project_doc_index pattern).
         if name == "pdf_read" {
-            return crate::pdf_evidence::handle_pdf_read(&self.cwd, &args).await;
+            return bounded_host_owned(name, effective_timeout, async {
+                crate::pdf_evidence::handle_pdf_read(&self.cwd, &args).await
+            })
+            .await;
         }
         // PDF evidence routing (2026-08-11): a `web_fetch` whose URL matches
         // ORZ_PDF_BROWSER_DOMAINS is intercepted BEFORE the toolset — the
@@ -1262,12 +1299,15 @@ impl OrzHost {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
-            return crate::pdf_evidence::handle_browser_pdf(
-                &self.cwd,
-                self.session_id.as_deref(),
-                browser.as_ref(),
-                url,
-            )
+            return bounded_host_owned(name, effective_timeout, async move {
+                crate::pdf_evidence::handle_browser_pdf(
+                    &self.cwd,
+                    self.session_id.as_deref(),
+                    browser.as_ref(),
+                    url,
+                )
+                .await
+            })
             .await;
         }
         // GAP-WEB-SEARCH-SEMAPHORE (2026-08-10): global `web_search`
@@ -1751,6 +1791,36 @@ fn terminal_idle_kill_facts_from(
         });
     }
     facts
+}
+
+/// P0-3（0dq 收口，2026-10-25）：host-owned 早退工具的统一墙钟——与
+/// toolset 路径的统一窗（`tokio::time::timeout(effective_timeout, fut)`）
+/// 同一预算、同一错误形状（`ToolError::Timeout`）。差异如实：早退路径
+/// （project_doc_index／pdf_read／browser 族／web_fetch PDF 路由）无本次
+/// 派生的子进程树（同步读／本地证据库／浏览器进程属会话 backend），
+/// 超时不做定向杀树，只把挂死调用换成模型可继续的错误。
+async fn bounded_host_owned<T, F>(
+    name: &str,
+    budget: std::time::Duration,
+    fut: F,
+) -> Result<T, ToolError>
+where
+    F: std::future::Future<Output = Result<T, ToolError>>,
+{
+    match tokio::time::timeout(budget, fut).await {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::warn!(
+                tool = name,
+                timeout = ?budget,
+                "host-owned tool TIMED OUT — early-exit path has no child process tree to kill"
+            );
+            Err(ToolError::Timeout(format!(
+                "tool '{name}' TIMED OUT after {budget:?} wall-clock budget — \
+                 host-owned path (no child process tree); the call did not complete"
+            )))
+        }
+    }
 }
 
 #[async_trait]
@@ -2250,6 +2320,12 @@ impl LoopHost for OrzHost {
         }
     }
 
+    /// 354c（0dr §4.6）：审批模式一行事实——`build_host` 装配期注入的
+    /// 只读常量；空串＝未装配（trait 默认零注入）。
+    fn permission_mode_line(&self) -> String {
+        self.permission_mode_line.clone()
+    }
+
     async fn call_tool(
         &self,
         name: &str,
@@ -2314,6 +2390,33 @@ mod tests {
     use orz_loop::gateway::model::{ModelGateway, ToolCall};
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// P0-3（0dq 收口）：host-owned 早退路径的统一墙钟——快路径透传、
+    /// 慢路径在预算到期后回 `ToolError::Timeout`（与统一窗同形状）。
+    #[tokio::test]
+    async fn bounded_host_owned_passes_through_and_times_out() {
+        // 快路径：结果原样透传。
+        let fast = bounded_host_owned("unit-fast", std::time::Duration::from_secs(1), async {
+            Ok::<_, ToolError>(ToolResult::default())
+        })
+        .await
+        .expect("fast path passes through");
+        assert_eq!(fast.exit_code, None);
+        // 慢路径：20ms 预算掐死 5s 的挂死调用。
+        let err = bounded_host_owned("unit-slow", std::time::Duration::from_millis(20), async {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            Ok::<_, ToolError>(ToolResult::default())
+        })
+        .await
+        .expect_err("hung call times out");
+        match err {
+            ToolError::Timeout(msg) => {
+                assert!(msg.contains("TIMED OUT"), "{msg}");
+                assert!(msg.contains("no child process tree"), "{msg}");
+            }
+            other => panic!("expected Timeout, got {other:?}"),
+        }
+    }
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 

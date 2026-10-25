@@ -115,6 +115,13 @@ pub struct GrepSearchInput {
     pub head_limit: Option<usize>,
 
     #[schemars(
+        with = "GrokIntegerSchema",
+        description = "Pagination cursor: 0-based line offset into the full result (354b). Read budget = offset + head_limit so paging never re-reads; pass the previous page's next_cursor. The result carries a trailing [page] trailer with total / shown / next_cursor."
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<usize>,
+
+    #[schemars(
         description = "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall)."
     )]
     #[serde(
@@ -179,6 +186,9 @@ const CONTENT_LINE_DEFAULT: usize = 200;
 const FILE_COUNT_LIMIT: usize = 10_000;
 /// Default when `head_limit` is omitted (files/count modes).
 const FILE_COUNT_DEFAULT: usize = 500;
+
+/// 354b：分页 offset 上限（防滥用——rg 仍要真实读到 offset+limit）。
+const MAX_PAGE_OFFSET: usize = 100_000;
 pub const DEFAULT_MAX_CHARS_PER_LINE: usize = 1_000;
 
 /// Hard cap on bytes read from ripgrep's stdout (5 MB).
@@ -380,8 +390,9 @@ impl xai_tool_runtime::Tool for GrepTool {
             // never flag truncation when there are exactly `effective_head_limit`
             // lines — matching `finalize_grep`'s `> limit` check.
             let (stdout_buf, stdout_truncated) = if let Some(stdout_pipe) = stdout_pipe {
-                read_rg_stdout_capped(stdout_pipe, config.effective_head_limit.saturating_add(1))
-                    .await
+                // 354b：读取预算 = offset + limit（+1 探测行）——offset 窗口之前的行
+                // 也计入预算，续页不重不漏。
+                read_rg_stdout_capped(stdout_pipe, config.read_budget().saturating_add(1)).await
             } else {
                 (Vec::new(), false)
             };
@@ -547,7 +558,7 @@ fn grep_progress_stream(
                             &tmp[..n],
                             stdout_buf.len(),
                             complete_lines,
-                            config.effective_head_limit.saturating_add(1),
+                            config.read_budget().saturating_add(1),
                         );
                         if accepted > 0 {
                             complete_lines += tmp[..accepted]
@@ -735,6 +746,20 @@ struct GrepFormatConfig {
     /// completed search (hits included) so the envelope always reports how
     /// many files were searched. `None` when the probe could not run.
     files_searched: Option<u64>,
+    /// 354c（0dr §4.3）：敏感路径一行提示（带尾换行；空串＝非敏感面）。
+    /// 只提示不拦截——workspace 外路径已随读面开放放行。
+    sensitive_notice: String,
+    /// 354b（0dr §4.2）分页游标：本页起点（0 基、全结果行序）。读取预算
+    /// ＝ page_offset + effective_head_limit（+1 exact-fit 探测行），续页
+    /// 不重不漏；终卡带 `[page]` trailer（total/shown/next_cursor）。
+    page_offset: usize,
+}
+
+impl GrepFormatConfig {
+    /// 354b：本页读取预算（offset + limit；不含 +1 探测行）。
+    fn read_budget(&self) -> usize {
+        self.page_offset.saturating_add(self.effective_head_limit)
+    }
 }
 
 /// A spawned ripgrep ready to be read, plus the resolved formatting config.
@@ -1207,6 +1232,13 @@ async fn prepare_grep(
             max_output_bytes,
             cwd_display,
             files_searched: None,
+            // 354c（0dr §4.3）：敏感路径（.ssh/.aws/.env*/*.pem/*.key/
+            // keystore）一行提示——只提示不拦截。
+            sensitive_notice: crate::types::resources::sensitive_path_notice(&workdir)
+                .map(|n| format!("{n}\n"))
+                .unwrap_or_default(),
+            // 354b (0dr S4.2) pagination cursor (0-based; capped -- rg still reads to offset+limit).
+            page_offset: input.offset.unwrap_or(0).min(MAX_PAGE_OFFSET),
         },
     }))
 }
@@ -1450,11 +1482,25 @@ fn finalize_grep(
 
     let (formatted_output, match_count, file_matches) = {
         let mut output_lines: Vec<String> = stdout.lines().map(|s| s.to_string()).collect();
-        let mut is_truncated = stdout_truncated;
-        if output_lines.len() > config.effective_head_limit {
-            is_truncated = true;
-            output_lines.truncate(config.effective_head_limit);
-        }
+        // 354b (0dr 4.2): pagination window -- [page_offset, +limit) feeds
+        // the formatter; total / next_cursor ride a one-line [page]
+        // trailer (per-tool-result line budget). The read budget is
+        // offset+limit (+1 probe), so total is exact when rg finished
+        // naturally and an honest lower bound when the budget capped it.
+        let total_lines_seen = output_lines.len();
+        let page_offset = config.page_offset;
+        let page_limit = config.effective_head_limit;
+        let has_more =
+            stdout_truncated || total_lines_seen > page_offset.saturating_add(page_limit);
+        let total_exact = !stdout_truncated;
+        let is_truncated = has_more;
+        let window: Vec<String> = output_lines
+            .iter()
+            .skip(page_offset)
+            .take(page_limit)
+            .cloned()
+            .collect();
+        output_lines = window;
 
         let file_matches = if matches!(config.output_mode, OutputMode::Content) {
             parse_file_matches(&output_lines, config.max_chars_per_line)
@@ -1478,6 +1524,7 @@ fn finalize_grep(
             }
         };
 
+        let shown_lines = output_lines.len();
         let formatted = match config.output_mode {
             OutputMode::Content => format_content_output(
                 output_lines,
@@ -1501,13 +1548,37 @@ fn finalize_grep(
                 files_searched,
             ),
         };
-        (formatted, match_count_value, file_matches)
+        // 354b: the [page] trailer -- total / shown / next_cursor as one
+        // mechanical fact line.
+        let page_trailer = {
+            let total_text = if total_exact {
+                total_lines_seen.to_string()
+            } else {
+                format!("≥{}", total_lines_seen)
+            };
+            let mut line = format!(
+                "[page] total: {total_text} | shown: {} (offset {page_offset})",
+                shown_lines,
+            );
+            if has_more {
+                line.push_str(&format!(
+                    " | next_cursor: {}",
+                    page_offset.saturating_add(page_limit)
+                ));
+            }
+            line
+        };
+        (
+            format!("{formatted}\n{page_trailer}"),
+            match_count_value,
+            file_matches,
+        )
     };
 
     GrepSearchOutput {
         stdout: format!(
-            "<workspace_result workspace_path=\"{}\">\n{}\n</workspace_result>",
-            config.cwd_display, formatted_output
+            "<workspace_result workspace_path=\"{}\">\n{}{}\n</workspace_result>",
+            config.cwd_display, config.sensitive_notice, formatted_output
         )
         .into_bytes(),
         stderr: stderr_buf,
@@ -1534,6 +1605,8 @@ struct BodyStreamer<'a> {
     emitted_lines: usize,
     /// Cumulative trimmed-line length (drives the byte-cap).
     cum_len: usize,
+    /// 354b 分页：已跳过的 offset 行数（窗口前的行不进体、不算 limit）。
+    skipped: usize,
     /// Set once the head-limit or byte-cap is hit (body complete).
     done: bool,
     /// Bytes after the last newline — the in-progress line, carried across feeds.
@@ -1549,6 +1622,7 @@ impl<'a> BodyStreamer<'a> {
             last_total: 0,
             emitted_lines: 0,
             cum_len: 0,
+            skipped: 0,
             done: false,
             pending: Vec::new(),
         }
@@ -1598,6 +1672,12 @@ impl<'a> BodyStreamer<'a> {
     /// Project one line into the body; returns its delta. Sets [`Self::done`]
     /// at the head-limit or byte-cap.
     fn push_line(&mut self, line: &[u8]) -> Option<xai_tool_runtime::ToolProgress> {
+        // 354b 分页：offset 窗口——窗口前的行只跳过（与 finalize_grep 的
+        // skip 同构），不投影、不占 head-limit。
+        if self.skipped < self.config.page_offset {
+            self.skipped += 1;
+            return None;
+        }
         // Head-limit (matches `finalize_grep`).
         if self.emitted_lines >= self.config.effective_head_limit {
             self.done = true;
@@ -1910,6 +1990,7 @@ mod tests {
             case_insensitive: false,
             r#type: None,
             head_limit: None,
+            offset: None,
             multiline: false,
             hidden: false,
             no_ignore: false,
@@ -2574,6 +2655,7 @@ mod tests {
                     case_insensitive: false,
                     r#type: None,
                     head_limit: None,
+                    offset: None,
                     multiline: false,
                     hidden: false,
                     no_ignore: false,
@@ -2614,6 +2696,7 @@ mod tests {
                     case_insensitive: false,
                     r#type: None,
                     head_limit: None,
+                    offset: None,
                     multiline: false,
                     hidden: false,
                     no_ignore: false,
@@ -2652,6 +2735,7 @@ mod tests {
                 case_insensitive: false,
                 r#type: None,
                 head_limit: None,
+                offset: None,
                 multiline: false,
                 hidden: false,
                 no_ignore: false,
@@ -2712,14 +2796,23 @@ mod tests {
             .expect("wrapper close");
         // Drop the summary (first line).
         let body_and_footer = formatted.split_once('\n').map_or("", |(_, rest)| rest);
-        // Drop an optional trailing footer line.
-        if let Some((body, last)) = body_and_footer.rsplit_once('\n')
+        // Terminal-only trailer lines strip in tail order: the 354b
+        // [page] line lands AFTER the omission footer, so peel it first,
+        // then the footer.
+        let after_page = if let Some((body, last)) = body_and_footer.rsplit_once('\n')
+            && last.starts_with("[page] ")
+        {
+            body
+        } else {
+            body_and_footer
+        };
+        if let Some((body, last)) = after_page.rsplit_once('\n')
             && last.starts_with("... [")
             && last.ends_with("] ...")
         {
             return body.to_string();
         }
-        body_and_footer.to_string()
+        after_page.to_string()
     }
 
     fn grep_config(
@@ -2739,6 +2832,8 @@ mod tests {
             max_output_bytes,
             cwd_display: "/ws".to_string(),
             files_searched: None,
+            sensitive_notice: String::new(),
+            page_offset: 0,
         }
     }
 
@@ -3097,7 +3192,12 @@ mod tests {
         // the summary (line 1) and the closing wrapper (last line) — with neither
         // the wrapper nor the "Found N …" summary.
         let card_lines: Vec<&str> = card.lines().collect();
-        let body_from_card = card_lines[2..card_lines.len() - 1].join("\n");
+        // 354b：末行若为 terminal-only [page] trailer，不进流式前缀。
+        let mut end = card_lines.len() - 1;
+        if card_lines[end - 1].starts_with("[page] ") {
+            end -= 1;
+        }
+        let body_from_card = card_lines[2..end].join("\n");
         assert_eq!(
             deltas, body_from_card,
             "accumulated deltas must equal the terminal card body"
@@ -3213,8 +3313,80 @@ mod tests {
         );
     }
 
+    /// 354b（0dr §4.2）真游标：5 命中 × head_limit=2 → 三页
+    /// [0,2)/[2,4)/[4,5)，`[page]` trailer 给 total/shown/next_cursor，
+    /// 续页**不重不漏**（读取预算＝offset+limit）。
     #[tokio::test]
-    async fn grep_rejects_path_escaping_workspace() {
+    async fn grep_offset_pagination_covers_all_matches_without_overlap() {
+        let tmp = TempDir::new().unwrap();
+        let content: String = (0..5)
+            .map(|i| {
+                format!(
+                    "findme_{i}
+"
+                )
+            })
+            .collect();
+        fs::write(tmp.path().join("many.txt"), &content).unwrap();
+
+        let tool = GrepTool;
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut offset: usize = 0;
+        let mut pages = 0usize;
+        loop {
+            let mut input = make_grep_input("findme_");
+            input.head_limit = Some(2);
+            input.offset = Some(offset);
+            let mut resources = Resources::new();
+            resources.insert(Cwd(tmp.path().to_path_buf()));
+            let output =
+                xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                    .await
+                    .unwrap();
+            let card = String::from_utf8_lossy(&output.stdout);
+            let page_line = card
+                .lines()
+                .find(|l| l.starts_with("[page] "))
+                .expect("[page] trailer");
+            if pages == 0 {
+                // 预算（offset+limit+1=3）截断 ⇒ total 是诚实下界
+                // （workspace 服务端路径才有精确 total；模型面有界读）。
+                assert!(
+                    page_line.contains("total: ")
+                        && page_line.contains("shown: 2 (offset 0)")
+                        && page_line.contains("next_cursor: 2"),
+                    "page0 trailer: {page_line}"
+                );
+            }
+            for line in card.lines() {
+                if line.contains("findme_") {
+                    seen.push(line.to_string());
+                }
+            }
+            pages += 1;
+            match page_line.split_once("next_cursor: ") {
+                Some((_, next)) => offset = next.trim().parse().unwrap(),
+                None => break,
+            }
+            assert!(pages < 10, "pagination did not terminate");
+        }
+        assert_eq!(pages, 3, "5 命中 × 2/页 恰三页");
+        // 不重不漏：findme_0..4 各恰一次。
+        for i in 0..5 {
+            let needle = format!("findme_{i}");
+            assert_eq!(
+                seen.iter().filter(|l| l.contains(&needle)).count(),
+                1,
+                "{needle} 恰一次, seen: {seen:?}"
+            );
+        }
+    }
+
+    /// 354c（0dr §4.3，2026-10-25）读面开放：workspace 外相对路径搜索
+    /// 成功——旧钉 `grep_rejects_path_escaping_workspace` 语义翻转。
+    #[tokio::test]
+    async fn grep_opens_path_escaping_workspace() {
         let tmp = TempDir::new().unwrap();
         let sub = tmp.path().join("workspace");
         std::fs::create_dir_all(&sub).unwrap();
@@ -3233,34 +3405,50 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_code, 1);
-        let err = String::from_utf8_lossy(&output.stderr);
-        assert!(err.contains("escapes workspace sandbox"), "stderr: {err}");
+        assert_eq!(
+            output.exit_code,
+            0,
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let out = String::from_utf8_lossy(&output.stdout);
+        assert!(out.contains("sensitive_data"), "stdout: {out}");
     }
 
+    /// 354c 读面开放＋敏感面提示：workspace 外 `.ssh` 目录搜索成功，
+    /// 回执首行带 `[敏感面]` 提示（只提示不拦截）。
     #[tokio::test]
-    async fn grep_rejects_absolute_path_outside_workspace() {
+    async fn grep_opens_absolute_path_outside_workspace_with_sensitive_notice() {
         let tmp = TempDir::new().unwrap();
         let sub = tmp.path().join("workspace");
         std::fs::create_dir_all(&sub).unwrap();
-        let outside = tmp.path().join("outside_dir");
-        std::fs::create_dir_all(&outside).unwrap();
-        std::fs::write(outside.join("target.txt"), "sensitive_data").unwrap();
+        let ssh = tmp.path().join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        std::fs::write(ssh.join("id_rsa_older_backup"), "PRIVATE DATA").unwrap();
 
         let mut resources = Resources::new();
         resources.insert(Cwd(sub));
 
-        let mut input = make_grep_input("sensitive_data");
-        input.path = Some(outside.to_string_lossy().into_owned());
+        let mut input = make_grep_input("PRIVATE DATA");
+        input.path = Some(ssh.to_string_lossy().into_owned());
 
         let tool = GrepTool;
         let output = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
             .unwrap();
 
-        assert_eq!(output.exit_code, 1);
-        let err = String::from_utf8_lossy(&output.stderr);
-        assert!(err.contains("escapes workspace sandbox"), "stderr: {err}");
+        assert_eq!(
+            output.exit_code,
+            0,
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let out = String::from_utf8_lossy(&output.stdout);
+        assert!(out.contains("PRIVATE DATA"), "stdout: {out}");
+        assert!(
+            out.contains("[敏感面]") && out.contains(".ssh"),
+            "敏感面提示必须出现在回执首行: {out}"
+        );
     }
 
     // ===== 0p S2 两段门测试组（2026-09-07 复审 P2-8 补全——grep 面此前

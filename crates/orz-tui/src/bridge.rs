@@ -176,6 +176,12 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
         EventType::BudgetCueInjected => TuiEvent::Unknown {
             event_type: event.event_type.to_string(),
         },
+        // 354a T4b（0dr，2026-10-25）：在途工具墙钟心跳——journal-only
+        // 中性事实（模型面零注入；inspect run 时间线的活跃度轨迹），TUI
+        // 回放降级 Unknown（同 BudgetCueInjected 姿态）。
+        EventType::ToolHeartbeat => TuiEvent::Unknown {
+            event_type: event.event_type.to_string(),
+        },
         // 0ac S3①-b (2026-09-15): retrieval delivery facts — journal-only
         // neutral events (no TUI surface); degrade to Unknown for replay
         // display (same posture as BudgetCueInjected above).

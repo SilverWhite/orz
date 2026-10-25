@@ -127,6 +127,43 @@ pub fn yolo_env_or_default() -> Result<bool, String> {
     yolo_from_env_result(std::env::var("ORZ_YOLO"))
 }
 
+/// 354c（0dr §4.6，2026-10-25）：审批模式一行事实的单一实现——
+/// `build_host` 装配期由 [`PermissionPolicy`]＋[`yolo_env_or_default`]
+/// 算好、经 `OrzHost::with_permission_mode_line` 注入；主车道每 run 拼
+/// 进系统提示（agent_loop §4.6 挂点）。只读事实、不参与判定（判定权威
+/// 仍是 PermissionBridge）；§7.5 预算＝每 run 至多 1 类注入的本类。
+pub fn permission_mode_line(policy: &PermissionPolicy) -> String {
+    match policy {
+        PermissionPolicy::ReadOnly => "[permission] mode=readonly source=policy".to_string(),
+        PermissionPolicy::Benchmark {
+            allow_shell,
+            allow_network,
+        } => format!(
+            "[permission] mode=benchmark source=policy (allow_shell={allow_shell}, \
+             allow_network={allow_network})"
+        ),
+        PermissionPolicy::Interactive => match std::env::var("ORZ_YOLO") {
+            Ok(value) => match parse_yolo_env(&value) {
+                Ok(true) => "[permission] mode=interactive-yolo source=env:ORZ_YOLO".to_string(),
+                Ok(false) => {
+                    "[permission] mode=confirm-first source=env:ORZ_YOLO (set ORZ_YOLO=1 to \
+                     restore auto-approve)"
+                        .to_string()
+                }
+                Err(()) => "[permission] mode=confirm-first source=env:ORZ_YOLO (invalid value; \
+                     assembly would fail closed)"
+                    .to_string(),
+            },
+            Err(std::env::VarError::NotPresent) => {
+                "[permission] mode=interactive-yolo source=default".to_string()
+            }
+            Err(_) => "[permission] mode=confirm-first source=env:ORZ_YOLO (not valid UTF-8; \
+                 assembly would fail closed)"
+                .to_string(),
+        },
+    }
+}
+
 fn yolo_from_env_result(value: Result<String, std::env::VarError>) -> Result<bool, String> {
     match value {
         Ok(v) => parse_yolo_env(&v).map_err(|()| {
@@ -691,6 +728,50 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// 354c（0dr §4.6）：审批模式一行事实——三策略形态＋ORZ_YOLO 四态
+    /// （缺省/显式开/显式关/非法值）。
+    #[test]
+    fn permission_mode_line_covers_policy_and_yolo_states() {
+        static YOLO_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = YOLO_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: single-threaded env mutation under the test-local lock.
+        unsafe { std::env::remove_var("ORZ_YOLO") };
+
+        assert_eq!(
+            permission_mode_line(&PermissionPolicy::ReadOnly),
+            "[permission] mode=readonly source=policy"
+        );
+        assert_eq!(
+            permission_mode_line(&PermissionPolicy::Benchmark {
+                allow_shell: true,
+                allow_network: false,
+            }),
+            "[permission] mode=benchmark source=policy (allow_shell=true, \
+             allow_network=false)"
+        );
+        // Interactive：缺省 yolo（ORZ_YOLO unset → auto-approve）。
+        assert_eq!(
+            permission_mode_line(&PermissionPolicy::Interactive),
+            "[permission] mode=interactive-yolo source=default"
+        );
+        // 显式关。
+        unsafe { std::env::set_var("ORZ_YOLO", "0") };
+        assert!(
+            permission_mode_line(&PermissionPolicy::Interactive)
+                .starts_with("[permission] mode=confirm-first source=env:ORZ_YOLO"),
+        );
+        // 显式开。
+        unsafe { std::env::set_var("ORZ_YOLO", "1") };
+        assert_eq!(
+            permission_mode_line(&PermissionPolicy::Interactive),
+            "[permission] mode=interactive-yolo source=env:ORZ_YOLO"
+        );
+        // 非法值 → confirm-first（装配面本就 fail-closed，此处如实显示）。
+        unsafe { std::env::set_var("ORZ_YOLO", "junk") };
+        assert!(permission_mode_line(&PermissionPolicy::Interactive).contains("confirm-first"),);
+        unsafe { std::env::remove_var("ORZ_YOLO") };
+    }
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 

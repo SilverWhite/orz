@@ -478,6 +478,59 @@ pub fn build_toolset(
 }
 
 /// Adapt `FinalizedToolset` definitions to the orz-loop `ToolRegistry` view.
+/// 354b（0dr §3.1，2026-10-25）：`orz capabilities` 能力清单——工具面
+/// 元数据的单一出口（help/guide 同源）。枚举生产工具集（与 run 同一
+/// `build_toolset` 装配；web_search 凭据缺席＝`Disabled` 形态，web_search
+/// 仍在面上、readiness 是配置态），每个工具一条
+/// `{name, kind, params_schema, needs_approval, readonly, one_line_usage}`：
+/// kind/readonly 来自 [`orz_loop::tool::ToolDispatcher::risk_class`] 机械
+/// 判定（ReadOnly→read、LocalMutation→write、SandboxEscape/NetworkCall→
+/// exec）；needs_approval＝非只读（yolo 姿态是运行态，不进清单）。
+/// 只读：不写盘、不触网（凭据读取缺席走 Disabled 分支）。
+pub fn capability_list(cwd: &Path) -> Result<serde_json::Value, String> {
+    let toolset = build_toolset(
+        cwd,
+        &WebSearchConfig::Disabled,
+        None,
+        Arc::new(orz_tools::computer::local::LocalTerminalBackend::new()),
+    )?;
+    let tools: Vec<serde_json::Value> = toolset
+        .tool_definitions()
+        .into_iter()
+        .map(|d| {
+            let name = d.function.name.clone();
+            let risk = orz_loop::tool::ToolDispatcher::risk_class(&name);
+            let (kind, readonly) = match risk {
+                orz_loop::host::RiskClass::ReadOnly => ("read", true),
+                orz_loop::host::RiskClass::LocalMutation => ("write", false),
+                orz_loop::host::RiskClass::SandboxEscape
+                | orz_loop::host::RiskClass::NetworkCall => ("exec", false),
+            };
+            let one_line_usage = d
+                .function
+                .description
+                .as_deref()
+                .and_then(|desc| desc.lines().next())
+                .unwrap_or("")
+                .to_string();
+            serde_json::json!({
+                "name": name,
+                "kind": kind,
+                "params_schema": d.function.parameters,
+                "needs_approval": !readonly,
+                "readonly": readonly,
+                "one_line_usage": one_line_usage,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "orz_version": env!("CARGO_PKG_VERSION"),
+        "web_search_credentials": false,
+        "note": "web_search readiness depends on runtime credentials; listed tools are the declared surface (yolo posture is runtime state, not capability metadata).",
+        "tools": tools,
+    }))
+}
+
 pub struct ToolsetRegistry {
     toolset: Arc<FinalizedToolset>,
     /// local_browser (2026-08-10) + 0t (2026-09-09, ADR-0010 §14.65 /

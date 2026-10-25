@@ -825,7 +825,7 @@ mod tests {
                 assert!(
                     applied
                         .tool_output_for_prompt
-                        .contains("[emoji 剥离] 1 处（写入内容 L1 行）"),
+                        .contains("[emoji 剥离] 1 处：U+1F389@L1"),
                     "got: {}",
                     applied.tool_output_for_prompt
                 );

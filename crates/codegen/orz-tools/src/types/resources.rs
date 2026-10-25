@@ -744,19 +744,19 @@ pub fn is_session_volume_window_path(
     false
 }
 
-/// 读工具沙箱三分判定（P0-0m D2，read_file/grep/list_dir 三个读工具统一
-/// 入口；`.gsa` 访问语义单点）：
+/// 读工具沙箱判定（P0-0m D2，read_file/grep/list_dir 三个读工具统一
+/// 入口；`.gsa` 访问语义单点）。**354c（0dr，2026-10-25，设计稿 §4.3，
+/// 用户已裁决方向）读面开放**：`run_terminal_cmd` 本可读任意路径，读面
+/// 限制只增加摩擦、不构成防线——workspace 外路径一律放行；敏感路径
+/// （密钥材料）不拦截，由 [`sensitive_path_notice`] 在回执加一行提示。
+/// 仍保留两条既有边界：①已注册技能根豁免（GLM F1）；②会话卷域
+/// （`.gsa` 内部面 agent-invisible 窗口契约，D3/0ct——那不是「读面
+/// 沙箱」，是内部状态保护，本批不动）。
 ///
 /// 1. 已注册技能根豁免（P0-GOV GLM F1，优先级不变）→ 放行；
 /// 2. 会话卷域（词法 `{cwd}/.gsa` 内或 canonical ∈ 卷根）→ 按 D3 窗口
 ///    契约判定——白名单两窗口放行，其余 agent-invisible（拒）；
-/// 3. workspace 内 → 放行（Task C 现状不变）；
-/// 4. 其余 → 拒（canonical 级 fail-closed 不放松）。
-///
-/// 会话卷域先于 workspace 判定：`.gsa` 真实目录在 cwd 内属 Task C
-/// workspace 判定的放行面，必须由窗口契约接管（journal 等内部面
-/// agent-invisible），否则白名单形同虚设。`session_volume` 为 `None` 时
-/// 窗口全关，沙箱退回纯 workspace 二元判定（Task C 现状，fail-closed）。
+/// 3. 其余（含 workspace 外）→ 放行（354c 读面开放；写面门禁不动）。
 pub fn is_path_allowed_for_read(
     cwd: &std::path::Path,
     joined_path: &std::path::Path,
@@ -776,7 +776,40 @@ pub fn is_path_allowed_for_read(
     {
         return is_session_volume_window_path(&volume.0, cwd, joined_path, resolved_path);
     }
-    is_path_within_workspace(cwd, joined_path, resolved_path, registered_skill_roots)
+    // 354c 读面开放：workspace 内外一律放行（原 workspace 二元判定退役；
+    // `is_path_within_workspace` 保留供写面/其他调用面）。
+    true
+}
+
+/// 敏感路径提示（354c §4.3，只提示不拦截）：密钥材料的常见宿主——
+/// `.ssh`／`.aws` 目录、`.env`（含 `.env.local` 等 `.env*`）、
+/// `*.pem`／`*.key` 文件、文件名含 `keystore`。命中时返回一行回执提示
+/// 文案（由 read_file/grep 拼在输出首行）；审计面照常（journal 已载）。
+pub fn sensitive_path_notice(path: &std::path::Path) -> Option<String> {
+    for component in path.components() {
+        let std::path::Component::Normal(part) = component else {
+            continue;
+        };
+        let Some(name) = part.to_str() else { continue };
+        let lower = name.to_ascii_lowercase();
+        let what: String = if lower == ".ssh" || lower == ".aws" {
+            lower
+        } else if lower == ".env" || lower.starts_with(".env.") {
+            ".env*".to_string()
+        } else if lower.ends_with(".pem") {
+            "*.pem".to_string()
+        } else if lower.ends_with(".key") {
+            "*.key".to_string()
+        } else if lower.contains("keystore") {
+            "keystore".to_string()
+        } else {
+            continue;
+        };
+        return Some(format!(
+            "[敏感面] 该路径疑似密钥材料（{what}）；读取照常，访问已记 journal 审计。"
+        ));
+    }
+    None
 }
 
 // ==== 0p S2 两段门（2026-09-07，ADR-0010 §14.61 设计 B；修订 §14.56
@@ -2621,13 +2654,35 @@ mod tests {
             &[],
             Some(&volume)
         ));
-        assert!(!is_path_allowed_for_read(
+        // 354c（0dr §4.3）读面开放：workspace 外路径放行（敏感面只提示，
+        // 见 sensitive_path_notice；.gsa 内部面窗口契约不受影响）。
+        assert!(is_path_allowed_for_read(
             &ws,
             &outside,
             Some(&outside),
             &[],
             Some(&volume)
         ));
+    }
+
+    /// 354c（0dr §4.3）敏感路径提示钉：`.ssh`/`.aws` 目录、`.env*`、
+    /// `*.pem`/`*.key`、`keystore` 命中即提示；普通路径 `None`。
+    #[test]
+    fn sensitive_path_notice_matches_key_material_hosts() {
+        let tmp = TempDir::new().unwrap();
+        let hit = |rel: &str| sensitive_path_notice(&tmp.path().join(rel));
+        assert!(hit(".ssh/known_hosts").unwrap().contains(".ssh"));
+        assert!(hit("home/.aws/credentials").unwrap().contains(".aws"));
+        assert!(hit(".env.local").unwrap().contains(".env"));
+        assert!(hit("certs/server.pem").unwrap().contains("*.pem"));
+        assert!(hit("keys/app.key").unwrap().contains("*.key"));
+        assert!(
+            hit("android/release.keystore")
+                .unwrap()
+                .contains("keystore")
+        );
+        assert!(hit("src/main.rs").is_none());
+        assert!(hit("notes.md").is_none());
     }
 
     /// 矩阵 #3/#4：`.gsa` 真实目录（cwd 内）+ 两个白名单窗口 → 放行。
@@ -2826,11 +2881,15 @@ mod tests {
         // 资源缺席：`.gsa` 真实目录在 cwd 内 → Task C workspace 面放行
         // （fail-closed 语义由 host 恒注入资源保证，本行为仅为回退现状）。
         assert!(is_path_allowed_for_read(&ws, &journal, None, &[], None));
-        // 资源缺席时越界 symlink 语义不变：canonical 落点在 cwd 外 → 拒。
+        // 354c（0dr §4.3）读面开放：越界 symlink 的 canonical 落点在 cwd
+        // 外 → 放行（`run_terminal_cmd` 本可读任意路径；敏感面只提示）。
+        // 会话卷域（branch 2 词法 `.gsa` + 窗口契约）在资源在场时仍由
+        // `is_session_volume_window_path` 接管——本测的资源参数是 `None`，
+        // 走的是已开放的 branch 3。
         let outside_dir = TempDir::new().unwrap();
         let outside = outside_dir.path().join("secret.txt");
         std::fs::write(&outside, "sensitive").unwrap();
-        assert!(!is_path_allowed_for_read(
+        assert!(is_path_allowed_for_read(
             &ws,
             &gsa.join("session").join("terminal").join("x.log"),
             Some(&outside),

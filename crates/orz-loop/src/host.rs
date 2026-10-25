@@ -1040,6 +1040,15 @@ pub trait LoopHost: Send + Sync {
     ) {
     }
 
+    /// 354c（0dr §4.6，2026-10-25）：审批模式可见——宿主装配期算好的
+    /// 一行只读事实（如 `[permission] mode=interactive-yolo source=default`），
+    /// 主车道每 run 拼进系统提示（常量跨轮稳定，不动前缀缓存）。空串
+    /// ＝宿主未提供（默认；测试与一次性宿主零注入）。§7.5 预算：每
+    /// run 至多 1 类注入的本类，模型面零新增消息。
+    fn permission_mode_line(&self) -> String {
+        String::new()
+    }
+
     /// Persist a turn record.
     async fn persist_turn(&self, _turn: &TurnRecord) -> Result<(), PersistError> {
         Ok(())

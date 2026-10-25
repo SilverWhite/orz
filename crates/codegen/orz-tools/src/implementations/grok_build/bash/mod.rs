@@ -4281,7 +4281,8 @@ mod tests {
             output_delta: None,
             was_bare_echo: false,
         };
-        bash.output_for_prompt = format_default_prompt(&bash, /* append_noop_reminder */ true, None);
+        bash.output_for_prompt =
+            format_default_prompt(&bash, /* append_noop_reminder */ true, None);
         bash
     }
 
@@ -4302,7 +4303,10 @@ mod tests {
             "got: {with}"
         );
         let without = format_default_prompt(&bash, /* append_noop_reminder */ true, None);
-        assert!(without.contains("[output] chars=6 lines=1 FFFD=0"), "got: {without}");
+        assert!(
+            without.contains("[output] chars=6 lines=1 FFFD=0"),
+            "got: {without}"
+        );
         assert!(!without.contains("took="), "got: {without}");
     }
 
@@ -4386,7 +4390,8 @@ mod tests {
         let mut bash = make_bash_output(-1, "partial\n");
         bash.signal = Some("timeout".to_string());
         bash.timed_out = true;
-        bash.output_for_prompt = format_default_prompt(&bash, /* append_noop_reminder */ true, None);
+        bash.output_for_prompt =
+            format_default_prompt(&bash, /* append_noop_reminder */ true, None);
         // Synthetic kill reasons render as `exit: killed (reason)` — no
         // redundant `[signal=…]` / `[timeout]` annotation.
         assert!(
@@ -4410,7 +4415,8 @@ mod tests {
         bash.total_bytes = 50_000;
         bash.output_file = "/tmp/.gsa/session/terminal/ord-1.log".into();
         bash.current_dir = "/tmp".into();
-        bash.output_for_prompt = format_default_prompt(&bash, /* append_noop_reminder */ true, None);
+        bash.output_for_prompt =
+            format_default_prompt(&bash, /* append_noop_reminder */ true, None);
         assert!(
             bash.output_for_prompt
                 .contains("[truncated: showing first/last"),
@@ -4517,7 +4523,8 @@ mod tests {
         bash.signal = Some("backgrounded".to_string());
         bash.output_file = "/tmp/bg.log".to_string();
         bash.total_bytes = 10000;
-        bash.output_for_prompt = format_default_prompt(&bash, /* append_noop_reminder */ true, None);
+        bash.output_for_prompt =
+            format_default_prompt(&bash, /* append_noop_reminder */ true, None);
         assert!(
             bash.output_for_prompt
                 .starts_with("[Command moved to background]")

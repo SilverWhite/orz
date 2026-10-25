@@ -7026,9 +7026,12 @@ mod tests {
         // (console_order_written retired 2026-09-06, ADR-0010 §14.57);
         // the five 0ac immediate-feedback twins joined 2026-09-13 (S3-b).
         let script = r#"
-import sys, json
-sys.path.insert(0, sys.argv[1])
-import run_event_journal_validation as v
+import sys, json, os
+# 350 批（5805355e）把 assurance/ 收成包（`from .contracts import` 相对
+# 导入）——独立模块导入自此崩溃（os error 109 断管）。改走包导入：父目录
+# 上 sys.path、`import assurance.…`。
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+import assurance.run_event_journal_validation as v
 fams = {
     "inquiry_kind": v._verify_v02_inquiry_kind,
     "initial_round_inquiry": v._verify_v02_initial_round_inquiry,
@@ -7653,9 +7656,12 @@ json.dump(out, sys.stdout)
         .unwrap();
 
         let script = r#"
-import sys, json
-sys.path.insert(0, sys.argv[1])
-import run_event_journal_validation as v
+import sys, json, os
+# 350 批（5805355e）把 assurance/ 收成包（`from .contracts import` 相对
+# 导入）——独立模块导入自此崩溃（os error 109 断管）。改走包导入：父目录
+# 上 sys.path、`import assurance.…`。
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+import assurance.run_event_journal_validation as v
 data = json.load(sys.stdin)
 out = {}
 for sc in data:

@@ -35,8 +35,8 @@ pub(crate) const KEEP_EMOJI_ENV: &str = "ORZ_WRITE_KEEP_EMOJI";
 #[cfg(test)]
 pub(crate) static EMOJI_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Maximum number of distinct line numbers rendered in the notice.
-const NOTICE_LINE_CAP: usize = 20;
+/// 354c（0dr §4.8）：回执最多列出的「码点@行」样本数——超出省略计总数。
+const NOTICE_SAMPLE_CAP: usize = 8;
 
 /// Result of one strip pass over write-face text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,30 +45,34 @@ pub(crate) struct StripNotice {
     pub(crate) count: usize,
     /// Distinct 1-based line numbers carrying stripped runs, in order.
     pub(crate) lines: Vec<usize>,
+    /// 354c（§4.8 可解释回执）：每个剥离 run 的首个码点＋其 1 基行号
+    /// （按 run 序；render 端截断展示）。「剥了什么」不再靠猜。
+    pub(crate) samples: Vec<(u32, usize)>,
 }
 
 impl StripNotice {
     /// One-line mechanical notice, e.g.
-    /// `[emoji 剥离] 3 处（写入内容 L12/L45/L46 行）`.
+    /// `[emoji 剥离] 2 处：U+1F389@L1、U+1F680@L2（行号为写入内容内部 1 基行）`.
     ///
     /// 0bl 审查修复（2026-09-24）：行号语义——这些是**写入内容内部**的
     /// 1 基行号（交给写面的那段文本），不是真实文件中的行号：写入文本
     /// 会被编辑工具拼进更大的文件，直接当文件坐标读会错位。文案显式
-    /// 点明作用域（`写入内容 … 行`），避免误读。
+    /// 点明作用域，避免误读。354c（§4.8）：样本列表按「U+码点@行」逐
+    /// run 列出（至多 [`NOTICE_SAMPLE_CAP`] 条，超出以 `…` 省略）。
     pub(crate) fn render(&self) -> String {
         let mut shown: Vec<String> = self
-            .lines
+            .samples
             .iter()
-            .take(NOTICE_LINE_CAP)
-            .map(|line| format!("L{line}"))
+            .take(NOTICE_SAMPLE_CAP)
+            .map(|(cp, line)| format!("U+{cp:04X}@L{line}"))
             .collect();
-        if self.lines.len() > NOTICE_LINE_CAP {
+        if self.samples.len() > NOTICE_SAMPLE_CAP {
             shown.push("…".to_string());
         }
         format!(
-            "[emoji 剥离] {} 处（写入内容 {} 行）",
+            "[emoji 剥离] {} 处：{}（行号为写入内容内部 1 基行）",
             self.count,
-            shown.join("/")
+            shown.join("、")
         )
     }
 }
@@ -131,6 +135,7 @@ pub(crate) fn strip_emoji(text: &str) -> (String, Option<StripNotice>) {
     let mut out = String::with_capacity(text.len());
     let mut count = 0usize;
     let mut lines: Vec<usize> = Vec::new();
+    let mut samples: Vec<(u32, usize)> = Vec::new();
     let mut line = 1usize;
     let mut i = 0usize;
     while i < chars.len() {
@@ -181,6 +186,8 @@ pub(crate) fn strip_emoji(text: &str) -> (String, Option<StripNotice>) {
         if lines.last() != Some(&line) {
             lines.push(line);
         }
+        // 354c（§4.8）：记录该 run 首个码点＋行号（可解释回执）。
+        samples.push((chars[run_start] as u32, line));
         let left_idx = if removed_base {
             run_start - 1
         } else {
@@ -208,7 +215,14 @@ pub(crate) fn strip_emoji(text: &str) -> (String, Option<StripNotice>) {
     if count == 0 {
         (text.to_string(), None)
     } else {
-        (out, Some(StripNotice { count, lines }))
+        (
+            out,
+            Some(StripNotice {
+                count,
+                lines,
+                samples,
+            }),
+        )
     }
 }
 
@@ -241,7 +255,10 @@ mod tests {
         assert!(!out.contains('\u{FE0F}'));
         let notice = notice.expect("notice");
         assert_eq!(notice.count, 1);
-        assert_eq!(notice.render(), "[emoji 剥离] 1 处（写入内容 L1 行）");
+        assert_eq!(
+            notice.render(),
+            "[emoji 剥离] 1 处：U+1F468@L1（行号为写入内容内部 1 基行）"
+        );
     }
 
     #[test]
@@ -294,7 +311,10 @@ mod tests {
         let notice = notice.expect("notice");
         assert_eq!(notice.count, 2);
         assert_eq!(notice.lines, vec![2, 4]);
-        assert_eq!(notice.render(), "[emoji 剥离] 2 处（写入内容 L2/L4 行）");
+        assert_eq!(
+            notice.render(),
+            "[emoji 剥离] 2 处：U+1F389@L2、U+1F680@L4（行号为写入内容内部 1 基行）"
+        );
     }
 
     #[test]

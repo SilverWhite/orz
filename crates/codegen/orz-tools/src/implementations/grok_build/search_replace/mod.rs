@@ -1903,7 +1903,7 @@ mod tests {
                 assert!(
                     applied
                         .tool_output_for_prompt
-                        .contains("[emoji 剥离] 2 处（写入内容 L1/L2 行）"),
+                        .contains("[emoji 剥离] 2 处：U+1F389@L1、U+1F680@L2"),
                     "got: {}",
                     applied.tool_output_for_prompt
                 );
@@ -1911,7 +1911,7 @@ mod tests {
                     .tool_output_for_prompt_concise
                     .as_deref()
                     .unwrap_or("");
-                assert!(concise.contains("[emoji 剥离] 2 处（写入内容 L1/L2 行）"));
+                assert!(concise.contains("[emoji 剥离] 2 处：U+1F389@L1、U+1F680@L2"));
             }
             other => panic!("Expected EditsApplied, got {:?}", other),
         }

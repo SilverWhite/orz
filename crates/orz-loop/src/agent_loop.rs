@@ -3318,6 +3318,16 @@ pub(crate) async fn run_agent_loop(
         } else {
             system
         };
+        // 354c（0dr §4.6，2026-10-25）：审批模式可见——宿主装配期算好的
+        // 一行只读事实（`[permission] mode=… source=…`）拼进系统提示；
+        // 模型据此决定是否需要「等批准」话术。空串＝宿主未提供（默认
+        // no-op，测试/一次性宿主零注入）；常量跨轮稳定，不动前缀缓存。
+        let permission_mode_line = host.permission_mode_line();
+        let system = if permission_mode_line.is_empty() {
+            system
+        } else {
+            format!("{}\n\n{}", system, permission_mode_line)
+        };
         // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 计划型执行框架
         // 在系统提示词层无条件注入（plan_first 会话；主/检索子代理同一
         // 入口）——不依赖 AGENTS.md 是否存在（D2 全覆盖，审查收口

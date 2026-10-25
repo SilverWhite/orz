@@ -777,7 +777,6 @@ mod tests {
     #[tokio::test]
     async fn rli_notice_direct_push_attaches_line_and_journals() {
         use crate::gateway::model::Role;
-        use orz_assurance::lif::{RLI_NOTICE_TEXT_BUDGET, RLI_T_HAT_ANNOTATION};
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {

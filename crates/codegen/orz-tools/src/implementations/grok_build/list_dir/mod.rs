@@ -1760,13 +1760,16 @@ mod tests {
         }
     }
 
+    /// 354c（0dr §4.3，2026-10-25）读面开放：workspace 外相对路径列目录
+    /// 成功——旧钉 `list_dir_rejects_path_escaping_workspace` 语义翻转。
     #[tokio::test]
-    async fn list_dir_rejects_path_escaping_workspace() {
+    async fn list_dir_opens_path_escaping_workspace() {
         let tmp = TempDir::new().unwrap();
         let sub = tmp.path().join("workspace");
         std::fs::create_dir_all(&sub).unwrap();
         let outside = tmp.path().join("outside_dir");
         std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("note.txt"), "x").unwrap();
 
         let mut resources = Resources::new();
         resources.insert(Cwd(sub));
@@ -1782,20 +1785,22 @@ mod tests {
         .await
         .unwrap();
         match output {
-            ListDirOutput::PermissionDenied(msg) => {
-                assert!(msg.contains("escapes workspace sandbox"), "msg: {msg}");
+            ListDirOutput::Content(content) => {
+                assert!(content.content.contains("note.txt"), "{content:?}");
             }
-            other => panic!("Expected PermissionDenied, got {:?}", other),
+            other => panic!("Expected Content (354c read opening), got {:?}", other),
         }
     }
 
+    /// 354c 读面开放：workspace 外绝对路径列目录成功。
     #[tokio::test]
-    async fn list_dir_rejects_absolute_path_outside_workspace() {
+    async fn list_dir_opens_absolute_path_outside_workspace() {
         let tmp = TempDir::new().unwrap();
         let sub = tmp.path().join("workspace");
         std::fs::create_dir_all(&sub).unwrap();
         let outside = tmp.path().join("outside_dir");
         std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("note.txt"), "x").unwrap();
 
         let mut resources = Resources::new();
         resources.insert(Cwd(sub));
@@ -1811,10 +1816,10 @@ mod tests {
         .await
         .unwrap();
         match output {
-            ListDirOutput::PermissionDenied(msg) => {
-                assert!(msg.contains("escapes workspace sandbox"), "msg: {msg}");
+            ListDirOutput::Content(content) => {
+                assert!(content.content.contains("note.txt"), "{content:?}");
             }
-            other => panic!("Expected PermissionDenied, got {:?}", other),
+            other => panic!("Expected Content (354c read opening), got {:?}", other),
         }
     }
 
