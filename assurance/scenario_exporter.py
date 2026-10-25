@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import AssuranceError
+from .layout import REGRESSION_ROOT
 from .utils import atomic_write_json, sha256_bytes, utc_now
 
 
@@ -38,7 +39,6 @@ from .utils import atomic_write_json, sha256_bytes, utc_now
 # path constants
 # ══════════════════════════════════════════════════════════════════════════════
 
-REGRESSION_ROOT = Path(__file__).resolve().parents[1] / "regression"
 DEFAULT_CORPUS_PATH = REGRESSION_ROOT / "cases-v0.1.yaml"
 DEFAULT_EXPORT_ROOT = REGRESSION_ROOT / "exports"
 

@@ -8,10 +8,10 @@ from typing import Any
 from .errors import AssuranceError
 from .io_utils import canonical_bytes, load_json, sha256_bytes, sha256_file, utc_now
 from .journal_lock import JournalLockError, exclusive_journal_lock
+from .layout import RUNTIME_ROOT
 from .schema import validate_instance
 
 
-RUNTIME_ROOT = Path(__file__).resolve().parents[1] / "runtime"
 TERMINAL_EVENTS = {"run_finished", "run_failed", "run_cancelled", "run_invalidated"}
 
 

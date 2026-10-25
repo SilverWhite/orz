@@ -11,6 +11,7 @@ from .contracts import ASSURANCE_ROOT, validate_contract
 from .errors import AssuranceError
 from .execution_lock import verify_disposable_reproduction_execution_lock
 from .journal_lock import exclusive_journal_lock
+from .layout import RUNTIME_ROOT
 from .utils import (
     atomic_write_bytes,
     atomic_write_json,
@@ -23,7 +24,6 @@ from .utils import (
 
 
 ROOT = ASSURANCE_ROOT.parent
-RUNTIME_ROOT = ROOT / "runtime"
 RUNNER_RECEIPT_SCHEMA = "gsa-no-model-runner-receipt-v0.1.schema.json"
 RUNNER_RECOVERY_INSPECTION_SCHEMA = (
     "gsa-runner-journal-recovery-inspection-v0.1.schema.json"

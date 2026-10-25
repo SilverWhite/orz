@@ -106,9 +106,11 @@ def zero_misintervention_check(jobs_root: Path) -> dict:
             if "fire" in et.lower():
                 found_types[et] = found_types.get(et, 0) + 1
     schema_hits = []
+    from .layout import RUNTIME_ROOT
+
     for schema_path in [
-        Path(__file__).resolve().parents[1] / "runtime" / "run-event-v0.2.schema.json",
-        Path(__file__).resolve().parents[1] / "runtime" / "tool-completed-event-payload-v0.1.schema.json",
+        RUNTIME_ROOT / "run-event-v0.2.schema.json",
+        RUNTIME_ROOT / "tool-completed-event-payload-v0.1.schema.json",
     ]:
         if schema_path.exists():
             text = schema_path.read_text(encoding="utf-8")

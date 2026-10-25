@@ -10,12 +10,12 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 from .contracts import validate_contract
 from .errors import AssuranceError
+from .layout import RUNTIME_ROOT
 from .orientation_runtime_guard import ALLOWED_ORIENTATION_FIELDS, FORBIDDEN_ORIENTATION_FIELDS
 from .utils import canonical_bytes, sha256_bytes, utc_now
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_ROOT = ROOT / "runtime"
 GLOBAL_PROGRESS_INPUT_SCHEMA = RUNTIME_ROOT / "global-progress-input-v0.1.schema.json"
 RECEIPT_SCHEMA = "grok-lifecycle-projection-receipt-v0.1.schema.json"
 

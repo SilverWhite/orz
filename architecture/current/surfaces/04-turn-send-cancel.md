@@ -41,13 +41,13 @@ terminal: run_finished | run_failed | run_cancelled | run_invalidated
 |---|---|---|---|
 | 排队 | 运行中提交入队并提示深度 | `main.js:204-214` | 接受 |
 | 停止 | `stopRun` → `session/cancel` | `main.js:350-363` | 接受 |
-| 取消终态 | 依赖 agent 回 `cancelled`；无超时兜底 | `acp.js:152` | 应修 |
-| 错误面 | **333 落码**：`copy.js` 四要素（发生了什么＋分类＋下一步＋证据），未知码 internal 兜底；工具失败仍留在对话里 | `copy.js`／`acp.js` | 已落（取消超时兜底仍未做） |
+| 取消终态 | agent 终态仍是真相；**334 已落 30s 本地兜底**：超时后复位本地运行态并提示服务端可能仍在收尾，终态先到会撤销 timer | `main.js` 的 `CANCEL_FALLBACK_MS`／`armCancelFallback`／终态清理；frontend smoke §16.11 | 已落且有直接回归 |
+| 错误面 | **333 落码**：`copy.js` 四要素（发生了什么＋分类＋下一步＋证据），未知码 internal 兜底；工具失败仍留在对话里 | `copy.js`／`acp.js` | 已落 |
 | partial output | 已产生内容保留 | 事件流 | 接受 |
 
 ## 6. 0.9.8 判决
 
-- **必闭**：取消后 30s 未收敛的兜底（前端复位＋提示）；错误面给可执行下一步（333 已落四要素文案；取消超时兜底仍未做）。
+- **必闭项实现状态**：错误面四要素由 333 落码；取消后 30s 未收敛的前端复位与提示由 334 落码，frontend smoke §16.11 直接覆盖 timer 装配、超时复位/提示与终态先到撤销。
 - **可延**：自动重试。
 - **不做**：steering。
 
@@ -59,6 +59,6 @@ terminal: run_finished | run_failed | run_cancelled | run_invalidated
 |---|---|---|
 | 1 单飞 | `prompt_bootstrap_failure_releases_cancel_token` | 并发 prompt 拒绝无测试 |
 | 2 不打断 | smoke §14.5 | 队列边界无端到端 |
-| 3 取消可收敛 | `session_prompt_default_yolo_auto_approves_with_dead_gateway` | 取消超时无测试 |
-| 4 终态必达 | journal 终态断言 | 前端兜底无测试 |
+| 3 取消可收敛 | frontend smoke §16.11（fake timer：`session/cancel`→30s 复位/提示；`run_cancelled` 先到→撤销） | 真机 30s 墙钟路径未单独跑 |
+| 4 终态必达 | 后端 journal 终态断言；frontend smoke §16.11 覆盖 `run_cancelled` 清 timer | 其余终态类型由同一 `TERMINAL_EVENT_TYPES` 分支承接，未逐枚举测试 |
 | 5 状态重同步 | `serverBusy` 逻辑（smoke） | 真实外部 busy 未跑 |

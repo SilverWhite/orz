@@ -7,11 +7,11 @@ from typing import Any
 from jsonschema import Draft202012Validator, FormatChecker
 
 from .errors import AssuranceError
+from .layout import RUNTIME_ROOT
 from .utils import atomic_write_bytes, canonical_bytes, sha256_bytes, utc_now
 
 
-ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_SCHEMA = ROOT / "runtime" / "run-event-v0.1.schema.json"
+RUNTIME_SCHEMA = RUNTIME_ROOT / "run-event-v0.1.schema.json"
 SUPPORTED_EVENT_TYPES = {
     "run_preflight",
     "run_started",

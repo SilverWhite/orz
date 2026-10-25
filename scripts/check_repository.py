@@ -3127,6 +3127,7 @@ def check_repository() -> dict[str, Any]:
     for name in (
         "write-control-review.allow.valid.json",
         "write-control-review.warn.valid.json",
+        "write-control-review.encoded-exec-warn.valid.json",
         "write-control-review.legacy-block.valid.json",
     ):
         run_event_v02_payload_positive_contracts[run_event_v02_payload_root / name] = (

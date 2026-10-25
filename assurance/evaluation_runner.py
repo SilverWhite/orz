@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .errors import AssuranceError
+from .layout import EVALUATION_ROOT, PROTOCOL_ROOT, REGRESSION_ROOT
 from .utils import atomic_write_json, canonical_bytes, sha256_bytes, utc_now
 
 
@@ -59,13 +60,11 @@ CLUSTER_ID_PATTERN = re.compile(r"^CLU-[0-9]{2}$")
 
 CONTRAST_TYPES = ("permission_reversal", "root_cause_contrast", "mode_boundary")
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
 PROTOCOL_ARTIFACTS: dict[str, Path] = {
-    "reason_registry_sha256": REPO_ROOT / "protocol" / "reason-codes-v0.1.yaml",
-    "gate_matrix_sha256": REPO_ROOT / "protocol" / "gate-matrix-v0.1.yaml",
-    "coverage_matrix_sha256": REPO_ROOT / "regression" / "coverage-matrix-v0.1.yaml",
-    "scoring_protocol_sha256": REPO_ROOT / "evaluation" / "SCORING_PROTOCOL_v0.1.md",
+    "reason_registry_sha256": PROTOCOL_ROOT / "reason-codes-v0.1.yaml",
+    "gate_matrix_sha256": PROTOCOL_ROOT / "gate-matrix-v0.1.yaml",
+    "coverage_matrix_sha256": REGRESSION_ROOT / "coverage-matrix-v0.1.yaml",
+    "scoring_protocol_sha256": EVALUATION_ROOT / "SCORING_PROTOCOL_v0.1.md",
 }
 
 
@@ -125,7 +124,7 @@ def load_coverage_matrix(path: Path | None = None) -> dict[str, Any]:
     derived as every (historical, challenge) combination declared inside one
     cluster, which is exactly the pairing the matrix defines.
     """
-    matrix_path = path or (REPO_ROOT / "regression" / "coverage-matrix-v0.1.yaml")
+    matrix_path = path or (REGRESSION_ROOT / "coverage-matrix-v0.1.yaml")
     try:
         import yaml
     except ImportError:  # pragma: no cover

@@ -12,11 +12,10 @@ from .disposable_reproduction import (
     verify_disposable_reproduction_run_proof,
 )
 from .errors import AssuranceError
+from .layout import EVALUATION_ROOT, PROTOCOL_ROOT, RUNTIME_ROOT
 from .utils import canonical_bytes, exclusive_create_bytes, sha256_bytes, sha256_file
 
 
-ROOT = ASSURANCE_ROOT.parent
-RUNTIME_ROOT = ROOT / "runtime"
 PROJECTION_SCHEMA = "gsa-runtime-preflight-projection-v0.1.schema.json"
 JOURNAL_RECEIPT_SCHEMA = "gsa-runtime-journal-receipt-v0.1.schema.json"
 RUN_ID = "RUN-GSA-DISPOSABLE-REPRODUCTION-PREFLIGHT"
@@ -237,10 +236,10 @@ def _runtime_manifest(proof: dict[str, Any], proof_sha256: str) -> dict[str, Any
             "retry_policy": "none",
         },
         "protocol_digests": {
-            "agent_protocol": sha256_file(ROOT / "protocol" / "PROTOCOL_DRAFT_v0.1.md"),
-            "reason_codes": sha256_file(ROOT / "protocol" / "reason-codes-v0.1.yaml"),
-            "gate_matrix": sha256_file(ROOT / "protocol" / "gate-matrix-v0.1.yaml"),
-            "scoring_protocol": sha256_file(ROOT / "evaluation" / "SCORING_PROTOCOL_v0.1.md"),
+            "agent_protocol": sha256_file(PROTOCOL_ROOT / "PROTOCOL_DRAFT_v0.1.md"),
+            "reason_codes": sha256_file(PROTOCOL_ROOT / "reason-codes-v0.1.yaml"),
+            "gate_matrix": sha256_file(PROTOCOL_ROOT / "gate-matrix-v0.1.yaml"),
+            "scoring_protocol": sha256_file(EVALUATION_ROOT / "SCORING_PROTOCOL_v0.1.md"),
             "output_schema": sha256_file(ASSURANCE_ROOT / "disposable-reproduction-run-proof-v0.1.schema.json"),
         },
         "journal_policy": {

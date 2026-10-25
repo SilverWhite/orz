@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
+from .layout import RUNTIME_ROOT
 
-RUNTIME_ROOT = Path(__file__).resolve().parents[1] / "runtime"
+
 TRANSITION_SCHEMA_NAME = "global-progress-transition-receipt-v0.1.schema.json"
 TRANSITION_SCHEMA = RUNTIME_ROOT / TRANSITION_SCHEMA_NAME
 INITIAL_STATE = "executing"

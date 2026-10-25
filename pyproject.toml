@@ -35,3 +35,16 @@ gsa-tui = "assurance.tui.main:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["assurance*"]
+exclude = ["assurance.tests*"]
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.package-data]
+assurance = [
+  "*.json",
+  "fixtures/**/*.dat",
+  "fixtures/**/*.json",
+  "fixtures/**/*.md",
+  "fixtures/**/*.pdf",
+]

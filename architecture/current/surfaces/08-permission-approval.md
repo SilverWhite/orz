@@ -55,7 +55,7 @@ tool → policy 判定（deny 短路）→ yolo? auto-approve
 
 | 不变量 | 现有测试 | 缺口 |
 |---|---|---|
-| 1 策略先于 yolo | `ask_auto_approves_under_default_yolo`（source=yolo） | policy deny 短路无独立钉 |
+| 1 策略先于 yolo | `permission::tests::read_only_policy_denies_non_read_before_manager`（manager 为 allow-all，仍断言 deny＋`source=policy`）；`codex_app::tests::read_only_and_workspace_write_threads_coexist`（端到端同类工具分流） | 浏览器强制审批类与普通 policy deny 的组合顺序仍无单一端到端矩阵 |
 | 2 fail-closed | `permission.rs` 300s 单测；334 `unanswered_permission_is_replayed_on_reattach` | 真机断线无测试；桥重启丢队列未测 |
 | 3 强制审批类 | smoke §5 | 浏览器下载类无端到端 |
 | 4 来源可审计 | PermitSource 断言 | 全枚举无覆盖 |

@@ -33,6 +33,7 @@ from typing import Any, Sequence
 from jsonschema import Draft202012Validator, FormatChecker
 
 from .contracts import ASSURANCE_ROOT, validate_contract
+from .layout import RUNTIME_ROOT, resource_path
 from .conversation import ConversationNamespace
 from .deepseek_adapter import (
     build_real_deepseek_answer_packet,
@@ -78,7 +79,6 @@ from .utils import (
 
 
 ROOT = ASSURANCE_ROOT.parent
-RUNTIME_ROOT = ROOT / "runtime"
 ANSWER_SCHEMA = "canonical-cli-answer-packet-v0.1.schema.json"
 RECEIPT_SCHEMA = "canonical-cli-run-receipt-v0.1.schema.json"
 DEFAULT_RUN_ID = "RUN-CANONICAL-CLI-FAKE-001"
@@ -119,7 +119,7 @@ def _event_line(event: dict[str, Any]) -> bytes:
 
 
 def _digest_path(relative: str) -> str:
-    return sha256_file(ROOT / relative)
+    return sha256_file(resource_path(relative))
 
 
 def _zero_digest(label: str) -> str:

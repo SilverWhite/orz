@@ -51,9 +51,11 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "runtime"
-ASSURANCE = ROOT / "assurance"
+from .contracts import ASSURANCE_ROOT
+from .layout import RUNTIME_ROOT, resource_path
+
+RUNTIME = RUNTIME_ROOT
+ASSURANCE = ASSURANCE_ROOT
 
 RUN_EVENT_SCHEMA = RUNTIME / "run-event-v0.1.schema.json"
 RUN_EVENT_SCHEMA_V02 = RUNTIME / "run-event-v0.2.schema.json"
@@ -96,7 +98,7 @@ def _derive_payload_registry_views() -> tuple[dict[str, tuple[str, Path]], dict[
                     f"run-event payload registry entry malformed for "
                     f"{track_key}/{event_type}: {item!r}"
                 )
-            view[event_type] = (slug, ROOT / schema_rel)
+            view[event_type] = (slug, resource_path(schema_rel))
         views.append(view)
     return views[0], views[1]
 

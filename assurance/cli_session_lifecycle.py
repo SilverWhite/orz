@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
 from .errors import AssuranceError
+from .layout import RUNTIME_ROOT
 
 
-RUNTIME_ROOT = Path(__file__).resolve().parents[1] / "runtime"
 PAYLOAD_SCHEMA_NAME = "cli-session-lifecycle-event-v0.2.schema.json"
 OBSERVATION_SCHEMA = RUNTIME_ROOT / "cli-session-lifecycle-observation-v0.2.schema.json"
 PAYLOAD_SCHEMA = RUNTIME_ROOT / PAYLOAD_SCHEMA_NAME
