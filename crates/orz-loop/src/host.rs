@@ -1023,6 +1023,23 @@ pub trait LoopHost: Send + Sync {
     /// path is fire-and-forget (a dropped client must not stall the turn).
     fn on_text_delta(&self, _text: &str) {}
 
+    /// P0-1（0dq，2026-10-25）：回合级写前落盘检查点——消息面推进到
+    /// 「provider 一致」状态时由 loop 调用：①含 `tool_calls` 的
+    /// assistant 声明入列后（任何副作用发生前，写前）；②工具结果入列
+    /// 后（回写）。宿主据当前消息切片＋LIF/黑板 live 快照重建续接包落
+    /// 侧车，使硬杀 run 后侧车至少保留到最后一个已回传的工具结果；断点
+    /// 处的悬挂调用由加载路径的事实注入（`conversation_repair`
+    /// `RepairMode::Sidecar`）对账。best-effort：实现不得 fail run——
+    /// 写失败记日志继续（与 run 尾侧车写入同纪律）。默认 no-op：测试与
+    /// 一次性宿主零行为变化。
+    async fn persist_conversation_checkpoint(
+        &self,
+        _messages: &[crate::gateway::model::Message],
+        _lif: &orz_assurance::lif::TemporalSessionSnapshot,
+        _blackboard: &crate::blackboard::Blackboard,
+    ) {
+    }
+
     /// Persist a turn record.
     async fn persist_turn(&self, _turn: &TurnRecord) -> Result<(), PersistError> {
         Ok(())

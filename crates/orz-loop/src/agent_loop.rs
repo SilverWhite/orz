@@ -2355,6 +2355,30 @@ fn spawn_rli_watchdog(
 /// continues across rounds; the caller owns the seed and the post-loop use
 /// (grill history writeback).
 #[allow(clippy::too_many_arguments)] // the shared loop's full contract
+/// P0-1（0dq，2026-10-25）：回合级写前落盘检查点——把当前消息切片与
+/// LIF/黑板 live 快照交宿主落侧车。调用点＝消息面推进到「provider 一致」
+/// 状态的边界：声明入列后（写前）、单个工具结果入列后（串行回写）、
+/// 并行批次折回后（批次回写）。best-effort：宿主未挂 sink 时是 trait
+/// 默认 no-op，落盘失败在宿主侧记日志——检查点绝不 fail run。
+/// 车道把关：只主车道检查。检索子代理与主车道**共用同一 host**（dispatch
+/// 透传），但其 `messages` 是车道本地会话——不挡则子代理轮会以子代理
+/// 历史覆写主会话侧车。grill 车道 role 同为 Main，其宿主不挂 sink
+/// （`handle_session_grill` 的 build_host 不装配）→ 天然 no-op。
+async fn checkpoint_conversation_sidecar(
+    host: &dyn LoopHost,
+    controller: &AgentLoopController,
+    profile: &LoopProfile,
+    messages: &[Message],
+) {
+    if profile.role != AgentRole::Main {
+        return;
+    }
+    let lif = controller.lif_session_snapshot();
+    let blackboard = controller.blackboard_conversation_snapshot();
+    host.persist_conversation_checkpoint(messages, &lif, &blackboard)
+        .await;
+}
+
 pub(crate) async fn run_agent_loop(
     svc: &SharedLoopServices<'_>,
     controller: &AgentLoopController,
@@ -4522,6 +4546,12 @@ pub(crate) async fn run_agent_loop(
             // 尾首条声明的轮章作 r_keep（跨恢复/多 prompt 精确）。
             round: decision_round,
         });
+        // P0-1（0dq，2026-10-25）写前落盘：含 tool_calls 的 assistant 声明
+        // 在**任何副作用发生前**先入侧车。此后硬杀 run（工具挂死/进程终止/
+        // 权限等待中崩溃）时，侧车至少保有「模型发起过 call X」这一事实，
+        // 加载路径按 `RepairMode::Sidecar` 注入「结果未知」对账——
+        // RUN-51da03ea-11 的「磁盘前进、对话不前进」在声明轴上闭合。
+        checkpoint_conversation_sidecar(host, controller, profile, messages).await;
         // Pending policy messages (denial breaker) — appended AFTER the
         // tool batch completes so no user message lands between the
         // assistant declaration and its tool replies (provider protocol;
@@ -4804,6 +4834,10 @@ pub(crate) async fn run_agent_loop(
                             }));
                     }
                 }
+                // P0-1（0dq）回写：并行批次折回完毕即刻落检查点（置于
+                // first_err 上抛**之前**——批次部分失败时已折回的结果同样
+                // 入盘，不留「半批蒸发」的缺口）。
+                checkpoint_conversation_sidecar(host, controller, profile, messages).await;
                 if let Some(e) = first_err {
                     return Err(e);
                 }
@@ -5392,6 +5426,10 @@ pub(crate) async fn run_agent_loop(
                     }
                 }
             };
+            // P0-1（0dq）回写：串行调用的结果消息已入列（结果消息在
+            // `run_host_tool_with_timeout` 返回前推送）——逐调用落检查点，
+            // 硬杀 run 时侧车保留到最后一个已回传的工具结果。
+            checkpoint_conversation_sidecar(host, controller, profile, messages).await;
             // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 更新计划门
             // 状态——accepted/degraded 解除门，refill_requested 进入第二次
             // （最后一次）提交机会。

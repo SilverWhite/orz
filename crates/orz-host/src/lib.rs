@@ -245,7 +245,21 @@ pub struct OrzHost {
     /// `SharedBrowser` 会话域同先例）。`None`（一次性车道/测试宿主）＝
     /// drain 恒空，零行为变化。
     supplement_queue: Option<Arc<SupplementQueue>>,
+    /// P0-1（0dq，2026-10-25）：回合级写前落盘 sink——loop 在声明入列/
+    /// 工具结果入列时回调，宿主据 base_dir＋会话级字段重建续接包落侧车
+    /// 检查点。生产装配点＝`acp_server` prompt 路径 take-out 后挂载；
+    /// `None`（测试/一次性宿主）＝trait 默认 no-op，零行为变化。
+    conversation_checkpoint: Option<Arc<ConversationCheckpointSink>>,
 }
+
+/// P0-1（0dq，2026-10-25）：检查点回调签名——当前消息切片＋LIF 会话轴
+/// live 快照＋黑板 live 快照（loop 侧 [`crate::`] 调用点现取现传）。
+pub type ConversationCheckpointSink = dyn Fn(
+        &[orz_loop::gateway::model::Message],
+        &orz_assurance::lif::TemporalSessionSnapshot,
+        &orz_loop::blackboard::Blackboard,
+    ) + Send
+    + Sync;
 
 /// 0di（2026-10-18，ADR-0010 §14.88）：会话级中途补充队列——运行中用户输入
 /// 的 agent 侧排队面。容量上限 fail-closed（每条 ≤256 KiB、深度 ≤16，超出
@@ -477,6 +491,7 @@ impl OrzHost {
             last_resource_tier: std::sync::atomic::AtomicU8::new(0),
             commit_hint_emitted: std::sync::atomic::AtomicBool::new(false),
             supplement_queue: None,
+            conversation_checkpoint: None,
         })
     }
 
@@ -486,6 +501,17 @@ impl OrzHost {
     pub fn with_supplement_queue(mut self, queue: Arc<SupplementQueue>) -> Self {
         self.supplement_queue = Some(queue);
         self
+    }
+
+    /// P0-1（0dq，2026-10-25）：挂载回合级写前落盘 sink。挂载点＝
+    /// `handle_session_prompt` 的续接包 take-out 之后（sink 闭包捕获
+    /// base_dir／session_started_at／会话级字段——recall_log、负担档位、
+    /// 刻度水位——检查点写沿 take-out 现场重建续接包，不丢撤回审计）。
+    pub(crate) fn set_conversation_checkpoint_sink(
+        &mut self,
+        sink: Arc<ConversationCheckpointSink>,
+    ) {
+        self.conversation_checkpoint = Some(sink);
     }
 
     /// 0aw（2026-09-20，HOST_RESOURCE_OS_DELEGATION_DESIGN §6；原 0z S1
@@ -2207,6 +2233,20 @@ impl LoopHost for OrzHost {
         // is the documented bypass. A dropped receiver discards the chunk.
         if !gateway.forward_fire_and_forget(notification) {
             tracing::debug!("on_text_delta: gateway receiver dropped, chunk discarded");
+        }
+    }
+
+    /// P0-1（0dq，2026-10-25）：回合级写前落盘——转发给装配期挂载的
+    /// sink。未挂载（`None`）＝no-op；挂载后的序列化/落盘失败由 sink
+    /// 闭包内部记日志，这里不再上抛（best-effort，写失败绝不 fail run）。
+    async fn persist_conversation_checkpoint(
+        &self,
+        messages: &[orz_loop::gateway::model::Message],
+        lif: &orz_assurance::lif::TemporalSessionSnapshot,
+        blackboard: &orz_loop::blackboard::Blackboard,
+    ) {
+        if let Some(sink) = &self.conversation_checkpoint {
+            sink(messages, lif, blackboard);
         }
     }
 

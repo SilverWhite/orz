@@ -20,14 +20,28 @@ use orz_loop::host::{
 };
 
 /// 最小集成宿主：零工具注册表＋脚本化放行（LoopHost 必需五件套）。
+/// P0-1（0dq）：可选检查点记录器——`persist_conversation_checkpoint`
+/// 的消息切片快照进 `checkpoints`（None ＝ 不记录）。
 struct IntegrationHost {
     journal: JournalRecorder,
+    checkpoints: Option<Arc<std::sync::Mutex<Vec<Vec<Message>>>>>,
 }
 
 impl IntegrationHost {
     fn new(dir: &std::path::Path) -> Self {
         Self {
             journal: JournalRecorder::new(dir.to_path_buf()),
+            checkpoints: None,
+        }
+    }
+
+    fn with_checkpoints(
+        dir: &std::path::Path,
+        checkpoints: Arc<std::sync::Mutex<Vec<Vec<Message>>>>,
+    ) -> Self {
+        Self {
+            journal: JournalRecorder::new(dir.to_path_buf()),
+            checkpoints: Some(checkpoints),
         }
     }
 }
@@ -66,6 +80,17 @@ impl LoopHost for IntegrationHost {
             exit_code: Some(0),
             ..Default::default()
         })
+    }
+
+    async fn persist_conversation_checkpoint(
+        &self,
+        messages: &[Message],
+        _lif: &orz_assurance::lif::TemporalSessionSnapshot,
+        _blackboard: &orz_loop::blackboard::Blackboard,
+    ) {
+        if let Some(sink) = &self.checkpoints {
+            sink.lock().unwrap().push(messages.to_vec());
+        }
     }
 }
 
@@ -207,5 +232,110 @@ async fn scripted_tool_turn_journals_started_completed_pair() {
     assert!(started < completed, "ToolStarted 先于 ToolCompleted");
     assert!(completed < finished, "工具边界先于终态");
     assert_eq!(events[started]["payload"]["call_id"], "call-it-1");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// P0-1（0dq，2026-10-25）：检查点在消息面「provider 一致」边界触发——
+/// ①写前：含 tool_calls 的声明入列后、任何工具执行前，首个切片以
+/// **悬挂声明**收尾（无任何 Tool 消息）；②回写：结果入列后，切片含
+/// 该调用的 tool 回应。跨模块主链：run_agent_loop → LoopHost trait。
+#[tokio::test]
+async fn conversation_checkpoints_fire_write_ahead_and_write_back() {
+    use orz_loop::gateway::model::Role;
+    use orz_loop::gateway::model::ToolCall;
+    let dir = tempdir();
+    let checkpoints: Arc<std::sync::Mutex<Vec<Vec<Message>>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let host = IntegrationHost::with_checkpoints(&dir, checkpoints.clone());
+    let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "grep".to_string(),
+            arguments: serde_json::json!({"pattern": "x"}),
+            call_id: "call-it-ck1".to_string(),
+        }]),
+        ScriptedResponse::text("工具结果已消化"),
+        ScriptedResponse::text("工具结果已消化"),
+    ])))
+    .with_acaf_fail_closed(false);
+    let mut conversation: Vec<Message> = Vec::new();
+    let (answer, _, _) = controller
+        .run_turn(
+            &host,
+            "查一下 x",
+            "RUN-IT-CK1",
+            &"0".repeat(64),
+            0,
+            None,
+            None,
+            Some(&mut conversation),
+        )
+        .await
+        .expect("run_turn completes a scripted tool turn");
+    assert_eq!(answer, "工具结果已消化");
+
+    let cps = checkpoints.lock().unwrap();
+    assert!(
+        cps.len() >= 2,
+        "写前＋回写至少两次检查点，实际 {} 次",
+        cps.len()
+    );
+    // 写前切片：末条＝悬挂声明（call-it-ck1），且没有任何 Tool 消息——
+    // 证明检查点发生在工具执行**之前**（硬杀时该事实已在盘上）。
+    let first = &cps[0];
+    let last = first.last().expect("write-ahead snapshot non-empty");
+    assert_eq!(last.role, Role::Assistant, "写前末条是 assistant 声明");
+    assert!(
+        last.tool_calls.iter().any(|c| c.call_id == "call-it-ck1"),
+        "写前声明携带本轮 call_id: {last:?}"
+    );
+    assert!(
+        !first.iter().any(|m| m.role == Role::Tool),
+        "写前切片不含任何工具结果: {first:?}"
+    );
+    // 回写切片：call-it-ck1 的结果已在列（最后一个 tool_completed 不蒸发）。
+    let write_back = cps
+        .iter()
+        .skip(1)
+        .find(|snap| {
+            snap.iter()
+                .any(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-it-ck1"))
+        })
+        .expect("回写切片含 call-it-ck1 的 tool 结果");
+    assert!(write_back.len() > first.len(), "回写切片严格长于写前切片");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// P0-1（0dq）车道把关：纯文本轮（无工具调用）**零检查点**——终答轴的
+/// 持久化仍由 run 尾 SUCCESS-ONLY 写承担，检查点只在工具轮边界付账，
+/// 不给无工具会话增加任何写放大。
+#[tokio::test]
+async fn text_only_turn_fires_no_conversation_checkpoint() {
+    let dir = tempdir();
+    let checkpoints: Arc<std::sync::Mutex<Vec<Vec<Message>>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let host = IntegrationHost::with_checkpoints(&dir, checkpoints.clone());
+    let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::text("纯文本回答"),
+    ])))
+    .with_acaf_fail_closed(false);
+    let mut conversation: Vec<Message> = Vec::new();
+    let (answer, _, _) = controller
+        .run_turn(
+            &host,
+            "打个招呼",
+            "RUN-IT-CK2",
+            &"0".repeat(64),
+            0,
+            None,
+            None,
+            Some(&mut conversation),
+        )
+        .await
+        .expect("run_turn completes a scripted text turn");
+    assert_eq!(answer, "纯文本回答");
+    assert!(
+        checkpoints.lock().unwrap().is_empty(),
+        "纯文本轮不得触发检查点"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

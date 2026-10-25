@@ -4738,6 +4738,46 @@ impl AcpServer {
         // 撤回历史清零）。
         let restored_recall_log = std::mem::take(&mut continuation.recall_log);
         drop(continuation);
+        // P0-1（0dq，2026-10-25）：回合级写前落盘 sink——loop 在「声明入列
+        // /工具结果入列」边界回调，这里沿 take-out 现场重建续接包落侧车。
+        // 会话级字段（recall_log／负担档位／刻度水位）取 take-out 值：检查
+        // 点写沿与 run 尾写同构，撤回审计不因检查点覆盖而清零。重建的
+        // StoredConversation 与 run 尾路径共用 `StoredConversation::full`
+        // ＋ `persist_conversation_sidecar`（原子替换、墓碑跳过、空跳过）。
+        // 语义修订（SUCCESS-ONLY → 检查点持久）：失败 run 的已完成消息面
+        // 就此入侧车——这正是事故修复面（磁盘前进、对话必须同样前进）；
+        // in-session `session.continuation` 的 Err 臂纪律不变（保 None，
+        // 下一 prompt 回落侧车＝检查点状态）。
+        {
+            let checkpoint_base = base_dir.clone();
+            let checkpoint_sid = session_id.to_string();
+            let checkpoint_started_at = session_started_at;
+            let checkpoint_burden = burden_tiers_notified.clone();
+            let checkpoint_scale = restored_context_scale_notified.clone();
+            let checkpoint_recall = restored_recall_log.clone();
+            host.set_conversation_checkpoint_sink(Arc::new(
+                move |messages: &[Message],
+                      lif: &TemporalSessionSnapshot,
+                      blackboard: &Blackboard| {
+                    let mut full = StoredConversation::full(
+                        &checkpoint_sid,
+                        messages.to_vec(),
+                        lif,
+                        checkpoint_started_at,
+                        blackboard,
+                    );
+                    full.burden_tiers_notified = checkpoint_burden.clone();
+                    full.context_scale_notified = checkpoint_scale.clone();
+                    full.recall_log = checkpoint_recall.clone();
+                    if let Err(e) = persist_conversation_sidecar(&checkpoint_base, &full) {
+                        tracing::warn!(
+                            session_id = %checkpoint_sid,
+                            "conversation checkpoint sidecar write failed: {e}"
+                        );
+                    }
+                },
+            ));
+        }
         // IP5: attach the session's pre-mutation snapshot store — mutation
         // tools with knowable targets get tracked before execution.
         // local_browser (2026-08-10): re-inject the session's browser lane
@@ -10700,6 +10740,9 @@ mod tests {
 
     /// A failed prompt keeps the pre-run conversation — the sidecar is not
     /// overwritten by a failed run's partial messages.
+    /// （0dq P0-1 语义修订边界：本钉限**纯文本**失败 run——文本轮零检查点、
+    /// 终态写缺席即回退 pre-run。工具轮失败 run 的检查点已入盘，见
+    /// [`Self::checkpoint_survives_tool_round_when_run_fails_before_terminal_persist`]。）
     #[tokio::test]
     async fn failed_prompt_keeps_pre_run_conversation() {
         tokio::task::LocalSet::new()
@@ -10736,6 +10779,99 @@ mod tests {
                 assert!(stored.messages.iter().any(|m| m.content == "第一问"));
                 assert!(stored.messages.iter().any(|m| m.content == "第一答"));
                 assert!(stored.messages.iter().all(|m| m.content != "第二问"));
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
+    }
+
+    /// P0-1（0dq，2026-10-25）回合级写前落盘：run 在工具轮之后、终态之前
+    /// 死掉（脚本耗尽＝模型失败的确定性「硬杀」替身）时，侧车仍保有本
+    /// run 的声明与已回传结果；重启装载后历史成对进入 provider，且结果
+    /// 在案 ⇒ P0-2 事实注入**不**触发。纯文本失败 run 的「保 pre-run」
+    /// 语义不变（见 [`Self::failed_prompt_keeps_pre_run_conversation`]）。
+    #[tokio::test]
+    async fn checkpoint_survives_tool_round_when_run_fails_before_terminal_persist() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                // 一条工具轮响应：第二次模型调用即脚本耗尽 → run 失败 →
+                // SUCCESS-ONLY 的 run 尾侧车写被跳过；侧车内容只能来自
+                // P0-1 检查点（写前＋回写）。
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "read_file".to_string(),
+                        arguments: serde_json::json!({"target_file": "missing.md"}),
+                        call_id: "call-ck-p01".to_string(),
+                    }]),
+                ])));
+                server
+                    .handle_session_new(
+                        "sess-ckpt",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                let err = server
+                    .handle_session_prompt("sess-ckpt", "读一下")
+                    .await
+                    .unwrap_err();
+                assert!(matches!(err, AcpError::AgentLoop(_)), "{err}");
+                // (server dropped — process restart releases its lease.)
+                drop(server);
+
+                // 检查点侧车：声明＋结果成对在盘，用户消息（run 起点）在列。
+                let stored =
+                    load_conversation_sidecar(&base, "sess-ckpt").expect("checkpoint sidecar");
+                let decl = stored
+                    .messages
+                    .iter()
+                    .position(|m| !m.tool_calls.is_empty())
+                    .expect("写前声明在侧车");
+                assert_eq!(stored.messages[decl].tool_calls[0].call_id, "call-ck-p01");
+                let reply = &stored.messages[decl + 1];
+                assert_eq!(reply.role, Role::Tool, "结果随回写检查点入盘");
+                assert_eq!(reply.tool_call_id.as_deref(), Some("call-ck-p01"));
+                assert!(stored.messages.iter().any(|m| m.content == "读一下"));
+
+                // 重启装载：历史成对进 provider；无悬挂调用 ⇒ 修复面静默。
+                let fake2 = Arc::new(FakeProvider::new(vec![ScriptedResponse::text("续答")]));
+                let server2 = shadow_server_with_gateway(fake2.clone());
+                server2
+                    .handle_session_new(
+                        "sess-ckpt",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                server2
+                    .handle_session_prompt("sess-ckpt", "继续")
+                    .await
+                    .unwrap();
+                let reqs = fake2.received_requests();
+                assert!(
+                    reqs[0].messages.iter().any(|m| m.content == "读一下"),
+                    "失败 run 的用户消息经检查点存活"
+                );
+                let d = reqs[0]
+                    .messages
+                    .iter()
+                    .position(|m| !m.tool_calls.is_empty())
+                    .expect("声明进 provider");
+                assert_eq!(
+                    reqs[0].messages[d + 1].tool_call_id.as_deref(),
+                    Some("call-ck-p01"),
+                    "声明与其结果成对进入 provider"
+                );
+                assert!(
+                    reqs[0]
+                        .messages
+                        .iter()
+                        .all(|m| !m.content.contains("[上次 run 中断]")),
+                    "结果已回写，事实注入不触发"
+                );
 
                 let _ = std::fs::remove_dir_all(&base);
             })
