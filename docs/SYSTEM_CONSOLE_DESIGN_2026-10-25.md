@@ -199,3 +199,5 @@
 - **T1 已落码**：`apply_child_env` 给所有子进程加 `PYTHONIOENCODING=utf-8` / `PYTHONUTF8=1` / `PYTHONLEGACYWINDOWSSTDIO=0`（`computer/local/terminal.rs`），放在基础层允许 login/request 覆盖。编译通过。
 - **T3 改判**：真游标不是渲染问题。grep 在 `head_limit` 处**提前 kill rg**（`EXACT_FIT_PROBE_TIMEOUT` / early-kill 预算），因此既没有真 total，也没有可续读的位点；要做 `offset` 必须把读取预算抬到 `offset + limit`，并改 early-kill 记账与 streaming 路径。**移入 354b（与 Envelope v1 的 `next_cursor` 同批）**，不在 354a 硬做。
 - **T4 拆分**：T4a＝工具结果里补"静默时长"（`took=…s`，让模型知道那段时间过了多久）；T4b＝`tool_started` 心跳 journal 行与断 run 注入（跨 host/loop）。T4a 可独立落，T4b 与 353 的 P0-2 同批。
+- **T4a 已落码**：`format_default_prompt` 增 `elapsed: Option<Duration>`，三读数同行补 `took=…s`（守住"每工具至多追加 1 行"预算）；`BashTool::run` 传 `run_started_at.elapsed()`。`cargo test -p orz-tools --lib bash` **238 passed / 0 failed**（新增 `default_prompt_reports_took_when_elapsed_is_known`）。
+- **T4b 状态更新**：断 run 事实注入已随 353 P0-2 落码（`RepairMode::Sidecar` → `[上次 run 中断]` 结果）；`tool_started` 心跳 journal 行仍未做。

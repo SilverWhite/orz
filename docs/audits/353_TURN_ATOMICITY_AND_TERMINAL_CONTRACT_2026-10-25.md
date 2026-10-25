@@ -144,8 +144,25 @@
 - `cargo test -p orz-host --lib -- --test-threads=1`：**436 passed / 0 failed / 6 ignored**（与 350 批基线同形）；默认 8 线程下 5 例进程树/超时用例 flaky（`run_tests_timeout_kills_process_tree`、`call_tool_timeout_kills_process_tree`、`call_tool_with_timeout_override_is_honored`、`session_volume_symlink_windows_end_to_end`、`run_terminal_cmd_truncation_carries_output_object`），串行全绿——判定为并行负载下的既有 flaky，非本批改动引入。
 - 未跑：`orz-bin` 套件与 `frontend_smoke.mjs`（本批未触及 CLI 旗面与前端）。
 
-### §9.5 仍未实施（下一批）
+### §9.5 P0-2 补批（2026-10-25 同日，已落码）
 
-- **P0-1／P0-2／P0-3**：回合级写前落盘、悬挂调用事实注入、单工具无输出超时——本事故"上下文回退"的直接修复面，本批未动 host 持久化路径。
+- **P0-2 悬挂调用不再静默剥离**：`conversation_repair::repair_tool_pairing` 增 `RepairMode`——
+  `Sidecar`（侧车存过工具输出，整条没回应＝真中断）保留声明并逐 call 补事实化结果
+  `[上次 run 中断] 工具调用 <name>（call_id=…）没有返回结果…结果未知，落盘副作用可能已经发生`；
+  `JournalRebuild`（journal 从不存工具输出）维持旧纪律剥离，避免把每段重建历史都说成失败。
+  `acp_server.rs` 两处调用点按来源分流（`reloaded_from_journal` 判定）。`RepairReport` 增
+  `unrecovered_calls`，与 `stripped_calls` 互斥。
+- **口径变更（测试改判）**：`dangling_tool_calls_from_sidecar_never_reach_the_provider` →
+  `…_reach_provider_as_failed_fact`（断言改为"声明与结果成对进入 provider"）；
+  `session_load_materializes_archive_and_repairs_tool_pairing` 由"空声明被剥离（2 条）"改为
+  "声明＋未回收结果成对保留（4 条）"。
+- 读数：`cargo test -p orz-host --lib -- --test-threads=1` **437 passed / 0 failed / 6 ignored**；
+  `conversation_repair` 7 例全绿（新增 Sidecar 幂等用例）。
+
+### §9.6 仍未实施（下一批）
+
+- **P0-1／P0-3**：回合级写前落盘、单工具无输出超时——本事故"上下文回退"的直接修复面，本批未动 host 持久化路径。
+  P0-3 取证结论：host 已有默认 300s 的 `tool_timeout`／`ORZ_TOOL_TIMEOUT_SECS`（`acp_server.rs:6184`、`lib.rs:458`），
+  故该项先查"超时为何没救回该 run"（车道是否同一 wrapper、kill 后结果是否回写），不重复造超时。
 - `finish()` 收尾工具：八工具面冻结，暂由 `ORZ_TERMINAL_DECLARATION` 承载机器可读终态。
 
