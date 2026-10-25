@@ -353,13 +353,8 @@ fn main_inner() {
     // 单一实现在 orz-host `parse_yolo_env`（装配点的 spawn Err 臂为直接
     // 消费 orz-host 的非常规入口兜底）。静默取缺省绝不允许——「要关而
     // 没关成」是危险方向。
-    if let Ok(v) = std::env::var("ORZ_YOLO")
-        && orz_host::permission::parse_yolo_env(&v).is_err()
-    {
-        eprintln!(
-            "error: ORZ_YOLO={v:?} is not a valid value (1/true/yes/on \
-             enable, 0/false/no/off disable; unset = default auto-approve)"
-        );
+    if let Err(detail) = orz_host::permission::yolo_env_or_default() {
+        eprintln!("error: {detail}");
         std::process::exit(2);
     }
     // 0cg (2026-10-01) 墙钟输入通道收口：`--max-wallclock <sec>` 不再经
@@ -789,14 +784,13 @@ fn permission_mode_banner() -> String {
     } else {
         let (auto_approve, source) = match YOLO_FLAG_INPUT.get().copied().flatten() {
             Some(on) => (on, if on { "--yolo" } else { "--no-yolo" }),
-            None => match std::env::var("ORZ_YOLO") {
-                Ok(v) => (
-                    // 非法值到不了生产 banner（main 早校验先 exit 2）；
-                    // 直接调用方兜底取安全方向（confirm-first）。
-                    orz_host::permission::parse_yolo_env(&v).unwrap_or(false),
+            None => match std::env::var_os("ORZ_YOLO") {
+                Some(_) => (
+                    // 非法值到不了生产 banner（main 早校验先 exit 2）。
+                    orz_host::permission::yolo_env_or_default().unwrap_or(false),
                     "ORZ_YOLO",
                 ),
-                Err(_) => (true, "default"),
+                None => (true, "default"),
             },
         };
         render_posture_line(auto_approve, source)

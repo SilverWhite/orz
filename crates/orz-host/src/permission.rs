@@ -119,6 +119,29 @@ pub fn parse_yolo_env(value: &str) -> Result<bool, ()> {
     }
 }
 
+/// Read the process-wide approval posture without conflating an absent value
+/// with an operating-system string that cannot be represented as UTF-8.
+/// The latter is invalid configuration and must fail closed: treating it as
+/// "unset" would silently turn auto-approval on.
+pub fn yolo_env_or_default() -> Result<bool, String> {
+    yolo_from_env_result(std::env::var("ORZ_YOLO"))
+}
+
+fn yolo_from_env_result(value: Result<String, std::env::VarError>) -> Result<bool, String> {
+    match value {
+        Ok(v) => parse_yolo_env(&v).map_err(|()| {
+            format!(
+                "ORZ_YOLO={v:?} is not a valid value (1/true/yes/on enable, \
+                 0/false/no/off disable; unset or --yolo/--no-yolo = default auto-approve)"
+            )
+        }),
+        Err(std::env::VarError::NotPresent) => Ok(true),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err("ORZ_YOLO is not valid UTF-8; refusing to enable auto-approve".to_string())
+        }
+    }
+}
+
 /// Grok permission manager wrapped for the LoopHost contract.
 pub struct PermissionBridge {
     handle: PermissionHandle,
@@ -243,15 +266,7 @@ impl PermissionBridge {
     /// 于全部车道全部平台；非法值 `Err`（装配点映射为显式失败——静默取
     /// 缺省绝不允许，「要关而没关成」是危险方向）。
     fn default_initial_yolo() -> Result<bool, String> {
-        match std::env::var("ORZ_YOLO") {
-            Ok(v) => parse_yolo_env(&v).map_err(|()| {
-                format!(
-                    "ORZ_YOLO={v:?} is not a valid value (1/true/yes/on enable, \
-                     0/false/no/off disable; unset or --yolo/--no-yolo = default auto-approve)"
-                )
-            }),
-            Err(_) => Ok(true),
-        }
+        yolo_env_or_default()
     }
 
     /// Request permission for a tool call (LoopHost `request_permission`).
@@ -897,6 +912,17 @@ mod tests {
         for garbage in ["", "2", "maybe", "auto"] {
             assert_eq!(parse_yolo_env(garbage), Err(()));
         }
+    }
+
+    #[test]
+    fn non_unicode_yolo_configuration_fails_closed() {
+        let err = yolo_from_env_result(Err(std::env::VarError::NotUnicode(
+            std::ffi::OsString::from("invalid"),
+        )));
+        assert_eq!(
+            err,
+            Err("ORZ_YOLO is not valid UTF-8; refusing to enable auto-approve".to_string())
+        );
     }
 
     #[tokio::test]
