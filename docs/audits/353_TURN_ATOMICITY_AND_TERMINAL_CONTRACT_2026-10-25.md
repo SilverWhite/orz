@@ -191,3 +191,9 @@
 - 读数：`cargo test -p orz-loop` **908/0/3**＋`run_turn_integration` **4/4**；`cargo test -p orz-host --lib
   -- --test-threads=1` **438/0/6**（437 → 438）；clippy 零新增；fmt 净。
 - P0-3 剩余核查（"车道是否同一 wrapper"）与 `finish()` 收尾工具仍未落（0dq 保持 open，计数 66 不变）。
+
+## §10 355 批勘误与收口（2026-10-25）
+
+- **P1-1 定义漂移勘误**：§6 处置表 P1-1 的定义是"交付与收束解耦"（无工具调用的文本无条件交付并落盘），而 §9.2 实施状态把 P1-1 等同于"终态声明缺省关闭"——名不符实。353 实际只落了**告知面**缺省关（系统提示语法行＋常驻尾行）；**强制面**（`require_declaration` 公式）因 controller 车道位被 0dm 时代在三处生产入口硬编码 `true`（ACP 会话／CLI 两路径）而原样存活——主车道无 `[RUN_END]` 的完整文本仍被扣留一轮，且教学面已拔＝"强制而不教"，§4.1/§4.3 判为缺陷的失效模式在主车道残留。AND→OR 改造理由（"原 AND 会把 benchmark 车道拖死"）基于把 controller 位误当 benchmark 位，置位点归属未盘点。
+- **收口**：355 批将三处生产置位改随 `ORZ_TERMINAL_DECLARATION` 单源、退役 0dm 兼容反例门（否则主车道缺省关后该门会在生产复活扣留终答）、新增验收钉 `session_text_reply_delivers_without_terminal_notice_by_default`——**§6 P1-2 验收"交互轮次零 [TERMINAL_NOTICE]"自 355 批起在 env 缺省下成立**。详见 [`355 批档`](355_353_354_REVIEW_REMEDIATION_2026-10-25.md) §1。
+- 其余残余（检查点 continue 缺口／残留 Z 生产者／prompt 路径 RepairMode 分流等）同批收口，见 355 批档 §4。

@@ -61,3 +61,11 @@ Scout 勘定（file:line 证据见 scout 报告归档）：
 - **未重建载体**（用户令）：本批全部改动在源仓与 `orz` 二进制 dev 构建，未 bump 版本、未重出 Windows/Linux 载体、未换装。
 - **Envelope 工具面统一**：0dr 剩余边界（§0）；0dq 全达成（闭合待用户裁决）、0dr 保持 open。
 - **两仓提交未推送**（与前批在途状态一致）。
+
+## §7 355 批勘误与补全（2026-10-25）
+
+审查（四路只读子代理＋主车道复核）发现本批以下条目需勘误/补全，已全数处置（详见 [`355 批档`](355_353_354_REVIEW_REMEDIATION_2026-10-25.md)）：
+
+- **354a T1"已落码"就事故平台不成立**：三个 env 变量落在 `#[cfg(unix)]` 的 `apply_child_env`（Windows 唯一生成路径不经过它，`PYTHONLEGACYWINDOWSSTDIO` 永不生效；另两个变量 Windows 侧批前已由 `inv.env` 提供），设计核心"启动器代码页统一"零落码。355 批重做：`shell.rs` 启动器前置（PS/Pwsh/Cmd）＋`PYTHONLEGACYWINDOWSSTDIO=0` 补 Windows 臂＋FFFD 失明修复（`looks_like_utf8_misdecoded_as_gbk` 判据＋改道提示文案）。
+- **capabilities 面不全**：原只枚举 `build_toolset` 8 件。355 批补全为 14 条（＋browser 2 gated＋loop 侧 4 curated，其中 run_tests/pdf_read/project_doc_index 勘定为 R1 封存休眠而非遗漏）；Envelope meta 增 `coverage` 字段如实点名未覆盖面；剩余单源统一边界登记 0dr。
+- **缺陷修复**：inspect events `--kind` 分页重复（游标改绝对行号）、context_view 最新 run 字典序错（改数字序）、grep offset 越界静默钳制（改显式报错）、敏感面 pattern 补 `.envrc`/SSH 裸名 stem＋ReadHandle 臂提示、browser 早退"无子进程树"措辞注释如实化。

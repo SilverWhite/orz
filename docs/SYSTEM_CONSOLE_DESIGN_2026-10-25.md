@@ -203,3 +203,5 @@
 - **T4b 状态更新**：断 run 事实注入已随 353 P0-2 落码（`RepairMode::Sidecar` → `[上次 run 中断]` 结果）；`tool_started` 心跳 journal 行仍未做。
 
 **354 落码批（2026-10-25，[`354A_B_C 落码批档`](audits/354A_B_C_SYSTEM_CONSOLE_IMPL_2026-10-25.md)）**：T4b＋354b＋354c 全落——`tool_heartbeat` 心跳全链（默认 20s，`ORZ_TOOL_HEARTBEAT_SECS`，无法官族同 prompt_submitted 姿态，Python 合规 17/17）；grep 真游标（`offset`＋读取预算 offset+limit＋`[page]` trailer，模型面 total 预算截断时为 ≥ 下界——精确 total 属 workspace 服务端路径）；inspect 四面＋`orz capabilities`（Envelope v1 首批公民）；读面沙箱撤销＋`[敏感面]` 提示（会话卷窗口契约不动）；outline 四族语言；emoji `U+码点@行`；审批 `[permission]` 行。附带：P0-3 wrapper 收口（0dq）、350 批遗留 parity 断管修复。边界：Envelope 对模型工具面的整面字段统一登记 0dr 剩余（read_file/terminal/blackboard_read 已有等价 meta，信息等价）；载体未重建（用户令）。
+
+**355 批勘误与补全（2026-10-25，[`355 批档`](audits/355_353_354_REVIEW_REMEDIATION_2026-10-25.md)）**：审查发现 T1 落码平台错位（env 变量在 `#[cfg(unix)]` 内、Windows 零增量；启动器代码页前置零落码）——355 批重做（`shell.rs` 启动器前置＋`PYTHONLEGACYWINDOWSSTDIO` 补 Windows 臂＋FFFD 失明判据扩展）；capabilities 补全 14 条＋`coverage` 如实（loop 侧无 host 单源部分策展，剩余登记 0dr）；inspect events 游标改绝对行号、context_view 改数字序、grep offset 越界改显式报错、敏感面 pattern 补全。
