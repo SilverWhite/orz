@@ -533,7 +533,11 @@ fn is_pure_status_print(trimmed: &str) -> bool {
 /// `append_noop_reminder` gates the no-op-command end-turn `<system-reminder>`.
 /// Callers pass the session's `SystemRemindersEnabled` value so the nudge
 /// follows the same switch as every other system reminder.
-pub(crate) fn format_default_prompt(bash: &BashOutput, append_noop_reminder: bool) -> String {
+pub(crate) fn format_default_prompt(
+    bash: &BashOutput,
+    append_noop_reminder: bool,
+    elapsed: Option<std::time::Duration>,
+) -> String {
     let output_str = if bash.output_for_prompt.is_empty() {
         // 0bw F7 (B plan): the prompt fallback must go through the capture
         // decode ladder — GB18030 child output (PS 5.1 pipe without a pinned
@@ -574,7 +578,16 @@ pub(crate) fn format_default_prompt(bash: &BashOutput, append_noop_reminder: boo
             let chars = output_str.chars().count();
             let lines = output_str.lines().count();
             let fffd = output_str.chars().filter(|c| *c == '\u{FFFD}').count();
-            format!("[output] chars={chars} lines={lines} FFFD={fffd}")
+            // 354a T4a（2026-10-25）：补静默时长——回执原本不给任何时间读数，
+            // 模型无法区分「长命令在跑」与「挂死等 stdin」。与三读数同行，
+            // 守住 §7.5「每工具结果至多追加 1 行」预算。
+            match elapsed {
+                Some(elapsed) => format!(
+                    "[output] chars={chars} lines={lines} FFFD={fffd} took={:.1}s",
+                    elapsed.as_secs_f64()
+                ),
+                None => format!("[output] chars={chars} lines={lines} FFFD={fffd}"),
+            }
         };
         // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计
         // §3.1/§3.2): 截断末尾机械附加补读闭环指针（非模型生成）——
@@ -2639,7 +2652,8 @@ impl xai_tool_runtime::Tool for BashTool {
                 .await
                 .get::<crate::types::resources::SystemRemindersEnabled>()
                 .is_none_or(|e| e.0);
-            bash.output_for_prompt = format_default_prompt(&bash, append_noop_reminder);
+            bash.output_for_prompt =
+                format_default_prompt(&bash, append_noop_reminder, Some(run_started_at.elapsed()));
 
             // Bare `echo "<msg>"` usage (common model anti-pattern for "just output something").
             // We tag it for statistics (grok_build backend) and can surface an educational
@@ -4267,8 +4281,29 @@ mod tests {
             output_delta: None,
             was_bare_echo: false,
         };
-        bash.output_for_prompt = format_default_prompt(&bash, /* append_noop_reminder */ true);
+        bash.output_for_prompt = format_default_prompt(&bash, /* append_noop_reminder */ true, None);
         bash
+    }
+
+    #[test]
+    fn default_prompt_reports_took_when_elapsed_is_known() {
+        // 354a T4a：静默时长与三读数同一行（每工具至多 1 行预算）。
+        // 助手已把完整回执烤进 `output_for_prompt`，这里还原成"刚捕获的正文"，
+        // 否则二次烘焙会把上一次的 `exit:` 头再算进 chars/lines（测的是读数本身）。
+        let mut bash = make_bash_output(0, "hello\n");
+        bash.output_for_prompt = BashOutput::make_output_for_prompt("hello\n");
+        let with = format_default_prompt(
+            &bash,
+            /* append_noop_reminder */ true,
+            Some(std::time::Duration::from_millis(1234)),
+        );
+        assert!(
+            with.contains("[output] chars=6 lines=1 FFFD=0 took=1.2s"),
+            "got: {with}"
+        );
+        let without = format_default_prompt(&bash, /* append_noop_reminder */ true, None);
+        assert!(without.contains("[output] chars=6 lines=1 FFFD=0"), "got: {without}");
+        assert!(!without.contains("took="), "got: {without}");
     }
 
     #[test]
@@ -4293,7 +4328,7 @@ mod tests {
             output_delta: None,
             was_bare_echo: false,
         };
-        let prompt = format_default_prompt(&bash, /* append_noop_reminder */ true);
+        let prompt = format_default_prompt(&bash, /* append_noop_reminder */ true, None);
         assert!(
             prompt.contains("中文"),
             "prompt should decode GBK: {prompt}"
@@ -4351,7 +4386,7 @@ mod tests {
         let mut bash = make_bash_output(-1, "partial\n");
         bash.signal = Some("timeout".to_string());
         bash.timed_out = true;
-        bash.output_for_prompt = format_default_prompt(&bash, /* append_noop_reminder */ true);
+        bash.output_for_prompt = format_default_prompt(&bash, /* append_noop_reminder */ true, None);
         // Synthetic kill reasons render as `exit: killed (reason)` — no
         // redundant `[signal=…]` / `[timeout]` annotation.
         assert!(
@@ -4375,7 +4410,7 @@ mod tests {
         bash.total_bytes = 50_000;
         bash.output_file = "/tmp/.gsa/session/terminal/ord-1.log".into();
         bash.current_dir = "/tmp".into();
-        bash.output_for_prompt = format_default_prompt(&bash, /* append_noop_reminder */ true);
+        bash.output_for_prompt = format_default_prompt(&bash, /* append_noop_reminder */ true, None);
         assert!(
             bash.output_for_prompt
                 .contains("[truncated: showing first/last"),
@@ -4451,7 +4486,7 @@ mod tests {
             let mut bash = make_bash_output(-1, "partial\n");
             bash.signal = Some(reason.to_string());
             bash.output_for_prompt =
-                format_default_prompt(&bash, /* append_noop_reminder */ true);
+                format_default_prompt(&bash, /* append_noop_reminder */ true, None);
             let expected = format!("exit: killed ({})", reason);
             assert!(
                 bash.output_for_prompt.starts_with(&expected),
@@ -4471,7 +4506,8 @@ mod tests {
 
         let mut oom = make_bash_output(137, "killed\n");
         oom.signal = Some("oom".to_string());
-        oom.output_for_prompt = format_default_prompt(&oom, /* append_noop_reminder */ true);
+        oom.output_for_prompt =
+            format_default_prompt(&oom, /* append_noop_reminder */ true, None);
         assert!(oom.output_for_prompt.starts_with("exit: 137 [signal=oom]"));
     }
 
@@ -4481,7 +4517,7 @@ mod tests {
         bash.signal = Some("backgrounded".to_string());
         bash.output_file = "/tmp/bg.log".to_string();
         bash.total_bytes = 10000;
-        bash.output_for_prompt = format_default_prompt(&bash, /* append_noop_reminder */ true);
+        bash.output_for_prompt = format_default_prompt(&bash, /* append_noop_reminder */ true, None);
         assert!(
             bash.output_for_prompt
                 .starts_with("[Command moved to background]")
@@ -4528,6 +4564,7 @@ mod tests {
             let prompt = format_default_prompt(
                 &bash_output_with_command(cmd, ""),
                 /* append_noop_reminder */ true,
+                None,
             );
             assert!(
                 prompt.contains(NOOP_END_TURN_REMINDER),
@@ -4545,6 +4582,7 @@ mod tests {
             let prompt = format_default_prompt(
                 &bash_output_with_command(cmd, ""),
                 /* append_noop_reminder */ false,
+                None,
             );
             assert!(
                 !prompt.contains("<system-reminder>"),
@@ -4570,6 +4608,7 @@ mod tests {
             let prompt = format_default_prompt(
                 &bash_output_with_command(cmd, "hi\n"),
                 /* append_noop_reminder */ true,
+                None,
             );
             assert!(
                 !prompt.contains("<system-reminder>"),

@@ -42,6 +42,9 @@ pub struct RepairReport {
     /// Synthetic `tool` messages inserted for calls missing from a partially
     /// answered declaration.
     pub synthetic_results: usize,
+    /// 0dq P0-2：侧车模式下「整条声明都没回应」的调用按事实补回结果的数量
+    /// （`stripped_calls` 与它互斥——前者是 journal 重建口径的剥离）。
+    pub unrecovered_calls: usize,
     /// Orphan or duplicate `tool` messages removed.
     pub dropped_orphan_results: usize,
 }
@@ -52,8 +55,22 @@ impl RepairReport {
             || self.stripped_calls > 0
             || self.dropped_empty_messages > 0
             || self.synthetic_results > 0
+            || self.unrecovered_calls > 0
             || self.dropped_orphan_results > 0
     }
+}
+
+/// 恢复来源：决定「整条声明都没回应」时的处置口径（0dq P0-2，2026-10-25）。
+///
+/// - [`RepairMode::Sidecar`]：侧车**存过**工具输出，没回应就是真中断——保留声明
+///   并按调用补一条事实化结果（`call_id` 在案、结果未知、副作用可能已发生），
+///   下一轮首帧因此能看到「上轮有个未回收调用」。
+/// - [`RepairMode::JournalRebuild`]：journal 重建**从不存**工具输出，整轮缺失是
+///   重建口径而非中断——按旧纪律剥离声明，避免把每一轮都说成失败。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepairMode {
+    Sidecar,
+    JournalRebuild,
 }
 
 /// Repair the assistant/tool pairing invariant in place.
@@ -62,7 +79,7 @@ impl RepairReport {
 /// immediately after an assistant declaration as its answers (the provider
 /// requires that adjacency). Any later `tool` message is an orphan and is
 /// removed.
-pub fn repair_tool_pairing(messages: &mut Vec<Message>) -> RepairReport {
+pub fn repair_tool_pairing(messages: &mut Vec<Message>, mode: RepairMode) -> RepairReport {
     let mut report = RepairReport::default();
     let mut repaired: Vec<Message> = Vec::with_capacity(messages.len());
     let mut index = 0usize;
@@ -80,17 +97,28 @@ pub fn repair_tool_pairing(messages: &mut Vec<Message>) -> RepairReport {
                 report.dropped_orphan_results += drop_unidentified_results(&mut results);
 
                 if results.is_empty() {
-                    // No result at all: keep the declaration only when it has
-                    // a body the model can still use; otherwise drop it.
-                    let mut stripped = message;
-                    report.stripped_declarations += 1;
-                    report.stripped_calls += stripped.tool_calls.len();
-                    stripped.tool_calls.clear();
-                    stripped.tool_call_id = None;
-                    if assistant_has_body(&stripped) {
-                        repaired.push(stripped);
+                    if mode == RepairMode::Sidecar {
+                        // 0dq P0-2：侧车存过工具输出——整条没回应即上一轮真中断。
+                        // 保留声明并补事实化结果（call_id 在案、结果未知、落盘副作用
+                        // 可能已发生）：既不冒充成功，也不让事实静默消失。
+                        repaired.push(message.clone());
+                        for call in &message.tool_calls {
+                            repaired.push(unrecovered_result(call));
+                            report.unrecovered_calls += 1;
+                        }
                     } else {
-                        report.dropped_empty_messages += 1;
+                        // journal 重建从不存工具输出，整轮缺失是重建口径而非中断：
+                        // 按旧纪律剥离，避免把每一段历史都说成失败。
+                        let mut stripped = message;
+                        report.stripped_declarations += 1;
+                        report.stripped_calls += stripped.tool_calls.len();
+                        stripped.tool_calls.clear();
+                        stripped.tool_call_id = None;
+                        if assistant_has_body(&stripped) {
+                            repaired.push(stripped);
+                        } else {
+                            report.dropped_empty_messages += 1;
+                        }
                     }
                     index = end;
                     continue;
@@ -185,6 +213,22 @@ fn synthetic_result(call: &ToolCall) -> Message {
     }
 }
 
+fn unrecovered_result(call: &ToolCall) -> Message {
+    Message {
+        role: Role::Tool,
+        content: format!(
+            "[上次 run 中断] 工具调用 `{}`（call_id={}）没有返回结果：上一轮在它执行期间终止，\
+             结果未知，落盘副作用可能已经发生（例如文件已写入或命令已跑完）。\
+             不要把它当作成功；如仍需要该事实，请重新调用或先核验工作区当前状态。",
+            call.name, call.call_id
+        ),
+        tool_call_id: Some(call.call_id.clone()),
+        tool_calls: Vec::new(),
+        reasoning_content: None,
+        round: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,7 +282,7 @@ mod tests {
             assistant("完成", &[]),
         ];
         let before = messages.clone();
-        let report = repair_tool_pairing(&mut messages);
+        let report = repair_tool_pairing(&mut messages, RepairMode::JournalRebuild);
         assert!(!report.changed(), "{report:?}");
         assert_eq!(messages, before);
     }
@@ -250,7 +294,7 @@ mod tests {
             assistant("", &[("read_file", "c1"), ("bash", "c2")]),
             assistant("完成报告", &[]),
         ];
-        let report = repair_tool_pairing(&mut messages);
+        let report = repair_tool_pairing(&mut messages, RepairMode::JournalRebuild);
         assert_eq!(report.stripped_declarations, 1);
         assert_eq!(report.stripped_calls, 2);
         assert_eq!(report.dropped_empty_messages, 1);
@@ -266,11 +310,37 @@ mod tests {
             assistant("我先读文件。", &[("read_file", "c1")]),
             user("继续"),
         ];
-        let report = repair_tool_pairing(&mut messages);
+        let report = repair_tool_pairing(&mut messages, RepairMode::JournalRebuild);
         assert_eq!(report.stripped_declarations, 1);
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[1].content, "我先读文件。");
         assert!(messages[1].tool_calls.is_empty());
+    }
+
+    #[test]
+    fn sidecar_mode_keeps_unanswered_declaration_and_states_the_interruption() {
+        // 0dq P0-2：侧车存过工具输出，整条声明没回应＝上一轮真中断。
+        // 事实必须留在窗口里（call_id 在案），且不能被冒充成成功。
+        let mut messages = vec![
+            user("问题"),
+            assistant("", &[("run_terminal_cmd", "c1"), ("read_file", "c2")]),
+            assistant("完成报告", &[]),
+        ];
+        let report = repair_tool_pairing(&mut messages, RepairMode::Sidecar);
+        assert_eq!(report.unrecovered_calls, 2);
+        assert_eq!(report.stripped_calls, 0);
+        assert_eq!(messages.len(), 5);
+        assert_eq!(messages[1].tool_calls.len(), 2);
+        assert_eq!(messages[2].tool_call_id.as_deref(), Some("c1"));
+        assert_eq!(messages[3].tool_call_id.as_deref(), Some("c2"));
+        assert!(messages[2].content.contains("[上次 run 中断]"));
+        assert!(messages[2].content.contains("run_terminal_cmd"));
+        assert!(messages[2].content.contains("结果未知"));
+        // 幂等：修过一轮之后再跑不变（已配对的调用不再算未回收）。
+        let snapshot = messages.clone();
+        let again = repair_tool_pairing(&mut messages, RepairMode::Sidecar);
+        assert!(!again.changed(), "{again:?}");
+        assert_eq!(messages, snapshot);
     }
 
     #[test]
@@ -281,7 +351,7 @@ mod tests {
             tool("c1", "真实结果"),
             assistant("完成", &[]),
         ];
-        let report = repair_tool_pairing(&mut messages);
+        let report = repair_tool_pairing(&mut messages, RepairMode::JournalRebuild);
         assert_eq!(report.synthetic_results, 1);
         assert_eq!(messages.len(), 5);
         assert_eq!(messages[2].tool_call_id.as_deref(), Some("c1"));
@@ -301,7 +371,7 @@ mod tests {
             tool("other", "别人的"),
             assistant("完成", &[]),
         ];
-        let report = repair_tool_pairing(&mut messages);
+        let report = repair_tool_pairing(&mut messages, RepairMode::JournalRebuild);
         assert_eq!(report.dropped_orphan_results, 3);
         assert_eq!(
             messages
@@ -321,10 +391,10 @@ mod tests {
             tool("c1", "真实结果"),
             assistant("完成", &[]),
         ];
-        let first = repair_tool_pairing(&mut messages);
+        let first = repair_tool_pairing(&mut messages, RepairMode::JournalRebuild);
         assert!(first.changed());
         let snapshot = messages.clone();
-        let second = repair_tool_pairing(&mut messages);
+        let second = repair_tool_pairing(&mut messages, RepairMode::JournalRebuild);
         assert!(!second.changed(), "{second:?}");
         assert_eq!(messages, snapshot);
     }

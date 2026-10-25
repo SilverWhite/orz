@@ -4234,8 +4234,16 @@ impl AcpServer {
                 );
             }
         }
-        let tool_pairing =
-            crate::conversation_repair::repair_tool_pairing(&mut continuation.messages);
+        let tool_pairing = crate::conversation_repair::repair_tool_pairing(
+            &mut continuation.messages,
+            if reloaded_from_journal {
+                // journal 重建不存工具输出：整轮缺失按重建口径剥离（0dq P0-2）。
+                crate::conversation_repair::RepairMode::JournalRebuild
+            } else {
+                // 侧车存过输出：整轮没回应＝上一轮真中断，保留事实并补 call_id。
+                crate::conversation_repair::RepairMode::Sidecar
+            },
+        );
         if identity_migrated || reloaded_from_journal || tool_pairing.changed() {
             tracing::warn!(
                 session_id,
@@ -4706,7 +4714,10 @@ impl AcpServer {
         // 侧车可能由旧进程/旧归档写入，或 `session/new` 直接复用了坏侧车。
         // 修正在成功 run 后随 continuation 一并回写；失败 run 保持原侧车，
         // 下一轮再修（不丢事实）。
-        let tool_pairing = crate::conversation_repair::repair_tool_pairing(&mut conversation);
+        let tool_pairing = crate::conversation_repair::repair_tool_pairing(
+            &mut conversation,
+            crate::conversation_repair::RepairMode::Sidecar,
+        );
         if tool_pairing.changed() {
             tracing::warn!(
                 session_id,
@@ -10590,11 +10601,12 @@ mod tests {
             .await;
     }
 
-    /// 恢复修复钉子（真机 P0）：坏侧车里的 assistant tool_calls 没有
-    /// `tool` 回应时，下一次 prompt 绝不能再把它送进 provider——装载时
-    /// 剥离空声明，请求里的历史保持 provider-valid。
+    /// 恢复修复钉子（0dq P0-2 改判，2026-10-25）：坏侧车里的 assistant
+    /// tool_calls 没有 `tool` 回应时，装载**不再静默剥离**——按"上一轮真中断"
+    /// 补一条事实化结果（`call_id` 在案、结果未知），下一次 prompt 送进
+    /// provider 的是**成对**的历史：声明与其结果都在，provider-valid。
     #[tokio::test]
-    async fn dangling_tool_calls_from_sidecar_never_reach_the_provider() {
+    async fn dangling_tool_calls_from_sidecar_reach_provider_as_failed_fact() {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
@@ -10648,20 +10660,37 @@ mod tests {
 
                 let requests = fake.received_requests();
                 assert_eq!(requests.len(), 1);
+                let sent = &requests[0].messages;
+                let decl = sent
+                    .iter()
+                    .position(|m| !m.tool_calls.is_empty())
+                    .expect("悬挂声明应保留而非剥离");
+                let answer = &sent[decl + 1];
+                assert_eq!(answer.role, Role::Tool, "声明后必须紧跟其结果");
+                assert_eq!(answer.tool_call_id.as_deref(), Some("c1"));
                 assert!(
-                    requests[0].messages.iter().all(|m| m.tool_calls.is_empty()),
-                    "provider 请求不得含无回应的 tool_calls: {:?}",
-                    requests[0].messages
+                    answer.content.contains("[上次 run 中断]"),
+                    "结果须写明这是一次未回收的调用: {}",
+                    answer.content
                 );
                 let stored = load_conversation_sidecar(&base, "sess-dangle").expect("sidecar");
                 assert_eq!(
                     stored.messages.len(),
-                    4,
-                    "旧问答（声明已剥离）＋新问答共四条"
+                    6,
+                    "旧问答（声明＋事实结果）＋新问答共六条"
                 );
                 assert!(
-                    stored.messages.iter().all(|m| m.tool_calls.is_empty()),
-                    "空声明在装载/成功回写后不得复活"
+                    stored
+                        .messages
+                        .iter()
+                        .filter(|m| !m.tool_calls.is_empty())
+                        .all(|m| stored.messages.iter().any(|r| {
+                            r.role == Role::Tool
+                                && m.tool_calls
+                                    .iter()
+                                    .any(|c| r.tool_call_id.as_deref() == Some(c.call_id.as_str()))
+                        })),
+                    "回写后的历史必须保持调用/结果成对"
                 );
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -11997,12 +12026,18 @@ mod tests {
         assert_eq!(response["status"], "loaded");
         assert!(!package.exists(), "load 自动回档后归档包应移除");
         let stored = load_conversation_sidecar(&base, session).expect("materialized sidecar");
-        assert_eq!(stored.messages.len(), 2, "空声明被剥离");
+        // 0dq P0-2：归档里存过工具输出，整条没回应＝真中断——声明与事实结果
+        // 都保留（user / 声明 / 未回收结果 / 历史回答），不再是"空声明被剥离"。
+        assert_eq!(stored.messages.len(), 4, "声明＋未回收事实结果成对保留");
+        assert_eq!(stored.messages[1].tool_calls.len(), 1);
+        assert_eq!(stored.messages[2].role, Role::Tool);
+        assert_eq!(stored.messages[2].tool_call_id.as_deref(), Some("c1"));
         assert!(
-            stored.messages.iter().all(|m| m.tool_calls.is_empty()),
-            "装载修复后不得再有孤立 tool_calls"
+            stored.messages[2].content.contains("[上次 run 中断]"),
+            "未回收结果须写明中断事实: {}",
+            stored.messages[2].content
         );
-        assert_eq!(stored.messages[1].content, "历史回答");
+        assert_eq!(stored.messages[3].content, "历史回答");
 
         let _ = std::fs::remove_dir_all(&base);
     }
