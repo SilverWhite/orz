@@ -168,3 +168,26 @@
   唯一有效面是 P0-1（执行前落盘）＋P0-2（下一轮对账，已落），P0-3 只剩"车道是否同一 wrapper"的剩余核查。
 - `finish()` 收尾工具：八工具面冻结，暂由 `ORZ_TERMINAL_DECLARATION` 承载机器可读终态。
 
+### §9.7 P0-1 补批（2026-10-25 同日，已落码；orz `d5b16793`）
+
+- **回合级写前落盘**：`LoopHost` 增 `persist_conversation_checkpoint(&[Message], &TemporalSessionSnapshot, &Blackboard)`
+  （默认 no-op）；`agent_loop` 三个调用点——①**写前**：含 `tool_calls` 的 assistant 声明入列后、任何副作用发生前；
+  ②**串行回写**：每个工具结果入列后（逐调用粒度）；③**并行回写**：批次折回毕、`first_err` 上抛**前**（部分失败的
+  批次已折回结果同样入盘）。车道把关 `profile.role == AgentRole::Main`——检索子代理与主车道共用同一 host，其
+  `messages` 是车道本地会话，不挡则子代理轮会覆写主侧车；grill 车道 role 同 Main 但其宿主不装配 sink，天然隔离。
+- **宿主侧**：`OrzHost` 增 `ConversationCheckpointSink`＋`set_conversation_checkpoint_sink`；`handle_session_prompt`
+  在续接包 take-out 之后挂载闭包——捕获 `base_dir`／`session_id`／`session_started_at`／`recall_log`／负担档位／
+  刻度水位，沿 take-out 现场重建 `StoredConversation::full` 走 `persist_conversation_sidecar`（原子替换、墓碑跳过、
+  空跳过同族；撤回审计不因检查点覆盖清零）。写失败 `warn` 继续，绝不 fail run。
+- **语义修订（SUCCESS-ONLY → 检查点持久，限工具轮）**：失败 run 的已完成消息面就此入侧车——这正是事故修复面
+  （磁盘前进、对话必须同样前进）。纯文本失败 run 维持保 pre-run（零检查点；`failed_prompt_keeps_pre_run_conversation`
+  钉子加注边界）。`-p`／一次性车道（`headless_session_archive`，跨调用恢复本不开启）与 benchmark 车道不挂 sink，
+  行为零变化。
+- **测试三钉**：①集成 `conversation_checkpoints_fire_write_ahead_and_write_back`——写前切片以悬挂声明收尾（无任何
+  Tool 消息，证明先于执行）、回写切片含该 call_id 结果；②集成 `text_only_turn_fires_no_conversation_checkpoint`
+  ——纯文本轮零检查点（终答轴仍由 run 尾写承担，无写放大）；③host 端到端
+  `checkpoint_survives_tool_round_when_run_fails_before_terminal_persist`——脚本耗尽模拟硬杀：终态写被跳过，侧车
+  仍保留声明＋结果＋用户消息；重启装载后成对进 provider、`[上次 run 中断]` 事实注入不触发（结果已回写）。
+- 读数：`cargo test -p orz-loop` **908/0/3**＋`run_turn_integration` **4/4**；`cargo test -p orz-host --lib
+  -- --test-threads=1` **438/0/6**（437 → 438）；clippy 零新增；fmt 净。
+- P0-3 剩余核查（"车道是否同一 wrapper"）与 `finish()` 收尾工具仍未落（0dq 保持 open，计数 66 不变）。

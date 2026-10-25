@@ -1141,9 +1141,9 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **P1-2 交互侧**（2026-10-25 落码）：交互车道零 `[TERMINAL_NOTICE]`；benchmark 车道行为不变（`finish()` 工具未做，经 2026-10-25 裁决解冻后另行落）。
 - [x] **P2-1 RLI 推送面删除**（2026-10-25 落码）：工具结果尾部不再注入 `RLI提醒`；`mechanical_audit_update{rli_notice}` 仍落 journal（模型不可见）；拉取面 `blackboard_read section=rli` 不变。
 - [x] **时间基准统一北京时间**（2026-10-25 落码）：`orz-assurance/src/clock.rs`（固定 +08:00）＋21 处生产者改口径；历史 `events.jsonl` 不回写。
-- [ ] **P0-3 单工具无输出超时**：`tool_started` 后 N 秒无 stdout／心跳 → 补 `tool_completed(error)` 并交回模型；附命令体首 200 字与已捕获输出尾部。
-- [ ] **P0-2 悬挂调用事实注入**：不静默剥离；窗口头注入「上轮中断，未回收 `tool(call_id)`，结果未知、落盘副作用可能已发生」；需先确认各 provider 对「悬挂 tool_call 后接 user 消息」的容忍度。
-- [ ] **P0-1 回合级写前落盘**：assistant 轮含 `tool_calls` 先写 sidecar、结果回写一次；强杀 run 后 sidecar 至少保留到最后一个 `tool_completed`。
+- [ ] **P0-3 单工具无输出超时**：`tool_started` 后 N 秒无 stdout／心跳 → 补 `tool_completed(error)` 并交回模型；附命令体首 200 字与已捕获输出尾部。**取证改判**（2026-10-25，353 批档 §9.6）：host 已有默认 300s `tool_timeout` 且会落 `tool_completed{status:error}`，事故 run 末事件停在 `tool_started`、预算未走到即进程终止——进程内看门狗救不了此类事故；只剩「各车道是否同一 timeout wrapper」剩余核查。
+- [x] **P0-2 悬挂调用事实注入**（2026-10-25 落码，orz `3ddbf947`）：不静默剥离——`repair_tool_pairing` 增 `RepairMode` 分流（`Sidecar`＝真中断，声明与逐 call 事实化结果「`[上次 run 中断]` …结果未知、落盘副作用可能已发生」成对进 provider；`JournalRebuild` 维持剥离）；读数 orz-host 串行 437/0/6。
+- [x] **P0-1 回合级写前落盘**（2026-10-25 落码，orz `d5b16793`）：assistant 轮含 `tool_calls` 声明入列即检查点（副作用发生前）、工具结果逐调用回写、并行批次折回毕即落；`LoopHost.persist_conversation_checkpoint`（默认 no-op，子代理车道 role 把关）＋`OrzHost` sink（take-out 现场重建续接包，recall_log/负担档位/刻度水位随行）；纯文本失败 run 维持保 pre-run，`-p`／benchmark 车道零变化。读数 orz-loop 908/0＋集成 4/4、orz-host 串行 438/0/6。
 - [ ] **`finish(status, summary)` 收尾工具**（2026-10-25 用户裁决解冻工具面）：schema 可校验、幂等、不占正文；benchmark／headless／外部 ACP 车道使用。
 - 验收：①断 run 后侧车保留至最后 `tool_completed`；②下一轮首帧可见未回收调用事实；③挂死命令在 N 秒内可见失败；④交互轮次零 `[TERMINAL_NOTICE]`、不带标记的完整答复仍到达用户。
 - 边界：不动 benchmark 判分口径；`terminal_declaration` 只影响「是否要求」声明，不改解析与落账。
@@ -1154,7 +1154,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **设计定稿**（2026-10-25，354 批）：三层＝capabilities／inspect／Envelope v1；专项 §4.1–§4.8；复杂度预算 §7.5（每工具至多 1 行、每 run 至多 1 类注入、零新增模型工具）；分批 354a/b/c。
 - [x] **354a T1**（2026-10-25 落码）：`apply_child_env` 基础层加 `PYTHONIOENCODING=utf-8`／`PYTHONUTF8=1`／`PYTHONLEGACYWINDOWSSTDIO=0`，允许 login/request 层覆盖。
 - [x] **354a T2**（2026-10-25 落码）：终端回执独占一行 `[output] chars=… lines=… FFFD=…`；`exit: N` 头行不变；`cargo test -p orz-tools --lib bash` 237 passed。
-- [ ] **354a T4a**：工具结果补 `took=…s`（让模型知道静默时长过了多久）。
+- [x] **354a T4a**（2026-10-25 落码，orz `3ddbf947`）：工具结果补 `took=…s`（让模型知道静默时长过了多久）；`format_default_prompt` 增 `elapsed: Option<Duration>`，三读数同行补 `took=`（守「每工具至多 1 行」预算）；`cargo test -p orz-tools --lib bash` 238 passed。
 - [ ] **354a T4b**：`tool_started` 心跳 journal 行＋断 run 注入（与 0dq P0-2 同批）。
 - [ ] **354b**：`orz capabilities --json`／`inspect session|run|context|events`／Envelope v1＋grep 真游标（需抬读取预算到 `offset+limit` 并改 early-kill 记账）。
 - [ ] **354c**：读面沙箱撤销（读全开放、写面不动、敏感路径只提示）／审批模式可见／代码 outline（Rust/Python/TS-JS）／emoji 回执可解释。

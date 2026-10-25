@@ -1943,7 +1943,9 @@ S4＝报告已落，**计数同步已随提交批落地**。
 - 事故形状：`RUN-51da03ea-10/11/12` 三次全部卡在 `permission_decision → tool_started` 后事件流终止，无 `run_finished`／`run_cancelled`／`run_invalidated`；run 11 交付了 R9 §11（`tool_completed` exit 0、mtime 逐秒吻合）却整轮 11 个 model 轮未入侧车，下一次 run 从 run 9 现场起步——**磁盘前进了、对话没前进**。
 - 三层根因：①执行层——长 PowerShell here-string 未闭合时转 stdin 续行，工具永不返回；②持久化层——`persist_conversation_sidecar` 只在 run 终态族调用（`acp_server.rs:3642/4247/4943`），硬切时一条不落；③恢复层——加载路径对「有 tool_call 无结果」静默剥离（`acp_server.rs:10597` 的测试名即契约），下一轮连「上轮有个未回收调用」的事实都看不到。
 - 已落码（353 批，orz `eb805117`／父仓 `b6c7ee0c` 已推送）：P1-1 交付与收束解耦（无工具调用的文本无条件交付并落盘）、P1-2 交互侧（`ORZ_TERMINAL_DECLARATION` 缺省 off，`declaration_required_for` AND→OR）、P2-1（RLI 推送面删除，只留 `blackboard_read section=rli`）、§9.1 时间基准统一北京时间（`clock.rs`＋21 处生产者）。读数＝orz-loop 908/0/3、orz-host 串行 436/0/6。
-- 剩余（本项验收面）：**P0-1** 回合级写前落盘（assistant 轮含 tool_calls 先写 sidecar）／**P0-2** 悬挂调用不静默剥离、窗口头注入「上轮中断，未回收 `tool(call_id)`，结果未知、落盘副作用可能已发生」／**P0-3** 单工具无输出超时（`tool_started` 后 N 秒无 stdout/心跳 → 补 `tool_completed(error)` 交回模型）；**`finish(status, summary)` 收尾工具**经用户 2026-10-25 裁决解冻（八工具面冻结解除），与 P0 同批或紧随。
+- 已落码（P0-2 补批，2026-10-25 同日，orz `3ddbf947`）：悬挂调用不再静默剥离——`repair_tool_pairing` 增 `RepairMode`（`Sidecar`＝真中断，声明与逐 call 事实化结果成对进 provider；`JournalRebuild` 维持剥离），读数 orz-host 串行 437/0/6。
+- 已落码（P0-1 补批，2026-10-25 同日，orz `d5b16793`）：回合级写前落盘——`LoopHost.persist_conversation_checkpoint`（默认 no-op）＋`agent_loop` 三调用点（声明入列后写前／串行逐调用回写／并行批次折回毕回写，`profile.role==Main` 把关子代理车道）＋`OrzHost` sink（`handle_session_prompt` take-out 后挂载，recall_log／负担档位／刻度水位随行重建续接包）；语义修订 SUCCESS-ONLY → 检查点持久（限工具轮；纯文本失败 run 维持保 pre-run；`-p`／benchmark 车道不挂 sink 零变化）。读数＝orz-loop 908/0＋集成 4/4、orz-host 串行 438/0/6。
+- 剩余（本项验收面）：**P0-3** 取证已改判（353 批档 §9.6：host 300s `tool_timeout` 在位且会落账，事故 run 预算未走到即进程终止——进程内看门狗救不了，只剩「各车道是否同一 wrapper」核查）／**`finish(status, summary)` 收尾工具**经用户 2026-10-25 裁决解冻（八工具面冻结解除），与 P0 同批或紧随。
 - 边界：`terminal_declaration` 只影响「是否要求」声明，不改变解析与落账；benchmark／headless 车道行为不变。入口：[`353 批档`](audits/353_TURN_ATOMICITY_AND_TERMINAL_CONTRACT_2026-10-25.md) ／ TODO `P1-0dq`。
 
 ### 0dr. 系统控制台（SYSTEM-CONSOLE-CAPABILITIES-INSPECT-ENVELOPE）（P1；2026-10-25 用户令立项，354 批；65 → 66；来源＝用户令「当前内部有没有什么其他你想修改的地方或者摩擦？我想做的是那种通用化的、特别方便模型使用和上手的『系统控制台』；按你的判断和建议做，先落一份设计文档」）
@@ -1951,7 +1953,7 @@ S4＝报告已落，**计数同步已随提交批落地**。
 - 诊断：摩擦的根不是命令不够多，是**每个面的形状不一样**——`read_file` 有 sha/range 信封、`grep` 只给 "at least"、`run_terminal_cmd` 只给裸 stdout、`blackboard_read` 自有折叠语义、`events.jsonl` 又是另一套；模型每换一个面就要重新学一遍返回形状。
 - 三层：**capabilities**（`orz capabilities --json`，能力清单作为 help／guide 单一来源）→ **inspect**（`session`／`run`／`context`／`events` 四个只读诊断面，零审批零副作用）→ **Envelope v1**（`ok/data/meta{chars,lines,encoding,truncated,next_cursor,sha256,took_ms}` 全面共用，`next_cursor` 为唯一分页语义）。
 - 分批：**354a**＝终端编码（启动器代码页＋三读数）／grep 分页／机械探查反馈；**354b**＝capabilities／inspect 族／Envelope v1（含 grep 真游标：现实现于 `head_limit` 处提前 kill rg，要 `offset` 必须抬读取预算并改 early-kill 记账）；**354c**＝读面沙箱撤销（用户已裁决方向：读全开放、写面不动、敏感路径只提示）／审批模式可见／代码 outline／emoji 回执可解释。
-- 已落码（354a 部分，orz `f623fbfb`）：T1 子进程 `PYTHONIOENCODING`／`PYTHONUTF8`／`PYTHONLEGACYWINDOWSSTDIO`；T2 终端回执 `[output] chars/lines/FFFD` 独立行。未落：T4a（`took=…s`）、T4b（`tool_started` 心跳＋断 run 注入，与 0dq P0-2 同批）、354b／354c 全部。
+- 已落码（354a 部分，orz `f623fbfb`／`3ddbf947`）：T1 子进程 `PYTHONIOENCODING`／`PYTHONUTF8`／`PYTHONLEGACYWINDOWSSTDIO`；T2 终端回执 `[output] chars/lines/FFFD` 独立行；T4a 工具结果补 `took=…s`（bash 238 passed）。未落：T4b（`tool_started` 心跳 journal 行；断 run 事实注入已随 0dq P0-2 落）、354b／354c 全部。
 - 预算（用户约束）：每条机械补强须满足「减负」或「暴露失败」至少一项；每工具结果至多追加 1 行、每 run 至多新增 1 类注入、零新增模型调用、零新增模型工具。入口：[`354 设计稿`](SYSTEM_CONSOLE_DESIGN_2026-10-25.md) ／ TODO `P1-0dr`。
 
 ## P2 — 生产化决策门
