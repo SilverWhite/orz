@@ -2308,6 +2308,7 @@ export const __testHooks = {
   detachBinding,
   resyncBusyState,
   onBridgeAttached,
+  onLiveJournalEvent,
   orderedSessionRuns,
   latestSessionRun,
   runSequence,

@@ -2314,6 +2314,67 @@ assert.ok(connBanner.textContent.includes('有运行在进行'), '409 必须显�
 assert.ok(connBanner.textContent.includes('等本轮结束'), '409 必须显示可行动 hint');
 console.log('ok  16.10 工作区切换：重连新根＋旧会话留旧区＋409 显示 message/hint');
 
+// 16.11 取消兜底（334 §4.10）：停止必须装配精确 30s timer；到点时本地
+// 状态收敛为空闲并给出 journal 边界提示；若终态先到，timer 必须撤销，
+// 不能在已收敛后再发一条误导性的超时提示。
+assert.equal(typeof hooks.onLiveJournalEvent, 'function', '必须可从冒烟钩子注入实时 journal 终态');
+const nativeSetTimeout = globalThis.setTimeout;
+const nativeClearTimeout = globalThis.clearTimeout;
+let nextFakeTimer = 1;
+const cancelTimers = new Map();
+globalThis.setTimeout = (fn, ms, ...args) => {
+  if (ms !== 30000) return nativeSetTimeout(fn, ms, ...args);
+  const id = { fakeCancelTimer: nextFakeTimer++ };
+  cancelTimers.set(id, { fn, active: true });
+  return id;
+};
+globalThis.clearTimeout = (id) => {
+  const timer = cancelTimers.get(id);
+  if (timer) {
+    timer.active = false;
+    return;
+  }
+  nativeClearTimeout(id);
+};
+try {
+  resetView();
+  hooks.setBinding('c0ffee00-1111-2222-3333-444455556666', 'D:\\CLI\\orz');
+  state.serverBusy = true;
+  vm.setRunning(true);
+  const cancelsBefore = methodCalls('session/cancel').length;
+  ui.stopRun();
+  assert.equal(methodCalls('session/cancel').length, cancelsBefore + 1, '停止必须先发 session/cancel');
+  const firstTimer = [...cancelTimers.values()].at(-1);
+  assert.ok(firstTimer?.active, '停止必须装配 30s 取消兜底 timer');
+  firstTimer.fn();
+  assert.equal(state.running, false, '取消 30s 未收敛时必须复位本地 running');
+  assert.equal(state.serverBusy, false, '取消 30s 未收敛时必须清 serverBusy');
+  assert.ok(
+    messageTexts().some((t) => t.includes('取消后 30 秒仍未收敛') && t.includes('journal')),
+    '取消超时必须提示本地复位与 journal 真相边界',
+  );
+
+  resetView();
+  state.serverBusy = true;
+  vm.setRunning(true);
+  ui.stopRun();
+  const lateTimer = [...cancelTimers.values()].at(-1);
+  assert.ok(lateTimer?.active, '第二次停止同样装配 timer');
+  hooks.onLiveJournalEvent({ event_type: 'run_cancelled', payload: { status: 'cancelled' } });
+  assert.equal(lateTimer.active, false, '终态先到时必须撤销 30s timer');
+  const timeoutNotices = messageTexts().filter((t) => t.includes('取消后 30 秒仍未收敛')).length;
+  if (lateTimer.active) lateTimer.fn();
+  assert.equal(
+    messageTexts().filter((t) => t.includes('取消后 30 秒仍未收敛')).length,
+    timeoutNotices,
+    '已撤销 timer 不得在晚到阶段追加超时提示',
+  );
+} finally {
+  globalThis.setTimeout = nativeSetTimeout;
+  globalThis.clearTimeout = nativeClearTimeout;
+}
+console.log('ok  16.11 cancel fallback 30s 收敛＋终态先到撤销 timer');
+
 /* ── 17. 338（2026-10-22 真机 c23e0aaa）：回档压平 mtime 后的会话顺序 ── */
 // 17.1 合并回放必须按 run 序号铺开，不得相信 /api/runs 的 mtime 顺序。
 // 真机：24 个 journal 的 mtime 被「回档」压到 44 ms 内（16 个不同值），服务端
