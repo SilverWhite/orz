@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/tool-heartbeat-event-payload-v0.2.schema.json",
+  "title": "tool_heartbeat event payload (Rust track, v0.2)",
+  "description": "354a T4b（0dr，2026-10-25，SYSTEM_CONSOLE_DESIGN §4.5①/§7.5 预算内）：在途工具墙钟心跳——tool_started 后每 N 秒（默认 20s，ORZ_TOOL_HEARTBEAT_SECS 可调，0=禁用）若无完成事实即落一条，使「启动即静默」的挂死工具在 journal 留下活跃度轨迹（B 暴露失败；模型面零注入）。无法官族、无 Python 镜像新族（prompt_submitted／supplement_delivered 同姿态，非机制事件）：每 call_id 多条合法（每节拍一条，跳过 elapsed≈0 的首 tick），invariant（elapsed_ms 单调不减、call_id 与其 tool_started 同键）由 orz-loop 单元钉承载；时间线投影（inspect run，354b）按 started→heartbeats→completed 聚合为「已运行 Ns」。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool",
+    "call_id",
+    "elapsed_ms"
+  ],
+  "properties": {
+    "tool": {
+      "type": "string",
+      "minLength": 1,
+      "description": "在途工具名（与同 call_id 的 tool_started.tool 同键）。"
+    },
+    "call_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "在途调用 id（与同 call_id 的 tool_started.call_id 同键）。"
+    },
+    "elapsed_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "自 tool_started 起的墙钟毫秒（单调不减；间隔≈节拍）。"
+    }
+  }
+}

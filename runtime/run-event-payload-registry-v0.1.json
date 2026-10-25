@@ -309,6 +309,10 @@
       "supplement_delivered": {
         "schema": "runtime/supplement-delivered-event-payload-v0.2.schema.json",
         "slug": "supplement-delivered"
+      },
+      "tool_heartbeat": {
+        "schema": "runtime/tool-heartbeat-event-payload-v0.2.schema.json",
+        "slug": "tool-heartbeat"
       }
     }
   },

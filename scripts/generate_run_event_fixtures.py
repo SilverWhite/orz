@@ -3165,6 +3165,34 @@ PAYLOAD_BAD_V02["supplement_delivered"] = {
 }
 
 
+# ── 354a T4b tool_heartbeat (0dr, 2026-10-25) ──
+# 在途工具墙钟心跳（SYSTEM_CONSOLE_DESIGN §4.5①）：journal-only 中性事实，
+# 无法官族、无 Python 镜像新族（prompt_submitted／supplement_delivered 同
+# 姿态）。注册即成为 registry 硬门成员（conformance 未注册即校验失败）。
+V02_EVENT_TYPES += ["tool_heartbeat"]
+V02_PAYLOAD_EVENTS += ["tool_heartbeat"]
+SLUGS_V02.update({
+    "tool_heartbeat": "tool-heartbeat",
+})
+V02_ENVELOPE_IDENTITY_OVERRIDES.update({
+    # Committed envelope identity pinned for byte-identical regeneration.
+    "tool_heartbeat": ("RUN-CONF-TOOL-HEARTBEAT", None, None),
+})
+
+PAYLOAD_GOOD_V02["tool_heartbeat"] = {
+    "tool": "run_terminal_cmd",
+    "call_id": "call_00_HEARTBEAT01",
+    "elapsed_ms": 40_012,
+}
+
+PAYLOAD_BAD_V02["tool_heartbeat"] = {
+    # violates exactly one constraint: elapsed_ms must be an integer ≥ 0.
+    "tool": "run_terminal_cmd",
+    "call_id": "call_00_HEARTBEAT01",
+    "elapsed_ms": -1,
+}
+
+
 def _envelope(event_type: str, payload: dict, sequence: int, previous: str | None) -> dict:
     return {
         "schema_version": "0.1.0-draft",

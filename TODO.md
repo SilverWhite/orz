@@ -1141,7 +1141,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **P1-2 交互侧**（2026-10-25 落码）：交互车道零 `[TERMINAL_NOTICE]`；benchmark 车道行为不变（`finish()` 工具未做，经 2026-10-25 裁决解冻后另行落）。
 - [x] **P2-1 RLI 推送面删除**（2026-10-25 落码）：工具结果尾部不再注入 `RLI提醒`；`mechanical_audit_update{rli_notice}` 仍落 journal（模型不可见）；拉取面 `blackboard_read section=rli` 不变。
 - [x] **时间基准统一北京时间**（2026-10-25 落码）：`orz-assurance/src/clock.rs`（固定 +08:00）＋21 处生产者改口径；历史 `events.jsonl` 不回写。
-- [ ] **P0-3 单工具无输出超时**：`tool_started` 后 N 秒无 stdout／心跳 → 补 `tool_completed(error)` 并交回模型；附命令体首 200 字与已捕获输出尾部。**取证改判**（2026-10-25，353 批档 §9.6）：host 已有默认 300s `tool_timeout` 且会落 `tool_completed{status:error}`，事故 run 末事件停在 `tool_started`、预算未走到即进程终止——进程内看门狗救不了此类事故；只剩「各车道是否同一 timeout wrapper」剩余核查。
+- [x] **P0-3 单工具无输出超时**（2026-10-25 wrapper 核查收口，354 落码批）：**取证改判**（353 批档 §9.6）之上剩余核查完成——全部 loop 车道本就收敛同一 wrapper（loop select！＋host 统一窗 `tokio::time::timeout`）；唯一缺口＝host 侧 4 条早退特例（project_doc_index/browser_read/browser_control/pdf_read/web_fetch-PDF 路由）在统一窗前 return，已补 `bounded_host_owned` 同预算同错误形状（无子进程树不杀树只解卡）；run_tests 独立 30min 预算 by-design。300s 预算在位且全车道覆盖（0dq 验收③达成）。
 - [x] **P0-2 悬挂调用事实注入**（2026-10-25 落码，orz `3ddbf947`）：不静默剥离——`repair_tool_pairing` 增 `RepairMode` 分流（`Sidecar`＝真中断，声明与逐 call 事实化结果「`[上次 run 中断]` …结果未知、落盘副作用可能已发生」成对进 provider；`JournalRebuild` 维持剥离）；读数 orz-host 串行 437/0/6。
 - [x] **P0-1 回合级写前落盘**（2026-10-25 落码，orz `d5b16793`）：assistant 轮含 `tool_calls` 声明入列即检查点（副作用发生前）、工具结果逐调用回写、并行批次折回毕即落；`LoopHost.persist_conversation_checkpoint`（默认 no-op，子代理车道 role 把关）＋`OrzHost` sink（take-out 现场重建续接包，recall_log/负担档位/刻度水位随行）；纯文本失败 run 维持保 pre-run，`-p`／benchmark 车道零变化。读数 orz-loop 908/0＋集成 4/4、orz-host 串行 438/0/6。
 - [ ] **`finish(status, summary)` 收尾工具**（2026-10-25 用户裁决解冻工具面）：schema 可校验、幂等、不占正文；benchmark／headless／外部 ACP 车道使用。
@@ -1155,9 +1155,10 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **354a T1**（2026-10-25 落码）：`apply_child_env` 基础层加 `PYTHONIOENCODING=utf-8`／`PYTHONUTF8=1`／`PYTHONLEGACYWINDOWSSTDIO=0`，允许 login/request 层覆盖。
 - [x] **354a T2**（2026-10-25 落码）：终端回执独占一行 `[output] chars=… lines=… FFFD=…`；`exit: N` 头行不变；`cargo test -p orz-tools --lib bash` 237 passed。
 - [x] **354a T4a**（2026-10-25 落码，orz `3ddbf947`）：工具结果补 `took=…s`（让模型知道静默时长过了多久）；`format_default_prompt` 增 `elapsed: Option<Duration>`，三读数同行补 `took=`（守「每工具至多 1 行」预算）；`cargo test -p orz-tools --lib bash` 238 passed。
-- [ ] **354a T4b**：`tool_started` 心跳 journal 行＋断 run 注入（与 0dq P0-2 同批）。
-- [ ] **354b**：`orz capabilities --json`／`inspect session|run|context|events`／Envelope v1＋grep 真游标（需抬读取预算到 `offset+limit` 并改 early-kill 记账）。
-- [ ] **354c**：读面沙箱撤销（读全开放、写面不动、敏感路径只提示）／审批模式可见／代码 outline（Rust/Python/TS-JS）／emoji 回执可解释。
+- [x] **354a T4b**（2026-10-25 落码，354 落码批）：断 run 注入已随 P0-2；`tool_heartbeat` journal 行全链——EventType 变体＋等待循环心跳臂（缺省 20s，`ORZ_TOOL_HEARTBEAT_SECS` 可调 0=禁用）＋父仓契约面（payload schema/registry/信封枚举/fixture，「无法官族」同 prompt_submitted 姿态，Python 合规 17/17）；模型面零注入。
+- [x] **354b**（2026-10-25 落码，354 落码批）：grep 真游标（`offset` 参数＋读取预算 offset+limit＋`[page] total/shown/next_cursor` trailer，分页钉不重不漏）；`orz-host/src/inspect.rs` 四面（session/run/context/events，只读投影＋Envelope v1 信封＋分页游标）；`orz capabilities`（risk_class 机械分档，人读/--json 双形态）。边界：Envelope 对模型工具面（read_file/terminal/blackboard_read）的整面字段统一登记 0dr 剩余边界（三面已有等价 meta，信息等价）。
+- [x] **354c**（2026-10-25 落码，354 落码批）：读面沙箱撤销（`is_path_allowed_for_read` 单点放行 workspace 外；会话卷窗口契约不动）＋`[敏感面]` 提示（.ssh/.aws/.env*/*.pem/*.key/keystore 只提示不拦截）；outline 四族语言（Rust/Python/TS-JS/Markdown）；emoji 回执 `U+码点@行`（样本 8 条封顶）；审批模式可见（`[permission] mode=… source=…` 每 run 一行拼系统提示，build_host 装配）。测试翻转八例（旧「必须拒」钉改判开放）。
+- [ ] **Envelope v1 模型工具面统一**（354 落码批登记边界，0dr 闭合随此待用户裁决）：read_file／run_terminal_cmd／blackboard_read 的结果信封字段对齐 Envelope v1——三面已有等价 meta（ReadHandle 信封／`[output]` 三读数＋`[page]`／折叠语义），信息等价、纯形状统一；§7.5 预算下不冒险热路径，独立小批落。
 - 验收：`inspect run --json` 与 `events.jsonl` 逐条可对；grep 超限输出含 `total`＋`next_cursor` 且续页不重不漏；`python -c "print('中文')"` 回执 `FFFD=0`；断 run 后下一轮首帧含 `[上次 run 中断]`；读工作区外路径不再 `escapes workspace sandbox`。
 - 边界：新增诊断只走 `inspect` 子命令，不进模型工具面；时间轴只投影机械事实、不做模型推断；不把 RLI 重新做成推送面。
 - 入口：[`354 设计稿`](docs/SYSTEM_CONSOLE_DESIGN_2026-10-25.md) / BACKLOG `0dr`。

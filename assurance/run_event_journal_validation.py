@@ -32,9 +32,11 @@ parseability and `schema_version` are NOT checked beyond the envelope schema
 itself plus the chain rules.
 
 Single registry authority (Task D S3 flip, 2026-09-06): the mapping lives in
-`runtime/run-event-payload-registry-v0.1.json` (v01=34 / v02=42; 2026-10-19
+`runtime/run-event-payload-registry-v0.1.json` (v01=34 / v02=43; 2026-10-19
 318 P0-1/P1-D7 修复批校准——0df `run_usage_metered` 与 0di
-`supplement_delivered` 入库后 v02=42，旧注 41 系 288 处置批后的陈旧读数); the
+`supplement_delivered` 入库后 v02=42，旧注 41 系 288 处置批后的陈旧读数;
+2026-10-25 354a T4b `tool_heartbeat`（0dr 心跳，无法官族同
+prompt_submitted 姿态）入库后 v02=43); the
 `PAYLOAD_SCHEMA_BY_EVENT_TYPE(_V02)` dicts below are import-time derived
 views consumed by this module, `runtime/tests/test_run_event_conformance.py`
 and `scripts/check_repository.py`. The former export script

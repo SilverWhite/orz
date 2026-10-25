@@ -201,3 +201,5 @@
 - **T4 拆分**：T4a＝工具结果里补"静默时长"（`took=…s`，让模型知道那段时间过了多久）；T4b＝`tool_started` 心跳 journal 行与断 run 注入（跨 host/loop）。T4a 可独立落，T4b 与 353 的 P0-2 同批。
 - **T4a 已落码**：`format_default_prompt` 增 `elapsed: Option<Duration>`，三读数同行补 `took=…s`（守住"每工具至多追加 1 行"预算）；`BashTool::run` 传 `run_started_at.elapsed()`。`cargo test -p orz-tools --lib bash` **238 passed / 0 failed**（新增 `default_prompt_reports_took_when_elapsed_is_known`）。
 - **T4b 状态更新**：断 run 事实注入已随 353 P0-2 落码（`RepairMode::Sidecar` → `[上次 run 中断]` 结果）；`tool_started` 心跳 journal 行仍未做。
+
+**354 落码批（2026-10-25，[`354A_B_C 落码批档`](audits/354A_B_C_SYSTEM_CONSOLE_IMPL_2026-10-25.md)）**：T4b＋354b＋354c 全落——`tool_heartbeat` 心跳全链（默认 20s，`ORZ_TOOL_HEARTBEAT_SECS`，无法官族同 prompt_submitted 姿态，Python 合规 17/17）；grep 真游标（`offset`＋读取预算 offset+limit＋`[page]` trailer，模型面 total 预算截断时为 ≥ 下界——精确 total 属 workspace 服务端路径）；inspect 四面＋`orz capabilities`（Envelope v1 首批公民）；读面沙箱撤销＋`[敏感面]` 提示（会话卷窗口契约不动）；outline 四族语言；emoji `U+码点@行`；审批 `[permission]` 行。附带：P0-3 wrapper 收口（0dq）、350 批遗留 parity 断管修复。边界：Envelope 对模型工具面的整面字段统一登记 0dr 剩余（read_file/terminal/blackboard_read 已有等价 meta，信息等价）；载体未重建（用户令）。

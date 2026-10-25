@@ -362,7 +362,10 @@ class RunEventV02ContractTests(unittest.TestCase):
         （`_PAYLOAD_SCHEMAS` / `_PAYLOAD_SCHEMAS_V02`，单源
         `runtime/run-event-payload-registry-v0.1.json`）与 envelope schema
         enum 派生，不再硬编码计数；registry 与 enum 任何一侧漂移都会在此
-        失败，而不是靠人工记得改钉值。"""
+        失败，而不是靠人工记得改钉值。
+        354a T4b 在途工具墙钟心跳（2026-10-25，0dr / SYSTEM_CONSOLE_DESIGN
+        §4.5①）：+tool_heartbeat。69 → 70（无法官族同 prompt_submitted
+        姿态）。"""
         schema = load_json(RUN_EVENT_SCHEMA_V02)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {
