@@ -1104,11 +1104,10 @@ mod tests {
         turn
     }
 
-    /// §14.90 条 3（0do/344 批，2026-10-23）测试臂：代表「真 codex 客户端」
-    /// 应答审批——读到 `approval/request` 即回 `allow_once` 并计数，其余消
-    /// 息直通；读到 `turn/completed` 返回其状态。Windows confirm-first 缺省
-    /// 下 workspace-write 线程的订单走审批线并由此执行；非 Windows 维持初
-    /// 始 yolo（审批计数为 0，助手原样直通）。
+    /// 测试排水泵（0do/344 批引入；0dp/348 批起语义：§14.91 缺省 yolo 下
+    /// 审批计数恒 0、助手原样直通——显式 confirm-first 通路若有在途审批，
+    /// 代表「真 codex 客户端」读到 `approval/request` 即回 `allow_once`
+    /// 并计数，其余消息直通；读到 `turn/completed` 返回其状态。
     async fn answer_approvals_until_turn_completed(
         w: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>,
         r: &mut BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
@@ -1639,11 +1638,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn workspace_write_order_executes_and_journals_following_1490() {
-        // 缺省审批姿态钉（0do/344 批，ADR-0010 §14.90 条 3）：workspace-write
-        // 线程的终端订单——Windows 缺省 confirm-first，approval/request 上线
-        // 由（测试具代答的）客户端 allow_once 后执行；非 Windows 维持初始
-        // yolo（零审批、直执行）。两臂下工具都真实执行并照常落 journal。
+    async fn workspace_write_order_executes_and_journals_following_1491() {
+        // 缺省审批姿态钉（0dp/348 批 S1 定稿，ADR-0010 §14.91 条 1；第三轮
+        // 改写——344 批 §14.90 条 3 的 confirm-first 缺省被取代）：
+        // workspace-write 线程的终端订单双平台零审批、直执行（§14.91
+        // 全车道缺省 yolo；显式 `--no-yolo`/`ORZ_YOLO=0` 是唯一的
+        // confirm-first 通路）。工具真实执行并照常落 journal。
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
@@ -1662,10 +1662,9 @@ mod tests {
                 )
                 .await
                 .expect("turn terminates");
-                let expected_approvals = u32::from(cfg!(windows));
                 assert_eq!(
-                    approval_count, expected_approvals,
-                    "windows confirm-first prompts once; non-windows yolo prompts never (§14.90)"
+                    approval_count, 0,
+                    "default posture auto-approves on every platform (§14.91)"
                 );
                 assert_eq!(status, "completed", "run must complete");
 
@@ -1776,9 +1775,9 @@ mod tests {
     #[tokio::test]
     async fn read_only_and_workspace_write_threads_coexist() {
         // One server, two threads with different sandboxes: the
-        // workspace-write thread executes（Windows：confirm-first 缺省下经
-        // 一次审批应答后执行——ADR-0010 §14.90；非 Windows：初始 yolo 直接
-        // 执行）; the read-only thread's same-class tool is denied by
+        // workspace-write thread executes（§14.91：双平台缺省 yolo 直接
+        // 执行——0dp/348 批第三轮改写，confirm-first 缺省退役）; the
+        // read-only thread's same-class tool is denied by
         // policy before the manager sees it——该 deny 在任一平台都不出
         // 审批线。
         tokio::task::LocalSet::new()
@@ -1813,10 +1812,9 @@ mod tests {
                 run_turn(&mut w, &mut r, "thr_ww", "二").await;
 
                 // Drain to both terminals; the responder below is a
-                // load-bearing path, not a defensive net（Windows：ww 线程
-                // 恰一次审批经其应答，ro 线程 policy deny 零审批；非
-                // Windows：零审批维持 yolo）——unexpected extra approvals
-                // would still mean a default regression.
+                // load-bearing path, not a defensive net（§14.91：ww 线程
+                // 缺省 yolo 零审批，ro 线程 policy deny 零审批；unexpected
+                // extra approvals would still mean a default regression）.
                 let mut approvals: Vec<JsonMessage> = Vec::new();
                 let mut completed = 0u32;
                 tokio::time::timeout(TURN_WAIT, async {
@@ -1844,9 +1842,9 @@ mod tests {
                 .expect("both turns complete");
                 assert_eq!(
                     approvals.len(),
-                    usize::from(cfg!(windows)),
-                    "§14.90: windows confirm-first prompts once (ww thread order); \
-                     non-windows yolo and the ro-thread policy deny prompt never"
+                    0,
+                    "§14.91: default yolo and the ro-thread policy deny prompt never, \
+                     on every platform"
                 );
 
                 // Journals: the read-only thread never started its tool;
@@ -1880,15 +1878,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn workspace_write_identical_orders_follow_1490_posture() {
+    async fn workspace_write_identical_orders_follow_1491_posture() {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
                 // Two identical workspace orders (same command args) —
-                // §14.90 姿态钉（0do/344 批）：Windows confirm-first 缺省下
-                // 每单各走一次审批线（remember_tool_approvals=false，无持久
-                // 授予可乘），测试具逐单 allow_once 后照常执行；非 Windows
-                // 维持初始 yolo（零审批双执行）。
+                // §14.91 姿态钉（0dp/348 批 S1 定稿；第三轮改写）：双平台
+                // 缺省 yolo 零审批双执行（remember_tool_approvals=false
+                // 边界不变——显式 confirm-first 下每单仍各走一次审批线的
+                // 断言随 §14.90 缺省退役，该形态由 `--no-yolo` 用户面承载）。
                 let script = vec![
                     ScriptedResponse::tool_calls(vec![terminal_call("dir", "call-act-1")]),
                     ScriptedResponse::tool_calls(vec![terminal_call("dir", "call-act-2")]),
@@ -1912,9 +1910,8 @@ mod tests {
                 .expect("turn terminates");
                 assert_eq!(status, "completed");
                 assert_eq!(
-                    wire_approvals,
-                    u32::from(cfg!(windows)) * 2,
-                    "windows confirm-first prompts per order; non-windows yolo prompts never (§14.90)"
+                    wire_approvals, 0,
+                    "default posture auto-approves every order on every platform (§14.91)"
                 );
                 let events = journal_events(&base, "thr_always", 0);
                 // 两笔直连终端调用都真实执行（tool_completed 带 exit_code=0）。

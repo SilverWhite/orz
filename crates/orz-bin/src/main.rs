@@ -21,6 +21,12 @@ mod argv_scrub;
 /// 可见面（argv/env）随即可擦写（见 `argv_scrub`）；此后派生 shell 不可见。
 static MAX_WALLCLOCK_INPUT: OnceLock<Option<String>> = OnceLock::new();
 
+/// 0dp S2（2026-10-25，§14.91 条 2）：main() 旗扫描的显式裁决
+/// （`Some(true)`＝`--yolo`、`Some(false)`＝`--no-yolo`、`None`＝未给旗），
+/// 供 `permission_mode_banner` 把解析姿态归因到旗而不是被旗桥覆写过的
+/// env。进程内静态、不随进程树继承（形态同 `MAX_WALLCLOCK_INPUT`）。
+static YOLO_FLAG_INPUT: OnceLock<Option<bool>> = OnceLock::new();
+
 use orz_host::session::{SessionHandle, bootstrap_session};
 use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
 use orz_loop::gateway::model::{Message, ModelGateway, ToolCall};
@@ -49,6 +55,36 @@ fn parse_benchmark_flags(args: &[String]) -> Result<(bool, bool), String> {
         );
     }
     Ok((allow_shell, allow_network))
+}
+
+/// 0dp S2（ADR-0010 §14.91 条 2，348 批 S1 定稿 2026-10-25）：审批姿态
+/// 显式旗解析。只接受无值精确形式 `--yolo` / `--no-yolo`（`=value` 形式
+/// 显式报错，`--allow-*` 家规）；二者同现报错（矛盾指令不允许「后到者
+/// 赢」）。返回 `None`＝未给旗（env/缺省决定姿态）、`Some(true)`＝
+/// `--yolo`、`Some(false)`＝`--no-yolo`。
+fn parse_yolo_flags(args: &[String]) -> Result<Option<bool>, String> {
+    if args
+        .iter()
+        .any(|a| a.starts_with("--yolo=") || a.starts_with("--no-yolo="))
+    {
+        return Err(
+            "--yolo/--no-yolo take no value (use --yolo / --no-yolo, or \
+             ORZ_YOLO env: 1/true/yes/on enable, 0/false/no/off disable)"
+                .to_string(),
+        );
+    }
+    let yolo = args.iter().any(|a| a == "--yolo");
+    let no_yolo = args.iter().any(|a| a == "--no-yolo");
+    if yolo && no_yolo {
+        return Err("--yolo and --no-yolo are mutually exclusive".to_string());
+    }
+    Ok(if yolo {
+        Some(true)
+    } else if no_yolo {
+        Some(false)
+    } else {
+        None
+    })
 }
 
 /// 318 审查 P0-3（2026-10-19）：桥专用维护子命令的能力令牌 env 键。
@@ -290,6 +326,42 @@ fn main_inner() {
             std::process::exit(2);
         }
     }
+    // 0dp S2 (2026-10-25, ADR-0010 §14.91 条 2): `--yolo` / `--no-yolo`
+    // (all entries, before any subcommand dispatch) → ORZ_YOLO (precedent:
+    // `--allow-write` → ORZ_ALLOW_WRITE). Fail-closed: `=value` 形式与
+    // 双旗同现显式报错 exit 2；显式旗覆写外层 env（旗＞env＞缺省的
+    // 优先级由桥式自然成立）。装配单一源在 orz-host
+    // `default_initial_yolo`；旗裁决另存 `YOLO_FLAG_INPUT` 供 banner
+    // 归因（进程内、不继承）。
+    let yolo_flag = match parse_yolo_flags(&args) {
+        Ok(decision) => decision,
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(2);
+        }
+    };
+    let _ = YOLO_FLAG_INPUT.set(yolo_flag);
+    if let Some(on) = yolo_flag {
+        // SAFETY: single-threaded before any runtime starts (edition 2024,
+        // `--allow-write` → ORZ_ALLOW_WRITE 先例同点).
+        unsafe {
+            std::env::set_var("ORZ_YOLO", if on { "1" } else { "0" });
+        }
+    }
+    // ORZ_YOLO 早校验（0dp S2）：非法 env 值在启动面即报错 exit 2——所有
+    // 入口（含 `orz web` 及其 spawn 的 child）先于分派拦截；值族解析
+    // 单一实现在 orz-host `parse_yolo_env`（装配点的 spawn Err 臂为直接
+    // 消费 orz-host 的非常规入口兜底）。静默取缺省绝不允许——「要关而
+    // 没关成」是危险方向。
+    if let Ok(v) = std::env::var("ORZ_YOLO")
+        && orz_host::permission::parse_yolo_env(&v).is_err()
+    {
+        eprintln!(
+            "error: ORZ_YOLO={v:?} is not a valid value (1/true/yes/on \
+             enable, 0/false/no/off disable; unset = default auto-approve)"
+        );
+        std::process::exit(2);
+    }
     // 0cg (2026-10-01) 墙钟输入通道收口：`--max-wallclock <sec>` 不再经
     // env 桥（原 P0-2 形态 `--max-wallclock` → `ORZ_MAX_WALLCLOCK` 退役）。
     // 取值一次性解析进进程内静态——argv 优先，其次宿主常驻 env（F-012：
@@ -456,6 +528,9 @@ fn main_inner() {
         );
         eprintln!(
             "       --allow-shell / --allow-network open the Benchmark shell/network axes (headless; require --allow-write)"
+        );
+        eprintln!(
+            "       --yolo / --no-yolo force auto-approve / per-action confirmation on every lane (default is auto-approve everywhere; ORZ_YOLO env is the same switch)"
         );
         eprintln!(
             "       without --allow-write the session keeps the default auto-approve (yolo) posture; the run banner prints the resolved mode"
@@ -679,11 +754,31 @@ fn acaf_fail_closed_enabled() -> bool {
     }
 }
 
-/// REV-083-01 (2026-09-27): resolve the permission-mode banner for the
-/// `-p`/`--plan` startup face. `ORZ_ALLOW_WRITE` switches the bridge to the
-/// Benchmark policy (see `build_cli_host`); otherwise the session runs the
-/// default Interactive + initial-yolo (auto-approve) posture. Pure echo of
-/// the same env the bridge consumes — no policy decision lives here.
+/// REV-083-01 (2026-09-27)：姿态行纯渲染——`-p` 面与 Web 启动面共用；
+/// 0dp S2（2026-10-25，§14.91 条 2）起行文案为源感知形态（S1 设计稿
+/// §1.4 逐字表）。纯函数供字面钉测试，不读 env/静态。
+fn render_posture_line(auto_approve: bool, source: &str) -> String {
+    if auto_approve {
+        format!(
+            "[permission] mode=interactive-yolo (auto-approve, source={source}; benchmark axes off)"
+        )
+    } else {
+        format!(
+            "[permission] mode=confirm-first (per-action approval, source={source}; benchmark axes off)"
+        )
+    }
+}
+
+/// REV-083-01 (2026-09-27)，0dp S2（2026-10-25，§14.91 条 2）改源感知：
+/// resolve the permission-mode banner for the `-p`/`--plan` startup face
+/// AND the `orz web` startup echo. `ORZ_ALLOW_WRITE` keeps priority and
+/// switches the bridge to the Benchmark policy (see `build_cli_host`);
+/// otherwise the line reports the resolved posture plus its source —
+/// `--yolo`/`--no-yolo`（旗裁决读 `YOLO_FLAG_INPUT`，旗桥已覆写 env，
+/// 朴读 env 无法归因）、`ORZ_YOLO`（env）或 `default`（§14.91 条 1：
+/// 全车道缺省自动审批）。confirm-first 无缺省态——凡 confirm-first 必
+/// 显式有源。Pure echo of the same env the bridge consumes — no policy
+/// decision lives here.
 fn permission_mode_banner() -> String {
     if std::env::var("ORZ_ALLOW_WRITE").is_ok() {
         format!(
@@ -692,7 +787,19 @@ fn permission_mode_banner() -> String {
             std::env::var("ORZ_ALLOW_NETWORK").is_ok()
         )
     } else {
-        "[permission] mode=interactive-yolo (default auto-approve; benchmark axes off)".to_string()
+        let (auto_approve, source) = match YOLO_FLAG_INPUT.get().copied().flatten() {
+            Some(on) => (on, if on { "--yolo" } else { "--no-yolo" }),
+            None => match std::env::var("ORZ_YOLO") {
+                Ok(v) => (
+                    // 非法值到不了生产 banner（main 早校验先 exit 2）；
+                    // 直接调用方兜底取安全方向（confirm-first）。
+                    orz_host::permission::parse_yolo_env(&v).unwrap_or(false),
+                    "ORZ_YOLO",
+                ),
+                Err(_) => (true, "default"),
+            },
+        };
+        render_posture_line(auto_approve, source)
     }
 }
 
@@ -1276,6 +1383,10 @@ fn run_web(rest: &[String]) {
     // 334（§3.1）：桥版本取 orz-bin 的产品版本（0.9.7），不是 orz-web
     // crate 版本（0.1.0）——否则 `/api/boot` 会把每次正常启动都报成偏斜。
     config.bridge_version = env!("CARGO_PKG_VERSION").to_string();
+    // 0dp S2 (2026-10-25, §14.91 条 2 / S1 设计稿 §1.4)：Web 启动面回显与
+    // `-p` 面同一行权限姿态——Web 是 Windows 日常主入口，`--no-yolo`
+    // 生效与否必须一处可见（复用同一解析，零新契约）。
+    eprintln!("{}", permission_mode_banner());
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -4120,7 +4231,7 @@ mod conformance_capture {
 
 #[cfg(test)]
 mod benchmark_flags_tests {
-    use super::parse_benchmark_flags;
+    use super::{parse_benchmark_flags, parse_yolo_flags, render_posture_line};
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
@@ -4230,6 +4341,69 @@ mod benchmark_flags_tests {
         assert_eq!(
             parse_benchmark_flags(&args(&["--allow-write", "--allow-shell"])).unwrap(),
             (true, false)
+        );
+    }
+
+    /// 0dp S2（2026-10-25，§14.91 条 2 / S1 设计稿 §1.1）：`--yolo` /
+    /// `--no-yolo` 只接受无值精确形式；无旗返回 `None`（env/缺省决定）；
+    /// 位置无关（全 argv 扫描，`orz web --no-yolo` 同样可达）。
+    #[test]
+    fn yolo_flags_exact_forms_only() {
+        assert_eq!(parse_yolo_flags(&args(&["--yolo"])).unwrap(), Some(true));
+        assert_eq!(
+            parse_yolo_flags(&args(&["--no-yolo"])).unwrap(),
+            Some(false)
+        );
+        assert_eq!(parse_yolo_flags(&args(&[])).unwrap(), None);
+        assert_eq!(
+            parse_yolo_flags(&args(&["--real", "-p", "hi", "--yolo"])).unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            parse_yolo_flags(&args(&["web", "--no-yolo"])).unwrap(),
+            Some(false)
+        );
+    }
+
+    /// 0dp S2：`=value` 形式显式报错（`--allow-*` 家规），绝不静默忽略。
+    #[test]
+    fn yolo_flags_value_forms_are_explicit_errors() {
+        assert!(parse_yolo_flags(&args(&["--yolo=1"])).is_err());
+        assert!(parse_yolo_flags(&args(&["--no-yolo=off"])).is_err());
+        // 精确形式不受 `=value` 同现影响语义——但 `=value` 本身即报错。
+        assert!(parse_yolo_flags(&args(&["--yolo", "--no-yolo=0"])).is_err());
+    }
+
+    /// 0dp S2：双旗同现显式报错（矛盾指令不允许「后到者赢」）。
+    #[test]
+    fn yolo_flags_are_mutually_exclusive() {
+        assert!(parse_yolo_flags(&args(&["--yolo", "--no-yolo"])).is_err());
+        assert!(parse_yolo_flags(&args(&["-p", "hi", "--no-yolo", "--yolo"])).is_err());
+    }
+
+    /// 0dp S2（S1 设计稿 §1.4）：姿态行逐字钉——源感知三形态
+    /// （confirm-first 无缺省态）。
+    #[test]
+    fn posture_line_matches_1491_wording() {
+        assert_eq!(
+            render_posture_line(true, "default"),
+            "[permission] mode=interactive-yolo (auto-approve, source=default; benchmark axes off)"
+        );
+        assert_eq!(
+            render_posture_line(true, "--yolo"),
+            "[permission] mode=interactive-yolo (auto-approve, source=--yolo; benchmark axes off)"
+        );
+        assert_eq!(
+            render_posture_line(true, "ORZ_YOLO"),
+            "[permission] mode=interactive-yolo (auto-approve, source=ORZ_YOLO; benchmark axes off)"
+        );
+        assert_eq!(
+            render_posture_line(false, "--no-yolo"),
+            "[permission] mode=confirm-first (per-action approval, source=--no-yolo; benchmark axes off)"
+        );
+        assert_eq!(
+            render_posture_line(false, "ORZ_YOLO"),
+            "[permission] mode=confirm-first (per-action approval, source=ORZ_YOLO; benchmark axes off)"
         );
     }
 }

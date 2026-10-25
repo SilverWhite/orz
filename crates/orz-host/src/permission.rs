@@ -3,12 +3,12 @@
 //! IP6 (hard-gate @ orz-workspace::permission) is the single allowed
 //! assurance injection into kept Grok providers. This bridge walks public
 //! seams only:
-//! - 默认审批姿态双轨（ADR-0010 §14.90 条 3，0do/344 批 2026-10-23）：
-//!   Windows 交互面（gateway/hub 任一在位）缺省 confirm-first（见
-//!   `default_initial_yolo`）；headless 与非 Windows 维持 yolo——the
-//!   manager starts in always-approve（用户令 2026-09-26「直接开auto
-//!   mode就行」：工作台默认自动审批、手动弹窗退役为非默认路径，该令自此
-//!   收窄至 headless/非 Windows 车道）；policy denies (ReadOnly/Benchmark)
+//! - 默认审批姿态单一源（ADR-0010 §14.91 条 1/2，0dp/348 批 S1 定稿
+//!   2026-10-25）：全部车道缺省 yolo 全自动审批（用户令：日常与跑分姿态
+//!   完全一致、全部能力缺省开启；§14.90 条 3 的平台×活审批面缺省矩阵
+//!   退役）；`--yolo`/`--no-yolo` 旗经 orz-bin 桥写 `ORZ_YOLO` env，由
+//!   `default_initial_yolo` 读同一 env（见 `parse_yolo_env`；非法值显式
+//!   失败，绝不静默取缺省）；policy denies (ReadOnly/Benchmark)
 //!   still short-circuit BEFORE yolo, and the no-bridge `OrzHost::new`
 //!   default stays fail-closed `Deny` (review P1-1 不动);
 //! - interactive prompting (`PermissionHookTransport`) remains the manual
@@ -104,6 +104,21 @@ fn is_shell_tool(tool: &str) -> bool {
     )
 }
 
+/// `ORZ_YOLO` 值族解析（0dp S2，ADR-0010 §14.91 条 2，348 批 S1 定稿）——
+/// 与 `orz_loop::controller::parse_acaf_fail_closed_env` 同族：trim 后
+/// 大小写不敏感，`0/false/no/off`→关（confirm-first）、`1/true/yes/on`→
+/// 开（auto-approve）、其余 `Err`。单一实现、两处消费：本模块
+/// `default_initial_yolo`（装配点）与 orz-bin 启动面早校验（exit 2）。
+/// `Result<_, ()>` 同先例（先例面零信息错误臂；告警定点豁免，不涨基线）。
+#[allow(clippy::result_unit_err)]
+pub fn parse_yolo_env(value: &str) -> Result<bool, ()> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "0" | "false" | "no" | "off" => Ok(false),
+        "1" | "true" | "yes" | "on" => Ok(true),
+        _ => Err(()),
+    }
+}
+
 /// Grok permission manager wrapped for the LoopHost contract.
 pub struct PermissionBridge {
     handle: PermissionHandle,
@@ -189,14 +204,15 @@ impl PermissionBridge {
         cwd: &std::path::Path,
         policy: PermissionPolicy,
     ) -> Result<Self, String> {
-        // 缺省审批姿态单一源（0do/344 批 2026-10-23，用户裁决，ADR-0010
-        // §14.90 条 3）：Windows 交互面（有活审批面 gateway/hub）缺省收回
-        // 全自动审批——Ask 直达交互确认；headless 车道（`-p`/`--plan`，
-        // 两者皆 None）维持 yolo（既有 headless 契约，无人值守自动化不破）；
-        // 非 Windows 维持 yolo（nono 沙箱在场）。2026-09-26「直接开 auto
-        // mode」用户令自此在 Windows 交互面收窄；运行时 `set_yolo_mode`
-        // 与 Benchmark policy 面不受影响。
-        let initial_yolo = Self::default_initial_yolo(gateway.is_some(), hub.is_some());
+        // 缺省审批姿态单一源（0dp/348 批 S1 定稿 2026-10-25，用户令，
+        // ADR-0010 §14.91 条 1/2）：全部车道缺省 yolo 全自动审批——日常
+        // 与跑分姿态完全一致（§14.90 条 3 的 Windows 交互缺省
+        // confirm-first 缺省面被取代，2026-10-23～10-25 过渡现行）；
+        // `--yolo`/`--no-yolo` 旗经 orz-bin 桥写 `ORZ_YOLO` env，本处读
+        // 同一 env（旗＞env＞缺省的优先级由桥式自然成立）；非法 env 值
+        // 显式失败，不静默取缺省。运行时 `set_yolo_mode` 与 Benchmark
+        // policy 面不受影响。
+        let initial_yolo = Self::default_initial_yolo()?;
         let gateway = gateway.unwrap_or_else(dead_gateway);
         let abs_cwd = orz_paths::AbsPathBuf::new(cwd.to_path_buf())
             .map_err(|e| format!("cwd must be absolute: {e}"))?;
@@ -222,14 +238,19 @@ impl PermissionBridge {
         })
     }
 
-    /// 缺省 yolo 姿态单一源（ADR-0010 §14.90 条 3，0do/344 批）——Windows
-    /// 交互面（有活审批面）缺省关；headless（无活审批面，Ask 无从应答，
-    /// 维持无人值守契约）与非 Windows（nono 沙箱在场）维持开。
-    fn default_initial_yolo(gateway_live: bool, hub_live: bool) -> bool {
-        if cfg!(windows) {
-            !(gateway_live || hub_live)
-        } else {
-            true
+    /// 缺省 yolo 姿态单一源（ADR-0010 §14.91 条 1/2，0dp/348 批 S1 定稿）——
+    /// `ORZ_YOLO` env 覆盖（[`parse_yolo_env`] 值族），unset 缺省 `true`
+    /// 于全部车道全部平台；非法值 `Err`（装配点映射为显式失败——静默取
+    /// 缺省绝不允许，「要关而没关成」是危险方向）。
+    fn default_initial_yolo() -> Result<bool, String> {
+        match std::env::var("ORZ_YOLO") {
+            Ok(v) => parse_yolo_env(&v).map_err(|()| {
+                format!(
+                    "ORZ_YOLO={v:?} is not a valid value (1/true/yes/on enable, \
+                     0/false/no/off disable; unset or --yolo/--no-yolo = default auto-approve)"
+                )
+            }),
+            Err(_) => Ok(true),
         }
     }
 
@@ -767,31 +788,114 @@ mod tests {
         );
     }
 
-    /// §14.90 条 3（0do/344 批，2026-10-23）：缺省 yolo 姿态单一源钉——
-    /// Windows 交互面（gateway/hub 有活）缺省收回自动审批；headless（皆
-    /// None）与非 Windows 维持 yolo。
+    /// `ORZ_YOLO` 测试卫生（grok_home `EnvVarGuard` 同式）：捕获旧值、
+    /// drop 时恢复；配一把模块内互斥锁——orz-host 测试串行门下冗余但
+    /// 便宜，并联调试时防 env 竞态放大无关雪崩。
+    struct YoloEnvGuard {
+        old: Option<std::ffi::OsString>,
+    }
+
+    impl YoloEnvGuard {
+        fn capture() -> Self {
+            Self {
+                old: std::env::var_os("ORZ_YOLO"),
+            }
+        }
+
+        fn set(value: &str) -> Self {
+            let guard = Self::capture();
+            // SAFETY: test-only, single-threaded under the lock.
+            unsafe {
+                std::env::set_var("ORZ_YOLO", value);
+            }
+            guard
+        }
+
+        fn cleared() -> Self {
+            let guard = Self::capture();
+            // SAFETY: test-only, single-threaded under the lock.
+            unsafe {
+                std::env::remove_var("ORZ_YOLO");
+            }
+            guard
+        }
+    }
+
+    impl Drop for YoloEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: test-only, single-threaded under the lock.
+            unsafe {
+                match &self.old {
+                    Some(v) => std::env::set_var("ORZ_YOLO", v),
+                    None => std::env::remove_var("ORZ_YOLO"),
+                }
+            }
+        }
+    }
+
+    fn with_yolo_env_lock(f: impl FnOnce()) {
+        static ORZ_YOLO_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ORZ_YOLO_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        f();
+    }
+
+    /// §14.91 条 1（0dp/348 批 S1 定稿，2026-10-25）：缺省 yolo 姿态单一
+    /// 源钉——`ORZ_YOLO` unset 缺省开于全部车道全部平台（§14.90 条 3 的
+    /// 平台×活审批面矩阵退役；缺省不再依赖 gateway/hub 在位性）。
     #[test]
-    fn default_yolo_is_confirm_first_on_windows_interactive() {
-        let interactive_default = !cfg!(windows);
-        assert_eq!(
-            PermissionBridge::default_initial_yolo(true, false),
-            interactive_default,
-            "gateway-live lane must be confirm-first on Windows (§14.90)"
-        );
-        assert_eq!(
-            PermissionBridge::default_initial_yolo(false, true),
-            interactive_default,
-            "hub-live lane must be confirm-first on Windows (§14.90)"
-        );
-        assert!(
-            PermissionBridge::default_initial_yolo(false, false),
-            "headless lane keeps the yolo contract on every platform"
-        );
-        if !cfg!(windows) {
+    fn default_yolo_is_auto_approve_on_every_lane() {
+        with_yolo_env_lock(|| {
+            let _guard = YoloEnvGuard::cleared();
             assert!(
-                PermissionBridge::default_initial_yolo(true, true),
-                "non-Windows keeps yolo"
+                PermissionBridge::default_initial_yolo().unwrap(),
+                "default posture is auto-approve on every lane/platform (§14.91)"
             );
+        });
+    }
+
+    /// §14.91 条 2：`ORZ_YOLO` env 覆盖钉——合法值两向生效，非法值显式
+    /// `Err`（装配点映射失败，绝不静默取缺省）。
+    #[test]
+    fn orz_yolo_env_overrides_and_garbage_fails_loudly() {
+        with_yolo_env_lock(|| {
+            for on in ["1", "true", "yes", "on", " ON "] {
+                let _guard = YoloEnvGuard::set(on);
+                assert!(
+                    PermissionBridge::default_initial_yolo().unwrap(),
+                    "ORZ_YOLO={on} must enable auto-approve"
+                );
+            }
+            for off in ["0", "false", "no", "off", " Off "] {
+                let _guard = YoloEnvGuard::set(off);
+                assert!(
+                    !PermissionBridge::default_initial_yolo().unwrap(),
+                    "ORZ_YOLO={off} must disable auto-approve (confirm-first)"
+                );
+            }
+            for garbage in ["", "maybe", "2", "auto"] {
+                let _guard = YoloEnvGuard::set(garbage);
+                let err = PermissionBridge::default_initial_yolo()
+                    .expect_err("malformed ORZ_YOLO must fail loudly");
+                assert!(
+                    err.contains("ORZ_YOLO"),
+                    "error must name the offending env key: {err}"
+                );
+            }
+        });
+    }
+
+    /// §14.91 条 2：`parse_yolo_env` 值族钉（与
+    /// `parse_acaf_fail_closed_env` 同族，trim＋大小写不敏感）。
+    #[test]
+    fn parse_yolo_env_value_family_matches_acaf_precedent() {
+        for on in ["1", "true", "TRUE", "Yes", "on"] {
+            assert_eq!(parse_yolo_env(on), Ok(true));
+        }
+        for off in ["0", "false", "FALSE", "No", "off", " off "] {
+            assert_eq!(parse_yolo_env(off), Ok(false));
+        }
+        for garbage in ["", "2", "maybe", "auto"] {
+            assert_eq!(parse_yolo_env(garbage), Err(()));
         }
     }
 

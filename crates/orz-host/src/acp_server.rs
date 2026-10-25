@@ -5948,10 +5948,10 @@ impl AcpServer {
     ///
     /// The bridge consumes the outbound ACP gateway when one is wired
     /// (`--stdio`); otherwise a dead gateway。初始审批姿态按 ADR-0010
-    /// §14.90 条 3（0do/344 批 2026-10-23）：Windows 下有活审批面
-    /// （gateway/hub 任一在位）缺省 confirm-first——Ask 直达交互确认，
-    /// 不再默认自动审批；headless（两者皆无）与非 Windows 维持初始 yolo
-    /// （用户令 2026-09-26 自此收窄至该两车道）。非 yolo 的 `Ask` 仍
+    /// §14.91 条 1（0dp/348 批 S1 定稿 2026-10-25）：全车道缺省 yolo 自动
+    /// 审批（`ORZ_YOLO` env／`--yolo`/`--no-yolo` 旗为显式用户开关，
+    /// 见 `default_initial_yolo`；§14.90 条 3 的平台×活审批面缺省矩阵
+    /// 退役）。非 yolo 的 `Ask` 仍
     /// fail closed。`policy` fixes the
     /// bridge's per-session behavior (slice #16): a read-only session denies
     /// mutation/network without prompting.
@@ -8715,23 +8715,22 @@ mod tests {
             .await
     }
 
-    /// 缺省审批姿态钉（0do/344 批，ADR-0010 §14.90 条 3）：装配了审批面
-    /// （含 dead gateway——结构上是交互车道）的会话，Windows 缺省
-    /// confirm-first——mutation（search_replace）不被自动放行，无客户端
-    /// 应答即 fail-closed 拒绝（PermissionDecision=deny、无 ToolStarted）；
-    /// 非 Windows 维持初始 yolo 契约（allow_once、照常执行）。2026-09-26
-    /// 「直接开 auto mode」用户令自此仅在非 Windows / headless 车道保持。
+    /// 缺省审批姿态钉（0dp/348 批 S1 定稿，ADR-0010 §14.91 条 1/2；第三轮
+    /// 改写——344 批 §14.90 条 3 的 confirm-first 缺省被取代）：装配了审批
+    /// 面（含 dead gateway——结构上是交互车道）的会话，双平台缺省回归 yolo
+    /// 自动放行——mutation（search_replace）allow_once 且照常执行
+    /// （ToolStarted 在场）；显式 `--no-yolo`／`ORZ_YOLO=0` 是唯一的
+    /// confirm-first 通路（无缺省态）。
     #[tokio::test]
-    async fn session_prompt_mutation_posture_with_dead_gateway_follows_1490() {
+    async fn session_prompt_mutation_posture_with_dead_gateway_follows_1491() {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
 
                 let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
                     // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
-                    // 面——模型直接调 search_replace（§14.90：Windows 交互
-                    // 车道缺省 confirm-first，dead gateway 无应答即拒绝；
-                    // 非 Windows 维持初始 yolo 放行）。
+                    // 面——模型直接调 search_replace（§14.91：全车道缺省
+                    // yolo 自动放行，dead gateway 交互车道同姿态）。
                     ScriptedResponse::tool_calls(vec![ToolCall {
                         name: "search_replace".to_string(),
                         arguments: serde_json::json!({
@@ -8771,37 +8770,20 @@ mod tests {
                         e.payload.get("tool").and_then(|t| t.as_str()) == Some("search_replace")
                     })
                     .expect("permission decision");
-                if cfg!(windows) {
-                    // §14.90 条 3：Windows 交互车道（含 dead gateway 装配）
-                    // 缺省 confirm-first——无客户端应答即 fail-closed 拒绝。
-                    assert!(
-                        !events.iter().any(|e| {
-                            e.event_type == EventType::ToolStarted
-                                && e.payload.get("tool").and_then(|t| t.as_str())
-                                    == Some("search_replace")
-                        }),
-                        "windows confirm-first default must not start the mutation: {types:?}"
-                    );
-                    assert_eq!(
-                        pd.payload.get("decision").and_then(|d| d.as_str()),
-                        Some("deny"),
-                        "unanswered prompt must deny on windows (§14.90): {:?}",
-                        pd.payload
-                    );
-                } else {
-                    assert!(
-                        events.iter().any(|e| {
-                            e.event_type == EventType::ToolStarted
-                                && e.payload.get("tool").and_then(|t| t.as_str())
-                                    == Some("search_replace")
-                        }),
-                        "non-windows keeps the initial-yolo contract: {types:?}"
-                    );
-                    assert_eq!(
-                        pd.payload.get("decision").and_then(|d| d.as_str()),
-                        Some("allow_once")
-                    );
-                }
+                assert!(
+                    events.iter().any(|e| {
+                        e.event_type == EventType::ToolStarted
+                            && e.payload.get("tool").and_then(|t| t.as_str())
+                                == Some("search_replace")
+                    }),
+                    "every lane defaults to the initial-yolo contract (§14.91): {types:?}"
+                );
+                assert_eq!(
+                    pd.payload.get("decision").and_then(|d| d.as_str()),
+                    Some("allow_once"),
+                    "default posture auto-approves on both platforms (§14.91): {:?}",
+                    pd.payload
+                );
 
                 let _ = std::fs::remove_dir_all(&base);
             })
@@ -8928,13 +8910,13 @@ mod tests {
             .await
     }
 
-    /// 快照时序钉（0do/344 批适配，ADR-0010 §14.90 条 3）：mutation
-    /// （`search_replace`）经权限门**放行**后执行——预变更快照**必须**记录
-    /// （快照只在权限门放行之后触发；deny 臂的「拒单不快照」时序由
-    /// ReadOnly 策略测试 `session_prompt_respects_session_policy` 继续钉住）。
-    /// 放行来源由原「初始 yolo」改为 **Benchmark 策略**（LocalMutation 编辑
-    /// 类确定性 Policy 放行、双平台一致）——Windows 交互车道缺省
-    /// confirm-first 后不再以 yolo 作放行前提。
+    /// 快照时序钉（0dp/348 批第三轮改写，ADR-0010 §14.91 条 1；原 344 批
+    /// 适配形态退役）：mutation（`search_replace`）经权限门**放行**后执行
+    /// ——预变更快照**必须**记录（快照只在权限门放行之后触发；deny 臂的
+    /// 「拒单不快照」时序由 ReadOnly 策略测试
+    /// `session_prompt_respects_session_policy` 继续钉住）。放行来源回归
+    /// **初始 yolo**（§14.91 全车道缺省自动审批，双平台一致）——344 批
+    /// 的 Benchmark 策略临时臂随 confirm-first 缺省退役。
     #[tokio::test]
     async fn session_prompt_allowed_mutation_records_snapshot() {
         tokio::task::LocalSet::new()
@@ -8944,7 +8926,7 @@ mod tests {
 
                 let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
                     // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
-                    // 面——模型直接调 search_replace（Benchmark 策略放行 →
+                    // 面——模型直接调 search_replace（缺省 yolo 放行 →
                     // 快照记录）。
                     ScriptedResponse::tool_calls(vec![ToolCall {
                         name: "search_replace".to_string(),
@@ -8962,14 +8944,10 @@ mod tests {
                 ])));
                 server.set_gateway(dead_gateway());
                 server
-                    .handle_session_new_with_policy(
+                    .handle_session_new(
                         "sess-allow-snap",
                         Some(base.clone()),
                         crate::session::TrustPolicy::Skip,
-                        crate::permission::PermissionPolicy::Benchmark {
-                            allow_shell: false,
-                            allow_network: false,
-                        },
                     )
                     .await
                     .unwrap();

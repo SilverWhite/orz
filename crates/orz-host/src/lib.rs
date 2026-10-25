@@ -333,10 +333,10 @@ impl OrzHost {
     /// Build a host with an optional IP6 permission bridge.
     ///
     /// `Some(bridge)` delegates `request_permission` to the Grok permission
-    /// manager (初始审批姿态双轨：Windows 交互面缺省 confirm-first，headless
-    /// 与非 Windows 维持初始 yolo——见 `default_initial_yolo` 与 ADR-0010
-    /// §14.90 条 3；2026-09-26 用户令收窄至后两车道；policy 短路与无桥
-    /// fail-closed 默认不变); `None` keeps the fail-closed default.
+    /// manager (初始审批姿态单一源：全部车道缺省 yolo 自动审批，
+    /// `ORZ_YOLO` env／`--yolo`/`--no-yolo` 旗覆盖——见
+    /// `default_initial_yolo` 与 ADR-0010 §14.91 条 1/2；policy 短路与
+    /// 无桥 fail-closed 默认不变); `None` keeps the fail-closed default.
     pub fn with_permission(
         journal: JournalRecorder,
         cwd: &Path,
@@ -920,11 +920,10 @@ impl OrzHost {
     /// Build a host with an IP6 permission bridge in one step.
     ///
     /// `gateway` is the outbound ACP sender when interactive (`--stdio`);
-    /// `None` (headless `-p`/`--plan`) substitutes a dead gateway — headless
-    /// 车道（gateway/hub 皆无活审批面）维持初始 yolo（用户令 2026-09-26；
-    /// ADR-0010 §14.90 条 3 把 Windows 交互面——任一面在位——收窄为缺省
-    /// confirm-first，见 `default_initial_yolo`），非 yolo 的 `Ask` 仍
-    /// fail closed to `Deny`.
+    /// `None` (headless `-p`/`--plan`) substitutes a dead gateway — 全车道
+    /// 缺省初始 yolo（用户令 2026-10-25；ADR-0010 §14.91 条 1 取代 §14.90
+    /// 条 3 的平台×活审批面缺省矩阵，见 `default_initial_yolo`），
+    /// 非 yolo 的 `Ask` 仍 fail closed to `Deny`.
     ///
     /// Note: `PermissionBridge::spawn` runs the manager actor via
     /// `spawn_local`, so callers must be inside a `tokio::task::LocalSet`.

@@ -132,7 +132,9 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
 }
 
 /// Parse `orz web` argv (the slice after `web`):
-/// `--addr 127.0.0.1:21487` / `--cwd <dir>` / `--real`.
+/// `--addr 127.0.0.1:21487` / `--cwd <dir>` / `--real` /
+/// `--yolo|--no-yolo`（0dp S2 白名单容忍——姿态由 orz-bin main 经
+/// `ORZ_YOLO` env 桥承载，本解析器识别即吞、不落字段）。
 pub fn parse_args(args: &[String]) -> Result<WebConfig, String> {
     let mut bind = None;
     let mut cwd = std::env::current_dir().map_err(|e| format!("无法读取当前目录: {e}"))?;
@@ -156,9 +158,13 @@ pub fn parse_args(args: &[String]) -> Result<WebConfig, String> {
             "--real" => {
                 real = true;
             }
+            // 0dp S2（2026-10-25，ADR-0010 §14.91 条 2 / S1 设计稿 §1.5）：
+            // 审批姿态旗白名单——识别即吞；web 侧二次解析即双源漂移温床，
+            // 故不落 WebConfig 字段；未给旗时 env/缺省照旧生效。
+            "--yolo" | "--no-yolo" => {}
             other => {
                 return Err(format!(
-                    "未知参数 {other}（用法: orz web [--addr ip:port] [--cwd dir] [--real]）"
+                    "未知参数 {other}（用法: orz web [--addr ip:port] [--cwd dir] [--real] [--yolo|--no-yolo]）"
                 ));
             }
         }
@@ -196,5 +202,17 @@ mod tests {
 
         assert!(parse_args(&["--addr".into()]).is_err());
         assert!(parse_args(&["--wat".into()]).is_err());
+    }
+
+    /// 0dp S2（2026-10-25，§14.91 条 2 / S1 设计稿 §1.5）：审批姿态旗
+    /// 白名单钉——`orz web --yolo`／`--no-yolo` 可达（识别即吞、不落
+    /// 字段），未知旗照旧拒绝。
+    #[test]
+    fn web_parse_args_tolerates_yolo_flags() {
+        assert!(parse_args(&["--yolo".into()]).is_ok());
+        assert!(parse_args(&["--no-yolo".into()]).is_ok());
+        assert!(parse_args(&["--real".into(), "--no-yolo".into()]).is_ok());
+        assert!(parse_args(&["--yolo=1".into()]).is_err());
+        assert!(parse_args(&["--no-yolo=off".into()]).is_err());
     }
 }
