@@ -5268,3 +5268,30 @@ Job Object 生命周期包装）＋交互缺省全自动审批（2026-09-26 用�
    AppContainer/受限令牌级隔离、`AgentLoopController` 拆相与 `run_agent_loop` 分相、
    `families.rs`/`rli.rs`/`main.rs` 巨石分文件——登记为后续批 backlog（0do S2+），
    本批不实施。
+
+#### §14.91 审批缺省回归全自动与用户命令接口（0dp 立项转录）（2026-10-25，v1.96）
+
+**来源**：2026-10-25 用户令（0.9.12 进体后实测 §14.90 条 3 姿态的直接反馈；0dp 立项随 347 批，
+设计/落码待续——**本节即日为现行法**，344 审查 P0 教训「治理不得滞后于裁决」的就地应用）。
+用户令原文照录：「我需要自动审批，之前专门改的默认自动审批」「日常和跑分要完全一致，全部
+默认开启，该开的全都开，让模型用个残废的orz完全没意义」「命令自动审批这点要给用户一个命令
+接口」「先立项不直接动手」。
+
+1. **全缺省自动审批恢复**：`initial_yolo` 缺省 `true` 于**全部车道**——Windows 交互面
+   （活审批面在位）自此回归 2026-09-26「直接开 auto mode」用户令原态，**§14.90 条 3 的
+   「Windows 交互缺省 confirm-first」缺省面由本条取代**（该条 2026-10-23～2026-10-25 为
+   过渡现行）。裁决依据＝日常使用与跑分评测姿态必须**完全一致**、全部能力缺省开启；不以
+   Benchmark 轴旗子作为日常通路。
+2. **用户命令接口**：审批自动化提供显式命令接口——形态 **S1 勘定**（候选＝启动旗
+   `--yolo`（显式开）／`--no-yolo`（显式关→confirm-first）＋ `ORZ_YOLO` 环境变量单源
+   （`default_initial_yolo` 单一源改造，env 覆盖、缺省 true）＋ `permission_mode_banner`
+   姿态如实反映；Web 工作台内审批模式开关为可选增项随 S1 裁决）。既有运行时
+   `set_yolo_mode` 通道、TUI「always allow」流程、Benchmark policy 面均不变。
+3. **不受影响面**：§14.90 条 1（写面 workspace 包含性）与条 2（`encoded-exec` warn 留痕）
+   照旧现行——两者皆不弹审批，与本裁决无涉。
+4. **实施与过渡**：S1 设计定稿 → S2 落码（含 344 五契约测试按本条第三轮改写＋姿态钉＋
+   orz-host/README 姿态注释三更＋`permission_mode_banner` 过时文案勘正）→ S3 Windows
+   载体重建＋换装（343 先例；Linux 载体与发行留下一自然节点）。**过渡期注记**：在役与
+   已发行 0.9.12 载体仍为 §14.90 条 3 缺省（confirm-first）；急用自动化者过渡通路＝
+   Benchmark 轴（`web --real --allow-write --allow-shell --allow-network` 或
+   `ORZ_ALLOW_*` env），S3 进体后回归零旗缺省。登记：[`347 立项档`](../docs/audits/347_0DP_AUTO_APPROVAL_DEFAULT_AND_CLI_REGISTRATION_2026-10-25.md)。
