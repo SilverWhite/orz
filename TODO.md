@@ -17,10 +17,10 @@
 
 > **分卷口径（2026-09-25 用户令）**：逐批流水与记录文档自**下一批**起**直接**记入 [BACKLOG 第二卷](docs/BACKLOG_AND_PRIORITIES_2.md)（取代先前「先落治理行、沉淀后再移入第二卷」）；本文件与主 BACKLOG 只留「当前计数＋本批一句要点＋指针链接」。
 
-- 未闭合总数：**66 项**（BACKLOG 计数口径；**0dp 经 2026-10-25 用户裁决闭合（65 → 64）**；**353（`0dq` 回合原子性与终态契约）与 354（`0dr` 系统控制台）同日正式立项（64 → 66）**。详见 [353 批档](docs/audits/353_TURN_ATOMICITY_AND_TERMINAL_CONTRACT_2026-10-25.md)／[354 设计稿](docs/SYSTEM_CONSOLE_DESIGN_2026-10-25.md)。）
+- 未闭合总数：**65 项**（BACKLOG 计数口径；**0dp 经 2026-10-25 用户裁决闭合（65 → 64）**；**353（`0dq`）与 354（`0dr`）同日正式立项（64 → 66）**；**0dq 经 2026-10-26 用户裁决闭合（66 → 65）**。详见 [353 批档](docs/audits/353_TURN_ATOMICITY_AND_TERMINAL_CONTRACT_2026-10-25.md)／[354 设计稿](docs/SYSTEM_CONSOLE_DESIGN_2026-10-25.md)。）
 
 - P0：0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续（**286 批：检索启用门缺省开——ADR §14.85，单源解析＋四面接线，缺省开待下一版载体生效**）；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项，实施未开始；§14.2 验证载体已裁决引入模拟器（2026-09-12），S1 载体搭建待放行，M0 定版为首个无依赖里程碑）；0z 真机资源安全边界与崩溃收尾（2026-09-12 用户裁决立项，设计完成待放行实施；S1–S4，**不与 0v-C 搭车**）。`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` 已随 0.5.1 载体重建闭合（2026-09-14）。**即时结果回报与流式检索线（GAP-MECH-IMMEDIATE-FEEDBACK）已于 2026-09-27 S4 三题实机复验通过后闭合**（55 → 54；判据①②③全过＋FR-D02 达成；整轮 89 题重跑按用户修正令不发起；原验证⑤登记已随 152 批退役废止）：[`098 S4 收口档`](docs/audits/098_0AC_S4_CLOSURE_2026-09-27.md)。**2026-09-20 闭合**：检索批次回送与轮级单席位线（S1 契约面／S2 实施／S3 同三题真机复验全部完成，ADR-0010 §14.73/v1.75 转录随 S2；未闭合 36 → 35）＋同日 N1–N6 摩擦深挖登记观察不立项。（2026-10-18 复核维持，语义零改——台账行龄纪律就地刷新。）
-- P1：0db／0aa／0ae／0ah／0al／0aq／0aw／0ax／0ba／0bd／0bg／0bh／0bi／0bj／0bm／0bn／0bp／0br／0bs／0bt／0by／0ci／0cl／0ct／0cu／0cy／0cz／0da／0dh／0di／0dk／0dl／0dm／0dn／0dq／0dr；另有组件审计（4）、Windows 证据（5）、DeepSeek live（6）、会话上下文（6d）。状态与里程碑以 BACKLOG 对应小节为准；审批缺省项已于 2026-10-25 用户裁决闭合（S1–S3 全达成，352 换装 0.9.13）。
+- P1：0db／0aa／0ae／0ah／0al／0aq／0aw／0ax／0ba／0bd／0bg／0bh／0bi／0bj／0bm／0bn／0bp／0br／0bs／0bt／0by／0ci／0cl／0ct／0cu／0cy／0cz／0da／0dh／0di／0dk／0dl／0dm／0dn／0dr；另有组件审计（4）、Windows 证据（5）、DeepSeek live（6）、会话上下文（6d）。状态与里程碑以 BACKLOG 对应小节为准；审批缺省项已于 2026-10-25 用户裁决闭合（S1–S3 全达成，352 换装 0.9.13）。
 - **328 批复核（只读，非新项）**：0.9.7 五问题根因＋54d12bcc 重置取证；修复顺序待裁决（P0 会话保活＋/rewind；P1 CDP＋session/new sweep；P2 进程＋时间溯源）。入口：[328 档](docs/audits/328_0_9_7_FIVE_ISSUE_REVIEW_AND_54D12BCC_RECOVERY_2026-10-21.md)。
 - **329 批修复（计数 63 不变；未重建）**：按 328 §8 排序落地——① `/rewind` 投影截断（0di；本地 items/marker/turn 截断＋重放按 `recall_log` 过滤＋`/api/recall`）② 会话保活/重连（0dk；桥持 child，WS detach 默认保活 1800s，attach 前置帧绑定）③ 交互式 `session/new` 不收卷（0cy 口径）④ CDP 就绪重试（100→200ms 退避）⑤ 0dm S2 交付状态面板（`/api/delivery`＋工具栏）。读数：orz-web 63/0、CDP 3/3、session 2/2、frontend smoke 43 ok；载体 S3/S4 因训练进程顺延。入口：[329 档](docs/audits/329_FIVE_ISSUE_FIX_REWIND_KEEPALIVE_CDP_SWEEP_AND_0DM_S2_2026-10-21.md)。
 - **334 批审查（只读，计数 64 不变；未重建）**：328–333 全面审查——设计合理性／实现合理性／符合性；P0 版本偏斜结构上不命中＋0.9.8 必闭台账未闭合＋CLI 删除绕过 close/lease；P1 桥请求 id 混表可锁死运行态＋锁序反转＋closing/archived 未落＋错误码面窄＋跨区根丢失＋doctor 面窄＋上下文口径不符；结论：0.9.8 重建前需 334 修复批或显式豁免。入口：[334 档](docs/audits/334_REVIEW_OF_BATCHES_328_333_2026-10-21.md)。
@@ -1134,7 +1134,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 边界：不新增功能项；差距挂现有项或显式不做；不换底座、不重写 loop；不改 ADR-0010 设计语义。
 - 入口：[`330 档`](docs/audits/330_SURFACE_CONTRACT_BASELINE_2026-10-21.md) / [`surfaces/`](architecture/current/surfaces/) / BACKLOG `0dn`。
 
-### P1-0dq. 回合原子性与终态契约（TURN-ATOMICITY-AND-TERMINAL-CONTRACT）（P1；2026-10-25 用户令立项，353 批；0dp 闭合后 64 → 65；来源＝LIF 会话 `51da03ea` 上下文缺失取证＋用户令「run_end 这个机制挺弱智的，这个设计不好，我考虑得改」）
+### P1-0dq. 回合原子性与终态契约（TURN-ATOMICITY-AND-TERMINAL-CONTRACT）（P1；2026-10-25 用户令立项，353 批；0dp 闭合后 64 → 65；**2026-10-26 用户裁决闭合（66 → 65）**；来源＝LIF 会话 `51da03ea` 上下文缺失取证＋用户令「run_end 这个机制挺弱智的，这个设计不好，我考虑得改」）
 
 - [x] **审查落档**（2026-10-25，353 批）：三段链路取证（工具挂死／run 级才落盘／悬挂调用静默剥离）＋同型三次复现（RUN-10/11/12）＋终态声明四种失效模式；见 [`353 批档`](docs/audits/353_TURN_ATOMICITY_AND_TERMINAL_CONTRACT_2026-10-25.md)。
 - [x] **P1-1 交付与收束解耦**（2026-10-25 落码；**355 批勘误补完**，orz `69cf5fb9`）：无工具调用的文本无条件交付并落盘；`terminal_declaration` 缺省 off，`ORZ_TERMINAL_DECLARATION=required|on|1|true|yes` 显式开启；`declaration_required_for` AND→OR；非 required 车道不再拼「结束前输出 [RUN_END]」。**勘误**（353 批档 §10）：353 原落码只关告知面——强制面经 0dm 时代三处生产置位（ACP 会话／CLI）原样存活且反例门潜伏；355 收口＝三处置位随 env 单源＋0dm 兼容反例门退役（否则缺省关后该门在生产复活扣留终答）。
@@ -1144,7 +1144,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **P0-3 单工具无输出超时**（2026-10-25 wrapper 核查收口，354 落码批）：**取证改判**（353 批档 §9.6）之上剩余核查完成——全部 loop 车道本就收敛同一 wrapper（loop select！＋host 统一窗 `tokio::time::timeout`）；唯一缺口＝host 侧 4 条早退特例（project_doc_index/browser_read/browser_control/pdf_read/web_fetch-PDF 路由）在统一窗前 return，已补 `bounded_host_owned` 同预算同错误形状（无子进程树不杀树只解卡）；run_tests 独立 30min 预算 by-design。300s 预算在位且全车道覆盖（0dq 验收③达成）。
 - [x] **P0-2 悬挂调用事实注入**（2026-10-25 落码，orz `3ddbf947`）：不静默剥离——`repair_tool_pairing` 增 `RepairMode` 分流（`Sidecar`＝真中断，声明与逐 call 事实化结果「`[上次 run 中断]` …结果未知、落盘副作用可能已发生」成对进 provider；`JournalRebuild` 维持剥离）；读数 orz-host 串行 437/0/6。
 - [x] **P0-1 回合级写前落盘**（2026-10-25 落码，orz `d5b16793`）：assistant 轮含 `tool_calls` 声明入列即检查点（副作用发生前）、工具结果逐调用回写、并行批次折回毕即落；`LoopHost.persist_conversation_checkpoint`（默认 no-op，子代理车道 role 把关）＋`OrzHost` sink（take-out 现场重建续接包，recall_log/负担档位/刻度水位随行）；纯文本失败 run 维持保 pre-run，`-p`／benchmark 车道零变化。读数 orz-loop 908/0＋集成 4/4、orz-host 串行 438/0/6。
-- [ ] **`finish(status, summary)` 收尾工具**（2026-10-25 用户裁决解冻工具面）：schema 可校验、幂等、不占正文；benchmark／headless／外部 ACP 车道使用。
+- [x] **`finish(status, summary)` 收尾工具**——随 0dq 闭合归档（2026-10-26 用户裁决）：机器可读终态由 `ORZ_TERMINAL_DECLARATION` 过渡承载（353 §9.6）；工具面已解冻，如 benchmark／headless／外部 ACP 车道实际需要再另行立项（不占计数）。
 - 验收：①断 run 后侧车保留至最后 `tool_completed`；②下一轮首帧可见未回收调用事实；③挂死命令在 N 秒内可见失败；④交互轮次零 `[TERMINAL_NOTICE]`、不带标记的完整答复仍到达用户。
 - 边界：不动 benchmark 判分口径；`terminal_declaration` 只影响「是否要求」声明，不改解析与落账。
 - 入口：[`353 批档`](docs/audits/353_TURN_ATOMICITY_AND_TERMINAL_CONTRACT_2026-10-25.md) / BACKLOG `0dq` / `orz/crates/orz-host/src/acp_server.rs`（持久化点） / `orz/crates/orz-loop/src/model_stop.rs`。
