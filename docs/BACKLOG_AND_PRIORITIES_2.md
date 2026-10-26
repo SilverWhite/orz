@@ -2638,3 +2638,15 @@ S3 摩擦、0bf、0bd、0be、0bg、0bh。
 - **边界如实记（本机网络）**：首轮 `gh release download` 在小件即时完成、两大件长时间 0 字节停摆（进程存活、无读写增长）故中止；改 `curl -L -C -`（断点续传＋停摆中止重试）后两件均完成且哈希逐位一致；range 探测读物已清理。判据以「服务端 digest＋回下载」两路互证为据，网络停摆不构成资产完整性疑点。
 - **台账**：本卷；[`225 补记`](audits/225_RELEASE_V0815_READBACK_VERIFICATION_2026-10-07.md)；BACKLOG 计数行（54 不变）＋本批指针行；TODO 计数行；索引头行 v4.197 → v4.198。
 - 关键词：225 批、回读核证、服务端 digest 逐位一致、回下载 identical 3/3、Latest、轻量 tag 9f659c0e、gh 大文件停摆、curl 续传、计数 54 不变、索引 v4.198。
+
+### 362 批 2026-10-26 开发者体验与工具面摩擦治理（implemented；66 → 65）
+- 落码：S1 handoff（completed/failed/cancelled）、S2 terminal structured merge（stderr_captured；tail/filter 为 loop 内部后处理）、S3 `read_file` `range`（工具层，read handle 前生效）、S4 `orz resume`（文档指针）、S5 capabilities `spawn_scout` schema 单源、S6 测试失败摘要（terminal cargo test；run_tests 仍 R1 封存）；S7 不立项。
+- 审查：P0-1/P0-2 fixed；P1-1/P1-3/P1-4/P1-5 fixed；P1-2 accepted boundary（tail/filter 未进 schema、长任务流式沿用 auto-background）。
+- 读数：orz-loop 922/0/3、orz-host 453/0/6、orz-tools read_file 237/0。
+- 入口：`docs/DEV_ERGONOMICS_DESIGN_2026-10-26.md` / `docs/audits/362_DEV_ERGONOMICS_REVIEW_2026-10-26.md`。
+
+### 363 批 2026-10-27 常驻策略收敛与 plan_first 改名（用户令治理；计数 65 不变）
+- 落码：D4／分块表／任务状态行／SELF_CHECK 常驻句默认 pull（`ORZ_MODEL_FACE_D4/BLOCK_TABLE/STATUS_LINE`＋`ORZ_SELF_CHECK_RESIDENT` 单键回退；单元测试默认保留旧常驻面回归）；`plan_first`→`plan`（`plan_gate` opt-in，旧 builder/常量 deprecated alias）；context-scale 第二次询问去「质量已严重衰减/可靠下沿」降智暗示，只报读数与动作。
+- 验证：`cargo check -p orz-loop -p orz-bin` 通过；orz-loop 922/0/3；故障消融五观察点（D4 陈旧编辑／压缩后块缺失／任务状态缺失／硬门越线／收尾无证据）为其后置验收，未跑。
+- 批号注：初稿误号「360 批」（撞 360 Windows 换装批），364 批收口改称 363。
+- 入口：`docs/audits/363_RESIDENT_POLICY_AND_PLAN_RENAME_2026-10-27.md`。
