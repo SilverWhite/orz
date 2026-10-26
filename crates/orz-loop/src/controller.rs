@@ -52,6 +52,24 @@ use crate::prompt::{
 use crate::retrieval::activation::{ActivationRegistry, StoredActivation};
 use crate::retrieval::evidence::EvidenceRecord;
 
+/// 359 补批（2026-10-26）：`self_check` 工具描述——只有终态声明 required
+/// 车道才追加 `[RUN_END]` 指令。353 §5.1 的语义是"声明为可选元数据、回合
+/// 边界由结构决定"，教学面不得在缺省车道继续命令模型输出声明。
+pub(crate) const SELF_CHECK_TOOL_DESC: &str = "Run the counterexample self-check \
+     before ending a non-routine task. Call with no arguments; returns the three \
+     standard questions (unverified premises / known counter-evidence / \
+     strength vs evidence) for you to answer and, if needed, revise the \
+     conclusion. Informational, not a hard gate — use it when you are about to \
+     finish substantive work.";
+
+/// 359 补批：required 车道的同一描述（追加 `[RUN_END]` 指令）。
+pub(crate) const SELF_CHECK_TOOL_DESC_REQUIRED: &str = "Run the counterexample \
+     self-check before ending a non-routine task. Call with no arguments; returns \
+     the three standard questions (unverified premises / known counter-evidence / \
+     strength vs evidence) for you to answer and, if needed, revise the \
+     conclusion. Informational, not a hard gate — use it when you are about to \
+     finish substantive work, then end with [RUN_END].";
+
 /// 毒锁容忍取内值（0do/345 批统一形态）：持锁线程 panic 后继续取内部值
 /// （343 事故面纪律——恢复/继续路径不得二次 panic），但必须 `warn` 留痕
 /// ——静默 `into_inner` 让中毒根因不可观测。新锁面一律经本助手。
@@ -84,6 +102,16 @@ pub fn max_tool_rounds_override() -> Option<u32> {
     std::env::var("ORZ_MAX_TOOL_ROUNDS")
         .ok()
         .and_then(|s| s.trim().parse().ok())
+}
+
+/// 358c（2026-10-26）：scout 并发上限——默认 2；`ORZ_SCOUT_MAX_CONCURRENCY`
+/// 可配（0/非法回默认）。同一 run 内超出即排队。
+pub fn scout_max_concurrency() -> usize {
+    std::env::var("ORZ_SCOUT_MAX_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(2)
 }
 
 /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, BACKLOG 0k / TODO
@@ -652,6 +680,12 @@ pub struct AgentLoopController {
     /// The counter is cleared at run start and consumed by
     /// `retrieval::evidence::build_structured_result` at each commit.
     pub(crate) next_source_seq: Mutex<u32>,
+    /// 358（2026-10-26）：scout 报告序号（`SC-0001`，run 内单调；与
+    /// `next_source_seq` 同族）。
+    pub(crate) next_scout_seq: std::sync::atomic::AtomicU64,
+    /// 358c（2026-10-26）：scout 并发上限（默认 2；`ORZ_SCOUT_MAX_CONCURRENCY`
+    /// 可配）。同一 run 内超出即排队，不并发放大。
+    pub(crate) scout_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
     /// GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 —
     /// mechanical source tier judge config (embedded seed lists by default;
     /// `ORZ_SOURCE_WEIGHTING_CONFIG` overrides at runtime). Quality layer
@@ -1001,6 +1035,10 @@ impl AgentLoopController {
             run_source_ledgers: Mutex::new(Vec::new()),
             retrieval_early_delivery_streak: std::sync::atomic::AtomicU32::new(0),
             next_source_seq: Mutex::new(0),
+            next_scout_seq: std::sync::atomic::AtomicU64::new(0),
+            scout_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(
+                scout_max_concurrency(),
+            )),
             source_weighting:
                 orz_assurance::source_weighting::SourceWeightConfig::from_env_or_default(),
             candidate_prefilter:
@@ -1682,6 +1720,10 @@ impl AgentLoopController {
             run_source_ledgers: Mutex::new(Vec::new()),
             retrieval_early_delivery_streak: std::sync::atomic::AtomicU32::new(0),
             next_source_seq: Mutex::new(0),
+            next_scout_seq: std::sync::atomic::AtomicU64::new(0),
+            scout_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(
+                scout_max_concurrency(),
+            )),
             source_weighting:
                 orz_assurance::source_weighting::SourceWeightConfig::from_env_or_default(),
             candidate_prefilter:
@@ -4165,7 +4207,9 @@ impl AgentLoopController {
                      gate arbitrates the goal). The LAST step must be the fixed \
                      terminal step (递交/完成) with id `deliver`; it never \
                      auto-advances on ordinary orders and is completed by a \
-                     `[RUN_END]` declaration with reason `completed`. On the FIRST round \
+                     `[RUN_END]` declaration with reason `completed` (or by a \
+                     substantive text-only turn when terminal declarations are \
+                     off). On the FIRST round \
                      of a run this is the only write tool available; an invalid \
                      plan is rejected with mechanical validation errors (one \
                      refill opportunity, then degrade)."
@@ -4292,13 +4336,12 @@ impl AgentLoopController {
         if !tool_defs.iter().any(|t| t.name == "self_check") {
             tool_defs.push(ToolDef {
                 name: "self_check".to_string(),
-                description: "Run the counterexample self-check before ending a \
-                     non-routine task. Call with no arguments; returns the three \
-                     standard questions (unverified premises / known counter-evidence / \
-                     strength vs evidence) for you to answer and, if needed, revise \
-                     the conclusion. Informational, not a hard gate — use it when you \
-                     are about to finish substantive work, then end with [RUN_END]."
-                    .to_string(),
+                description: if crate::model_stop::terminal_declaration_required() {
+                    SELF_CHECK_TOOL_DESC_REQUIRED
+                } else {
+                    SELF_CHECK_TOOL_DESC
+                }
+                .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {},
@@ -5858,6 +5901,57 @@ mod tests {
             "deliver step must be Done after run_end(completed)"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 359 补批（2026-10-26）：终态声明非 required 车道——实质文本轮
+    /// 即回合边界，`deliver` 末步同样机械完成（不再依赖 `[RUN_END]`）。
+    #[tokio::test]
+    async fn substantive_text_turn_completes_deliver_without_declaration() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("self_check", "call-deliver-2")]),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-DELIVER-NO-DECL".to_string(),
+            1,
+            "任务".to_string(),
+            vec!["交付".to_string()],
+        );
+        controller.blackboard().write().plan.steps[0].id = "deliver".to_string();
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-DELIVER-NODECL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, "完成");
+        assert!(
+            controller.blackboard().read().plan.steps[0]
+                .status
+                .is_done(),
+            "deliver step must be Done on a substantive text turn without [RUN_END]"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 359 补批（2026-10-26）：`self_check` 工具描述只在 required 车道
+    /// 教学 `[RUN_END]`；交互式缺省不得再命令声明。
+    #[test]
+    fn self_check_tool_description_follows_terminal_declaration() {
+        assert!(!SELF_CHECK_TOOL_DESC.contains("[RUN_END]"));
+        assert!(SELF_CHECK_TOOL_DESC_REQUIRED.contains("[RUN_END]"));
     }
 
     /// 0dm：被拒绝的 self_check 不算「调用过」——self_check_called 必须由

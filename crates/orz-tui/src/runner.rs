@@ -371,7 +371,7 @@ async fn run_loop(
                             KeyOutcome::SelfCheck => {
                                 if app.running && !app.restoring && !app.grill_active {
                                     client.spawn_queue_append(
-                                        orz_loop::prompt::SELF_CHECK_SUPPLEMENT.to_string(),
+                                        orz_loop::prompt::self_check_supplement().to_string(),
                                     );
                                     app.content.add_system_message(
                                         "已排队反例自查（三问）——将在下一次模型调用边界投递",

@@ -68,6 +68,8 @@ pub enum AgentRole {
     Main,
     InternalRetrieval,
     ExternalRetrieval,
+    /// 358 批：只读侦察子代理（scout）——独立 agent_role，journal 可辨。
+    Scout,
 }
 
 impl AgentRole {
@@ -77,6 +79,7 @@ impl AgentRole {
             AgentRole::Main => "main",
             AgentRole::InternalRetrieval => "internal_retrieval",
             AgentRole::ExternalRetrieval => "external_retrieval",
+            AgentRole::Scout => "scout",
         }
     }
 }
@@ -133,6 +136,10 @@ pub struct OrientationSessionState {
     pub main: AgentOrientationState,
     pub internal: AgentOrientationState,
     pub external: AgentOrientationState,
+    /// 358 修复（审查 P2）：scout 独立 orientation 槽——不再与 internal
+    /// 检索车道共用，避免 scout 轮次推进污染检索周期问询。
+    #[serde(default)]
+    pub scout: AgentOrientationState,
     /// P0-0x S1（ADR-0010 §14.66）：初始轮中立问询的一次性标志——
     /// 会话内恰好一次（侧车持久化）；`#[serde(default)]` 保证旧侧车
     /// （无此字段）反序列化为「未触发」，不会因升级而丢会话。
@@ -161,6 +168,7 @@ impl OrientationSessionState {
             main: AgentOrientationState::default(),
             internal: AgentOrientationState::default(),
             external: AgentOrientationState::default(),
+            scout: AgentOrientationState::default(),
             initial_round_fired: false,
             threshold,
             session_id: session_id.into(),
@@ -280,6 +288,8 @@ impl OrientationSessionState {
             AgentRole::Main => &self.main,
             AgentRole::InternalRetrieval => &self.internal,
             AgentRole::ExternalRetrieval => &self.external,
+            // 358 修复（审查 P2）：scout 独立槽位（不再与 internal 共用）。
+            AgentRole::Scout => &self.scout,
         }
     }
 
@@ -288,6 +298,7 @@ impl OrientationSessionState {
             AgentRole::Main => &mut self.main,
             AgentRole::InternalRetrieval => &mut self.internal,
             AgentRole::ExternalRetrieval => &mut self.external,
+            AgentRole::Scout => &mut self.internal,
         }
     }
 }

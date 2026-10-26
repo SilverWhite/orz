@@ -278,6 +278,15 @@ pub fn run_timeline(base_dir: &Path, run_id: &str) -> Value {
             let mut permission_events = Vec::new();
             let mut terminal: Option<Value> = None;
             let mut run_started_at: Option<String> = None;
+            // 358c（2026-10-26）：scout 子 run 的父视图——子代理事件与主 run
+            // 同 journal；`tool_completed(agent_role=scout)` 携带 child_run_id
+            // 与报告 stats，inspect 据此列 children（不伪造独立 journal 目录）。
+            let mut children: Vec<Value> = Vec::new();
+            // 358 修复（审查 P1）：scout wrapper 的 ToolStarted→ToolCompleted
+            // 之间是子代理的工具序列；按 child_run_id 归组。
+            let mut current_child: Option<String> = None;
+            let mut child_tool_calls: std::collections::BTreeMap<String, Vec<String>> =
+                std::collections::BTreeMap::new();
             for event in &events {
                 let event_type = event
                     .get("event_type")
@@ -319,12 +328,52 @@ pub fn run_timeline(base_dir: &Path, run_id: &str) -> Value {
                             "tool_started" => {
                                 entry["started_at"] =
                                     event.get("timestamp").cloned().unwrap_or(Value::Null);
+                                if event["payload"]["target"] == "scout" {
+                                    current_child =
+                                        event["payload"]["child_run_id"].as_str().map(String::from);
+                                } else if let Some(child) = &current_child {
+                                    let list = child_tool_calls.entry(child.clone()).or_default();
+                                    if !list.contains(&call_id) {
+                                        list.push(call_id.clone());
+                                    }
+                                }
                             }
                             "tool_completed" => {
                                 entry["completed_at"] =
                                     event.get("timestamp").cloned().unwrap_or(Value::Null);
                                 entry["exit_code"] = event["payload"]["exit_code"].clone();
                                 entry["status"] = event["payload"]["status"].clone();
+                                if event["payload"]["target"] == "scout" {
+                                    if event["payload"]["agent_role"] == "scout" {
+                                        let child_id =
+                                            event["payload"]["child_run_id"].as_str().unwrap_or("");
+                                        let child_tools = child_tool_calls
+                                            .get(child_id)
+                                            .map(|ids| {
+                                                ids.iter()
+                                                    .filter_map(|id| tools.get(id).cloned())
+                                                    .collect::<Vec<_>>()
+                                            })
+                                            .unwrap_or_default();
+                                        children.push(json!({
+                                            "child_run_id": event["payload"]["child_run_id"].clone(),
+                                            "parent_run_id": event["payload"]["parent_run_id"].clone(),
+                                            "report_id": event["payload"]["report_id"].clone(),
+                                            "status": event["payload"]["status"].clone(),
+                                            "exit_code": event["payload"]["exit_code"].clone(),
+                                            "files_read": event["payload"]["files_read"].clone(),
+                                            "tokens_used": event["payload"]["tokens_used"].clone(),
+                                            "wall_s": event["payload"]["wall_s"].clone(),
+                                            "tools": child_tools,
+                                        }));
+                                        current_child = None;
+                                    }
+                                } else if let Some(child) = &current_child {
+                                    let list = child_tool_calls.entry(child.clone()).or_default();
+                                    if !list.contains(&call_id) {
+                                        list.push(call_id.clone());
+                                    }
+                                }
                             }
                             "tool_heartbeat" => {
                                 if let Some(list) = entry["heartbeats"].as_array_mut() {
@@ -356,6 +405,7 @@ pub fn run_timeline(base_dir: &Path, run_id: &str) -> Value {
                 "tools": tool_list,
                 "permissions": permission_events,
                 "terminal": terminal,
+                "children": children,
             });
             let rendered = serde_json::to_string_pretty(&data).unwrap_or_default();
             envelope(
@@ -642,6 +692,70 @@ mod tests {
         assert_eq!(tool["heartbeats"].as_array().unwrap().len(), 1);
         assert_eq!(out["data"]["terminal"]["status"], "completed");
         assert!(out["meta"]["took_ms"].is_u64());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 358c（2026-10-26）：inspect run 的父子视图——scout 子 run 的
+    /// `tool_completed(agent_role=scout)` 携带 child_run_id/parent_run_id
+    /// 与报告 stats，`run_timeline` 据此列 children。
+    #[test]
+    fn run_timeline_lists_scout_children() {
+        let base = tempdir();
+        seed_run(
+            &base,
+            "RUN-s1-2",
+            &[
+                event("run_started", json!({})),
+                event(
+                    "tool_started",
+                    json!({
+                        "tool": "spawn_scout",
+                        "call_id": "c1",
+                        "target": "scout",
+                        "agent_role": "scout",
+                        "child_run_id": "scout-s1-0001",
+                        "parent_run_id": "RUN-s1-2"
+                    }),
+                ),
+                event(
+                    "tool_started",
+                    json!({"tool": "read_file", "call_id": "c2"}),
+                ),
+                event(
+                    "tool_completed",
+                    json!({"tool": "read_file", "call_id": "c2", "exit_code": 0}),
+                ),
+                event(
+                    "tool_completed",
+                    json!({
+                        "tool": "spawn_scout",
+                        "call_id": "c1",
+                        "target": "scout",
+                        "agent_role": "scout",
+                        "child_run_id": "scout-s1-0001",
+                        "parent_run_id": "RUN-s1-2",
+                        "report_id": "SC-0001",
+                        "status": "ok",
+                        "exit_code": 0,
+                        "files_read": 3,
+                        "tokens_used": 1200,
+                        "wall_s": 7
+                    }),
+                ),
+                event("run_finished", json!({"status": "completed"})),
+            ],
+        );
+        let out = run_timeline(&base, "RUN-s1-2");
+        let children = out["data"]["children"].as_array().expect("children array");
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0]["child_run_id"], "scout-s1-0001");
+        assert_eq!(children[0]["parent_run_id"], "RUN-s1-2");
+        assert_eq!(children[0]["report_id"], "SC-0001");
+        assert_eq!(children[0]["files_read"], 3);
+        assert_eq!(children[0]["status"], "ok");
+        let child_tools = children[0]["tools"].as_array().expect("child tools");
+        assert_eq!(child_tools.len(), 1);
+        assert_eq!(child_tools[0]["tool"], "read_file");
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -18,6 +18,9 @@
 pub enum DispatchTarget {
     InternalRetrieval,
     ExternalRetrieval,
+    /// 358b（2026-10-26）：只读侦察子代理——`spawn_scout` 单一入口。
+    /// 与检索车道同构（同一 loop、独立 journal），工具面只读白名单。
+    Scout,
     /// GAP-SUBAGENT-RUNTIME (2026-08-10, M4): the parent's structured
     /// disposition control tool (`retrieval_disposition`) — main-lane only
     /// (the subagent's tool projection strips it).
@@ -86,10 +89,66 @@ pub fn route(function_name: &str) -> DispatchTarget {
         DispatchTarget::InternalRetrieval
     } else if is_web_retrieval_tool(function_name) {
         DispatchTarget::ExternalRetrieval
+    } else if function_name == "spawn_scout" {
+        DispatchTarget::Scout
     } else if function_name == "retrieval_disposition" {
         DispatchTarget::ParentDisposition
     } else {
         DispatchTarget::Host
+    }
+}
+
+/// 358b（2026-10-26）：scout 启动工具的**声明**。
+///
+/// 与 `retrieval_disposition` 同路：声明由 loop 侧合成，不进 host registry
+/// ——执行不落在 host 工具面，而是被 `route("spawn_scout")` 接到
+/// `DispatchTarget::Scout`，由 scout 子代理车道承载。
+pub fn spawn_scout_tool_def() -> crate::host::ToolDef {
+    crate::host::ToolDef {
+        name: "spawn_scout".to_string(),
+        description: "Spawn a read-only scout sub-agent to survey files and return \
+                      a compact findings table (every finding cites path:line). \
+                      Use it when a task needs reading many files (>10) or an \
+                      independent verification pass; do not use it for 1-2 files \
+                      — the startup cost outweighs the saving. The scout cannot \
+                      write, cannot run commands, and cannot spawn further scouts."
+            .to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "One-line goal for the scout, e.g. 'list every terminal output decode site'."
+                },
+                "scope": {
+                    "type": "object",
+                    "description": "Paths the scout may read (whitelist).",
+                    "properties": {
+                        "paths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Absolute or workspace-relative paths."
+                        },
+                        "tools": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional narrower tool whitelist (default: read_file, grep)."
+                        }
+                    },
+                    "required": ["paths"]
+                },
+                "budget": {
+                    "type": "object",
+                    "description": "Optional caps; exceeding any cap returns partial findings.",
+                    "properties": {
+                        "max_files": {"type": "integer"},
+                        "max_tokens": {"type": "integer"},
+                        "max_wall_s": {"type": "integer"}
+                    }
+                }
+            },
+            "required": ["task", "scope"]
+        }),
     }
 }
 

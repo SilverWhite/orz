@@ -63,12 +63,56 @@ pub const SELF_CHECK_BLOCK: &str = "[SELF_CHECK]\n\
 这不是硬门。请据此修订或确认终答，然后按 §4.1 输出 [RUN_END]。\n\
 [/SELF_CHECK]";
 
+/// 2026-10-26（359 补批，353 §5.1）：终态声明**非 required** 车道
+/// （交互式 Web/TUI 缺省）的自查块——不再命令模型输出 `[RUN_END]`。
+/// 回合边界由结构决定（无 `tool_calls` 的文本＝回合结束），声明只是
+/// 可选元数据；`SELF_CHECK_BLOCK` 保留给 required 车道与历史块识别。
+pub const SELF_CHECK_BLOCK_NEUTRAL: &str = "[SELF_CHECK]\n\
+请对即将输出的结论做最后一次反例自查：\n\
+1. 是否存在未验证的前提？\n\
+2. 是否存在可推翻结论的已知证据？\n\
+3. 结论强度是否超出证据支持？\n\
+这不是硬门。请据此修订或确认终答。\n\
+[/SELF_CHECK]";
+
+/// 当前车道应返回的自查块（env 是交互车道单一事实源，355 §1）。
+pub fn self_check_block() -> &'static str {
+    self_check_block_for(crate::model_stop::terminal_declaration_required())
+}
+
+/// 纯选择函数（测试用；避免进程级 env 并发污染）。
+pub(crate) fn self_check_block_for(declare_required: bool) -> &'static str {
+    if declare_required {
+        SELF_CHECK_BLOCK
+    } else {
+        SELF_CHECK_BLOCK_NEUTRAL
+    }
+}
+
 /// 0dm：主车道常驻软提示（用户 2026-10-21 指定文案，逐字）。
 pub const SELF_CHECK_RESIDENT_LINE: &str = "请对非日常聊天类的任务调用反例自查。";
 
 /// 0dm：Web/TUI 工具栏「反例自查」投递的补充消息（用户面入口）。
 pub const SELF_CHECK_SUPPLEMENT: &str =
     "请对当前结论执行反例自查（三问），然后按需继续或输出 [RUN_END]。";
+
+/// 2026-10-26（359 补批）：非 required 车道的补充消息——同样不命令
+/// `[RUN_END]`（只保留"继续"这一半语义）。
+pub const SELF_CHECK_SUPPLEMENT_NEUTRAL: &str = "请对当前结论执行反例自查（三问），然后按需继续。";
+
+/// 当前车道应投递的自查补充消息。
+pub fn self_check_supplement() -> &'static str {
+    self_check_supplement_for(crate::model_stop::terminal_declaration_required())
+}
+
+/// 纯选择函数（测试用；避免进程级 env 并发污染）。
+pub(crate) fn self_check_supplement_for(declare_required: bool) -> &'static str {
+    if declare_required {
+        SELF_CHECK_SUPPLEMENT
+    } else {
+        SELF_CHECK_SUPPLEMENT_NEUTRAL
+    }
+}
 
 /// 0dm：终态声明缺失时的一次性机械提示（不是门；工具轮后有新动作可再
 /// 提示一次，最多 2 次；之后 fail-open 接受）。
@@ -113,6 +157,7 @@ pub fn is_injected_block_text(content: &str) -> bool {
     let content = content.trim();
     content == COUNTEREXAMPLE_GATE_BLOCK
         || content == SELF_CHECK_BLOCK
+        || content == SELF_CHECK_BLOCK_NEUTRAL
         || content == TERMINAL_NOTICE_BLOCK
         || INJECTED_BLOCK_PREFIXES
             .iter()
@@ -219,6 +264,7 @@ pub fn is_generated_injected_block(content: &str) -> bool {
     let content = content.trim();
     if content == COUNTEREXAMPLE_GATE_BLOCK
         || content == SELF_CHECK_BLOCK
+        || content == SELF_CHECK_BLOCK_NEUTRAL
         || content == TERMINAL_NOTICE_BLOCK
     {
         return true;
@@ -652,6 +698,14 @@ pub fn build_retrieval_system_prompt(
 ) -> String {
     let section_name = role.section_name();
     let lanes_contract = match role {
+        // 358：scout 车道——只读取证，返回 findings（每条带 path:line）。
+        crate::agents::SubagentRole::Scout => {
+            "Scout lane: read-only reconnaissance. Use grep / read_file only. \
+             Return ONLY a JSON object: {\"summary\": \"...\", \"findings\": \
+             [{\"claim\": \"...\", \"evidence\": \"path:line\", \
+             \"confidence\": \"high|mid|low\"}]}. Every finding must cite \
+             `path:line`; no writes, no browser, no sub-scouts."
+        }
         crate::agents::SubagentRole::ExternalRetrieval => {
             "Retrieval lanes (0t dual-lane): both lanes are available in \
              this session — browser_read — [车道:本地浏览器检索|推荐首选] \
@@ -930,6 +984,7 @@ mod tests {
         let status = build_status_line(Some("目标"), &[]);
         let blocks: Vec<(&str, String)> = vec![
             ("self-check", SELF_CHECK_BLOCK.to_string()),
+            ("self-check-neutral", SELF_CHECK_BLOCK_NEUTRAL.to_string()),
             ("terminal-notice", TERMINAL_NOTICE_BLOCK.to_string()),
             (
                 "orientation",
@@ -1038,7 +1093,18 @@ mod tests {
     fn self_check_block_carries_shared_questions() {
         for question in SELF_CHECK_QUESTIONS.lines() {
             assert!(SELF_CHECK_BLOCK.contains(question), "{question}");
+            assert!(SELF_CHECK_BLOCK_NEUTRAL.contains(question), "{question}");
         }
+    }
+
+    /// 359 补批（2026-10-26）：自查块/补充消息只在 required 车道命令
+    /// `[RUN_END]`；交互式缺省（353 §5.1）不得再教学该声明。
+    #[test]
+    fn self_check_texts_follow_terminal_declaration() {
+        assert!(self_check_block_for(true).contains("[RUN_END]"));
+        assert!(!self_check_block_for(false).contains("[RUN_END]"));
+        assert!(self_check_supplement_for(true).contains("[RUN_END]"));
+        assert!(!self_check_supplement_for(false).contains("[RUN_END]"));
     }
 
     /// 318 审查 P1-C5（2026-10-19）：真实用户文本可以合法地以登记前缀开头

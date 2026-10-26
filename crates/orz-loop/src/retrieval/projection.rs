@@ -298,6 +298,17 @@ impl AgentLoopController {
         role: SubagentRole,
         retrieval_enabled: bool,
     ) -> Vec<ToolDef> {
+        // 358a（2026-10-26）：scout 车道＝**只读取证面**。
+        // 白名单而非黑名单：只放 read_file / grep（+ project_doc_index 若在
+        // 主面），其余一律不进入——无写、无 exec、无 browser、无 web、
+        // 无 retrieve_project_*、无 spawn_scout（深度 1，杜绝递归）。
+        if role == SubagentRole::Scout {
+            return parent_tools
+                .iter()
+                .filter(|t| matches!(t.name.as_str(), "read_file" | "grep" | "project_doc_index"))
+                .cloned()
+                .collect();
+        }
         let mut defs: Vec<ToolDef> = parent_tools
             .iter()
             .filter(|t| {
@@ -937,6 +948,43 @@ mod tests {
             ],
             "internal lane is read-family only (no web/browser control / \
              retrieve dispatch): {names:?}"
+        );
+    }
+
+    /// 358a（2026-10-26）：scout 车道是**只读白名单**——写面／执行面／检索面／
+    /// 递归面一律不进入。这是设计 §6 验收第 4 条的负向钉。
+    #[test]
+    fn scout_lane_projection_is_read_only_whitelist() {
+        let parent = [
+            "read_file",
+            "grep",
+            "search_replace",
+            "run_terminal_cmd",
+            "web_search",
+            "web_fetch",
+            "browser_read",
+            "retrieve_project_docs",
+            "spawn_scout",
+        ]
+        .iter()
+        .map(|n| ToolDef {
+            name: n.to_string(),
+            description: format!("tool {n}"),
+            parameters: serde_json::json!({}),
+        })
+        .collect::<Vec<_>>();
+        let projected = AgentLoopController::subagent_tool_projection(
+            &parent,
+            &BrowserDeclaringRegistry,
+            SubagentRole::Scout,
+            true,
+        );
+        let mut names: Vec<&str> = projected.iter().map(|t| t.name.as_str()).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["grep", "read_file"],
+            "scout 面只允许 read_file/grep（无写、无 exec、无 web、无递归）: {names:?}"
         );
     }
 

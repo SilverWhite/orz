@@ -3624,7 +3624,7 @@ impl AgentLoopController {
                     None,
                 ));
             }
-            let content = crate::prompt::SELF_CHECK_BLOCK.to_string();
+            let content = crate::prompt::self_check_block().to_string();
             writer
                 .record(
                     EventType::ToolCompleted,

@@ -587,6 +587,11 @@ pub fn capability_list(cwd: &Path) -> Result<serde_json::Value, String> {
             "read",
             "Discover and query the workspace project-doc index (retrieval-lane read); R1-sealed from the declaration face (handler retained).",
         ),
+        (
+            "spawn_scout",
+            "read",
+            "Spawn a read-only reconnaissance subagent (task/scope/budget) that returns bounded findings with path:line evidence; loop-synthesized (no host handler), declared on the main face since 358.",
+        ),
     ];
     for (name, kind, usage) in curated {
         let readonly =
@@ -599,7 +604,11 @@ pub fn capability_list(cwd: &Path) -> Result<serde_json::Value, String> {
             "readonly": readonly,
             "one_line_usage": usage,
             "schema_source": "curated",
-            "availability": if *name == "blackboard_read" { "declared" } else { "sealed" },
+            "availability": if matches!(*name, "blackboard_read" | "spawn_scout") {
+                "declared"
+            } else {
+                "sealed"
+            },
         }));
     }
     Ok(serde_json::json!({
@@ -626,10 +635,11 @@ pub const CAPABILITY_COVERAGE: &str = "coverage: (1) the 8 toolset entries are d
      (2) browser_read/browser_control are derived from the host browser-lane declarations, \
      availability=gated — declared per session by the retrieval enable gate, which this \
      standalone CLI cannot observe; \
-     (3) blackboard_read/run_tests/pdf_read/project_doc_index are CURATED loop-side entries \
-     (schemas live in the loop controller with no host-side machine-readable source, \
-     params_schema=null on purpose — nothing fabricated); run_tests/pdf_read/project_doc_index \
-     are R1-sealed from the current declaration face (handlers retained); \
+     (3) blackboard_read/spawn_scout/run_tests/pdf_read/project_doc_index are CURATED loop-side \
+     entries (schemas live in the loop controller with no host-side machine-readable source, \
+     params_schema=null on purpose — nothing fabricated); spawn_scout is loop-synthesized \
+     (no host handler) and declared on the main face since 358; run_tests/pdf_read/\
+     project_doc_index are R1-sealed from the current declaration face (handlers retained); \
      (4) NOT covered: loop-side tools with no host-side schema source \
      (blackboard_write/context_manage/\
      plan_write/submit — conditional declarations; self_check — unconditional since 356, \
@@ -972,7 +982,7 @@ mod tests {
                 "{name} must carry the real schema"
             );
         }
-        // ③ loop 侧四件：策展——schema 置 null，不虚构。
+        // ③ loop 侧五件：策展——schema 置 null，不虚构。
         let blackboard = entry("blackboard_read");
         assert_eq!(blackboard["schema_source"], "curated");
         assert_eq!(blackboard["availability"], "declared");
@@ -980,6 +990,13 @@ mod tests {
         assert_eq!(blackboard["readonly"], true);
         assert!(blackboard["params_schema"].is_null());
         assert!(!blackboard["one_line_usage"].as_str().unwrap().is_empty());
+        let scout = entry("spawn_scout");
+        assert_eq!(scout["schema_source"], "curated");
+        assert_eq!(scout["availability"], "declared");
+        assert_eq!(scout["kind"], "read");
+        assert_eq!(scout["readonly"], true);
+        assert!(scout["params_schema"].is_null());
+        assert!(!scout["one_line_usage"].as_str().unwrap().is_empty());
         for name in ["run_tests", "pdf_read", "project_doc_index"] {
             let e = entry(name);
             assert_eq!(e["schema_source"], "curated", "{name}");
@@ -990,8 +1007,8 @@ mod tests {
         assert_eq!(entry("run_tests")["kind"], "write");
         assert_eq!(entry("run_tests")["readonly"], false);
         assert_eq!(entry("run_tests")["needs_approval"], true);
-        // 清单总数＝8+2+4；web_search 凭据面保持如实缺省。
-        assert_eq!(tools.len(), 14, "toolset 8 + browser 2 + curated 4");
+        // 清单总数＝8+2+5；web_search 凭据面保持如实缺省。
+        assert_eq!(tools.len(), 15, "toolset 8 + browser 2 + curated 5");
         assert_eq!(data["web_search_credentials"], false);
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1004,6 +1021,7 @@ mod tests {
             "build_toolset",
             "gated",
             "CURATED",
+            "spawn_scout",
             "R1-sealed",
             "NOT covered",
             "blackboard_write",

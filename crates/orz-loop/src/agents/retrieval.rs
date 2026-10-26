@@ -28,6 +28,9 @@ use crate::host::ToolDef;
 pub enum SubagentRole {
     InternalRetrieval,
     ExternalRetrieval,
+    /// 358 批（2026-10-26）：只读侦察子代理——通用任务、只读工具面、
+    /// 结构化返回（`findings[]` + `stats`），不写黑板分区、不再生 scout。
+    Scout,
 }
 
 impl SubagentRole {
@@ -36,6 +39,7 @@ impl SubagentRole {
         match self {
             SubagentRole::InternalRetrieval => "internal_retrieval",
             SubagentRole::ExternalRetrieval => "external_retrieval",
+            SubagentRole::Scout => "scout",
         }
     }
 
@@ -44,6 +48,8 @@ impl SubagentRole {
         match self {
             SubagentRole::InternalRetrieval => "internal_ret",
             SubagentRole::ExternalRetrieval => "external_ret",
+            // scout 不写黑板分区（报告由主模型落一行索引到 findings）。
+            SubagentRole::Scout => "scout_ret",
         }
     }
 }
@@ -234,6 +240,9 @@ pub fn write_section(
 ) {
     let mut w = blackboard.write();
     match role {
+        // 358：scout 不写黑板分区——报告由主模型落一行索引到 findings 分区，
+        // 全文落 scout_report/。此臂保持空实现，避免误写 internal_ret。
+        SubagentRole::Scout => {}
         SubagentRole::InternalRetrieval => {
             let section: &mut InternalRetSection = &mut w.internal_ret;
             section.response = Some(response);

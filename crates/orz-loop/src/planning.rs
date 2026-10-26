@@ -195,7 +195,8 @@ pub(crate) fn parse_and_validate_plan(arguments: &Value) -> PlanVerdict {
         errors.push(format!(
             "the final step id must be a terminal step ({}); the last step is \
              the fixed 递交/完成 step, completed by a [RUN_END] declaration with \
-             reason `completed`",
+             reason `completed` (or by a substantive text-only turn when terminal \
+             declarations are off)",
             TERMINAL_STEP_IDS.join(" / ")
         ));
     }

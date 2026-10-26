@@ -14,6 +14,9 @@
 
 pub mod main;
 pub mod retrieval;
+/// 358（2026-10-26）：只读 scout 子代理的契约与结果成形。
+pub mod scout;
 
 pub use main::MainAgent;
 pub use retrieval::{RetrievalSubagent, SubagentRole};
+pub use scout::{ScoutFinding, ScoutReport, ScoutStats, ScoutStatus};

@@ -76,6 +76,12 @@ impl RunUsageMeter {
         self.journal_line_written = true;
     }
 
+    /// 358（2026-10-26）：scout 子代理的 `tokens_used` 差值读取
+    /// （prompt + completion；scout 前后各取一次）。
+    pub(crate) fn token_totals(&self) -> (u64, u64) {
+        (self.prompt_tokens, self.completion_tokens)
+    }
+
     /// `run_usage_metered` 事件 payload（每 run 终态前恰一条）。
     pub(crate) fn metered_payload(&self, model: &str, effort_tier: &str) -> serde_json::Value {
         serde_json::json!({

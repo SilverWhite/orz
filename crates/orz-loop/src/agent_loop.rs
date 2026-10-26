@@ -672,6 +672,8 @@ impl LoopProfile {
         let agent_role = match role {
             SubagentRole::InternalRetrieval => AgentRole::InternalRetrieval,
             SubagentRole::ExternalRetrieval => AgentRole::ExternalRetrieval,
+            // 358：scout 独立 agent_role（journal 可辨），不占检索车道。
+            SubagentRole::Scout => AgentRole::Scout,
         };
         Self {
             role: agent_role,
@@ -2239,8 +2241,12 @@ fn terminal_source_for(declared: bool, substantive: bool) -> &'static str {
 }
 
 /// 0dm：模型以 `[RUN_END]`（conclude/completed）结束且 plan 末步是新的
-/// `deliver` 时，机械地把末步记为 Done——`submit` 退役后这是 `deliver` 的
-/// 唯一完成源；其他 reason（partial/blocked/pause）不推进。
+/// `deliver` 时，机械地把末步记为 Done——`submit` 退役后这是声明车道的
+/// 完成源；其他 reason（partial/blocked/pause）不推进。
+///
+/// 359 补批（2026-10-26）：终态声明非 required 车道（交互式缺省）由
+/// **实质文本轮**（`terminal_source == "text_without_terminal"`）完成
+/// `deliver`——回合边界由结构决定（353 §5.1），声明不是唯一完成源。
 fn mark_deliver_done(svc: &SharedLoopServices<'_>, run_id: &str) {
     let mut bb = svc.blackboard.write();
     let Some(index) = bb.plan.steps.len().checked_sub(1) else {
@@ -3249,7 +3255,14 @@ pub(crate) async fn run_agent_loop(
             // 派发）与 ACAF/权限/预算/候选计数硬门由调用面照常执行。
             projected
         } else {
-            tool_defs.to_vec()
+            let mut defs = tool_defs.to_vec();
+            // 358b（2026-10-26）：scout 启动工具由 loop 侧合成——声明进面、
+            // 执行走 `route("spawn_scout") → DispatchTarget::Scout`，不进
+            // host registry（与 `retrieval_disposition` 同路）。
+            if profile.role == AgentRole::Main && !defs.iter().any(|t| t.name == "spawn_scout") {
+                defs.push(crate::relay::spawn_scout_tool_def());
+            }
+            defs
         };
         // P0-C orz 内嵌集成 S2 (2026-08-15): 注册板块每轮机械刷新（主车道；
         // 检索车道无操作台）。内容 = 动作名 + 最小参数提示（最小提示由
@@ -4421,6 +4434,13 @@ pub(crate) async fn run_agent_loop(
                 });
             }
             last_text = response.text;
+            // 359 补批（2026-10-26）：终态声明非 required 车道不再要求
+            // `[RUN_END]`；实质文本轮即回合边界（353 §5.1），plan 的
+            // `deliver` 末步在此机械完成——此前唯一完成源挂在声明上，
+            // 交互式缺省下 deliver 会永远停在 pending。
+            if terminal_source == "text_without_terminal" {
+                mark_deliver_done(svc, &current_run_id);
+            }
             break;
         }
 
@@ -5178,7 +5198,11 @@ pub(crate) async fn run_agent_loop(
             };
             let mut round_feedback: Option<PolicyFeedback> = None;
             let result = match effective {
-                DispatchTarget::InternalRetrieval | DispatchTarget::ExternalRetrieval => {
+                // 358b：scout 与检索车道同构——同一 loop、独立 journal、
+                // 只读工具面（白名单在 `subagent_tool_projection` 早退）。
+                DispatchTarget::InternalRetrieval
+                | DispatchTarget::ExternalRetrieval
+                | DispatchTarget::Scout => {
                     if profile.tool_filter.denies_nested_dispatch() {
                         // One seat per role — a retrieval lane never
                         // dispatches another retrieval (ADR-0010 §11.3).

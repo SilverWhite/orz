@@ -115,6 +115,11 @@ impl ToolDispatcher {
         // (click/type/eval) must re-review this — the host side gates those
         // by ACTION (unknown actions stay `Edit`).
         "browser_control",
+        // 358（2026-10-26）：`spawn_scout` 是 loop 合成的只读侦察入口
+        // （无 host handler；子代理工具面由投影白名单限死
+        // read_file/grep/project_doc_index）。ReadOnly 类避免能力清单
+        // 把 spawn 误标 write/needs_approval。
+        "spawn_scout",
     ];
 
     /// IP3a: evaluate the instruction provenance gate for the tool-call

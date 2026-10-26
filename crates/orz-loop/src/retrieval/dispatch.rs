@@ -63,16 +63,37 @@ impl AgentLoopController {
             DispatchTarget::ExternalRetrieval => {
                 (SubagentRole::ExternalRetrieval, "external_retrieval")
             }
+            // 358b：scout 车道（`spawn_scout` 单一入口）。
+            DispatchTarget::Scout => (SubagentRole::Scout, "scout"),
             DispatchTarget::ParentDisposition => {
                 unreachable!("disposition calls go to handle_parent_disposition")
             }
             DispatchTarget::Host => unreachable!("host calls go to run_host_tool"),
         };
+        // 358（2026-10-26）：scout 走独立只读路径——不建 activation、不写
+        // evidence / 黑板分区；结果成形与落盘见 `agents/scout.rs`。
+        if role == SubagentRole::Scout {
+            return self
+                .run_scout_subagent(
+                    host,
+                    writer,
+                    run_gateway,
+                    tc,
+                    messages,
+                    tool_defs,
+                    orientation,
+                    cancel,
+                    heartbeat,
+                )
+                .await;
+        }
         // 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1, v1.3): 独立检索启用门
         // ——三值模式退役后唯一授权状态。未启用会话 refuse WITHOUT a
         // ToolStarted（拒绝码 `retrieval_not_enabled`，脱离模式状态机）：
         // 拒绝是 terminal ToolCompleted(error) alone。
-        if !self.retrieval_enabled {
+        // 358b：scout 不依赖检索启用门——它是通用只读侦察，不是检索车道
+        // （检索门只约束 internal/external 两条 web/doc 车道）。
+        if !self.retrieval_enabled && role != SubagentRole::Scout {
             let msg = format!(
                 "retrieval '{target_name}' refused — retrieval is not \
                  enabled for this session (ADR-0010 §14.65); no \
@@ -327,6 +348,8 @@ impl AgentLoopController {
                 ),
             ))),
             SubagentRole::InternalRetrieval => None,
+            // 358：scout 车道无 browser，SERP 预算恒 None。
+            SubagentRole::Scout => None,
         };
 
         // The subagent's tool projection = the parent's registry minus the
@@ -404,6 +427,8 @@ impl AgentLoopController {
             match role {
                 SubagentRole::ExternalRetrieval => Some(fetch_candidates.clone()),
                 SubagentRole::InternalRetrieval => None,
+                // 358：scout 不执行候选计数工具（无 web/browser 面）。
+                SubagentRole::Scout => None,
             },
             // 第二批分档：同轮 browser_read 并行上限（standard 2 /
             // extended 4 / deep 不限——host tab 池为最终物理上限）。
@@ -707,6 +732,8 @@ impl AgentLoopController {
                     match role {
                         SubagentRole::InternalRetrieval => "project_doc",
                         SubagentRole::ExternalRetrieval => "web_page",
+                        // 358：scout 的取证域＝本地文件系统。
+                        SubagentRole::Scout => "scout",
                     },
                     &subagent_session_id,
                     &activation_id,
@@ -1692,6 +1719,99 @@ mod tests {
     /// host-tool round — the shared loop's journal events (subagent
     /// model_output ×2, the host ToolCompleted) land in the same chain
     /// inside the parent's wrapper.
+    /// 358b：scout 冒烟——主模型 `spawn_scout` → 只读子代理读文件 →
+    /// JSON findings 成形 → 主对话只收 ≤2K 摘要；全文落 `scout-report/`。
+    #[tokio::test]
+    async fn scout_dispatch_forms_bounded_report_and_journals_scout_role() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "file contents".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let scout_json = r#"{"summary":"两处解码点","findings":[{"claim":"A","evidence":"src/a.rs:1","confidence":"high"},{"claim":"B","evidence":"src/b.rs:2","confidence":"mid"}]}"#;
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![crate::gateway::model::ToolCall {
+                name: "spawn_scout".to_string(),
+                arguments: serde_json::json!({
+                    "task": "列出解码点",
+                    "scope": { "paths": ["src"] }
+                }),
+                call_id: "call-scout".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-read")]),
+            ScriptedResponse::text(scout_json),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let mut conversation = Vec::new();
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "侦察",
+                "RUN-SCOUT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, "完成");
+
+        let scout_tool = conversation
+            .iter()
+            .find(|m| m.role == Role::Tool && m.content.contains("[SCOUT SC-0001]"))
+            .expect("scout tool result in main conversation");
+        assert!(
+            scout_tool.content.chars().count() <= 2000,
+            "scout summary must be ≤2K, got {}",
+            scout_tool.content.chars().count()
+        );
+        assert!(scout_tool.content.contains("src/a.rs:1"));
+        assert!(scout_tool.content.contains("full report:"));
+
+        let events = events(&dir);
+        assert!(
+            events.iter().any(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("target").and_then(|v| v.as_str()) == Some("scout")
+            }),
+            "scout ToolStarted must pair with ToolCompleted: {:?}",
+            event_types(&dir)
+        );
+        let completed = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("target").and_then(|v| v.as_str()) == Some("scout")
+            })
+            .expect("scout ToolCompleted");
+        assert_eq!(
+            completed.payload.get("agent_role").and_then(|v| v.as_str()),
+            Some("scout"),
+            "scout ToolCompleted must carry agent_role=scout: {:?}",
+            event_types(&dir)
+        );
+        assert_eq!(
+            completed.payload.get("exit_code"),
+            Some(&serde_json::json!(0))
+        );
+
+        let report = std::fs::read_to_string(dir.join("scout_report").join("SC-0001.md"))
+            .expect("scout report persisted");
+        assert!(report.contains("两处解码点"));
+        assert!(report.contains("src/b.rs:2"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn subagent_loop_runs_multi_round_with_host_tool() {
         let dir = test_dir();

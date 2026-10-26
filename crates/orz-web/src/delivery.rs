@@ -2,7 +2,9 @@
 //!
 //! 设计依据 `docs/TERMINAL_DECLARATION_AND_SELF_CHECK_PULL_DESIGN_2026-10-21.md` §4.2：
 //! `submit` 已从模型工具面退役，交付由 `[RUN_END]`（intent=conclude /
-//! reason=completed）机械完成；`compute_delivery_status` 是 loop 运行时函数
+//! reason=completed）机械完成；终态声明非 required 车道（交互式缺省）则由
+//! **实质文本轮**完成 `deliver`（359 补批，353 §5.1）。
+//! `compute_delivery_status` 是 loop 运行时函数
 //! （依赖进程内的计划批准基线 `delivery_baseline`），**空闲 UI 不可复算**。
 //! 因此本模块只做事实投影，边界如实写进响应的 `notes`：
 //!

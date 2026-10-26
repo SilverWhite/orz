@@ -750,9 +750,10 @@ pub fn build_model_face(
     // 0bs ①（2026-09-25）：**结束自述通道常驻尾行**——告知面收口。0bm 轮
     // 实证：`[RUN_END]` 语法只挂 pull 面 `guide`（`blackboard_read section=
     // guide`）⇒ 137 工具轮零自述、`run_finished` 仍三键。单一来源＝
-    // `model_stop`；每轮尾随（分块表之后＝窗口最末消息）。0bz S3 后的口径：
-    // 头部结构消息（指针/D4）已常驻，尾部两行仍待分块出现——尾部追加不破
-    // 前缀，无分块会话不注入。0bz S3′ 后指针常驻头部、D4 落尾部（均常驻）。
+    // `model_stop`；**仅 required 车道**每轮尾随（`model_stop_resident_line()`
+    // 在交互式缺省返回空串，353 §9.2/355 §1）。0bz S3 后的口径：头部结构
+    // 消息（指针/D4）已常驻，尾部两行仍待分块出现——尾部追加不破前缀，
+    // 无分块会话不注入。0bz S3′ 后指针常驻头部、D4 落尾部（均常驻）。
     let stop_line = crate::model_stop::model_stop_resident_line();
     if !stop_line.is_empty() {
         view.push(mechanical_message(stop_line));

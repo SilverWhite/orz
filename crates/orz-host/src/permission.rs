@@ -692,6 +692,10 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
         // 0dm（2026-10-21）：`self_check` 只返回三问模板，无文件/网络/外部
         // 副作用——与 blackboard_read 同族，ReadOnly 自动放行。
         || tool == "self_check"
+        // 358（2026-10-26）：`spawn_scout` 是 loop 合成的只读侦察入口——
+        // 无 host handler、无文件/网络副作用；与 `self_check` 同族。
+        // 两表同批：controller `READ_ONLY_EXEMPT_TOOLS` 与本桥 arm。
+        || tool == "spawn_scout"
     {
         // Controller-owned in-memory tools (A3 blackboard_read / A6 §8 C.2
         // compaction_whitelist_add): NO external side effect — no file, no
@@ -1153,6 +1157,8 @@ mod tests {
             ),
             // 0dm：自查工具无参数。
             ("self_check", serde_json::json!({})),
+            // 358：spawn_scout 只读侦察（loop 合成；代表调用取任务契约）。
+            ("spawn_scout", serde_json::json!({"task": "x"})),
             (
                 "compaction_whitelist_add",
                 serde_json::json!({"content": "x"}),
