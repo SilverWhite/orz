@@ -499,6 +499,17 @@ fn main_inner() {
         run_replay_entry(&path);
         return;
     }
+    // 362 S4：`orz resume` 汇总最近 run 的机械 handoff / journal。
+    if args.get(1).map(String::as_str) == Some("resume") {
+        match resume_summary() {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("orz resume: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     // Bare `orz` (or `--run-root` / `--fake-provider` only) launches the
     // assurance workbench TUI — Python `gsa` precedent.
     let cli_mode = args
@@ -2184,6 +2195,73 @@ fn load_fake_scenario(path: &str) -> Result<Vec<ScriptedResponse>, String> {
 /// Render the plan artifact's four sections for the plan-write counterexample
 /// gate round (mechanical — no model-generated plan text yet).
 /// Parse `-p <prompt>` or `--prompt <prompt>` from argv.
+/// 362 S4：汇总最近 run 的机械 handoff；无 handoff 时回退到 journal 摘要。
+fn resume_summary() -> Result<String, String> {
+    let root = std::env::current_dir().map_err(|e| e.to_string())?;
+    let gsa = root.join(".gsa");
+    let handoff = gsa.join("handoff");
+    if let Ok(rd) = std::fs::read_dir(&handoff) {
+        let mut files: Vec<_> = rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "md"))
+            .collect();
+        files.sort_by_key(|p| p.metadata().and_then(|m| m.modified()).ok());
+        if let Some(p) = files.last() {
+            return std::fs::read_to_string(p).map_err(|e| e.to_string());
+        }
+    }
+    let runs = gsa.join("runs");
+    let mut dirs: Vec<_> = std::fs::read_dir(&runs)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort_by_key(|p| p.metadata().and_then(|m| m.modified()).ok());
+    let latest = dirs.last().ok_or("no runs under .gsa/runs")?;
+    let text = std::fs::read_to_string(latest.join("events.jsonl")).map_err(|e| e.to_string())?;
+    let mut prompt = String::new();
+    let mut rounds = 0usize;
+    let mut tools = 0usize;
+    let mut terminal = "unknown";
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        match v["event_type"].as_str().unwrap_or("") {
+            "prompt_submitted" => {
+                prompt = v["payload"]["prompt"].as_str().unwrap_or("").to_string()
+            }
+            "model_output" => rounds += 1,
+            "tool_started" => tools += 1,
+            "run_finished" => terminal = "completed",
+            "run_failed" => terminal = "failed",
+            "run_cancelled" => terminal = "cancelled",
+            "run_terminated" => terminal = "terminated",
+            _ => {}
+        }
+    }
+    let mut out = format!(
+        "# Run {}\n\n- 终态: {}\n- 模型轮数: {}\n- 工具调用: {}\n- prompt: {}\n\n（无 handoff；新 run 结束后自动落盘）\n",
+        latest.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
+        terminal,
+        rounds,
+        tools,
+        prompt.chars().take(300).collect::<String>()
+    );
+    for p in [
+        "CLI_PROJECT_INDEX.md",
+        "docs/BACKLOG_AND_PRIORITIES.md",
+        "docs/DEV_ERGONOMICS_DESIGN_2026-10-26.md",
+    ] {
+        if root.join(p).exists() {
+            out.push_str(&format!("- 文档: {p}\n"));
+        }
+    }
+    Ok(out)
+}
+
 fn parse_prompt(args: &[String]) -> Result<String, String> {
     for (i, arg) in args.iter().enumerate() {
         if arg == "-p" || arg == "--prompt" {

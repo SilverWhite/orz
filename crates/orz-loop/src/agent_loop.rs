@@ -2474,7 +2474,7 @@ pub(crate) async fn run_agent_loop(
     // （恢复会话或本会话后续 run）不重复触发；检索车道不触发。计划轮计入
     // 已完成逻辑模型轮（feed_round 照常），通过后计划落黑板 plan epoch。
     let mut plan_gate: Option<crate::planning::PlanGateState> = None;
-    if controller.plan_first_enabled()
+    if controller.plan_gate_enabled()
         && !controller.plan_first_session_done()
         && profile.role == AgentRole::Main
         && svc.blackboard.read().plan.plan_id.is_none()
@@ -2671,7 +2671,10 @@ pub(crate) async fn run_agent_loop(
         // （epoch 冻结纪律不变：压缩/截断后 `face_d4_block = None` 重渲一次）。
         // 旧条件（分块非空才渲染）使 D4 在开窗轮才插入 face 前部 ⇒ 开窗前缀
         // 重排（与 model_face 常驻头同机理，`RUN-CLI-6ab99969` r40）。
-        if face_d4_block.is_none() {
+        if face_d4_block.is_none()
+            && !crate::prompt::plain_input_enabled()
+            && crate::prompt::d4_resident_enabled()
+        {
             face_d4_block = Some(crate::action_ledger::render_run_context_block(
                 run_baseline.as_deref(),
                 &svc.blackboard.read().edits,
@@ -2734,7 +2737,10 @@ pub(crate) async fn run_agent_loop(
         // 2026-09-24 必定压缩补足：T1 闩按越线重新武装，由强制窗收口处的
         // 显式 rearm 驱动两级升级，见下方 `t1_window_failures` 增减点）。
         let mut truncate_now = false;
-        if pending_checkpoint.is_none() && profile.role == AgentRole::Main {
+        if pending_checkpoint.is_none()
+            && profile.role == AgentRole::Main
+            && !crate::prompt::plain_input_enabled()
+        {
             let ladder = svc.context_compact.context_scale_ladder;
             let truncate_tokens = crate::model_face::ladder_truncate_tokens(&ladder);
             let fires = context_scale.due(model_face_tokens, &ladder);
@@ -3253,13 +3259,30 @@ pub(crate) async fn run_agent_loop(
             // 调用一个往返）；console 订单面退役，不再收敛到只读+写单面。
             // 半助理层背板（run_terminal_cmd/search_replace/run_tests/检索
             // 派发）与 ACAF/权限/预算/候选计数硬门由调用面照常执行。
-            projected
+            // 358 验收修复（2026-10-26）：probe 投影只看得见 host 注册面，
+            // spawn_scout 是 loop 合成工具，投影后必须补挂——否则正常
+            // 主车道（有 probe snapshot 时）模型看不到该工具。
+            let mut defs = projected;
+            if profile.role == AgentRole::Main
+                && !defs.iter().any(|t| t.name == "spawn_scout")
+                && defs
+                    .iter()
+                    .any(|t| matches!(t.name.as_str(), "read_file" | "grep"))
+            {
+                defs.push(crate::relay::spawn_scout_tool_def());
+            }
+            defs
         } else {
             let mut defs = tool_defs.to_vec();
             // 358b（2026-10-26）：scout 启动工具由 loop 侧合成——声明进面、
             // 执行走 `route("spawn_scout") → DispatchTarget::Scout`，不进
             // host registry（与 `retrieval_disposition` 同路）。
-            if profile.role == AgentRole::Main && !defs.iter().any(|t| t.name == "spawn_scout") {
+            if profile.role == AgentRole::Main
+                && !defs.iter().any(|t| t.name == "spawn_scout")
+                && defs
+                    .iter()
+                    .any(|t| matches!(t.name.as_str(), "read_file" | "grep"))
+            {
                 defs.push(crate::relay::spawn_scout_tool_def());
             }
             defs
@@ -3297,7 +3320,10 @@ pub(crate) async fn run_agent_loop(
         };
         // 0dm（2026-10-21）：主车道常驻软提示（用户指定文案，逐字）＋终态
         // 语法短行。放系统提示（不进对话侧车、不增加模型面消息条数）。
-        let system = if profile.self_check_prompt {
+        let system = if profile.self_check_prompt
+            && !crate::prompt::plain_input_enabled()
+            && crate::prompt::self_check_resident_enabled()
+        {
             // 353：终态声明缺省关闭——只有显式 required 的车道才在系统提示
             // 里挂"结束前输出"这一句（它每轮都在把"继续"翻译成"收尾"）。
             let declaration = if crate::model_stop::terminal_declaration_required() {
@@ -3328,10 +3354,10 @@ pub(crate) async fn run_agent_loop(
         // 在系统提示词层无条件注入（plan_first 会话；主/检索子代理同一
         // 入口）——不依赖 AGENTS.md 是否存在（D2 全覆盖，审查收口
         // 2026-08-16）。常量跨轮稳定，不影响前缀缓存。
-        let system = if controller.plan_first_enabled() {
+        let system = if controller.plan_enabled() {
             format!(
                 "{}\n\n{}",
-                crate::planning::PLAN_FIRST_FRAMEWORK_BLOCK,
+                crate::planning::PLAN_FRAMEWORK_BLOCK,
                 system
             )
         } else {
@@ -4682,7 +4708,7 @@ pub(crate) async fn run_agent_loop(
                 // （事件/后处理留痕），首个错误在批次提交完毕后返回。
                 let mut first_err: Option<AgentLoopError> = None;
                 for outcome in outcomes {
-                    let (tc, result, feedback, mut w, local_msgs, direct_ctx) = match outcome {
+                    let (tc, mut result, feedback, mut w, local_msgs, direct_ctx) = match outcome {
                         Ok(x) => x,
                         Err(e) => {
                             if first_err.is_none() {
@@ -4691,6 +4717,9 @@ pub(crate) async fn run_agent_loop(
                             continue;
                         }
                     };
+                    // 362 S2/S6：终端结果结构化（exit_code/stdout/stderr）、
+                    // PowerShell 噪音清理、tail/filter、测试失败摘要。
+                    enrich_tool_result(&tc.name, &tc.arguments, &mut result);
                     // P2-3：预算超限按串行语义拒绝（消息面注入拒绝消息、
                     // 结果不计入注入预算），但调用已真实执行——事件仍重放
                     // 留痕、后处理照常，审计面与事实一致（并行批次无法像
@@ -5335,7 +5364,7 @@ pub(crate) async fn run_agent_loop(
                         {
                             counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
-                        let (result, feedback) = controller
+                        let (mut result, feedback) = controller
                             .run_host_tool_with_plan_gate(
                                 host,
                                 writer,
@@ -5378,6 +5407,7 @@ pub(crate) async fn run_agent_loop(
                                 cancel,
                             )
                             .await?;
+                        enrich_tool_result(&tc.name, &tc.arguments, &mut result);
                         if let Some(slot) = svc.in_flight_tools {
                             let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
                             if let Some(pos) = guard.iter().position(|(_, id)| id == &tc.call_id) {
@@ -5790,6 +5820,7 @@ pub(crate) async fn run_agent_loop(
         // 优先派发一次性初始轮 record（会话内恰好一次）。
         let mut fired_initial_round = false;
         if pending_checkpoint.is_none()
+            && !crate::prompt::plain_input_enabled()
             && let Some(role) = profile.orientation_role
             && let Some(record) = controller
                 // THIN-HARNESS-REDESIGN-V2 §9.2: 同 loop-top——软门模式
@@ -6422,6 +6453,137 @@ async fn refuse_inject_budget(
             policy_revision,
         })),
     ))
+}
+
+/// 362 S2：终端结果结构化（exit_code/stdout/stderr）＋ PowerShell 噪音清理
+/// ＋可选 `tail`/`filter` 后处理；S6：测试失败摘要（run_tests 与 cargo test）。
+fn enrich_tool_result(tool: &str, args: &serde_json::Value, result: &mut crate::host::ToolResult) {
+    if tool == "run_terminal_cmd" {
+        let cleaned = strip_powershell_noise(&result.output);
+        let filtered = apply_tail_filter(&cleaned, args);
+        let exit = result.exit_code.unwrap_or(0);
+        // 362 review P0-1：不伪造 stderr；保留既有 structured，只 merge。
+        let mut structured = result
+            .structured
+            .take()
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = structured.as_object_mut() {
+            obj.insert("exit_code".into(), serde_json::json!(exit));
+            obj.insert("stdout".into(), serde_json::json!(filtered));
+            obj.insert("stderr_captured".into(), serde_json::json!(false));
+        }
+        result.structured = Some(structured);
+        result.output = filtered;
+        if exit != 0
+            && args
+                .get("command")
+                .and_then(|v| v.as_str())
+                .is_some_and(|c| c.contains("cargo test"))
+        {
+            let summary = test_failure_summary(&result.output);
+            result.output.push_str(&summary);
+            let mut structured = result
+                .structured
+                .take()
+                .unwrap_or_else(|| serde_json::json!({}));
+            if let Some(obj) = structured.as_object_mut() {
+                obj.insert("failure_summary".into(), serde_json::json!(summary));
+            }
+            result.structured = Some(structured);
+        }
+    } else if tool == "run_tests" && result.exit_code.unwrap_or(0) != 0 {
+        let summary = test_failure_summary(&result.output);
+        result.output.push_str(&summary);
+        // 362 review P0-1：merge 而非覆盖既有 structured。
+        let mut structured = result
+            .structured
+            .take()
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = structured.as_object_mut() {
+            obj.insert("exit_code".into(), serde_json::json!(result.exit_code));
+            obj.insert("failure_summary".into(), serde_json::json!(summary));
+        }
+        result.structured = Some(structured);
+    }
+}
+
+fn strip_powershell_noise(s: &str) -> String {
+    let mut out = Vec::new();
+    let mut skip_next_plus = false;
+    for line in s.lines() {
+        let t = line.trim();
+        if t.starts_with("所在位置 行:")
+            || t.contains("CategoryInfo")
+            || t.contains("FullyQualifiedErrorId")
+            || t.contains(" : [permission] mode=")
+            || t.starts_with("gsa hygiene sweep:")
+        {
+            skip_next_plus = true;
+            continue;
+        }
+        if skip_next_plus && t.starts_with("+ ") {
+            skip_next_plus = false;
+            continue;
+        }
+        skip_next_plus = false;
+        if t.starts_with("+ ...") {
+            continue;
+        }
+        out.push(line);
+    }
+    out.join("\n")
+}
+
+fn apply_tail_filter(s: &str, args: &serde_json::Value) -> String {
+    let mut lines: Vec<&str> = s.lines().collect();
+    if let Some(f) = args.get("filter").and_then(|v| v.as_str()) {
+        lines.retain(|l| l.contains(f));
+    }
+    if let Some(n) = args.get("tail").and_then(|v| v.as_u64()) {
+        let n = n as usize;
+        if lines.len() > n {
+            lines = lines[lines.len() - n..].to_vec();
+        }
+    }
+    lines.join("\n")
+}
+
+fn test_failure_summary(s: &str) -> String {
+    let mut picked: Vec<String> = Vec::new();
+    let mut in_failures = false;
+    for line in s.lines() {
+        let t = line.trim();
+        if t == "failures:" {
+            in_failures = true;
+            continue;
+        }
+        if in_failures {
+            if t.is_empty() || t.starts_with("test result:") || t.starts_with("----") {
+                in_failures = false;
+            } else if !picked.iter().any(|x| x == t) {
+                picked.push(t.to_string());
+                if picked.len() >= 8 {
+                    break;
+                }
+            }
+        }
+        if t.starts_with("FAILED")
+            || t.starts_with("test result: FAILED")
+            || t.contains(" panicked at ")
+        {
+            if !picked.iter().any(|x| x == t) {
+                picked.push(t.to_string());
+            }
+            if picked.len() >= 8 {
+                break;
+            }
+        }
+    }
+    if picked.is_empty() {
+        "\n[test-summary] no FAILED/panic line found\n".to_string()
+    } else {
+        format!("\n[test-summary]\n{}\n", picked.join("\n"))
+    }
 }
 
 #[cfg(test)]
@@ -9395,7 +9557,7 @@ mod tests {
             .iter()
             .find(|c| c.contains("第二次询问"))
             .expect("第二次（升级）窗口块");
-        assert!(second_ask.contains("上下文质量已严重衰减"), "{second_ask}");
+        assert!(second_ask.contains("压缩是恢复工作现场的方式"), "{second_ask}");
         assert!(second_ask.contains("最后一次压缩窗口"), "{second_ask}");
         assert!(second_ask.contains("按块回查存档"), "{second_ask}");
 
@@ -9550,7 +9712,7 @@ mod tests {
             .find(|m| m.content.contains("必定压缩") && m.content.contains("第二次询问"))
             .expect("未落地后升级链须推进到第二次询问（不停摆）");
         assert!(
-            second_ask.content.contains("上下文质量已严重衰减"),
+            second_ask.content.contains("压缩是恢复工作现场的方式"),
             "{}",
             second_ask.content
         );

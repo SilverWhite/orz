@@ -596,14 +596,21 @@ pub fn capability_list(cwd: &Path) -> Result<serde_json::Value, String> {
     for (name, kind, usage) in curated {
         let readonly =
             orz_loop::tool::ToolDispatcher::risk_class(name) == orz_loop::host::RiskClass::ReadOnly;
+        // 362 S5（2026-10-26）：`spawn_scout` 的声明由 loop 侧合成；这里
+        // 取同一单源的真实 parameters，不再把 schema 置 null。
+        let params_schema = if *name == "spawn_scout" {
+            orz_loop::spawn_scout_tool_def().parameters
+        } else {
+            serde_json::Value::Null
+        };
         tools.push(serde_json::json!({
             "name": name,
             "kind": kind,
-            "params_schema": serde_json::Value::Null,
+            "params_schema": params_schema,
             "needs_approval": !readonly,
             "readonly": readonly,
             "one_line_usage": usage,
-            "schema_source": "curated",
+            "schema_source": if *name == "spawn_scout" { "derived" } else { "curated" },
             "availability": if matches!(*name, "blackboard_read" | "spawn_scout") {
                 "declared"
             } else {
@@ -635,10 +642,11 @@ pub const CAPABILITY_COVERAGE: &str = "coverage: (1) the 8 toolset entries are d
      (2) browser_read/browser_control are derived from the host browser-lane declarations, \
      availability=gated — declared per session by the retrieval enable gate, which this \
      standalone CLI cannot observe; \
-     (3) blackboard_read/spawn_scout/run_tests/pdf_read/project_doc_index are CURATED loop-side \
+     (3) blackboard_read/run_tests/pdf_read/project_doc_index are CURATED loop-side \
      entries (schemas live in the loop controller with no host-side machine-readable source, \
      params_schema=null on purpose — nothing fabricated); spawn_scout is loop-synthesized \
-     (no host handler) and declared on the main face since 358; run_tests/pdf_read/\
+     (no host handler) and declared on the main face since 358; 362 S5 takes its schema from \
+     the same loop-side declaration (single source, schema_source=derived); run_tests/pdf_read/\
      project_doc_index are R1-sealed from the current declaration face (handlers retained); \
      (4) NOT covered: loop-side tools with no host-side schema source \
      (blackboard_write/context_manage/\
@@ -991,11 +999,21 @@ mod tests {
         assert!(blackboard["params_schema"].is_null());
         assert!(!blackboard["one_line_usage"].as_str().unwrap().is_empty());
         let scout = entry("spawn_scout");
-        assert_eq!(scout["schema_source"], "curated");
+        assert_eq!(scout["schema_source"], "derived");
         assert_eq!(scout["availability"], "declared");
         assert_eq!(scout["kind"], "read");
         assert_eq!(scout["readonly"], true);
-        assert!(scout["params_schema"].is_null());
+        assert!(!scout["params_schema"].is_null());
+        assert_eq!(
+            scout["params_schema"]["properties"]["task"]["type"],
+            "string"
+        );
+        assert!(scout["params_schema"]["properties"]["scope"].is_object());
+        assert_eq!(
+            scout["params_schema"],
+            orz_loop::spawn_scout_tool_def().parameters,
+            "spawn_scout schema must be the loop single source"
+        );
         assert!(!scout["one_line_usage"].as_str().unwrap().is_empty());
         for name in ["run_tests", "pdf_read", "project_doc_index"] {
             let e = entry(name);

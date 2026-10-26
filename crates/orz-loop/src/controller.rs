@@ -555,11 +555,10 @@ pub struct AgentLoopController {
     /// Flushed as `epoch_archive_write_failed` v0.2 events at run start so
     /// the loss of an old epoch's durable snapshot leaves an audit trace.
     epoch_archive_errors: Mutex<Vec<(u64, EpochArchiveWriteKind)>>,
-    /// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): whether the
-    /// first-round plan gate is active for main-lane sessions. Production
-    /// wiring (ACP server / CLI run) enables it; tests keep the legacy
-    /// tool surface by default.
-    pub(crate) plan_first_enabled: bool,
+    /// 360：plan 工具/框架是否可用（不再暗示“首轮必须”）。
+    pub(crate) plan_enabled: bool,
+    /// 360：旧“首轮必须 plan”的硬门；默认关闭，仅显式 opt-in 时启用。
+    pub(crate) plan_gate_enabled: bool,
     /// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): whether this
     /// session has already completed its first-round plan gate (session-
     /// level, not run-level — the gate fires once per session; restored
@@ -1067,7 +1066,8 @@ impl AgentLoopController {
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             // 0bg S2：LIF 域迁移连带记录游标（只记不发模型）。
             lif_migration_recorded: Mutex::new(0),
-            plan_first_enabled: false,
+            plan_enabled: false,
+            plan_gate_enabled: false,
             plan_first_session_done: false,
             session_turn: 1,
         }
@@ -1598,6 +1598,11 @@ impl AgentLoopController {
     /// is a pure function of plan state, so it is byte-identical across
     /// rounds while the plan is unchanged (prefix-cache discipline).
     pub(crate) fn render_status_line(&self) -> Option<String> {
+        // 360：任务状态行默认 pull（blackboard_read section=plan）；仅显式
+        // ORZ_MODEL_FACE_STATUS_LINE=1 时恢复常驻。
+        if !crate::prompt::status_line_resident_enabled() {
+            return None;
+        }
         // 0cg（2026-10-01）墙钟可见性拆除：原 0am S1 Part A 的轮次预算档
         // 搭载（LIF 投影行）退役——状态行只渲染计划推进事实，取黑板读锁
         // 前无 LIF 锁交互（锁序纪律见本文件 2026-08-31 B2 复审登记）。
@@ -1752,7 +1757,8 @@ impl AgentLoopController {
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             // 0bg S2：LIF 域迁移连带记录游标（只记不发模型）。
             lif_migration_recorded: Mutex::new(0),
-            plan_first_enabled: false,
+            plan_enabled: false,
+            plan_gate_enabled: false,
             plan_first_session_done: false,
             session_turn: 1,
         }
@@ -1805,12 +1811,23 @@ impl AgentLoopController {
             .set_registration(registrations);
     }
 
-    /// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): enable the
-    /// first-round plan gate for main-lane sessions. Production wiring
-    /// (ACP server / CLI run) calls this; tests keep the legacy surface.
-    pub fn with_plan_first_enabled(mut self, enabled: bool) -> Self {
-        self.plan_first_enabled = enabled;
+    /// 360：plan 工具与框架可用；不隐含“首轮必须 plan”。
+    pub fn with_plan_enabled(mut self, enabled: bool) -> Self {
+        self.plan_enabled = enabled;
         self
+    }
+
+    /// 360：旧“首轮必须 plan”的硬门（opt-in）。
+    pub fn with_plan_gate_enabled(mut self, enabled: bool) -> Self {
+        self.plan_gate_enabled = enabled;
+        self
+    }
+
+    /// 兼容旧名：旧调用点同时开启 plan 与 gate（保持原语义）。
+    #[deprecated(note = "use with_plan_enabled / with_plan_gate_enabled")]
+    pub fn with_plan_first_enabled(self, enabled: bool) -> Self {
+        self.with_plan_enabled(enabled)
+            .with_plan_gate_enabled(enabled)
     }
 
     /// PLAN-FIRST 阶段 A (2026-08-16): mark the session's first-round plan
@@ -1821,8 +1838,19 @@ impl AgentLoopController {
         self
     }
 
+    pub(crate) fn plan_enabled(&self) -> bool {
+        self.plan_enabled
+    }
+
+    pub(crate) fn plan_gate_enabled(&self) -> bool {
+        self.plan_gate_enabled
+    }
+
+    /// 兼容旧名。
+    #[allow(dead_code)]
+    #[deprecated(note = "use plan_enabled")]
     pub(crate) fn plan_first_enabled(&self) -> bool {
-        self.plan_first_enabled
+        self.plan_enabled
     }
 
     pub(crate) fn plan_first_session_done(&self) -> bool {
@@ -3667,7 +3695,13 @@ impl AgentLoopController {
                 let _ = self
                     .journal_usage_meter(&mut writer, &usage_meter_model, &usage_meter_tier, true)
                     .await;
+                let status = match &event {
+                    EventType::RunCancelled => "cancelled",
+                    EventType::RunInvalidated => "invalidated",
+                    _ => "failed",
+                };
                 let _ = writer.record_terminal(event, payload).await;
+                write_handoff(&writer, status);
                 let _ = journal.flush_async().await;
                 Err(e)
             }
@@ -4193,7 +4227,7 @@ impl AgentLoopController {
         // （只写内存黑板计划槽，无外部副作用）→ 所有策略自动放行。
         // 2026-08-16 审查收口（P3-4）：声明面随 plan_first_enabled 收敛——
         // 关闭态/grill 不声明，调用时另由 handler 拒绝（不旋转黑板）。
-        if self.plan_first_enabled && !tool_defs.iter().any(|t| t.name == "plan_write") {
+        if self.plan_enabled && !tool_defs.iter().any(|t| t.name == "plan_write") {
             tool_defs.push(ToolDef {
                 name: "plan_write".to_string(),
                 description: "Write the structured step-by-step plan (PLAN-FIRST). \
@@ -4693,6 +4727,8 @@ impl AgentLoopController {
         writer
             .record_terminal(terminal_event, terminal_payload)
             .await?;
+        // 362 S1：run 结束写机械 handoff（`orz resume` 读同一文件）。
+        write_handoff(writer, status);
 
         // Grill mode (2026-08-08): persist the full conversation (incl. tool
         // rounds) as the next turn's history — the session is multi-turn.
@@ -4989,6 +5025,81 @@ impl EventWriter<'_> {
     /// under `{dir}/retrieval-results/`.
     pub(crate) fn journal_dir(&self) -> Option<std::path::PathBuf> {
         self.journal.map(|j| j.journal_dir().to_path_buf())
+    }
+}
+
+/// 362 S1：run 结束写机械 handoff（`.gsa/handoff/<run>.md`）。
+/// 只汇总 journal 中的事实，不做语义判断；`orz resume` 读同一文件。
+fn write_handoff(writer: &EventWriter<'_>, status: &str) {
+    let Some(dir) = writer.journal_dir() else {
+        tracing::warn!("handoff skipped: no journal dir");
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(dir.join("events.jsonl")) else {
+        tracing::warn!("handoff skipped: events.jsonl unreadable");
+        return;
+    };
+    let mut prompt = String::new();
+    let mut rounds = 0usize;
+    let mut tools: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut files: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut failed_test = String::new();
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let ty = v["event_type"].as_str().unwrap_or("");
+        let p = &v["payload"];
+        match ty {
+            "prompt_submitted" => prompt = p["prompt"].as_str().unwrap_or("").to_string(),
+            "model_output" => rounds += 1,
+            "tool_started" => {
+                if let Some(t) = p["tool"].as_str() {
+                    *tools.entry(t.to_string()).or_default() += 1;
+                }
+            }
+            "tool_completed" => {
+                if let Some(f) = p["file_path"].as_str() {
+                    files.insert(f.to_string());
+                }
+                if p["tool"].as_str() == Some("run_tests")
+                    && p["exit_code"].as_i64().is_some_and(|c| c != 0)
+                {
+                    failed_test =
+                        format!("run_tests exit={}", p["exit_code"].as_i64().unwrap_or(-1));
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(gsa) = dir.parent().and_then(|p| p.parent()) else {
+        return;
+    };
+    let handoff = gsa.join("handoff");
+    if let Err(e) = std::fs::create_dir_all(&handoff) {
+        tracing::warn!(error = %e, "handoff skipped: cannot create dir");
+        return;
+    }
+    let body = format!(
+        "# Run {}\n\n- 终态: {}\n- 模型轮数: {}\n- 工具调用: {}\n- 编辑文件: {}\n- 失败测试: {}\n- prompt: {}\n",
+        writer.run_id(),
+        status,
+        rounds,
+        tools
+            .iter()
+            .map(|(k, v)| format!("{k}×{v}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        files.iter().cloned().collect::<Vec<_>>().join(", "),
+        if failed_test.is_empty() {
+            "（无）"
+        } else {
+            &failed_test
+        },
+        prompt.chars().take(300).collect::<String>()
+    );
+    if let Err(e) = std::fs::write(handoff.join(format!("{}.md", writer.run_id())), body) {
+        tracing::warn!(error = %e, "handoff write failed");
     }
 }
 

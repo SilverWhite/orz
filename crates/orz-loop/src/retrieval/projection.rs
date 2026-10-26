@@ -680,6 +680,7 @@ mod tests {
                 // 缺省控制器上不再被 self_check_enabled 谓词挡在声明面外
                 // （规则式非工作族，与 bash 同腕）。
                 "self_check",
+                "spawn_scout",
             ],
             "R1 single-face list projection (todo_write / compaction_whitelist_add \
              sealed): {declared:?}"
@@ -698,7 +699,7 @@ mod tests {
     /// 本测试即补上该面——新增声明面工具若既不进 `WORK_TOOLS` 又不属上述族，
     /// 此处报红（豁免是**族规则**，不是"再列一个名字就过"）。
     #[tokio::test]
-    async fn declared_face_tools_are_work_tools_or_rule_based_non_work_families() {
+    async fn declared_face_tools_are_work_tools_or_rule_based_or_loop_synthesized() {
         use crate::tool_probe::is_main_agent_work_tool;
 
         fn is_declared_non_work_family(name: &str) -> bool {
@@ -713,6 +714,7 @@ mod tests {
                 // 是控制器内存面工具，无探针判定）。
                 || name == "submit"
                 || name == "self_check"
+                || name == "spawn_scout"
                 // 检索模式门工具（宿主路由检索族；主面由模式门与 R1 封存管辖）。
                 || name == "pdf_read"
                 || name.starts_with("retrieve_project_")

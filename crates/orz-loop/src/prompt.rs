@@ -25,6 +25,63 @@
 /// 数据边界 / 压缩白名单 / plan-first 文本 / 检索分区拉取行见 R1 审计。
 pub const BASE_SYSTEM_PROMPT: &str = "";
 
+/// 0xx（2026-10-26，用户实验）：**纯输入模式**——机械层不向模型面追加
+/// 常驻头/指针、D4、分块表、结束自述行，也不注入 orientation/工作台、
+/// self_check 常驻句与 context-scale 提醒。用于隔离「模型只看到用户输入
+/// ＋工具结果」的对照实验；缺省关闭（`ORZ_PLAIN_INPUT=1|on|true|yes` 开启）。
+/// 注意：本模式只服务实验，不改变本地面与会话侧车；压缩/截断仍按本地
+/// 全量记账（模型面不再显示分块表，回放需自行读会话档案）。
+pub const PLAIN_INPUT_ENV: &str = "ORZ_PLAIN_INPUT";
+
+pub fn plain_input_enabled() -> bool {
+    matches!(
+        std::env::var(PLAIN_INPUT_ENV).ok().as_deref(),
+        Some("1") | Some("on") | Some("true") | Some("yes")
+    )
+}
+
+/// 360（2026-10-27）：resident policy——记忆类默认 pull，只有“改变下一步
+/// 动作”的内容常驻。下列 env =1 可把对应项重新常驻（调试/回退）；缺省
+/// 全部关闭。`ORZ_PLAIN_INPUT=1` 仍是更强的总开关（同时跳过 context-scale
+/// 与 orientation）。
+pub const ENV_MODEL_FACE_D4: &str = "ORZ_MODEL_FACE_D4";
+pub const ENV_MODEL_FACE_BLOCK_TABLE: &str = "ORZ_MODEL_FACE_BLOCK_TABLE";
+pub const ENV_MODEL_FACE_STATUS_LINE: &str = "ORZ_MODEL_FACE_STATUS_LINE";
+pub const ENV_SELF_CHECK_RESIDENT: &str = "ORZ_SELF_CHECK_RESIDENT";
+
+fn resident_flag(name: &str) -> bool {
+    match std::env::var(name).ok().as_deref() {
+        Some("1") | Some("on") | Some("true") | Some("yes") => true,
+        Some("0") | Some("off") | Some("false") | Some("no") => false,
+        // 360：单元测试默认保留旧的常驻面（回归覆盖）；生产默认 pull。
+        _ => cfg!(test),
+    }
+}
+
+/// D4（run 基线/自编辑清单/编辑指纹）是否常驻模型面。默认 off；pull 面：
+/// `git status` / `read_file` / 会话档案。
+pub fn d4_resident_enabled() -> bool {
+    resident_flag(ENV_MODEL_FACE_D4)
+}
+
+/// 分块表是否常驻窗口尾。默认 off；pull 面：`.gsa/ledger/current.md` 与
+/// 压缩 marker 内的块档案路径。
+pub fn block_table_resident_enabled() -> bool {
+    resident_flag(ENV_MODEL_FACE_BLOCK_TABLE)
+}
+
+/// `[任务状态]` 行是否常驻系统提示。默认 off；pull 面：`blackboard_read
+/// section=plan`。
+pub fn status_line_resident_enabled() -> bool {
+    resident_flag(ENV_MODEL_FACE_STATUS_LINE)
+}
+
+/// `SELF_CHECK` 常驻句是否常驻系统提示。默认 off；工具本身仍在，任务结束
+/// 或按需可调。
+pub fn self_check_resident_enabled() -> bool {
+    resident_flag(ENV_SELF_CHECK_RESIDENT)
+}
+
 /// Counterexample gate block — 正式答案输出前, fires once per run and the
 /// block explicitly tells the model it appears only once (§4.6.5 verbatim).
 ///

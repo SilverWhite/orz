@@ -663,6 +663,11 @@ pub fn build_model_face(
     messages: &[Message],
     params: &ModelFaceParams,
 ) -> Result<Vec<Message>, std::io::Error> {
+    // 0xx（2026-10-26，用户实验）：纯输入模式——模型面＝会话本体，不追加
+    // 指针/D4/分块表/结束自述行。仅服务对照实验，缺省关闭。
+    if crate::prompt::plain_input_enabled() {
+        return try_clone_messages(messages);
+    }
     // 0da S2（2026-10-11，设计 §4.1，D1 修复）：清零 marker 在场**不再**短路
     // 独立装配——有块清零走**常规装配**（`hidden_message_ranges` 的
     // `(0, clear_end)` 前置臂已在位、不钳 slider_start），边界后内容照常受
@@ -740,13 +745,17 @@ pub fn build_model_face(
     // 重渲都重价其后的整段前缀（recli 四跑离线对账实证：9/9 压缩后 +2 请求
     // 在 D4 槽全前缀重价＝「第 2 针」未消的机理）。落尾部后 D4 重渲只重价
     // 尾部自身，与块表同属窗口尾易变区。内容零改，只动位置。
-    if let Some(d4) = params.d4_block.as_deref() {
-        view.push(mechanical_message(d4.to_string()));
+    if crate::prompt::d4_resident_enabled() {
+        if let Some(d4) = params.d4_block.as_deref() {
+            view.push(mechanical_message(d4.to_string()));
+        }
     }
-    // 分块表**落尾部**（前缀纪律；见模块头注）。
-    view.push(mechanical_message(render_block_table(
-        &blocks, &markers, params,
-    )));
+    // 分块表**落尾部**（前缀纪律；见模块头注）。360：默认 pull，不常驻。
+    if crate::prompt::block_table_resident_enabled() {
+        view.push(mechanical_message(render_block_table(
+            &blocks, &markers, params,
+        )));
+    }
     // 0bs ①（2026-09-25）：**结束自述通道常驻尾行**——告知面收口。0bm 轮
     // 实证：`[RUN_END]` 语法只挂 pull 面 `guide`（`blackboard_read section=
     // guide`）⇒ 137 工具轮零自述、`run_finished` 仍三键。单一来源＝
@@ -791,14 +800,18 @@ fn build_cleared_face(
     for m in messages.iter().skip(hidden_end) {
         view.push(try_clone_message(m)?);
     }
-    if let Some(d4) = params.d4_block.as_deref() {
-        view.push(mechanical_message(d4.to_string()));
+    if crate::prompt::d4_resident_enabled() {
+        if let Some(d4) = params.d4_block.as_deref() {
+            view.push(mechanical_message(d4.to_string()));
+        }
     }
     let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
     if !blocks.is_empty() {
-        view.push(mechanical_message(render_block_table(
-            &blocks, markers, params,
-        )));
+        if crate::prompt::block_table_resident_enabled() {
+            view.push(mechanical_message(render_block_table(
+                &blocks, markers, params,
+            )));
+        }
         let stop_line = crate::model_stop::model_stop_resident_line();
         if !stop_line.is_empty() {
             view.push(mechanical_message(stop_line));
@@ -829,8 +842,10 @@ fn try_clone_messages_with_resident_head(
     // D4 位置不变（块表/结束行追加其后），前缀逐字节稳定。
     let mut view = try_clone_messages(messages)?;
     view.try_reserve_exact(2).map_err(alloc_err_io)?;
-    if let Some(d4) = params.d4_block.as_deref() {
-        view.push(mechanical_message(d4.to_string()));
+    if crate::prompt::d4_resident_enabled() {
+        if let Some(d4) = params.d4_block.as_deref() {
+            view.push(mechanical_message(d4.to_string()));
+        }
     }
     if let Some(ledger) = params.ledger_path.as_deref() {
         view.insert(
@@ -1054,8 +1069,10 @@ pub fn estimate_model_face_tokens(messages: &[Message], params: &ModelFaceParams
             &crate::action_ledger::build_pointer_message(ledger),
         ));
     }
-    if let Some(d4) = params.d4_block.as_deref() {
-        total = total.saturating_add(injected_estimate(d4));
+    if crate::prompt::d4_resident_enabled() {
+        if let Some(d4) = params.d4_block.as_deref() {
+            total = total.saturating_add(injected_estimate(d4));
+        }
     }
     for (i, m) in messages.iter().enumerate() {
         if i < preamble_end {
@@ -1075,7 +1092,11 @@ pub fn estimate_model_face_tokens(messages: &[Message], params: &ModelFaceParams
         }
         total = total.saturating_add(crate::controller::estimate_message_tokens(m));
     }
-    let index = injected_estimate(&render_block_table(&blocks, &markers, params));
+    let index = if crate::prompt::block_table_resident_enabled() {
+        injected_estimate(&render_block_table(&blocks, &markers, params))
+    } else {
+        0
+    };
     let channel = injected_estimate(&crate::model_stop::model_stop_resident_line());
     total
         .saturating_add(index)
@@ -1112,12 +1133,18 @@ fn estimate_cleared_face_tokens(
     for m in messages.iter().skip(clear_end) {
         total = total.saturating_add(crate::controller::estimate_message_tokens(m));
     }
-    if let Some(d4) = params.d4_block.as_deref() {
-        total = total.saturating_add(injected_estimate(d4));
+    if crate::prompt::d4_resident_enabled() {
+        if let Some(d4) = params.d4_block.as_deref() {
+            total = total.saturating_add(injected_estimate(d4));
+        }
     }
     let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
     if !blocks.is_empty() {
-        let index = injected_estimate(&render_block_table(&blocks, markers, params));
+        let index = if crate::prompt::block_table_resident_enabled() {
+            injected_estimate(&render_block_table(&blocks, markers, params))
+        } else {
+            0
+        };
         let channel = injected_estimate(&crate::model_stop::model_stop_resident_line());
         total = total.saturating_add(index).saturating_add(channel);
     }

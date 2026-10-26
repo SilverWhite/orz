@@ -12,7 +12,7 @@ use crate::blackboard::{
 
 /// Canonical PLAN-FIRST execution-style framework block (shared with the
 /// external AGENTS.md wrapper; see orz-assurance `plan::framework`).
-pub(crate) use orz_assurance::plan::framework::PLAN_FIRST_FRAMEWORK_BLOCK;
+pub(crate) use orz_assurance::plan::framework::PLAN_FRAMEWORK_BLOCK;
 
 pub const PLAN_WRITE_TOOL: &str = "plan_write";
 pub const BLACKBOARD_READ_TOOL: &str = "blackboard_read";
@@ -1916,7 +1916,7 @@ mod tests {
     }
 
     /// D2 全覆盖（2026-08-16 审查收口）：plan_first 会话的系统提示词注入
-    /// <plan_first_framework>（不依赖 AGENTS.md）；关闭态不注入。
+    /// <plan_framework>（不依赖 AGENTS.md）；关闭态不注入。
     #[tokio::test]
     async fn plan_first_framework_block_follows_gate_switch() {
         let enabled_dir = test_dir();
@@ -1947,7 +1947,7 @@ mod tests {
             .unwrap();
         let received = enabled_fake.received_requests();
         assert!(
-            received[0].system.contains("<plan_first_framework>"),
+            received[0].system.contains("<plan_framework>"),
             "plan-first system prompt must carry the framework block"
         );
         let _ = std::fs::remove_dir_all(&enabled_dir);
@@ -1977,7 +1977,7 @@ mod tests {
             .unwrap();
         let received = off_fake.received_requests();
         assert!(
-            !received[0].system.contains("<plan_first_framework>"),
+            !received[0].system.contains("<plan_framework>"),
             "legacy (gate-off) system prompt must not carry the framework block"
         );
         let _ = std::fs::remove_dir_all(&off_dir);

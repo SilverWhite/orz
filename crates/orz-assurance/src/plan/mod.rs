@@ -15,5 +15,5 @@ pub mod framework;
 pub mod state_machine;
 
 pub use artifact::{PlanArtifact, PlanSection, verify_plan_artifact};
-pub use framework::PLAN_FIRST_FRAMEWORK_BLOCK;
+pub use framework::PLAN_FRAMEWORK_BLOCK;
 pub use state_machine::{PlanApprovalDecision, PlanApprovalRecord, PlanState, PlanStateMachine};

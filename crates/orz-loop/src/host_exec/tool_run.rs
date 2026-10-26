@@ -3386,7 +3386,7 @@ impl AgentLoopController {
         if tc.name == crate::planning::PLAN_WRITE_TOOL {
             // 2026-08-16 审查收口（P3-4）：声明面随开关收敛后，调用面同样
             // fail-closed —— 关闭态/grill 的 plan_write 一律拒绝，不落板。
-            if !self.plan_first_enabled {
+            if !self.plan_enabled {
                 let msg = "plan_write refused — the plan gate is disabled in this session";
                 writer
                     .record(
@@ -6209,7 +6209,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn benchmark_policy_declares_full_registry_catalog() {
+    async fn benchmark_policy_declares_full_declared_face() {
         // P0-A-2（设计 §4/§9 v0.2；ADR-0010 §3.5 v1.8 已登记）：
         // 模型可见列表 = 探针完整集 ∩ 会话声明集 + 非工作工具。
         // Benchmark + 可读可写 workspace：read_file/list_dir/grep/
@@ -6258,6 +6258,7 @@ mod tests {
                 // self_check_enabled 谓词挡在声明面外，现恒在（规则式
                 // 非工作族，与 bash 同腕）。
                 "self_check",
+                "spawn_scout",
             ],
             "single-face projection under Benchmark (R1 封存 list_dir/compaction_whitelist_add，mode=off 移除检索族): {declared:?}"
         );
@@ -6312,6 +6313,7 @@ mod tests {
                 // 356 批（2026-10-25 用户裁决）：self_check 无条件在位（同
                 // benchmark 面钉改判注）。
                 "self_check",
+                "spawn_scout",
             ],
             "ReadOnly single-face projection (R1 封存 list_dir/compaction_whitelist_add，写/执行工具探针不完整移除): {declared:?}"
         );

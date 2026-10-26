@@ -476,6 +476,18 @@ pub struct ReadFileInput {
         description = "With line=…: maximum characters to return (default 4000, max 16000)."
     )]
     pub char_limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Line range alias for non-PDF files: {start,end} (1-based, inclusive). Equivalent to offset/limit; applied before the read-handle gate."
+    )]
+    pub range: Option<ReadFileRange>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ReadFileRange {
+    pub start: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<i64>,
 }
 async fn cursor_rules_on_read_enabled(resources: &SharedResources) -> bool {
     let res = resources.lock().await;
@@ -759,7 +771,7 @@ fn render_line_window(
 }
 
 pub(crate) async fn run_read_file(
-    input: ReadFileInput,
+    mut input: ReadFileInput,
     cwd_override: Option<std::path::PathBuf>,
     contract_version: Option<&str>,
     resources: SharedResources,
@@ -767,6 +779,15 @@ pub(crate) async fn run_read_file(
     invoking_param_names: &crate::types::resources::InvokingToolParamNames,
     call_id: &str,
 ) -> Result<ReadFileOutput, xai_tool_runtime::ToolError> {
+    // 362 review P0-2：`range` 在工具层落到 offset/limit，先于 read-handle
+    // 判定，因此大文件分页也生效。
+    if let Some(range) = input.range.take() {
+        let start = range.start.max(1);
+        input.offset = Some(start);
+        input.limit = range
+            .end
+            .map(|end| (end - start + 1).max(0) as usize);
+    }
     let (cwd, display_cwd, fs, hints_enabled, skill_roots, session_volume);
     let session_volume_access;
     {

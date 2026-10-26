@@ -595,8 +595,7 @@ pub fn mandatory_compression_window_block(
         (
             format!(
                 "{WINDOW_NOTICE_PREFIX} · 窗口 · 必定压缩 · {k}K · 第二次询问] 当前上下文窗口 {reading}，\
-                 仍在必定压缩线（{k}K 估算 ≈385K 真实 token）之上。**上下文质量已严重衰减**\
-                 ——≈385K 真实 token 已过模型普遍可靠下沿，压缩是解决这一问题的途径。\
+                 仍在必定压缩线（{k}K 估算 ≈385K 真实 token）之上。压缩是恢复工作现场的方式；\
                  这是**最后一次压缩窗口**："
             ),
             "窗口收口仍未产出 ⇒ 机械层将**仅保留工作现场**，把其余已闭合分块全部移出窗口\
@@ -1011,7 +1010,7 @@ mod tests {
         assert!(first.contains("机械层不替你截断"), "{first}");
         assert!(!first.contains("第二次询问"), "{first}");
         assert!(second.contains("第二次询问"), "{second}");
-        assert!(second.contains("上下文质量已严重衰减"), "{second}");
+        assert!(second.contains("压缩是恢复工作现场的方式"), "{second}");
         assert!(second.contains("最后一次压缩窗口"), "{second}");
         assert!(second.contains("按块回查存档"), "{second}");
     }

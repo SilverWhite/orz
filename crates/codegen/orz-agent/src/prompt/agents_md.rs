@@ -326,7 +326,7 @@ pub const LEGACY_AGENTS_MD_REMINDER_PREFIX: &str =
 /// Canonical copy lives in orz-assurance (`plan::framework`); orz-loop
 /// injects the same block unconditionally at the system-prompt level for
 /// plan-first sessions (independent of AGENTS.md presence).
-pub use orz_assurance::plan::framework::PLAN_FIRST_FRAMEWORK_BLOCK;
+pub use orz_assurance::plan::framework::PLAN_FRAMEWORK_BLOCK;
 
 /// Open/close `system-reminder` (Grok) or `system_reminder` (Cursor/IDE), case-insensitive.
 /// Shared with unit tests so CI fails if the pattern is ever invalid or too narrow.
@@ -359,7 +359,7 @@ fn render_agents_md(configs: &[AgentConfigFile]) -> Option<String> {
     // (main and subagent) comes after it, so the execution-style framework
     // precedes all project instructions.
     section.push('\n');
-    section.push_str(PLAN_FIRST_FRAMEWORK_BLOCK);
+    section.push_str(PLAN_FRAMEWORK_BLOCK);
     section.push('\n');
 
     for config in configs {
@@ -522,7 +522,7 @@ mod tests {
     // plan-first wrapper precedes every AGENTS.md file's content.
 
     #[test]
-    fn plan_first_framework_precedes_agents_content() {
+    fn plan_framework_precedes_agents_content() {
         let configs = vec![AgentConfigFile {
             file_name: "AGENTS.md".to_string(),
             file_path: "/repo/AGENTS.md".to_string(),
@@ -530,7 +530,7 @@ mod tests {
         }];
         let section = format_agents_md_section(&configs).unwrap();
         let framework_at = section
-            .find("<plan_first_framework>")
+            .find("<plan_framework>")
             .expect("plan-first wrapper must be present");
         let content_at = section
             .find("## From: /repo/AGENTS.md")
