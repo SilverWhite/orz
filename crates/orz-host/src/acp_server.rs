@@ -4841,11 +4841,13 @@ impl AcpServer {
         let activation_snapshot_json =
             serde_json::to_value(&activation_snapshot).unwrap_or(serde_json::Value::Null);
         let controller = AgentLoopController::with_gateway(self.model_gateway.clone())
+            // 365：plan 工具可用（复杂任务建议写，简单任务可直接行动）；
+            // “首轮必须 plan”的门不启用（plan_gate 默认 false）。
+            .with_plan_enabled(true)
             // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27, 实际使用
             // 裁决)：plan 门为普适删减——ACP 交互会话面与 CLI 一致不再
             // 启用首轮计划仪式（安全职责在机械审计层与提交门，不靠计划
-            // 结构）；`plan_first` 仅作休眠开关保留（测试/回退），生产
-            // 不再启用。console 默认面随生产路径保留（与 CLI 一致）。
+            // 结构）。console 默认面随生产路径保留（与 CLI 一致）。
             .with_console_default_enabled(true)
             // 355 批（2026-10-25，353 审查处置）：交互/CLI 主车道终态声明随
             // ORZ_TERMINAL_DECLARATION 单源——缺省 off＝文本轮无条件交付

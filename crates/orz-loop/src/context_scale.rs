@@ -335,7 +335,7 @@ pub fn soft_reminder_block(milestone_tokens: u64, model_face_tokens: u64) -> Str
     format!(
         "{REMINDER_INJECTED_PREFIX} {k}K] 当前上下文窗口 {reading}。除你**最近工作的\
          连续轮次**（工作现场）以外，更早的内容按**分块**累积在你的窗口里\
-         （分块表在窗口**尾部**、逐轮刷新），机械层不会替你删除它们。\
+         （分块表默认按需读取 `.gsa/ledger/current.md`），机械层不会替你删除它们。\
          压缩交给你自选、可延后：{}\n\
          {}",
         summary_block_guide(),
@@ -359,7 +359,7 @@ pub fn hard_reminder_block(
     let t1 = truncate_tokens / 1000;
     let reading = reading(model_face_tokens);
     format!(
-        "{REMINDER_INJECTED_PREFIX} {k}K · 硬提醒] 当前上下文窗口 {reading}，已越过模型间开始分化的位置\
+        "{REMINDER_INJECTED_PREFIX} {k}K · 硬提醒] 当前上下文窗口 {reading}，已越过 {k}K 估算线\
          （≈246K 真实 token）。到 **{t1}K 估算（≈385K 真实 token）** 时，机械层将**强制开压缩窗口**，\
          要求把工作现场以外的全部已闭合分块压缩；两次窗口内仍未产出 ⇒ 第三次机械层将**仅保留工作现场**，\
          把其余已闭合分块移出窗口（逐字原文全量留档，需要前置上下文时按块回查存档）。\n\
@@ -370,7 +370,7 @@ pub fn hard_reminder_block(
          {permission}",
         target_tier_advice(),
         summary_block_guide(),
-        crate::model_face::BLOCK_TABLE_POINTER_LINE,
+        crate::model_face::block_table_pointer_line(),
         declaration = crate::model_face::MODEL_FACE_DECLARATION,
         permission = context_permission_line()
     )
@@ -421,7 +421,7 @@ pub fn truncation_notice_block(
          {declaration}\n\
          {permission}",
         reading(model_face_tokens),
-        crate::model_face::BLOCK_TABLE_POINTER_LINE,
+        crate::model_face::block_table_pointer_line(),
         declaration = crate::model_face::MODEL_FACE_DECLARATION,
         permission = context_permission_line()
     )
@@ -511,7 +511,7 @@ fn reading_only(tokens: u64) -> String {
 pub fn first_block_reminder_block() -> String {
     format!(
         "{REMINDER_INJECTED_PREFIX} 首个分块] 你的当前上下文窗口里首次出现了**工作现场之外**的分块\
-         （分块表见下）。这只是一个索引事实：内容仍在你的窗口里，机械层不会替你删除。\
+         （分块表默认按需读取 `.gsa/ledger/current.md`）。这只是一个索引事实：内容仍在你的窗口里，机械层不会替你删除。\
          请把接线结论/关键读数固化到黑板（{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes）\
          ——黑板不属于上下文窗口，跨压缩与截断都不失效。"
     )
@@ -615,7 +615,7 @@ pub fn mandatory_compression_window_block(
          {pointer}\n{declaration}\n\
          {permission}",
         guide = summary_block_guide(),
-        pointer = crate::model_face::BLOCK_TABLE_POINTER_LINE,
+        pointer = crate::model_face::block_table_pointer_line(),
         declaration = crate::model_face::MODEL_FACE_DECLARATION,
         permission = context_permission_line()
     )
@@ -1030,7 +1030,7 @@ mod tests {
             assert!(!text.contains("[上下文分块表"), "{text}");
             assert!(!text.contains("说明: 工作现场"), "{text}");
             assert!(
-                text.contains(crate::model_face::BLOCK_TABLE_POINTER_LINE),
+                text.contains(crate::model_face::block_table_pointer_line()),
                 "{text}"
             );
         }

@@ -75,6 +75,18 @@ pub const CLEAR_MARKER_PREFIX: &str = "[前文上下文已清零";
 pub const BLOCK_TABLE_POINTER_LINE: &str =
     "分块表见**窗口尾部**（逐轮刷新；压缩/回放均按块号指定）。";
 
+/// 360：块表默认 pull 时的指针（替代“见窗口尾部”）。
+pub const BLOCK_TABLE_PULL_LINE: &str =
+    "分块表默认按需读取（`.gsa/ledger/current.md`；压缩/回放均按块号指定）。";
+
+pub fn block_table_pointer_line() -> &'static str {
+    if crate::prompt::block_table_resident_enabled() {
+        BLOCK_TABLE_POINTER_LINE
+    } else {
+        BLOCK_TABLE_PULL_LINE
+    }
+}
+
 /// marker 机器行标签：块号区间（供 `face_markers` 反解分块状态）。
 pub const BLOCK_MARKER_RANGE_LABEL: &str = "已处理分块: ";
 

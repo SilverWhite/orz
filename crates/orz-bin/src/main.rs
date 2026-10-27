@@ -1623,6 +1623,8 @@ fn run_plan(prompt: &str, wallclock: Option<Duration>, stall_timeout: Option<Dur
             // (plan artifacts are mechanically derived today; model-generated
             // plans later keep the same ingestion point).
             let controller = orz_loop::AgentLoopController::with_gateway(gateway)
+                // 365：plan 工具可用，不再有“首轮必须 plan”的门。
+                .with_plan_enabled(true)
                 // 355 批（2026-10-25，353 审查处置）：交互/CLI 主车道终态声明随
                 // ORZ_TERMINAL_DECLARATION 单源——缺省 off＝文本轮无条件交付
                 // （353 §5.1）；机器可读终态（benchmark/headless/外部 ACP）由
@@ -2355,10 +2357,12 @@ async fn run(
         // off ⇒ 开）。模式 A probe/机械降级退役：不再启动期拉起浏览器或
         // 产生 retrieval_mode_transition。
         let controller = orz_loop::AgentLoopController::with_gateway(build_gateway())
+            // 365：plan 工具可用（复杂任务建议写，简单任务可直接行动）；
+            // “首轮必须 plan”的门不启用（plan_gate 默认 false）。
+            .with_plan_enabled(true)
             // THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.5): plan 门摘除——
             // 首轮直接进入工作工具（与第 2 轮 direct 面一致）；plan 分区
-            // 保留在黑板（历史/审计），模型可不读。plan_first 仅作休眠
-            // 开关保留（测试/回退），生产不再启用。
+            // 保留在黑板（历史/审计），模型可不读。
             // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console
             // default + direct 受控降级（双模式）随生产路径启用。
             .with_console_default_enabled(true)
