@@ -2375,6 +2375,11 @@ _WORK_TOOLS = frozenset(
         # 单工具带 mode＝compress 承继 0ap 管线＋clear 主动清零）——三处
         # 同批先例照抄（表格数据同步；判别规则零改动）。
         "context_manage",
+        # 0ds M1-S1（2026-10-27）：`state_read` / `state_write`（黑板 state
+        # 分区窄读/写面；纯内存、ReadOnly 类）——三处同批先例照抄
+        # （Rust 探针/判官/本表；表格数据同步、判别规则零改动）。
+        "state_read",
+        "state_write",
         "todo_write",
         "update_goal",
         "enter_plan_mode",

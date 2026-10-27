@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/state-write-event-payload-v0.2.schema.json",
+  "title": "State-write event payload v0.2 (0ds M1-S1 blackboard state partition)",
+  "description": "0ds M1-S1 (2026-10-27, 366 charter / architecture §4.1/§9): an accepted write to the blackboard `state` partition. The payload is a mechanical audit row — which fields the caller provided, a bounded goal preview, the rendered content size and the chars/2 token estimate — plus a self-contained full-text snapshot: `state` carries the complete rendered state document at write time (bounded at 2048 chars; the 200-token design cap keeps the rendered document ≈400 chars). R-M1S1-01 (370 §8.2 step 4, user decision: adopt the snapshot) — replaying accepted rows in journal order reconstructs the state history from this row alone; the corresponding model_output `state_write` / `blackboard_write` tool call remains the provenance record for the write arguments.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "outcome",
+    "fields",
+    "content_chars",
+    "estimated_tokens",
+    "state"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["outcome"],
+        "properties": {
+          "outcome": { "const": "accepted" }
+        }
+      },
+      "then": {
+        "required": ["updated"],
+        "description": "371 批（F5b，2026-10-28）：accepted 行必有系统盖章（r<round>@<domain> <ts>）。"
+      }
+    },
+    {
+      "if": {
+        "required": ["outcome"],
+        "properties": {
+          "outcome": { "const": "cleared" }
+        }
+      },
+      "then": {
+        "not": { "required": ["updated"] },
+        "description": "371 批（F5b）：cleared 行无状态可盖，不携带 updated。"
+      }
+    }
+  ],
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "enum": ["accepted", "cleared"]
+    },
+    "fields": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["goal", "now", "next", "open", "constraints"]
+      },
+      "description": "Fields provided by this write (fixed order goal/now/next/open/constraints). Absent fields keep their previous value (merge semantics)."
+    },
+    "goal": {
+      "type": "string",
+      "maxLength": 120,
+      "description": "Bounded goal preview (first non-empty field when goal is absent)."
+    },
+    "state": {
+      "type": "string",
+      "maxLength": 2048,
+      "description": "Full-text snapshot of the rendered state document at write time (first 2048 chars; the 200-token design cap keeps it ≈400). Empty string on `cleared` (post-clear state is empty)."
+    },
+    "content_chars": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Rendered state document character count at write time."
+    },
+    "estimated_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 200,
+      "description": "chars/2 estimate of the rendered state document (≤200 by design)."
+    },
+    "updated": {
+      "type": "string",
+      "minLength": 1,
+      "description": "System stamp: r<round>@<domain> <ts>."
+    }
+  }
+}

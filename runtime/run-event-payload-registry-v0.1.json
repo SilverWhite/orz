@@ -206,6 +206,10 @@
         "schema": "runtime/plan-write-event-payload-v0.2.schema.json",
         "slug": "plan-write"
       },
+      "state_write": {
+        "schema": "runtime/state-write-event-payload-v0.2.schema.json",
+        "slug": "state-write"
+      },
       "request_header_change": {
         "schema": "runtime/request-header-change-event-payload-v0.2.schema.json",
         "slug": "request-header-change"

@@ -66,6 +66,7 @@
         "epoch_archive_write_failed",
         "session_archive",
         "plan_write",
+        "state_write",
         "console_mode_transition",
         "console_order_written",
         "console_order_rejected",
