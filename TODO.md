@@ -17,12 +17,12 @@
 
 > **分卷口径（2026-09-25 用户令）**：逐批流水与记录文档自**下一批**起**直接**记入 [BACKLOG 第二卷](docs/BACKLOG_AND_PRIORITIES_2.md)（取代先前「先落治理行、沉淀后再移入第二卷」）；本文件与主 BACKLOG 只留「当前计数＋本批一句要点＋指针链接」。
 
-- 未闭合总数：**65 项**（BACKLOG 计数口径；**362 闭合（66 → 65，2026-10-26）**；**0dp 经 2026-10-25 用户裁决闭合（65 → 64）**；**353（`0dq`）与 354（`0dr`）同日正式立项（64 → 66）**；**0dq 经 2026-10-26 用户裁决闭合（66 → 65）**。详见 [353 批档](docs/audits/353_TURN_ATOMICITY_AND_TERMINAL_CONTRACT_2026-10-25.md)／[354 设计稿](docs/SYSTEM_CONSOLE_DESIGN_2026-10-25.md)。）
+- 未闭合总数：**66 项**（BACKLOG 计数口径；**366 批：Agent OS v1（0ds）立项，65 → 66，2026-10-27**；**362 闭合（66 → 65，2026-10-26）**；**0dp 经 2026-10-25 用户裁决闭合（65 → 64）**；**353（`0dq`）与 354（`0dr`）同日正式立项（64 → 66）**；**0dq 经 2026-10-26 用户裁决闭合（66 → 65）**。详见 [353 批档](docs/audits/353_TURN_ATOMICITY_AND_TERMINAL_CONTRACT_2026-10-25.md)／[354 设计稿](docs/SYSTEM_CONSOLE_DESIGN_2026-10-25.md)。）
 - [x] **362 批（开发者体验与工具面摩擦治理）**：S1 handoff、S4 `orz resume`、S2 终端结构化（structured merge、stderr_captured、噪音清理；tail/filter 为 loop 内部后处理）、S3 `range`（read_file 工具层，read handle 前生效）、S6 测试失败摘要（terminal cargo test；run_tests 仍 R1 封存）已落码；S5 capabilities schema 单源；S7 不立项。orz-loop 922/0/3、orz-host 453/0/6、orz-tools read_file 237/0；S2 长任务流式沿用既有 auto-background。入口：[`362 设计稿`](docs/DEV_ERGONOMICS_DESIGN_2026-10-26.md) / [`362 审查档`](docs/audits/362_DEV_ERGONOMICS_REVIEW_2026-10-26.md)。
 - [x] **363 批（常驻策略收敛与 plan_first 改名；2026-10-27 用户令治理；计数 65 不变）**：D4／分块表／任务状态行／SELF_CHECK 常驻句默认 pull（`ORZ_MODEL_FACE_*`／`ORZ_SELF_CHECK_RESIDENT` 单键回退；测试默认保留旧面回归）；`plan_first`→`plan`（`plan_gate` opt-in）；context-scale 文案去降智暗示；故障消融五观察点后置未跑。入口：[363 档](docs/audits/363_RESIDENT_POLICY_AND_PLAN_RENAME_2026-10-27.md)。（初稿误号 360，364 批改称。）
 
 - P0：0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续（**286 批：检索启用门缺省开——ADR §14.85，单源解析＋四面接线，缺省开待下一版载体生效**）；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项，实施未开始；§14.2 验证载体已裁决引入模拟器（2026-09-12），S1 载体搭建待放行，M0 定版为首个无依赖里程碑）；0z 真机资源安全边界与崩溃收尾（2026-09-12 用户裁决立项，设计完成待放行实施；S1–S4，**不与 0v-C 搭车**）。`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` 已随 0.5.1 载体重建闭合（2026-09-14）。**即时结果回报与流式检索线（GAP-MECH-IMMEDIATE-FEEDBACK）已于 2026-09-27 S4 三题实机复验通过后闭合**（55 → 54；判据①②③全过＋FR-D02 达成；整轮 89 题重跑按用户修正令不发起；原验证⑤登记已随 152 批退役废止）：[`098 S4 收口档`](docs/audits/098_0AC_S4_CLOSURE_2026-09-27.md)。**2026-09-20 闭合**：检索批次回送与轮级单席位线（S1 契约面／S2 实施／S3 同三题真机复验全部完成，ADR-0010 §14.73/v1.75 转录随 S2；未闭合 36 → 35）＋同日 N1–N6 摩擦深挖登记观察不立项。（2026-10-18 复核维持，语义零改——台账行龄纪律就地刷新。）
-- P1：0db／0aa／0ae／0ah／0al／0aq／0aw／0ax／0ba／0bd／0bg／0bh／0bi／0bj／0bm／0bn／0bp／0br／0bs／0bt／0by／0ci／0cl／0ct／0cu／0cy／0cz／0da／0dh／0di／0dk／0dl／0dm／0dn／0dr；另有组件审计（4）、Windows 证据（5）、DeepSeek live（6）、会话上下文（6d）。状态与里程碑以 BACKLOG 对应小节为准；审批缺省项已于 2026-10-25 用户裁决闭合（S1–S3 全达成，352 换装 0.9.13）。
+- P1：0db／0aa／0ae／0ah／0al／0aq／0aw／0ax／0ba／0bd／0bg／0bh／0bi／0bj／0bm／0bn／0bp／0br／0bs／0bt／0by／0ci／0cl／0ct／0cu／0cy／0cz／0da／0dh／0di／0dk／0dl／0dm／0dn／0dr／0ds；另有组件审计（4）、Windows 证据（5）、DeepSeek live（6）、会话上下文（6d）。状态与里程碑以 BACKLOG 对应小节为准；审批缺省项已于 2026-10-25 用户裁决闭合（S1–S3 全达成，352 换装 0.9.13）。
 - **328 批复核（只读，非新项）**：0.9.7 五问题根因＋54d12bcc 重置取证；修复顺序待裁决（P0 会话保活＋/rewind；P1 CDP＋session/new sweep；P2 进程＋时间溯源）。入口：[328 档](docs/audits/328_0_9_7_FIVE_ISSUE_REVIEW_AND_54D12BCC_RECOVERY_2026-10-21.md)。
 - **329 批修复（计数 63 不变；未重建）**：按 328 §8 排序落地——① `/rewind` 投影截断（0di；本地 items/marker/turn 截断＋重放按 `recall_log` 过滤＋`/api/recall`）② 会话保活/重连（0dk；桥持 child，WS detach 默认保活 1800s，attach 前置帧绑定）③ 交互式 `session/new` 不收卷（0cy 口径）④ CDP 就绪重试（100→200ms 退避）⑤ 0dm S2 交付状态面板（`/api/delivery`＋工具栏）。读数：orz-web 63/0、CDP 3/3、session 2/2、frontend smoke 43 ok；载体 S3/S4 因训练进程顺延。入口：[329 档](docs/audits/329_FIVE_ISSUE_FIX_REWIND_KEEPALIVE_CDP_SWEEP_AND_0DM_S2_2026-10-21.md)。
 - **334 批审查（只读，计数 64 不变；未重建）**：328–333 全面审查——设计合理性／实现合理性／符合性；P0 版本偏斜结构上不命中＋0.9.8 必闭台账未闭合＋CLI 删除绕过 close/lease；P1 桥请求 id 混表可锁死运行态＋锁序反转＋closing/archived 未落＋错误码面窄＋跨区根丢失＋doctor 面窄＋上下文口径不符；结论：0.9.8 重建前需 334 修复批或显式豁免。入口：[334 档](docs/audits/334_REVIEW_OF_BATCHES_328_333_2026-10-21.md)。
@@ -1170,6 +1170,16 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 验收：`inspect run --json` 与 `events.jsonl` 逐条可对；grep 超限输出含 `total`＋`next_cursor` 且续页不重不漏；`python -c "print('中文')"` 回执 `FFFD=0`；断 run 后下一轮首帧含 `[上次 run 中断]`；读工作区外路径不再 `escapes workspace sandbox`。
 - 边界：新增诊断只走 `inspect` 子命令，不进模型工具面；时间轴只投影机械事实、不做模型推断；不把 RLI 重新做成推送面。
 - 入口：[`354 设计稿`](docs/SYSTEM_CONSOLE_DESIGN_2026-10-25.md) / BACKLOG `0dr`。
+
+### P1-0ds. Agent OS v1（AGENT-OS-V1）（P1；2026-10-27 用户令立项，366 批；65 → 66；来源＝用户令「就按照你的需求进行判定就行，请落设计文档吧」「确定就当前设计了的话就可以正式立项排期并同步 index/todo/backlog 等状态文档了」）
+
+- [ ] **M1 基础内核**（state 分区 + `state_read/write` + `context_map` + `recenter` + journal 事件；目标 2026-11-03）：复用 blackboard/journal；state ≤200 token；context_map ≤1K；recenter 只读 ≤1K；四工具可用、测试全绿。
+- [ ] **M1.5 分层压缩与上下文编辑**（decisions `.gsa/decisions` 追加台账 + `context_manage(edit/slider/decision_*)` + 压缩摘要 decision IDs + `context_map` decisions；目标 2026-11-07）：summary ≤300/detail ≤2000；edit 原子/可逆/原块留档；当前轮可编辑（原文留 journal）；前缀影响可读。
+- [ ] **M2 能力薄层 + resident 清理**（capability registry 白名单/preopen/audit；清 permission/plan_framework/context permission；目标 2026-11-10）：越权拒绝可审；模型面 fingerprint 无残留。
+- [ ] **M3 v1 验收**（10 不变量、故障消融、预算、跨压缩；目标 2026-11-17）：验收清单全过、零回归；不做质量 A/B。
+- [ ] **M4 orz-system 本地服务**（daemon + named pipe/Unix socket + checkpoint/recovery；目标 2026-12-08）：跨进程 state/checkpoint；崩溃恢复。
+- [ ] **M5 host adapters**（fs/process/net/credential/terminal；Windows/Linux；目标 2027-01-05）：adapter 契约测试；Job Objects/cgroups 冒烟。
+- 入口：[`架构设计`](docs/ORZ_AGENT_OS_ARCHITECTURE_V1_2026-10-27.md) / [`先验调研`](docs/AGENT_OS_PRIOR_ART_SURVEY_2026-10-27.md) / [`366 章程`](docs/audits/366_AGENT_OS_V1_PROJECT_CHARTER_2026-10-27.md) / [`M1.5 设计`](docs/DECISION_LEDGER_AND_CONTEXT_EDITOR_DESIGN_2026-10-27.md) / BACKLOG `0ds`。
 
 ### P1-0dh 长程进程显式通道——TER 封闭面受控重开＋收割语义修订（LONGRUNNING-PROCESS-EXPLICIT-CHANNEL）（P1；2026-10-17 用户令立项，BACKLOG 0dh；63 → 64；来源＝昨晚真机实锤〔会话 b41b096d runs5-7：`Start-Process` 被 per-call Job Object 回收 ep1、受管后台路径被 `run_shutdown` sweep 跨 run 杀 ep96、用户手起进程存活〕＋用户令「orz内部的deepseek没办法起长程进程……做成上下文管理的那种选择式」＋「看来是目前版本的orz存在bug，待我修一下」）
 
