@@ -50,6 +50,8 @@ pub use relay::spawn_scout_tool_def;
 pub mod render_fold;
 mod retrieval;
 pub mod selfhistory;
+/// 0ds M1-S1：`state` 分区（黑板当前事实薄层）。
+pub mod state;
 pub mod summary;
 pub mod tool;
 pub mod tool_probe;

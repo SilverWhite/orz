@@ -209,6 +209,17 @@ pub enum EventType {
     // identity/goal/step count, mechanical validation verdict, one-refill
     // attempt progression and degrade reason. Main lane only.
     PlanWrite,
+    // 0ds M1-S1 (2026-10-27, 366 charter / architecture §9): an accepted
+    // write to the blackboard `state` partition — field set, goal preview,
+    // content size, the mechanical token estimate, and (R-M1S1-01, 370
+    // §8.2 step 4) a self-contained `state` full-text snapshot (≤2048
+    // chars; the 200-token design cap keeps it ≈400). `state` is the
+    // session's current-facts layer; every write leaves this audit row,
+    // and replaying accepted rows reconstructs the state history without
+    // joining the corresponding model_output `state_write` /
+    // `blackboard_write` tool call (which remains the provenance record
+    // for the write arguments).
+    StateWrite,
     // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / PLAN_FIRST
     // _BLACKBOARD_DESIGN §7): the console/direct dual-mode transition
     // decision record — console→direct (assistant-failure-streak switch),

@@ -622,6 +622,11 @@ pub struct AgentLoopController {
     /// pending_checkpoint 对齐一次；工具执行只发生在 loop-top 之间的派发段，
     /// 故该值在整段派发内恒真。
     pub(crate) compression_window_active: std::sync::atomic::AtomicBool,
+    /// 2026-10-27（369）：`context_manage(mode=compress, summary=…)` 的
+    /// **一次性摘要请求位**。工具执行点写入自由文本摘要（无固定模板），
+    /// agent_loop 在下一个 loop-top 取走并注入 `pending_semantic`，随后走
+    /// 既有按块压缩管线；有 summary 时不置窗口请求位（不开多轮窗口）。
+    pub(crate) compression_summary: Mutex<Option<String>>,
     /// A6 §8 C.2 compaction whitelist (user decision 2026-08-08): the
     /// model-written list of task facts that survive compaction. Written
     /// only during the FIRST tool batch; resident in the conversation's
@@ -995,6 +1000,7 @@ impl AgentLoopController {
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
             compression_window_requested: std::sync::atomic::AtomicBool::new(false),
             compression_window_active: std::sync::atomic::AtomicBool::new(false),
+            compression_summary: Mutex::new(None),
             // v7（S1 修订批）：会话级提醒水位——构造时为空（新会话从零开始；
             // ACP 会话在 prompt 起始经 `with_context_scale_notified` 注入侧车值）。
             context_scale_notified: Mutex::new(Vec::new()),
@@ -1708,6 +1714,7 @@ impl AgentLoopController {
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
             compression_window_requested: std::sync::atomic::AtomicBool::new(false),
             compression_window_active: std::sync::atomic::AtomicBool::new(false),
+            compression_summary: Mutex::new(None),
             // v7（S1 修订批）：会话级提醒水位（构造时空）。
             context_scale_notified: Mutex::new(Vec::new()),
             // 318 P1-C5：真实用户输入来源表（run 作用域，起点清空）。
@@ -2149,12 +2156,13 @@ impl AgentLoopController {
     /// **空表**口径（不为本面新增豁免）。文案逐字不变 ⇒ digest 不变。
     fn board_guide_body() -> String {
         format!(
-            "【名词】黑板＝会话工作记忆：plan/notes/findings 模型可写，其余分区机械只读。\
+            "【名词】黑板＝会话工作记忆：plan/notes/findings/state 模型可写，其余分区机械只读。\
              journal＝本 run 事件链（逐行、sha 连锁）；轮 r＝决策轮，块 b＝压缩分块，\
              s＝journal 行号；定位符 `r<轮>·b<块>·s<seq>[#sha8]`＝事件指针\
              （分块表/压缩回执里直接复制；section=journal anchor=… 点读 ≤512B）。\
-             压缩＝旧上下文换摘要（原文在本地档案、可回放；是否压缩由模型决定，\
-             机械不强制）。清零＝把边界前上下文整体移出窗口继续工作（未销毁、\
+             压缩＝旧上下文换摘要（原文在本地档案、可回放；摘要用 {cm} 的 \
+             mode=compress+summary 提交，自由文本、无固定模板，不写成 assistant 正文；\
+             是否压缩由模型决定，机械不强制）。清零＝把边界前上下文整体移出窗口继续工作（未销毁、\
              可回放；需先写交接摘要）；一键清理＝清零＋黑板三分区一并清空\
              （handover 成为清空后板面唯一条目）；清空黑板分区＝blackboard_write \
              op=clear（历史全量在 journal 可回查）。域（start/normal/pressure/\
@@ -2165,9 +2173,12 @@ impl AgentLoopController {
              替模型记账（section=temporal / rli 按需查，fires 不注入）。检索由子代理\
              执行（派发返回指针时读 internal_ret/external_ret）。写计划/笔记用 {}\
              （单条 ≤8K；清空分区 op=clear）；上下文窗口自管理（主动压缩/清零/\
-             一键清理）用 {}。",
+             一键清理）用 {}。当前事实用 {}/{}（goal/now/next/open/constraints；≤200 token）。",
             crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME,
             orz_assurance::tool_names::CONTEXT_MANAGE_TOOL_NAME,
+            orz_assurance::tool_names::STATE_READ_TOOL_NAME,
+            orz_assurance::tool_names::STATE_WRITE_TOOL_NAME,
+            cm = orz_assurance::tool_names::CONTEXT_MANAGE_TOOL_NAME,
         )
     }
 
@@ -3113,6 +3124,26 @@ impl AgentLoopController {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// 2026-10-27（369）：工具侧登记一次性压缩摘要（自由文本；机械层原样
+    /// 交给现有按块压缩管线，不要求固定段模板）。后写覆盖前写（同一派发
+    /// 段内多次调用只保留最后一次）。
+    pub(crate) fn request_compression_summary(&self, summary: String) {
+        let mut slot = self
+            .compression_summary
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = Some(summary);
+    }
+
+    /// agent_loop 在 loop-top 取走一次性摘要（锁存语义：取走即清空）。
+    pub(crate) fn take_compression_summary(&self) -> Option<String> {
+        let mut slot = self
+            .compression_summary
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        slot.take()
+    }
+
     /// 动态上下文滑块 S1 修订批（v7，2026-09-15，设计 §3.5.1，用户裁定
     /// DP-16）：**会话级提醒水位**——已提醒刻度键（`["500k", "900k"]`）。
     /// 与黑板同族：跨 prompt 延续、新会话从零开始、恢复不重发（先例
@@ -3282,6 +3313,10 @@ impl AgentLoopController {
     pub(crate) fn is_blackboard_render_error(content: &str) -> bool {
         content.starts_with("unknown blackboard section:")
             || content.starts_with("receipt_id 仅与 section=actions")
+            // 371 批（F4，2026-10-28）：`state` 过滤拒绝形状（R-369-04 的
+            // live-only 纪律）同登记——否则失败读会挂增量头并推进 state
+            // 游标，违反「模型没拿到内容不算读过」不变量。
+            || content.starts_with("blackboard_read state 只支持 live 读取")
             || (content.starts_with("blackboard_read ")
                 && (content.contains("with epoch is not supported")
                     || content.contains("not found")))
@@ -3812,6 +3847,12 @@ impl AgentLoopController {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             crate::usage_meter::RunUsageMeter::default();
+        // 2026-10-27（369）：一次性压缩摘要请求位随 run 复位——上一 run 若在
+        // 消费前异常退出，不能把旧摘要带进新 run（per-run 隔离，同 usage）。
+        *self
+            .compression_summary
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         // 318 P1-C5：真实用户输入来源表随 run 复位（写回只认本 run 的
         // prompt/supplement；跨 run 残留会让旧文本豁免新 run 的注入判定）。
         self.reset_user_authored_inputs();
@@ -3982,7 +4023,8 @@ impl AgentLoopController {
                      anchor=r<轮>·b<块>·s<seq>[#sha8] → that event’s mechanical \
                      summary ≤512B), guide (框架说明书: 名词解释与组件关系，\
                      section=guide — read it once when unsure what a framework \
-                     term means). Folded partitions \
+                     term means), state (当前事实薄层: goal/now/next/open/\
+                     constraints/updated; 与 state_read 同源). Folded partitions \
                      show `[域段 r1–r30 · N 条 · 摘要]` markers; expand one round \
                      range with domain+round_from+round_to (all three together; \
                      exec/edits/tool_actions only). Every live response starts with \
@@ -4013,6 +4055,7 @@ impl AgentLoopController {
                                 "journal",
                                 "notes",
                                 "findings",
+                                "state",
                             ],
                             "description": "Partition to read — see the tool description for one-line usage per partition.",
                         },
@@ -4096,16 +4139,19 @@ impl AgentLoopController {
         {
             tool_defs.push(ToolDef {
                 name: crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME.to_string(),
- description: "Write a note to the blackboard — the fold-proof durable memory: blackboard content survives context folding and compaction — at the 500K hard truncation (T1) only the current slider window survives, so plan/notes on the blackboard remain recoverable via blackboard_read. `section` is \"plan\" (task plan + key intermediate conclusions), \"notes\" (free-form working notes), or \"findings\" (the append-only ledger of established results & conclusions from actual work); with op=clear, section may also be \"all\" (wipe all three). Single write is capped at 8K chars — split longer content across writes. The live watermark 【x.xM/10M】 rides every blackboard_read response header. Writes are stamped (round, domain) and journaled; cleared/replaced entries stay fully archived in the journal; mechanical partitions (edits/exec/actions/processes/temporal/session) are NOT writable.".to_string(),
+ description: "Write a note to the blackboard — the fold-proof durable memory: blackboard content survives context folding and compaction — at the 500K hard truncation (T1) only the current slider window survives, so plan/notes on the blackboard remain recoverable via blackboard_read. `section` is \"plan\" (task plan + key intermediate conclusions), \"notes\" (free-form working notes), \"findings\" (the append-only ledger of established results & conclusions from actual work), or \"state\" (the current-facts layer, `key: value` document: goal/now/next/open/constraints; merged, ≤200 tokens, `updated` system-written). With op=clear, section may also be \"all\" (wipe the three note partitions; state is cleared explicitly with section=state). Single write is capped at 8K chars — split longer content across writes. The live watermark 【x.xM/10M】 rides every blackboard_read response header. Writes are stamped (round, domain) and journaled; cleared/replaced entries stay fully archived in the journal; mechanical partitions (edits/exec/actions/processes/temporal/session) are NOT writable.".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "section": {
                             "type": "string",
-                            "enum": ["plan", "notes", "findings", "all"],
+                            "enum": ["plan", "notes", "findings", "state", "all"],
                             "description": "目标分区：plan = 工作计划与关键中间结论；notes = 自由工作\
                              笔记；findings = 已探明内容工作台账（已确立/已验证的发现与结论）；\
-                             all = 三分区全部（**仅与 op=clear 组合合法**）。",
+                             state = 当前事实薄层（content 用 `key: value` 行：goal/now/next/\
+                             open/constraints；合并写入、≤200 token、updated 系统写）；\
+                             all = 上述三个笔记分区全部（**仅与 op=clear 组合合法**；\
+                             state 不在 all 内，清 state 用 section=state）。",
                         },
                         "content": {
                             "type": "string",
@@ -4123,6 +4169,75 @@ impl AgentLoopController {
                         },
                     },
                     "required": ["section"],
+                }),
+            });
+        }
+        // 0ds M1-S1（2026-10-27，366 章程 / 架构 §4.1/§11）：`state_read` /
+        // `state_write`——黑板 `state` 分区窄读/写面（6 字段、≤200 token、
+        // 合并写入、`updated` 系统写）。与 `blackboard_read/write
+        // section=state` 共用解析/校验/渲染单源；只写内存黑板 → ReadOnly
+        // 类（所有策略自动放行）。无条件声明（沿 blackboard_write 形态；
+        // 不随 plan 门/状态行开关）。
+        if !tool_defs
+            .iter()
+            .any(|t| t.name == orz_assurance::tool_names::STATE_READ_TOOL_NAME)
+        {
+            tool_defs.push(ToolDef {
+                name: orz_assurance::tool_names::STATE_READ_TOOL_NAME.to_string(),
+                description: "Read the blackboard `state` partition (PULL — costs nothing \
+                     when you do not call it): goal / now / next / open / constraints / \
+                     updated. Compact line record; empty state returns （无）. Read it at \
+                     task start, after compaction, or when you need the current facts."
+                    .to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false,
+                }),
+            });
+        }
+        if !tool_defs
+            .iter()
+            .any(|t| t.name == orz_assurance::tool_names::STATE_WRITE_TOOL_NAME)
+        {
+            tool_defs.push(ToolDef {
+                name: orz_assurance::tool_names::STATE_WRITE_TOOL_NAME.to_string(),
+                description: "Write/merge the blackboard `state` partition — the small, \
+                     stable current-facts layer (survives folding/compaction). Provide any \
+                     of goal / now / next / open (≤3) / constraints (≤3); absent fields keep \
+                     their previous value, empty string or `none` clears one. Total budget \
+                     ≤200 tokens (excess is rejected with a trim hint). `updated` is \
+                     system-written. Write only when the task actually changes."
+                    .to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "goal": {
+                            "type": "string",
+                            "description": "一句话目标（任务变化时更新；空串/none 清空）。",
+                        },
+                        "now": {
+                            "type": "string",
+                            "description": "当前正在做什么。",
+                        },
+                        "next": {
+                            "type": "string",
+                            "description": "下一步动作（recenter 后应与此一致）。",
+                        },
+                        "open": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "maxItems": 3,
+                            "description": "未决问题（0-3 条；空数组清空）。",
+                        },
+                        "constraints": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "maxItems": 3,
+                            "description": "硬约束（0-3 条；空数组清空）。",
+                        },
+                    },
+                    "additionalProperties": false,
                 }),
             });
         }
@@ -4146,16 +4261,16 @@ impl AgentLoopController {
         {
             tool_defs.push(ToolDef {
                 name: orz_assurance::tool_names::CONTEXT_MANAGE_TOOL_NAME.to_string(),
-                description: "Manage your own context window. mode=compress: open a \
-                     compression window (≤3 rounds), then write a [SEMANTIC_SUMMARY] \
-                     block to fold older context; optional `whitelist` entries survive \
-                     compaction. mode=clear: move ALL prior context out of the window \
-                     and continue on the ledger — requires `handover` (≤8K), which is \
-                     written to the blackboard first. mode=clear_all: one-shot wipe of \
-                     the context window AND the blackboard (plan/notes/findings), then \
-                     your `handover` becomes the only blackboard entry. Nothing is \
-                     destroyed: cleared content stays in .gsa/journal and can be \
-                     re-read. Returns a readout."
+                description: "Manage your own context window. mode=compress: with an \
+                     optional free-form `summary`, compress immediately (preferred; no fixed \
+                     field template, optional `压缩块: 1-4` line); without `summary`, open a \
+                     compression window (≤3 rounds) and submit a summary later. Do not write \
+                     the summary as ordinary assistant text. mode=clear: move ALL prior context \
+                     out of the window and continue on the ledger — requires `handover` (≤8K), \
+                     which is written to the blackboard first. mode=clear_all: one-shot wipe of \
+                     the context window AND the blackboard (plan/notes/findings), then your \
+                     `handover` becomes the only blackboard entry. Nothing is destroyed: \
+                     cleared content stays in .gsa/journal and can be re-read. Returns a readout."
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
@@ -4167,6 +4282,15 @@ impl AgentLoopController {
                              clear = 主动清零（边界前全部内容移出当前窗口；未销毁、可回放）；\
                              clear_all = 一键清理（上下文清零＋黑板三分区清空，handover 成为\
                              清空后板面唯一条目）。",
+                        },
+                        "summary": {
+                            "type": "string",
+                            "maxLength": 8192,
+                            "description": "mode=compress 可选：自由文本工作现场摘要——\
+                             不要求固定字段/模板，按当前任务写需要跨压缩保留的事实即可；\
+                             可含 `压缩块: 1-4` 行指定范围（不写由机械层按缺省选最旧闭合块）。\
+                             提供时一次性排队压缩；不提供则走 ≤3 轮压缩窗口。不要写成 \
+                             assistant 正文。",
                         },
                         "whitelist": {
                             "type": "array",
@@ -6356,7 +6480,7 @@ mod tests {
         let write_enum = write.parameters["properties"]["section"]["enum"].clone();
         assert_eq!(
             write_enum,
-            serde_json::json!(["plan", "notes", "findings", "all"]),
+            serde_json::json!(["plan", "notes", "findings", "state", "all"]),
             "{write_enum}"
         );
         let read_enum = read.parameters["properties"]["section"]["enum"].clone();
@@ -8572,6 +8696,11 @@ body"
         ));
         assert!(AgentLoopController::is_blackboard_render_error(
             "blackboard_read external_ret with epoch is not supported — retrieval 分区 live-only"
+        ));
+        // 371 批（F4）：state 过滤拒绝形状同登记（R-369-04 live-only 纪律）。
+        assert!(AgentLoopController::is_blackboard_render_error(
+            "blackboard_read state 只支持 live 读取（不带 since_timestamp/epoch/\
+             receipt_id/expand/failures_only/search）——省略这些参数后重试"
         ));
         assert!(!AgentLoopController::is_blackboard_render_error(
             "goal: 构建\nplan_id: PLAN-A"

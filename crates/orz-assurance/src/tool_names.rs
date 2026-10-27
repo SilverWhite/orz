@@ -41,6 +41,17 @@ pub const CONTEXT_COMPRESS_TOOL_NAME: &str = "context_compress";
 /// 先例顺延）；方案 A：`context_compress` 同批声明面退役、管线由本工具承继。
 pub const CONTEXT_MANAGE_TOOL_NAME: &str = "context_manage";
 
+/// `state_read`——0ds M1-S1（2026-10-27，366 章程 / 架构 §11）：黑板
+/// `state` 分区窄读面（goal/now/next/open/constraints/updated；PULL，
+/// 无副作用，ReadOnly 类）。与 `blackboard_read section=state` 共用渲染单源。
+pub const STATE_READ_TOOL_NAME: &str = "state_read";
+
+/// `state_write`——0ds M1-S1（2026-10-27，366 章程 / 架构 §4.1/§11）：黑板
+/// `state` 分区窄写面（合并语义、≤200 token、`updated` 系统写）。只写内存
+/// 黑板，无文件/网络副作用 → ReadOnly 类；与 `blackboard_write
+/// section=state` 共用解析/校验单源。
+pub const STATE_WRITE_TOOL_NAME: &str = "state_write";
+
 #[cfg(test)]
 mod tests {
     use super::*;

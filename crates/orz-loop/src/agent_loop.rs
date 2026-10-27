@@ -1200,17 +1200,24 @@ async fn finalize_model_compression_close(
     svc: &SharedLoopServices<'_>,
     writer: &mut EventWriter<'_>,
     tool_rounds: u32,
+    tool_summary_participated: bool,
 ) -> Result<(), AgentLoopError> {
     let Some((window_start_writes, rounds_used, _mandatory)) = state.take() else {
         return Ok(());
     };
     let writes_now = svc.blackboard.read().model_note_count();
-    let participated = writes_now > window_start_writes;
+    // 371 批（F2，2026-10-28）：参与判定计入**工具摘要**——369/370 让
+    // `context_manage(mode=compress, summary=…)` 成为强制窗 prompt 的首选
+    // 提交路径后，模型按指引提交摘要而未写黑板时，本审计原口径会系统性
+    // 记 `model_participated=false`（失真）。工具摘要在收口 loop-top 已被
+    // 注入 `pending_semantic`（R-369-01 顺序），调用方据此传位。
+    let participated = writes_now > window_start_writes || tool_summary_participated;
     let payload = audit.record(
         "model_compression",
         tool_rounds,
         format!(
-            "model_participated={participated} rounds_used={rounds_used} \
+            "model_participated={participated} tool_summary_participated=\
+             {tool_summary_participated} rounds_used={rounds_used} \
              window_start_writes={window_start_writes} writes_now={writes_now}"
         ),
         if participated {
@@ -2975,18 +2982,37 @@ pub(crate) async fn run_agent_loop(
             journal_epoch_start_seq = writer.seq();
             ledger_seq_epoch = None;
         }
-        // 0ae D3 延迟收口（0AE-C1 修复，2026-09-15 深审）：上一迭代的窗口
-        // 轮携带 blackboard_write 落穿了正常派发路径——写入此刻已派发完成，
-        // 黑板读数真实。按 C2 形状落账 `model_compression` 并置机械折叠
-        // 兜底旗标；本迭代稍后的 summary_now 块即执行机械折叠
-        // （reason=context_scale_window；S1 前该值写作 `attention_920k_window`
-        // ——不在 `context_compressed` reason 闭枚举内，S1 批按契约同步为
-        // `context_scale_window`）。收口逻辑统一在
-        // `finalize_model_compression_close`（budget 收尾 / IPG block /
-        // run 尾三条异常出口同走此函数，窄边沿修复 2026-09-15）。
-        // 必定压缩三步升级（2026-09-24）：延迟收口的是**强制窗**且**未产出
-        // 语义摘要** ⇒ 升级计数＋复位 T1 闩——水位越线期间下一 loop-top 再
-        // 触发（首问→再询问→第三次机械截断）。
+        // 2026-10-27（369）：`context_manage(mode=compress, summary=…)` 的
+        // 一次性摘要——工具调用是控制面，不参与终答判定。**先于窗口收口
+        // 注入**：强制窗内用工具提交摘要也算模型参与，`finalize` 才不会把
+        // 它误记为 `model_not_participated`；软门/其它 pending 仍锁存到
+        // 无 checkpoint 的 loop-top（与 `compression_window_requested` 同
+        // 一「一个 pending checkpoint」纪律）。
+        // 371 批（F1，2026-10-28）：窗口种类不再一律盖 `ModelRequested`
+        // ——延迟收口态携带强制位（`model_compression_close.2`）时盖
+        // `Mandatory`：`compress_blocks_now` 的缺省语义随之＝**全部已闭合
+        // 分块**，与强制窗 prompt 的「summary 不含 `压缩块:` 行 ＝ 按全部
+        // 处理」承诺一致；也使 0bn R1 的「产出未落地 ⇒ 升级计数」分支对
+        // 工具摘要路径同等生效。窗种类只在延迟收口轮可判（其余时刻无窗口
+        // 在程 ⇒ `ModelRequested` 即正确归因）。
+        let mut tool_summary_participated = false;
+        let summary_slot_open = pending_checkpoint.is_none()
+            || matches!(
+                pending_checkpoint,
+                Some(PendingCheckpoint::ModelCompression { .. })
+            );
+        if profile.role == AgentRole::Main
+            && summary_slot_open
+            && let Some(summary) = controller.take_compression_summary()
+        {
+            let summary_window = match model_compression_close {
+                Some((_, _, true)) => CompressionWindowKind::Mandatory,
+                _ => CompressionWindowKind::ModelRequested,
+            };
+            pending_semantic = Some((summary, Some(summary_window), false));
+            defer_semantic_once = false;
+            tool_summary_participated = true;
+        }
         let closed_mandatory = matches!(model_compression_close, Some((_, _, true)));
         finalize_model_compression_close(
             &mut model_compression_close,
@@ -2994,6 +3020,7 @@ pub(crate) async fn run_agent_loop(
             svc,
             writer,
             tool_rounds,
+            tool_summary_participated,
         )
         .await?;
         if closed_mandatory && pending_semantic.is_none() {
@@ -3355,11 +3382,7 @@ pub(crate) async fn run_agent_loop(
         // 入口）——不依赖 AGENTS.md 是否存在（D2 全覆盖，审查收口
         // 2026-08-16）。常量跨轮稳定，不影响前缀缓存。
         let system = if controller.plan_enabled() {
-            format!(
-                "{}\n\n{}",
-                crate::planning::PLAN_FRAMEWORK_BLOCK,
-                system
-            )
+            format!("{}\n\n{}", crate::planning::PLAN_FRAMEWORK_BLOCK, system)
         } else {
             system
         };
@@ -3888,23 +3911,40 @@ pub(crate) async fn run_agent_loop(
         // 「摘要替换被压区」，mode=model_summary）。工具轮的文本不进
         // `messages`（只留 model_output 事件），故识别点必须在这里；仅主
         // 车道（检索车道不折叠、不压缩——车道范围裁决）。
-        if profile.role == AgentRole::Main
-            && pending_semantic.is_none()
-            && let Some(summary) = response
+        //
+        // 2026-10-27（367 后续修复，RUN-7ef4c983-1/2 实锤）：模型按压缩提醒
+        // 只输出一个 `[SEMANTIC_SUMMARY]` 块、无 tool_calls 时，353 §5.1 的
+        // 「无 tool_calls ⇒ 回合结束」会把它当终答交付并收 run（摘要被 run 尾
+        // 兜底消费，任务却停在半路）。该类回复是**压缩控制轮**，不是终答：
+        // 识别后在 checkpoint 分支之后回 loop-top 消费摘要并继续任务。
+        // `[RUN_END]` + 摘要 = 真实终答，不按控制轮处理；摘要块前后有实质
+        // 文本（`is_summary_only=false`）也按终答处理。
+        let summary_text = response
+            .text
+            .as_deref()
+            .and_then(crate::context_scale::extract_model_summary);
+        let stop_declared = response
+            .text
+            .as_deref()
+            .and_then(crate::model_stop::extract_model_stop)
+            .is_some();
+        let summary_control_turn = profile.role == AgentRole::Main
+            && summary_text.is_some()
+            && response.tool_calls.is_empty()
+            && !stop_declared
+            && response
                 .text
                 .as_deref()
-                .and_then(crate::context_scale::extract_model_summary)
+                .is_some_and(crate::context_scale::is_summary_only);
+        if profile.role == AgentRole::Main
+            && let Some(summary) = summary_text
+            && (summary_control_turn || pending_semantic.is_none())
         {
             // 0ap 复核批（P2）：归因随摘要**在产出时固定**——此刻在程窗口的
             // 种类即促成者；无窗口在程（模型自选摘要块）记 `None`。
             // 0de D3（2026-10-16，设计 §2）：源消息是否携带 STOP 声明随摘要
             // **在识别时固定**——收束/暂停同消息的摘要，消费路径只落审计不
             // 注入告知块（模型已离场，注入必造逼轮；事发 seq 556→558 形态）。
-            let stop_declared = response
-                .text
-                .as_deref()
-                .and_then(crate::model_stop::extract_model_stop)
-                .is_some();
             pending_semantic = Some((summary, window_kind, stop_declared));
         }
         if !response.tool_calls.is_empty() {
@@ -4169,6 +4209,18 @@ pub(crate) async fn run_agent_loop(
             }
         }
 
+        // 2026-10-27（367 后续修复）：纯语义摘要控制轮＝模型在执行压缩，
+        // 不是交付终答。摘要已在识别点进入 `pending_semantic`；此处不把
+        // 它推入 messages、不进入 plan/终答分支，回 loop-top 安全间隙消费
+        // 摘要（按块压缩）后继续任务。带 `[RUN_END]` 的摘要不算控制轮
+        // （`summary_control_turn` 已在识别处排除）。
+        if summary_control_turn && response.tool_calls.is_empty() {
+            // 控制轮必须在本 loop-top 消费；清掉终态 nudge 的一次性延迟，
+            // 否则摘要会多挂在 pending 里跨一轮。
+            defer_semantic_once = false;
+            continue;
+        }
+
         // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 首轮计划轮——
         // 无工具回复（未写 plan_write）不算最终答案：继续计划面；连续
         // MAX_PLAN_ROUNDS_WITHOUT_SUBMISSION 轮未提交则机械降级
@@ -4236,6 +4288,7 @@ pub(crate) async fn run_agent_loop(
                 svc,
                 writer,
                 tool_rounds,
+                false,
             )
             .await?;
             terminal_source = "budget_exhausted";
@@ -4264,6 +4317,7 @@ pub(crate) async fn run_agent_loop(
                 svc,
                 writer,
                 tool_rounds,
+                false,
             )
             .await?;
             terminal_source = "close_round";
@@ -4514,6 +4568,7 @@ pub(crate) async fn run_agent_loop(
                 svc,
                 writer,
                 tool_rounds,
+                false,
             )
             .await?;
             terminal_source = "gate_block";
@@ -6101,12 +6156,37 @@ pub(crate) async fn run_agent_loop(
     // 0ae D3 窄边沿修复（2026-09-15）：run 尾安全网——前两条 break 路径
     // 之外的未知正常出口若仍携带未收口窗口状态，在此兜底落账（take 幂等，
     // 已收口时为空操作）。
+    // 371 批（F3，2026-10-28）：**工具摘要槽位同兜底**——摘要锁存后若
+    // 下一 loop-top 被非 ModelCompression 的 pending checkpoint 顶住
+    // （Orientation 等）且 run 随即终止，槽位内容此前会随 run 静默丢弃
+    // （run 起点复位清残留，journal 零痕迹）。run 尾与 `pending_semantic`
+    // 同为安全间隙（模型已离场、无工具在途）⇒ 在此取走并折入
+    // `pending_semantic` 走既有按块压缩；强制位照收口态判（收口态在下方
+    // finalize 才被 take，此刻仍可读）。
+    let run_tail_mandatory_window = matches!(model_compression_close, Some((_, _, true)));
+    let mut tail_tool_summary_participated = false;
+    if profile.role == AgentRole::Main
+        && pending_semantic.is_none()
+        && let Some(summary) = controller.take_compression_summary()
+    {
+        pending_semantic = Some((
+            summary,
+            Some(if run_tail_mandatory_window {
+                CompressionWindowKind::Mandatory
+            } else {
+                CompressionWindowKind::ModelRequested
+            }),
+            false,
+        ));
+        tail_tool_summary_participated = true;
+    }
     finalize_model_compression_close(
         &mut model_compression_close,
         &mut mechanical_audit,
         svc,
         writer,
         tool_rounds,
+        tail_tool_summary_participated,
     )
     .await?;
     // v7 修正批（2026-09-15，审查 P1②）× v8（2026-09-16 勘误批）：
@@ -8052,11 +8132,11 @@ mod tests {
             // 窗口调用 ⇒ 延迟收口（无写入/无摘要 ⇒ model_participated=false
             // 如实落账——防抖调用不构成参与）。
             ScriptedResponse::tool_calls(vec![context_compress_call("call-c2")]),
-            // 第 4 轮（已出窗，普通面）：模型产出语义摘要块——355 批（353
-            // §5.1）：无 tool_calls 的文本＝回合结束，本轮即终答（原"反例门
-            // 消费轮＋第 5 轮收尾"两轮收敛为一轮），摘要由 run 尾消费点按块
-            // 压缩（run 尾＝安全间隙，v8 语义不变）。
+            // 第 4 轮（已出窗，普通面）：模型产出语义摘要块——2026-10-27
+            // 367 后续修复后这是**压缩控制轮**（不是终答）：loop-top 消费
+            // 摘要并继续任务；第 5 轮才是真实终答。
             ScriptedResponse::text(semantic_block),
+            ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway)
@@ -8081,9 +8161,9 @@ mod tests {
             )
             .await
             .unwrap();
-        // 355 批：终答候选无条件交付——语义摘要块不再是门轮前置，随终答
-        // 原文交付（不剥离；[RUN_END] 才剥离），压缩在 run 尾落地。
-        assert_eq!(answer, semantic_block);
+        // 355 批：终答候选无条件交付。2026-10-27（367 后续修复）：纯摘要
+        // 块是压缩控制轮，不再作为终答交付；控制轮之后模型继续到真实终答。
+        assert_eq!(answer, "终答");
 
         // ① 两次调用都 exit 0（fail-soft 三态信封）。0cz S2：事件工具名
         // 随方案 A 改指 context_manage。
@@ -8592,19 +8672,20 @@ mod tests {
                     .any(|m| m.content.contains("模型参与压缩"))
             );
         }
-        // 提醒文案（v7 重写）：窗口剩余轮提示改指**语义摘要块**，仍守
+        // 提醒文案（2026-10-27 R-369-02 改钉）：窗口剩余轮提示改指
+        // `context_manage(mode=compress, summary=…)` 工具指针，仍守
         // 「无成串空格」纪律（0AE-C13）。
         let second_window_round = &requests[3].messages;
         assert!(
             second_window_round.iter().any(|m| m
                 .content
-                .contains("窗口剩余 2 轮：尚未检测到语义摘要块。请输出")),
+                .contains("窗口剩余 2 轮：尚未检测到语义摘要。请调用")),
             "reminder copy uses a single space: {second_window_round:?}"
         );
         assert!(
             !second_window_round
                 .iter()
-                .any(|m| m.content.contains("语义摘要块。  ")),
+                .any(|m| m.content.contains("尚未检测到语义摘要。  ")),
             "no run-on spaces in the reminder: {second_window_round:?}"
         );
 
@@ -9205,12 +9286,12 @@ mod tests {
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
                 .with_prompt_tokens(100),
             // 355 批：反例门轮退役——两个工具轮提供执行事实与可压分块后，
-            // 首个纯文本候选即终答；**摘要块就在这里** ⇒ 本 run 只有 run 尾
-            // 能消费它（loop-top 消费点不会再经过）。驻留带恒含最新一轮，
-            // 只有 ≥2 个完整轮时「最旧轮」才可能被移出。
+            // 首个纯文本候选即终答；**摘要块与终答正文同轮**（非纯摘要控制
+            // 轮）⇒ 本 run 只有 run 尾能消费它（loop-top 消费点不会再经过）。
+            // 驻留带恒含最新一轮，只有 ≥2 个完整轮时「最旧轮」才可能被移出。
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
                 .with_prompt_tokens(100),
-            ScriptedResponse::text(semantic_block),
+            ScriptedResponse::text(format!("{semantic_block}\n\n任务完成：见上。")),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway)
@@ -9269,6 +9350,893 @@ mod tests {
                 .all(|k| k == crate::context_scale::FLAG_FIRST_BLOCK),
             "本路径不得写入数值刻度水位: {:?}",
             controller.context_scale_notified_keys()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-10-27（367 后续修复）：**纯语义摘要文本轮不是终答**。模型按
+    /// 压缩提醒只回一个 `[SEMANTIC_SUMMARY]` 块、无 tool_calls 时，loop
+    /// 必须在 loop-top 消费摘要后继续任务，而不是按 353 §5.1 的
+    /// 「无 tool_calls ⇒ 回合结束」收 run。回归锚＝RUN-7ef4c983-1/2：
+    /// `model_output(text=summary)` → `context_compressed` → `run_finished
+    /// {terminal_source:"text_without_terminal"}`，任务半路停止。
+    #[tokio::test]
+    async fn pure_semantic_summary_turn_continues_instead_of_finishing() {
+        let semantic_block = "[SEMANTIC_SUMMARY]\n目标: 控制轮压缩\n已完成: 台账接线\n\
+                             关键决策: 保留滑块\n未决问题: 无\n下一步: 继续任务\n关键文件: compact.rs\n\
+                             [/SEMANTIC_SUMMARY]";
+        let old_round = "O".repeat(10_000);
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+                .with_prompt_tokens(100),
+            // 第 3 轮：纯摘要块（无工具、无终答正文）——修复前会被当终答。
+            ScriptedResponse::text(semantic_block),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
+            .with_session_id(Some("SESSION-SEM-CONTROL".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: old_round,
+                ..ok_result()
+            }),
+        };
+        let outcome = controller
+            .run_turn(
+                &host,
+                "纯摘要控制轮测试",
+                "RUN-SEM-CONTROL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.0, "终答");
+
+        let events = events(&dir);
+        let finish = events
+            .iter()
+            .find(|e| e.event_type == EventType::RunFinished)
+            .expect("run_finished event");
+        assert_eq!(finish.payload["terminal_source"], "text_without_terminal");
+        let compact: Vec<serde_json::Value> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload.clone())
+            .collect();
+        assert_eq!(
+            compact.len(),
+            1,
+            "纯摘要控制轮须在 loop-top 被消费一次: {compact:?}"
+        );
+        assert_eq!(compact[0]["mode"], "model_summary");
+        assert_eq!(compact[0]["reason"], "model_selected");
+        // 摘要控制轮之后仍有一次真实模型请求（终答），不是把摘要当终答收 run。
+        let model_calls = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ModelOutput)
+            .count();
+        assert_eq!(model_calls, 4, "控制轮后必须继续到真实终答");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-10-27（369）：**压缩摘要走工具控制面**。模型调用
+    /// `context_manage(mode=compress, summary=自由文本)`，不写 assistant
+    /// 正文；工具回执后 loop-top 消费摘要、按块压缩，再继续到真实终答。
+    #[tokio::test]
+    async fn context_manage_summary_tool_call_compresses_without_assistant_text() {
+        let old_round = "O".repeat(10_000);
+        let summary = "正在改 state 工具；下一步跑 host 测试。";
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "context_manage".to_string(),
+                arguments: serde_json::json!({
+                    "mode": "compress",
+                    "summary": summary,
+                }),
+                call_id: "call-c1".to_string(),
+            }])
+            .with_prompt_tokens(100),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
+            .with_session_id(Some("SESSION-CM-SUMMARY".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: old_round,
+                ..ok_result()
+            }),
+        };
+        let outcome = controller
+            .run_turn(
+                &host,
+                "工具摘要压缩测试",
+                "RUN-CM-SUMMARY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.0, "终答");
+
+        let events = events(&dir);
+        let compact: Vec<serde_json::Value> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload.clone())
+            .collect();
+        assert_eq!(compact.len(), 1, "工具摘要须压缩一次: {compact:?}");
+        assert_eq!(compact[0]["mode"], "model_summary");
+        assert_eq!(compact[0]["reason"], "model_selected");
+        assert!(
+            events.iter().all(|e| {
+                e.event_type != EventType::ModelOutput
+                    || e.payload["text"]
+                        .as_str()
+                        .is_none_or(|t| !t.contains(summary))
+            }),
+            "摘要不得出现在 assistant 正文"
+        );
+        let queued = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_manage"
+            })
+            .expect("context_manage tool_completed");
+        assert_eq!(queued.payload["summary_queued"], true);
+        assert_eq!(queued.payload["mode"], "compress");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R-369-03 回归钉（2026-10-27，370 §8.2 步 2）：**summary 先校验再
+    /// whitelist**——非法 summary 的整调用拒绝不得携带 whitelist 副作用。
+    /// 修前 whitelist 先落盘/存档、之后才 normalize summary ⇒ 拒绝时白名单
+    /// 已写入（`whitelist.jsonl` 已落行、常驻消息已进模型面）。
+    #[tokio::test]
+    async fn invalid_summary_rejects_the_whole_call_without_whitelist_side_effects() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            // summary 超长（> TOOL_SUMMARY_MAX_CHARS 8192）⇒ 校验失败；
+            // 同批 whitelist 条目**不得**因此落盘。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "context_manage".to_string(),
+                arguments: serde_json::json!({
+                    "mode": "compress",
+                    "summary": "长".repeat(9_000),
+                    "whitelist": ["跨压缩保留条目甲"],
+                }),
+                call_id: "call-c1".to_string(),
+            }])
+            .with_prompt_tokens(100),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
+            .with_session_id(Some("SESSION-CM-REJECT".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "x".repeat(6_000),
+                ..ok_result()
+            }),
+        };
+        controller
+            .run_turn(
+                &host,
+                "拒绝组合测试",
+                "RUN-CM-REJECT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let completed = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_manage"
+            })
+            .expect("context_manage tool_completed");
+        assert_eq!(completed.payload["exit_code"], 1);
+        assert_eq!(completed.payload["summary_queued"], false);
+        assert_eq!(completed.payload["whitelist_applied"], false);
+        assert!(
+            completed.payload["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("白名单：未处理"),
+            "拒绝回执须如实说明 whitelist 未处理: {:?}",
+            completed.payload
+        );
+        // 零副作用①：whitelist 存档文件未落行。
+        assert!(
+            !dir.join("whitelist.jsonl").exists(),
+            "拒绝调用不得写 whitelist.jsonl"
+        );
+        // 零副作用②：后续请求的模型面不携带白名单常驻消息。
+        assert!(
+            fake.received_requests()
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .all(|m| !m.content.contains("跨压缩保留条目甲")),
+            "拒绝调用不得把 whitelist 条目写进模型面"
+        );
+        // 拒绝路径不开压缩窗、不压缩。
+        assert!(
+            events
+                .iter()
+                .all(|e| e.event_type != EventType::ContextCompressed),
+            "校验拒绝不得触发压缩"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R-369-03 组合正向钉（2026-10-27）：合法 summary + whitelist 同批——
+    /// 校验通过 ⇒ whitelist 照常落盘/存档/常驻，摘要照常排队并压缩。
+    #[tokio::test]
+    async fn valid_summary_and_whitelist_land_together_in_one_call() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "context_manage".to_string(),
+                arguments: serde_json::json!({
+                    "mode": "compress",
+                    "summary": "正在收尾压缩控制面；下一步全量回归。",
+                    "whitelist": ["跨压缩保留条目乙"],
+                }),
+                call_id: "call-c1".to_string(),
+            }])
+            .with_prompt_tokens(100),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
+            .with_session_id(Some("SESSION-CM-COMBO".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "y".repeat(6_000),
+                ..ok_result()
+            }),
+        };
+        controller
+            .run_turn(
+                &host,
+                "组合落地测试",
+                "RUN-CM-COMBO",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let completed = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_manage"
+            })
+            .expect("context_manage tool_completed");
+        assert_eq!(completed.payload["exit_code"], 0);
+        assert_eq!(completed.payload["summary_queued"], true);
+        // whitelist 落盘两 observable：存档行 + 模型面常驻消息。
+        let archive =
+            std::fs::read_to_string(dir.join("whitelist.jsonl")).expect("whitelist archived");
+        assert!(archive.contains("跨压缩保留条目乙"), "{archive}");
+        assert!(
+            fake.received_requests()
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .any(|m| m.content.contains("跨压缩保留条目乙")),
+            "whitelist 常驻消息须进入模型面"
+        );
+        // 摘要照常排队并压缩一次。
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::ContextCompressed)
+                .count(),
+            1
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R-369-01 回归钉（2026-10-27，370 §8.2 步 3）：**强制窗内用工具提交
+    /// 摘要＝模型参与**——`take_compression_summary` 注入先于窗口收口
+    /// （`summary_slot_open` 放行 ModelCompression），`finalize` 不得把它
+    /// 记成「窗口未参与」（修前会多计 `t1_window_failures`、误推进三步
+    /// 升级链）。
+    /// 371 批（F1+F2，2026-10-28）改钉扩断言：① 强制窗内工具摘要盖
+    /// `Mandatory` ⇒ 缺省＝**全部已闭合分块**（`rounds_dropped ≥ 2`；修前
+    /// 恒折最旧一块＝与强制窗 prompt「不含压缩块行 ＝ 按全部处理」相反）；
+    /// ② 归因随窗口种类＝`context_scale_window`（370 §3 的「工具摘要记
+    /// model_selected」口径债随 F1 一并收口）；③ `model_compression` 收口
+    /// 审计如实记 `model_participated=true tool_summary_participated=true`
+    /// （修前只看黑板写数 ⇒ 合规模型被记 false）。
+    #[tokio::test]
+    async fn mandatory_window_tool_summary_counts_as_participation_without_escalation() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+                .with_prompt_tokens(100),
+            // 强制窗（第一次询问）在程中：模型用工具提交摘要。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "context_manage".to_string(),
+                arguments: serde_json::json!({
+                    "mode": "compress",
+                    "summary": "强制窗内工具提交：旧轮已摘要，无需机械截断。",
+                }),
+                call_id: "call-c1".to_string(),
+            }])
+            .with_prompt_tokens(100),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            // T1 钉在 4K：r1+r2 两轮旧文 ⇒ 必定压缩窗口开启。
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, 4_000))
+            .with_session_id(Some("SESSION-T1-TOOL-SUMMARY".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "T".repeat(6_000),
+                ..ok_result()
+            }),
+        };
+        controller
+            .run_turn(
+                &host,
+                "强制窗工具摘要测试",
+                "RUN-T1-TOOL-SUMMARY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // ① 窗口确实开启过（前提校验：本钉测的是窗内参与，不是普通轮）。
+        assert!(
+            fake.received_requests()
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .any(|m| m.content.contains("必定压缩")),
+            "本钉前提：必定压缩窗口须已开启"
+        );
+
+        let events = events(&dir);
+        let audit = audit_events(&dir);
+        // ② 未参与落账不得出现（R-369-01 病灶）。
+        assert!(
+            audit.iter().all(
+                |e| e.payload["payload"]["key"] != "context_scale:mandatory_summary_not_landed"
+            ),
+            "强制窗内工具摘要须记为参与: {:?}",
+            audit
+                .iter()
+                .filter(
+                    |e| e.payload["payload"]["key"] == "context_scale:mandatory_summary_not_landed"
+                )
+                .collect::<Vec<_>>()
+        );
+        // ③ 升级链不推进：无第二次询问、无机械截断。
+        assert!(
+            fake.received_requests()
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .all(|m| !m.content.contains("第二次询问")),
+            "窗内参与不得触发升级再询问"
+        );
+        assert!(
+            audit
+                .iter()
+                .all(|e| e.payload["payload"]["key"] != "context_scale:hard_truncate"),
+            "窗内参与不得走到第三步机械截断"
+        );
+        // ④ 摘要排队且压缩恰好一次；归因随强制窗种类＝context_scale_window；
+        // 缺省语义＝全部已闭合分块（F1：rounds_dropped ≥ 2，修前恒 1）。
+        let completed = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_manage"
+            })
+            .expect("context_manage tool_completed");
+        assert_eq!(completed.payload["summary_queued"], true);
+        let compressed = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            compressed.len(),
+            1,
+            "窗内工具摘要须压缩一次: {compressed:?}"
+        );
+        assert_eq!(compressed[0].payload["reason"], "context_scale_window");
+        let rounds_dropped = compressed[0].payload["rounds_dropped"].as_u64().unwrap();
+        assert!(
+            rounds_dropped >= 2,
+            "强制窗工具摘要缺省须折全部已闭合分块（F1）: rounds_dropped={rounds_dropped}"
+        );
+
+        // ⑤ F2：收口审计如实记参与（工具摘要计入，不再只看黑板写数）。
+        let mc: Vec<_> = audit_events(&dir)
+            .into_iter()
+            .filter(|e| e.payload["kind"] == crate::mechanical_audit::KIND_MODEL_COMPRESSION)
+            .collect();
+        assert_eq!(mc.len(), 1, "强制窗收口审计恰一条: {mc:?}");
+        let mc_summary = mc[0].payload["payload"]["summary"].as_str().unwrap();
+        assert!(
+            mc_summary.contains("model_participated=true")
+                && mc_summary.contains("tool_summary_participated=true"),
+            "{mc_summary}"
+        );
+        assert_eq!(mc[0].payload["payload"]["anomaly"], serde_json::Value::Null);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 371 批（F3，2026-10-28）**预算收口序钉**：工具摘要在最后一个预算轮
+    /// 排队 ⇒ 下一 loop-top 必须先按块压缩、再走 `budget_exhausted` 收尾
+    /// break（注入点在 break 检查之前——这是「摘要不丢」的常规路径前提）。
+    /// 若有人把注入移到 break 检查之后，此钉先红。run 尾排水本体只服务
+    /// 「锁存被非 ModelCompression 的 pending checkpoint 顶住」的例外路径
+    /// （e2e 不可经 `run_turn` 构造——orientation 态不进测试入口，见 371
+    /// 批档 §3；排水代码与既有 `pending_semantic` run 尾安全网同形对称）。
+    #[tokio::test]
+    async fn tool_summary_in_final_budgeted_round_compresses_before_exhaustion_break() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            // 第 1 轮：肥胖结果闭合成块（滑块外 compressible 集合非空——
+            // 摘要排队的前提）。
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            // 第 2 轮（末个预算轮）：排队摘要；轮末 tool_rounds(2) ≥
+            // max_tool_rounds(2) ⇒ budget_exhausted。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "context_manage".to_string(),
+                arguments: serde_json::json!({
+                    "mode": "compress",
+                    "summary": "末轮排队摘要：旧轮现场已交棒，预算收尾。",
+                }),
+                call_id: "call-c1".to_string(),
+            }])
+            .with_prompt_tokens(100),
+            // 第 3 轮（D-8 耗尽收尾轮，只准文本）：loop-top 注入→压缩在
+            // 本轮模型请求**之前**完成，随后收尾终答。
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_max_tool_rounds(2)
+            .with_session_id(Some("SESSION-TAIL-ORDER".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "T".repeat(6_000),
+                ..ok_result()
+            }),
+        };
+        let _ = controller
+            .run_turn(
+                &host,
+                "末轮摘要预算收口",
+                "RUN-TAIL-ORDER",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 注入先于收尾轮：第 3 次请求（D-8 收尾轮）在压缩落地后发出。
+        assert_eq!(fake.received_requests().len(), 3);
+
+        let events = events(&dir);
+        let completed = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_manage"
+            })
+            .expect("context_manage tool_completed");
+        assert_eq!(completed.payload["summary_queued"], true);
+        // 摘要在 break 前已按块压缩恰一次（无窗口 ⇒ 归因 model_selected）。
+        let compressed = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            compressed.len(),
+            1,
+            "末轮摘要须在收尾前压缩: {compressed:?}"
+        );
+        assert_eq!(compressed[0].payload["reason"], "model_selected");
+        let finish = events
+            .iter()
+            .find(|e| e.event_type == EventType::RunFinished)
+            .expect("run_finished event");
+        assert_eq!(finish.payload["terminal_source"], "budget_exhausted");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 371 批（F5c，2026-10-28）**summary 类型 fail-closed 钉**：非字符串
+    /// summary（且非 null）显式整调用拒绝（exit 1、`summary_queued:false`、
+    /// `whitelist_applied:false`），绝不静默按缺席降级走窗口路径。
+    #[tokio::test]
+    async fn non_string_summary_rejects_the_call_fail_closed() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "context_manage".to_string(),
+                arguments: serde_json::json!({
+                    "mode": "compress",
+                    "summary": 42,
+                }),
+                call_id: "call-bad-summary".to_string(),
+            }]),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_session_id(Some("SESSION-BAD-SUMMARY".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                ..ok_result()
+            }),
+        };
+        controller
+            .run_turn(
+                &host,
+                "非字符串摘要拒绝",
+                "RUN-BAD-SUMMARY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let completed = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_manage"
+            })
+            .expect("context_manage tool_completed");
+        assert_eq!(completed.payload["exit_code"], 1);
+        assert_eq!(completed.payload["summary_queued"], false);
+        assert_eq!(completed.payload["whitelist_applied"], false);
+        assert!(
+            completed.payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("summary 必须是字符串"),
+            "{completed:?}"
+        );
+        // 未排队 ⇒ 无压缩事件；模型面收到的拒绝文本如实、可自纠。
+        assert!(
+            events
+                .iter()
+                .all(|e| e.event_type != EventType::ContextCompressed)
+        );
+        let requests = fake.received_requests();
+        let tool_msg = requests
+            .last()
+            .expect("second request exists")
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-bad-summary"))
+            .expect("tool result message");
+        assert!(
+            tool_msg.content.contains("summary 必须是字符串"),
+            "{tool_msg:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R-M1S1-01 回归钉（2026-10-27，370 §8.2 步 4）：StateWrite 行自包含
+    /// ——payload 的 `state` 全文快照（≤2048 字符）须携带渲染文档本体，
+    /// 回放 accepted 行即可重建 state_history（不再依赖 join model_output
+    /// 参数）。
+    #[tokio::test]
+    async fn state_write_event_carries_self_contained_state_snapshot() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "state_write".to_string(),
+                arguments: serde_json::json!({
+                    "goal": "落地 M1-S1 快照",
+                    "next": "全量回归",
+                }),
+                call_id: "call-s1".to_string(),
+            }]),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                ..ok_result()
+            }),
+        };
+        controller
+            .run_turn(
+                &host,
+                "state 快照测试",
+                "RUN-STATE-SNAPSHOT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let written = events(&dir)
+            .into_iter()
+            .find(|e| e.event_type == EventType::StateWrite)
+            .expect("state_write 调用须落 StateWrite 行");
+        assert_eq!(written.payload["outcome"], "accepted");
+        assert_eq!(
+            written.payload["fields"],
+            serde_json::json!(["goal", "next"])
+        );
+        let snapshot = written.payload["state"]
+            .as_str()
+            .expect("payload 必须携带 state 全文快照");
+        assert!(
+            snapshot.contains("goal: 落地 M1-S1 快照") && snapshot.contains("next: 全量回归"),
+            "快照须是渲染文档本体: {snapshot}"
+        );
+        assert!(snapshot.chars().count() <= 2048, "快照 ≤2048 字符");
+        assert!(
+            written.payload["estimated_tokens"].as_u64().unwrap() <= 200,
+            "设计帽：≤200 token"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R-369-04 回归钉（2026-10-27，370 §8.2 步 5）：`blackboard_read
+    /// section=state` 对过滤/展开参数**显式文本拒绝**（与 guide 同纪律）
+    /// ——绝不静默忽略（否则调用方误以为过滤生效）；省略参数后 live
+    /// 读取照常。
+    #[tokio::test]
+    async fn blackboard_read_state_rejects_filter_params_and_live_reads_without_them() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "state_write".to_string(),
+                arguments: serde_json::json!({ "goal": "过滤拒绝测试" }),
+                call_id: "call-s0".to_string(),
+            }]),
+            // 带过滤参数 ⇒ 显式文本错误。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({
+                    "section": "state",
+                    "since_timestamp": "2026-10-01T00:00:00Z",
+                }),
+                call_id: "call-r1".to_string(),
+            }]),
+            // 省略参数 ⇒ live 读取照常返回 state 渲染。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({ "section": "state" }),
+                call_id: "call-r2".to_string(),
+            }]),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                ..ok_result()
+            }),
+        };
+        controller
+            .run_turn(
+                &host,
+                "过滤拒绝测试",
+                "RUN-STATE-FILTER",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 拒绝臂：错误文本如实进模型面（工具消息），state 渲染不出现。
+        let requests = fake.received_requests();
+        let rejected = requests
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .find(|m| m.content.contains("blackboard_read state 只支持 live 读取"))
+            .expect("过滤参数须显式拒绝");
+        assert!(
+            !rejected.content.contains("goal: 过滤拒绝测试"),
+            "拒绝臂不得携带 state 渲染"
+        );
+        // live 臂：省略参数后照常渲染当前事实。
+        assert!(
+            requests
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .any(|m| m.content.contains("goal: 过滤拒绝测试")),
+            "无参数 live 读取须返回 state 渲染"
+        );
+        let completed = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| e.payload["tool"] == "blackboard_read")
+            .map(|e| e.payload)
+            .collect::<Vec<_>>();
+        assert_eq!(completed.len(), 2);
+        assert!(completed.iter().all(|p| p["exit_code"] == 0));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R-M1S1-02（2026-10-27，370 §8.2 步 5）：空 summary（trim 后为空）
+    /// ＝「未提供」——走普通压缩窗请求路径（0ap 三态），不得误入摘要
+    /// 排队路径，也不得误报校验错误。
+    #[tokio::test]
+    async fn empty_summary_is_treated_as_absent_and_takes_the_plain_window_path() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "context_manage".to_string(),
+                arguments: serde_json::json!({
+                    "mode": "compress",
+                    "summary": "   ",
+                }),
+                call_id: "call-c1".to_string(),
+            }])
+            .with_prompt_tokens(100),
+            // 空摘要 ⇒ 普通路径：下一 loop-top 开压缩窗；窗内用一次合法
+            // summary 参与收窗（避免拖完整条未产出升级链），随后终答。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "context_manage".to_string(),
+                arguments: serde_json::json!({
+                    "mode": "compress",
+                    "summary": "补交：旧轮工作现场摘要。",
+                }),
+                call_id: "call-c2".to_string(),
+            }])
+            .with_prompt_tokens(100),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
+            .with_session_id(Some("SESSION-CM-EMPTY".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "z".repeat(6_000),
+                ..ok_result()
+            }),
+        };
+        controller
+            .run_turn(
+                &host,
+                "空摘要测试",
+                "RUN-CM-EMPTY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let completed = events(&dir)
+            .into_iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_manage"
+            })
+            .map(|e| e.payload)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            completed.len(),
+            2,
+            "两次 context_manage 调用: {completed:?}"
+        );
+        // r2＝空 summary：普通路径回执——exit 0、无 summary_queued、
+        // 压缩窗请求受理（可压缩块在场 ⇒ Requested 三态）。
+        assert_eq!(completed[0]["exit_code"], 0);
+        assert!(
+            completed[0].get("summary_queued").is_none(),
+            "空 summary 不得走排队路径: {:?}",
+            completed[0]
+        );
+        assert!(
+            fake.received_requests()
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .any(|m| m.content.contains("压缩窗口已请求")),
+            "空 summary 须走普通压缩窗请求路径"
+        );
+        // r3＝窗内合法 summary：参与收窗并压缩一次（窗口语义照常）。
+        assert_eq!(completed[1]["summary_queued"], true);
+        assert_eq!(
+            events(&dir)
+                .iter()
+                .filter(|e| e.event_type == EventType::ContextCompressed)
+                .count(),
+            1,
+            "窗内补交摘要须落地一次压缩"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -9557,7 +10525,10 @@ mod tests {
             .iter()
             .find(|c| c.contains("第二次询问"))
             .expect("第二次（升级）窗口块");
-        assert!(second_ask.contains("压缩是恢复工作现场的方式"), "{second_ask}");
+        assert!(
+            second_ask.contains("压缩是恢复工作现场的方式"),
+            "{second_ask}"
+        );
         assert!(second_ask.contains("最后一次压缩窗口"), "{second_ask}");
         assert!(second_ask.contains("按块回查存档"), "{second_ask}");
 
@@ -10266,9 +11237,10 @@ mod tests {
                 .with_prompt_tokens(100),
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
                 .with_prompt_tokens(100),
-            // 355 批改判（2026-10-25，353 §5.1）：原"门轮＋终轮摘要走 run 尾
-            // 消费"中的门轮已退役——首个纯文本候选即终答，摘要由 run 尾消费。
+            // 2026-10-27（367 后续修复）：纯摘要块是压缩控制轮，不是终答；
+            // 它由 loop-top 消费后继续到第 4 轮真实终答。
             ScriptedResponse::text(semantic_block),
+            ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway)

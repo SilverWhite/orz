@@ -20,7 +20,9 @@ use crate::host::{
 };
 use crate::tool::ToolDispatcher;
 use orz_assurance::EventType;
-use orz_assurance::tool_names::CONTEXT_MANAGE_TOOL_NAME;
+use orz_assurance::tool_names::{
+    CONTEXT_MANAGE_TOOL_NAME, STATE_READ_TOOL_NAME, STATE_WRITE_TOOL_NAME,
+};
 use serde_json::Value;
 use std::sync::Mutex;
 
@@ -1363,15 +1365,84 @@ impl AgentLoopController {
                 self.context_compact.slider_window_tokens,
                 self.context_compact.model_face_block_tokens,
             );
-            let state = if self.compression_window_active() {
-                crate::context_scale::CompressRequestState::InProgress
+            // 2026-10-27（369）：`summary` 存在 ⇒ 一次性压缩，不置窗口请求位；
+            // 摘要自由文本，不要求固定模板。摘要路径在 whitelist 处理后统一
+            // 排队/回报（保持白名单参数同批生效）。
+            // 371 批（F5c，2026-10-28）：summary 类型 fail-closed——存在但
+            // 非字符串（且非 null）时显式整调用拒绝，绝不静默按缺席降级走
+            // 窗口路径（schema 类型约束是第一道门，此处是 handler 第二道；
+            // 与「非法摘要 ⇒ ToolCompleted exit 1」同一纪律）。
+            let summary_present = tc.arguments.get("summary");
+            let summary_type_error =
+                summary_present.is_some_and(|v| !v.is_null() && v.as_str().is_none());
+            let summary_arg = summary_present
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            // R-369-03（2026-10-27，370 §8.2 步 2）：summary **先校验**再
+            // whitelist——非法 summary 的整调用拒绝不得携带 whitelist 副作用
+            // （此前 whitelist 先落盘/存档，之后才 normalize summary，拒绝时
+            // 白名单已写入）。校验在此前置；whitelist 仅在「无 summary」或
+            // 「summary 校验通过」时处理。
+            let validated_summary = if summary_type_error {
+                Some(Err(
+                    "summary 必须是字符串（收到其它类型）；本次未压缩。".to_string()
+                ))
+            } else {
+                summary_arg
+                    .map(|raw| crate::context_scale::normalize_tool_summary(raw).map(|s| (raw, s)))
+            };
+            if let Some(Err(error)) = &validated_summary {
+                let output =
+                    format!("{error}\n白名单：未处理（summary 未通过校验，本调用整体拒绝）。");
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 1,
+                    "mode": "compress",
+                    "summary_queued": false,
+                    "whitelist_applied": false,
+                    "error": output,
+                });
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: output.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                return Ok((
+                    ToolResult {
+                        output,
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    },
+                    None,
+                ));
+            }
+            let state = if summary_arg.is_some() {
+                None
+            } else if self.compression_window_active() {
+                Some(crate::context_scale::CompressRequestState::InProgress)
             } else if readout.compressible_blocks == 0 {
-                crate::context_scale::CompressRequestState::NothingToCompress
+                Some(crate::context_scale::CompressRequestState::NothingToCompress)
             } else {
                 self.request_compression_window();
-                crate::context_scale::CompressRequestState::Requested
+                Some(crate::context_scale::CompressRequestState::Requested)
             };
-            let output_base = crate::context_scale::context_compress_response(state, &readout);
+            let output_base = state
+                .map(|state| crate::context_scale::context_compress_response(state, &readout))
+                .unwrap_or_default();
             // 0am FR4（2026-09-20 用户令「压缩白名单挂在 context_compress
             // 下」）：可选 `whitelist` 条目——机制本体复用 A6 §8 C.2（内存
             // 列表 + 16K 累计上限 + `.gsa` best-effort 存档 + 常驻前言区
@@ -1437,6 +1508,97 @@ impl AgentLoopController {
                     whitelist_note.push_str(&format!("；{skipped_empty} 条空条目跳过"));
                 }
             }
+            // 2026-10-27（369）：一次性摘要路径——校验已前置（R-369-03），
+            // 此处仅登记到 controller，下一个 loop-top 与既有 `pending_semantic`
+            // 合流；不写 assistant 正文、不开窗口。工具回执保持短，明确
+            // “继续当前任务”。
+            if let Some(raw) = summary_arg {
+                if readout.compressible_blocks == 0 {
+                    let output = format!(
+                        "{}{whitelist_note}",
+                        crate::context_scale::context_compress_response(
+                            crate::context_scale::CompressRequestState::NothingToCompress,
+                            &readout,
+                        )
+                    );
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 0,
+                        "mode": "compress",
+                        "summary_queued": false,
+                    });
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    return Ok((
+                        ToolResult {
+                            output,
+                            exit_code: Some(0),
+                            output_encoding: None,
+                            structured: None,
+                            ..Default::default()
+                        },
+                        None,
+                    ));
+                }
+                // R-369-03：校验前置已通过（Err 已在前段整调用拒绝返回）。
+                let summary = validated_summary
+                    .expect("summary_arg present ⇒ validated_summary is Some")
+                    .expect("summary normalized before whitelist processing")
+                    .1;
+                let summary_chars = raw.chars().count();
+                self.request_compression_summary(summary);
+                let output = format!(
+                    "{}{whitelist_note}",
+                    crate::context_scale::context_compress_queued_response(summary_chars, &readout)
+                );
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 0,
+                    "mode": "compress",
+                    "summary_queued": true,
+                    "summary_chars": summary_chars,
+                });
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: output.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                return Ok((
+                    ToolResult {
+                        output,
+                        exit_code: Some(0),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    },
+                    None,
+                ));
+            }
             let output = if whitelist_note.is_empty() {
                 output_base
             } else {
@@ -1471,6 +1633,248 @@ impl AgentLoopController {
                 round: None,
             });
             return Ok((result, None));
+        }
+        // 0ds M1-S1（2026-10-27，366 章程 / 架构 §4.1/§11）：`state_write`
+        // 与 `blackboard_write section=state` 共用同一写入/校验/预算/审计
+        // 单源。`state_write` 走窄参数（goal/now/next/open/constraints）；
+        // 黑板入口走 `key: value` 文档形态（content）。失败 fail-closed：
+        // 不改状态、不落 state_write 事件（ToolCompleted exit 1 留痕）。
+        let state_via_blackboard = tc.name == BLACKBOARD_WRITE_TOOL_NAME
+            && tc.arguments.get("section").and_then(|v| v.as_str()) == Some("state");
+        if tc.name == STATE_WRITE_TOOL_NAME || state_via_blackboard {
+            let op = tc
+                .arguments
+                .get("op")
+                .and_then(|v| v.as_str())
+                .unwrap_or("append");
+            let clear = state_via_blackboard && op == "clear";
+            let invalid_op =
+                state_via_blackboard && !matches!(op, "append" | "replace_all" | "clear");
+            if invalid_op {
+                let error: String = format!(
+                    "{BLACKBOARD_WRITE_TOOL_NAME} op 非法（{op}）：state 分区只接受 \
+                     append | replace_all | clear"
+                );
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 1,
+                    "section": "state",
+                    "error": error,
+                });
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                let result = ToolResult {
+                    output: error,
+                    exit_code: Some(1),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                };
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: result.output.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                return Ok((result, None));
+            }
+            if clear {
+                let changed = self.blackboard.write().clear_state();
+                // 371 批（F5a，2026-10-28）：StateWrite 语义＝机械状态变化
+                // 行；no-op 清空（原本已空）不落事件（清空指令本身仍由
+                // ToolCompleted 留痕、`cleared:false` 如实），避免审计行与
+                // 状态变化一对一的语义失真。
+                if changed {
+                    writer
+                        .record(
+                            EventType::StateWrite,
+                            serde_json::json!({
+                                "outcome": "cleared",
+                                "fields": [],
+                                "content_chars": 0,
+                                "estimated_tokens": 0,
+                                "state": "",
+                            }),
+                        )
+                        .await?;
+                }
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                let output = if changed {
+                    "已清空黑板 state（旧状态全量在 journal 与工具调用参数中，可回查）；\
+                     用 state_read 回读为（无）。"
+                        .to_string()
+                } else {
+                    "黑板 state 原本为空；无需清空。".to_string()
+                };
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 0,
+                    "section": "state",
+                    "op": "clear",
+                    "cleared": changed,
+                });
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
+                let result = ToolResult {
+                    output,
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                };
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: result.output.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                return Ok((result, None));
+            }
+            let parsed = if tc.name == STATE_WRITE_TOOL_NAME {
+                crate::state::StateUpdate::from_tool_arguments(&tc.arguments)
+            } else {
+                match tc.arguments.get("content").and_then(|v| v.as_str()) {
+                    Some(content) => crate::state::StateSection::parse_document(content),
+                    None => Err(crate::state::StateError::InvalidDocument {
+                        line: 0,
+                        detail: "state 写入需要 content（`key: value` 行）".to_string(),
+                    }),
+                }
+            };
+            let (round, domain) = self.effective_blackboard_stamp();
+            let stamp = format!("r{round}@{} {}", domain.as_str(), chrono_utc_now());
+            let replace_all = state_via_blackboard && op == "replace_all";
+            let applied = parsed.and_then(|update| {
+                let mut board = self.blackboard.write();
+                if replace_all {
+                    board.replace_state(&update, stamp.clone())?;
+                } else {
+                    board.write_state(&update, stamp.clone())?;
+                }
+                let state = board.state.clone();
+                Ok((update, state))
+            });
+            match applied {
+                Ok((update, state)) => {
+                    let rendered = state.render();
+                    let content_chars = rendered.chars().count();
+                    let estimated_tokens = state.estimated_tokens();
+                    let goal_preview: String = state
+                        .goal
+                        .as_deref()
+                        .or(state.now.as_deref())
+                        .or(state.next.as_deref())
+                        .unwrap_or("")
+                        .chars()
+                        .take(120)
+                        .collect();
+                    // R-M1S1-01（2026-10-27，370 §8.2 步 4 裁决采纳）：行内
+                    // `state` 全文快照——StateWrite 行自包含，回放 accepted
+                    // 行即可重建 state_history（合并语义下不再依赖 join
+                    // model_output 参数）。上限 2048 字符为防御性口径；200
+                    // token 设计帽使渲染文档常态 ≈400 字符。
+                    let state_snapshot: String = rendered.chars().take(2048).collect();
+                    writer
+                        .record(
+                            EventType::StateWrite,
+                            serde_json::json!({
+                                "outcome": "accepted",
+                                "fields": update.touched_fields(),
+                                "goal": goal_preview,
+                                "state": state_snapshot,
+                                "content_chars": content_chars,
+                                "estimated_tokens": estimated_tokens,
+                                "updated": stamp,
+                            }),
+                        )
+                        .await?;
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
+                    let watermark = self.blackboard_watermark_label();
+                    let output = format!(
+                        "state 已写入（{stamp}；≈{estimated_tokens}/{} token）；用 state_read \
+                         回读。live 水位{watermark}。",
+                        crate::state::STATE_MAX_TOKENS,
+                    );
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 0,
+                        "section": "state",
+                        "fields": update.touched_fields(),
+                        "estimated_tokens": estimated_tokens,
+                    });
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    let result = ToolResult {
+                        output,
+                        exit_code: Some(0),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    };
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: result.output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    return Ok((result, None));
+                }
+                Err(err) => {
+                    let error = format!("state 写入被拒绝：{err}");
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 1,
+                        "section": "state",
+                        "error": error,
+                    });
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
+                    let result = ToolResult {
+                        output: error,
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    };
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: result.output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    return Ok((result, None));
+                }
+            }
         }
         // 0ae D0（2026-09-15，设计 §3，用户裁决 DP-6）：`blackboard_write`
         // ——模型写入面（8 工具面冻结的用户主导显式例外 +1）。可写分区限
@@ -1958,54 +2362,60 @@ impl AgentLoopController {
         // permission gate already ran (ReadOnly class auto-allows under
         // every policy); the event chain is complete (PermissionRequested/
         // PermissionDecision/ToolStarted above, ToolCompleted below).
-        if tc.name == "blackboard_read" {
+        if tc.name == "blackboard_read" || tc.name == STATE_READ_TOOL_NAME {
             // 2026-08-19 方案B 全面审查处理（N3）：section 非字符串 = 显式报错
             // （同非法 epoch/receipt_id 纪律——绝不静默回退到 "plan" 默认值，
             // 否则与 receipt_id 组合时守卫报错会显示误导性的 section=plan）。
-            let section = match tc.arguments.get("section") {
-                Some(raw) => match raw.as_str() {
-                    Some(s) => s.to_string(),
-                    None => {
-                        let content = format!(
-                            "invalid blackboard_read section: {raw} — section 必须 \
+            // 0ds M1-S1：`state_read` 是本分支的窄别名（section 固定 state），
+            // 与 `blackboard_read section=state` 共用渲染/信封单源。
+            let section = if tc.name == STATE_READ_TOOL_NAME {
+                "state".to_string()
+            } else {
+                match tc.arguments.get("section") {
+                    Some(raw) => match raw.as_str() {
+                        Some(s) => s.to_string(),
+                        None => {
+                            let content = format!(
+                                "invalid blackboard_read section: {raw} — section 必须 \
                              是字符串（plan|edits|tool_actions|exec|actions|session|\
                              internal_ret|external_ret|entities|deps|processes|env|temporal|rli|\
-                             guide|journal）"
-                        );
-                        let mut completed = serde_json::json!({
-                            "tool": tc.name,
-                            "call_id": tc.call_id,
-                            "exit_code": 1,
-                            "section": "<invalid>",
-                            "error": content,
-                        });
-                        // F3 (2026-08-16 审查收口): direct 盖章对称。
-                        stamp_direct(&mut completed);
-                        writer.record(EventType::ToolCompleted, completed).await?;
-                        self.push_tool_action_stamped(
-                            ToolDispatcher::action_category(&tc.name).to_string(),
-                            tc.name.clone(),
-                            chrono_utc_now(),
-                        );
-                        let result = ToolResult {
-                            output: content,
-                            exit_code: Some(1),
-                            output_encoding: None,
-                            structured: None,
-                            ..Default::default()
-                        };
-                        messages.push(Message {
-                            role: Role::Tool,
-                            content: result.output.clone(),
-                            tool_call_id: Some(tc.call_id.clone()),
-                            tool_calls: Vec::new(),
-                            reasoning_content: None,
-                            round: None,
-                        });
-                        return Ok((result, None));
-                    }
-                },
-                None => "plan".to_string(),
+                             guide|journal|state）"
+                            );
+                            let mut completed = serde_json::json!({
+                                "tool": tc.name,
+                                "call_id": tc.call_id,
+                                "exit_code": 1,
+                                "section": "<invalid>",
+                                "error": content,
+                            });
+                            // F3 (2026-08-16 审查收口): direct 盖章对称。
+                            stamp_direct(&mut completed);
+                            writer.record(EventType::ToolCompleted, completed).await?;
+                            self.push_tool_action_stamped(
+                                ToolDispatcher::action_category(&tc.name).to_string(),
+                                tc.name.clone(),
+                                chrono_utc_now(),
+                            );
+                            let result = ToolResult {
+                                output: content,
+                                exit_code: Some(1),
+                                output_encoding: None,
+                                structured: None,
+                                ..Default::default()
+                            };
+                            messages.push(Message {
+                                role: Role::Tool,
+                                content: result.output.clone(),
+                                tool_call_id: Some(tc.call_id.clone()),
+                                tool_calls: Vec::new(),
+                                reasoning_content: None,
+                                round: None,
+                            });
+                            return Ok((result, None));
+                        }
+                    },
+                    None => "plan".to_string(),
+                }
             };
             let since = tc.arguments.get("since_timestamp").and_then(|s| s.as_str());
             // F6 (2026-08-15, BACKLOG 6e 复查遗留): distinguish "epoch
@@ -3007,6 +3417,25 @@ impl AgentLoopController {
                 // ——live 渲染、时间正序、不进折叠展开集）。
                 let bb = self.blackboard.read();
                 bb.render_findings_section()
+            } else if section == "state" {
+                // 0ds M1-S1（2026-10-27）：state 当前事实薄层（`state_read`
+                // 窄别名与 `blackboard_read section=state` 共用渲染单源）。
+                // 与 guide 同纪律：live 只读面不接受过滤/展开参数——显式
+                // 文本错误，绝不静默忽略（否则调用方会误以为过滤生效）。
+                if since.is_some()
+                    || epoch.is_some()
+                    || receipt_id.is_some()
+                    || expand.is_some()
+                    || failures_only.is_some()
+                    || search.is_some()
+                {
+                    "blackboard_read state 只支持 live 读取（不带 since_timestamp/epoch/\
+                     receipt_id/expand/failures_only/search）——省略这些参数后重试"
+                        .to_string()
+                } else {
+                    let bb = self.blackboard.read();
+                    bb.render_state_section()
+                }
             } else if section == "exec" && (failures_only.is_some() || search.is_some()) {
                 // 0p S1（2026-09-07，ADR-0010 §14.61 设计 A1/A2）：自信息面
                 // 派发——failures_only 走 failure_agg 聚合行集（P2-12 行语义
@@ -6259,6 +6688,9 @@ mod tests {
                 // 非工作族，与 bash 同腕）。
                 "self_check",
                 "spawn_scout",
+                // 0ds M1-S1：state 窄读/写面（无条件声明，ReadOnly 类）。
+                "state_read",
+                "state_write",
             ],
             "single-face projection under Benchmark (R1 封存 list_dir/compaction_whitelist_add，mode=off 移除检索族): {declared:?}"
         );
@@ -6314,6 +6746,9 @@ mod tests {
                 // benchmark 面钉改判注）。
                 "self_check",
                 "spawn_scout",
+                // 0ds M1-S1：state 窄读/写面（无条件声明，ReadOnly 类）。
+                "state_read",
+                "state_write",
             ],
             "ReadOnly single-face projection (R1 封存 list_dir/compaction_whitelist_add，写/执行工具探针不完整移除): {declared:?}"
         );

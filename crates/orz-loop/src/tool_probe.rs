@@ -32,7 +32,10 @@ use std::path::{Path, PathBuf};
 
 use crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME;
 use crate::host::ToolPolicy;
-use orz_assurance::tool_names::{CONTEXT_COMPRESS_TOOL_NAME, CONTEXT_MANAGE_TOOL_NAME};
+use orz_assurance::tool_names::{
+    CONTEXT_COMPRESS_TOOL_NAME, CONTEXT_MANAGE_TOOL_NAME, STATE_READ_TOOL_NAME,
+    STATE_WRITE_TOOL_NAME,
+};
 
 /// Every main-agent work tool in canonical (stable) projection order.
 /// Single source of truth for membership, the probe snapshot partition and
@@ -42,7 +45,7 @@ use orz_assurance::tool_names::{CONTEXT_COMPRESS_TOOL_NAME, CONTEXT_MANAGE_TOOL_
 /// (ADR-0010 §14.58/§14.59) the journaled availability accounting covers
 /// the declared surface only — a subset of this list; the raw probe
 /// (`probe_work_tools`) still partitions the full set.
-pub const WORK_TOOLS: [&str; 26] = [
+pub const WORK_TOOLS: [&str; 28] = [
     // Locally deterministic tools (former Face B).
     "read_file",
     "list_dir",
@@ -69,6 +72,11 @@ pub const WORK_TOOLS: [&str; 26] = [
     // 状态操作＋黑板合法写路径）——三处同批先例照抄，判据共用
     // `probe_storage`。
     CONTEXT_MANAGE_TOOL_NAME,
+    // 0ds M1-S1（2026-10-27）：`state_read` / `state_write` 入面（黑板
+    // state 分区窄读/写面；纯内存会话状态、无宿主依赖）——三处同批
+    // 先例照抄，判据共用 `probe_storage`。
+    STATE_READ_TOOL_NAME,
+    STATE_WRITE_TOOL_NAME,
     "todo_write",
     "update_goal",
     "enter_plan_mode",
@@ -407,6 +415,8 @@ pub fn probe_tool(name: &str, ctx: &ProbeContext) -> ToolProbeResult {
         | BLACKBOARD_WRITE_TOOL_NAME
         | CONTEXT_COMPRESS_TOOL_NAME
         | CONTEXT_MANAGE_TOOL_NAME
+        | STATE_READ_TOOL_NAME
+        | STATE_WRITE_TOOL_NAME
         | "compaction_whitelist_add" => probe_storage(ctx),
         "todo_write" | "update_goal" => probe_goal_write(ctx),
         "enter_plan_mode" | "exit_plan_mode" => probe_plan_mode(ctx),
@@ -560,7 +570,7 @@ mod tests {
         // （2026-10-11，方案 A）：25 → 26——`context_manage` 入面（第十一
         // 主工具；context_compress 表位保留供历史回放）。单一探针面的口径是
         // 「声明面 ∩ 机械链可判」；此数与请求面同批维护。
-        assert_eq!(WORK_TOOLS.len(), 26, "single probe face = 26 tools");
+        assert_eq!(WORK_TOOLS.len(), 28, "single probe face = 28 tools");
         for tool in WORK_TOOLS {
             assert!(is_main_agent_work_tool(tool), "{tool} must be a work tool");
         }
@@ -1032,6 +1042,9 @@ mod tests {
                 "context_compress".to_string(),
                 // 0cz S2（2026-10-11）：同族判据（probe_storage；第十一主工具）。
                 "context_manage".to_string(),
+                // 0ds M1-S1：state 窄读/写面同族判据（probe_storage）。
+                "state_read".to_string(),
+                "state_write".to_string(),
                 "compaction_whitelist_add".to_string(),
             ]
         );

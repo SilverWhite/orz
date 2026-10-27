@@ -681,6 +681,9 @@ mod tests {
                 // （规则式非工作族，与 bash 同腕）。
                 "self_check",
                 "spawn_scout",
+                // 0ds M1-S1：state 窄读/写面（无条件声明，ReadOnly 类）。
+                "state_read",
+                "state_write",
             ],
             "R1 single-face list projection (todo_write / compaction_whitelist_add \
              sealed): {declared:?}"

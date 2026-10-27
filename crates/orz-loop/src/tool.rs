@@ -21,7 +21,10 @@ use orz_assurance::gates::ipg::{
 
 use crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME;
 use crate::host::{RiskClass, ToolPolicy};
-use orz_assurance::tool_names::{CONTEXT_COMPRESS_TOOL_NAME, CONTEXT_MANAGE_TOOL_NAME};
+use orz_assurance::tool_names::{
+    CONTEXT_COMPRESS_TOOL_NAME, CONTEXT_MANAGE_TOOL_NAME, STATE_READ_TOOL_NAME,
+    STATE_WRITE_TOOL_NAME,
+};
 
 /// Dispatches tool calls with pre/post assurance checks.
 #[derive(Debug, Clone, Default)]
@@ -97,6 +100,13 @@ impl ToolDispatcher {
         // 属 `.gsa` 客观承载，与既有压缩落盘同性质），无外部副作用 →
         // ReadOnly 类（所有策略自动放行）。8 工具面冻结的用户主导显式例外 +3。
         CONTEXT_MANAGE_TOOL_NAME,
+        // 0ds M1-S1（2026-10-27，366 章程 / 架构 §4.1/§11）：`state_read` /
+        // `state_write` 只读写内存黑板的 state 分区——无文件/网络/工作区
+        // 外部副作用，ReadOnly 类（所有策略自动放行）。两表同批：
+        // 本表与宿主 `permission.rs::access_kind` 必须同时登记（跨表护栏
+        // `read_only_tools_never_fall_into_the_edit_bucket` 看护）。
+        STATE_READ_TOOL_NAME,
+        STATE_WRITE_TOOL_NAME,
         // GAP-RETRIEVAL-TOOLS (2026-08-10): `project_doc_index` is a
         // workspace-local read (discovery + query) — ReadOnly class
         // (auto-allowed under every policy; the retrieval subagent's
@@ -213,6 +223,11 @@ impl ToolDispatcher {
             // (+ blackboard handover write) only — honest "other" fold,
             // same family as context_compress (NOT a "read": clear/compress
             // are state operations, and the action board should say so).
+            "other"
+        } else if tool_name == STATE_WRITE_TOOL_NAME {
+            // 0ds M1-S1：state 写入是内存黑板簿记（无外部副作用）——
+            // 与 plan_write/blackboard_write 同族 "other" 折叠；state_read
+            // 走下方 ReadOnly → "read" 分支。
             "other"
         } else if tool_name == "self_check" {
             // 0dm：自查只是把三问模板交还模型，无副作用——"other" 折叠。

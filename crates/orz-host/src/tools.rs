@@ -633,10 +633,11 @@ pub fn capability_list(cwd: &Path) -> Result<serde_json::Value, String> {
 /// ③loop 侧四件为策展条目（schema 声明在 orz-loop controller，host 无
 /// 机器可读单源 → params_schema=null；其中三件 R1 封存休眠）；
 /// ④未覆盖：host 侧无 schema 单源的其余 loop 侧工具（blackboard_write／
-/// context_manage／plan_write／submit 为条件声明，self_check 自 356 批
-/// 起无条件声明）——宁缺毋假，剩余边界登记 0dr（SYSTEM_CONSOLE_DESIGN
-/// §3.1）。356 批（2026-10-25 用户裁决）：self_check 无条件在位，④ 段
-/// 相应改述。
+/// context_manage／plan_write／submit 为条件声明；state_read／state_write
+/// 无条件声明但 schema 仍只在 loop controller；self_check 自 356 批起无
+/// 条件声明）——宁缺毋假，剩余边界登记 0dr（SYSTEM_CONSOLE_DESIGN §3.1）。
+/// 356 批（2026-10-25 用户裁决）：self_check 无条件在位，④ 段相应改述。
+/// 367 批（2026-10-27）：state 两工具入未覆盖点名（host 无 handler）。
 pub const CAPABILITY_COVERAGE: &str = "coverage: (1) the 8 toolset entries are derived from the \
      same build_toolset assembly as a live run (schema = the declared model face); \
      (2) browser_read/browser_control are derived from the host browser-lane declarations, \
@@ -649,9 +650,10 @@ pub const CAPABILITY_COVERAGE: &str = "coverage: (1) the 8 toolset entries are d
      the same loop-side declaration (single source, schema_source=derived); run_tests/pdf_read/\
      project_doc_index are R1-sealed from the current declaration face (handlers retained); \
      (4) NOT covered: loop-side tools with no host-side schema source \
-     (blackboard_write/context_manage/\
-     plan_write/submit — conditional declarations; self_check — unconditional since 356, \
-     schema still loop-side only); boundary registered as 0dr (SYSTEM_CONSOLE_DESIGN §3.1).";
+     (blackboard_write/context_manage/plan_write/submit — conditional declarations; \
+     state_read/state_write — unconditional, schema still loop-side only; \
+     self_check — unconditional since 356, schema still loop-side only); \
+     boundary registered as 0dr (SYSTEM_CONSOLE_DESIGN §3.1).";
 
 pub struct ToolsetRegistry {
     toolset: Arc<FinalizedToolset>,

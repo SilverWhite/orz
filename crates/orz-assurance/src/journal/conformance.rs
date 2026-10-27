@@ -799,4 +799,125 @@ mod tests {
         });
         assert!(track_of(&mixed).is_err());
     }
+
+    /// 0ds M1-S1（2026-10-27）：`state_write` payload schema 已登记且
+    /// 预算/形态约束真的生效（registry → schema 单源；不是只加枚举）。
+    /// R-M1S1-01（370 §8.2 步 4，2026-10-27）：行内 `state` 全文快照
+    /// （required，maxLength 2048）使行自包含。
+    #[test]
+    fn state_write_payload_schema_is_registered_and_bounded() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        assert!(root.join("runtime").is_dir());
+        let registry = load_registry(&root).unwrap();
+        let entry = registry
+            .resolve(EventTrack::V02, "state_write")
+            .expect("state_write must be registered on the v0.2 track");
+        let schema = load_json(&root.join(&entry.schema_rel)).unwrap();
+        let validator = jsonschema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .should_validate_formats(false)
+            .build(&schema)
+            .expect("state_write payload schema must compile");
+        assert!(
+            validator
+                .validate(&serde_json::json!({
+                    "outcome": "accepted",
+                    "fields": ["goal", "next"],
+                    "goal": "落地 M1-S1",
+                    "state": "goal: 落地 M1-S1\nnext: 全量回归\nupdated: r3@normal",
+                    "content_chars": 120,
+                    "estimated_tokens": 60,
+                    "updated": "r3@normal 2026-10-27T20:00:00Z",
+                }))
+                .is_ok(),
+            "accepted state_write payload must validate"
+        );
+        assert!(
+            validator
+                .validate(&serde_json::json!({
+                    "outcome": "cleared",
+                    "fields": [],
+                    "content_chars": 0,
+                    "estimated_tokens": 0,
+                    "state": "",
+                }))
+                .is_ok(),
+            "cleared state_write payload must validate"
+        );
+        assert!(
+            validator
+                .validate(&serde_json::json!({
+                    "outcome": "accepted",
+                    "fields": ["goal"],
+                    "content_chars": 900,
+                    "estimated_tokens": 201,
+                    "state": "goal: x",
+                }))
+                .is_err(),
+            "estimated_tokens > 200 must be rejected by the payload schema"
+        );
+        assert!(
+            validator
+                .validate(&serde_json::json!({
+                    "outcome": "accepted",
+                    "fields": ["goal"],
+                    "state": "a".repeat(2049),
+                    "content_chars": 2049,
+                    "estimated_tokens": 200,
+                }))
+                .is_err(),
+            "state snapshot beyond the 2048-char bound must be rejected"
+        );
+        assert!(
+            validator
+                .validate(&serde_json::json!({
+                    "outcome": "accepted",
+                    "fields": ["goal"],
+                    "content_chars": 1,
+                    "estimated_tokens": 1,
+                }))
+                .is_err(),
+            "missing required `state` snapshot must be rejected (R-M1S1-01)"
+        );
+        assert!(
+            validator
+                .validate(&serde_json::json!({
+                    "outcome": "accepted",
+                    "fields": ["unknown"],
+                    "content_chars": 1,
+                    "estimated_tokens": 1,
+                    "state": "goal: x",
+                }))
+                .is_err(),
+            "unknown state field must be rejected"
+        );
+        // 371 批（F5b，2026-10-28）：schema if/then——accepted 行缺系统盖章
+        // `updated` 须被拒；cleared 行带 updated 同拒（盖章只属于有内容的
+        // accepted 行）。
+        assert!(
+            validator
+                .validate(&serde_json::json!({
+                    "outcome": "accepted",
+                    "fields": ["goal"],
+                    "state": "goal: x",
+                    "content_chars": 7,
+                    "estimated_tokens": 3,
+                }))
+                .is_err(),
+            "accepted state_write without the system stamp must be rejected"
+        );
+        assert!(
+            validator
+                .validate(&serde_json::json!({
+                    "outcome": "cleared",
+                    "fields": [],
+                    "content_chars": 0,
+                    "estimated_tokens": 0,
+                    "state": "",
+                    "updated": "r1@normal t",
+                }))
+                .is_err(),
+            "cleared rows must not carry an updated stamp beyond the if/then shape"
+        );
+    }
 }

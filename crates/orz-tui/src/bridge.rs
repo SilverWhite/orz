@@ -504,6 +504,9 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
         | EventType::ProcessTreeReaped
         | EventType::ReclaimPerformed
         | EventType::ResourceLimitHit
+        // 0ds M1-S1：state 写入是黑板簿记事实（无专用 TUI 卡片，
+        // 降级 Unknown 与其余机械事实族同姿态）。
+        | EventType::StateWrite
         // 0bw③：写入管控命令审查事实——机器审计面（无专用 TUI 卡片，
         // 降级 Unknown 与其余宿主事实族同姿态）。
         | EventType::WriteControlReview

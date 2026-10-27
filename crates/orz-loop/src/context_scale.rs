@@ -306,25 +306,15 @@ fn reading(tokens: u64) -> String {
     )
 }
 
-/// 语义摘要块的输出说明（软提醒／硬提醒／窗口块共用——单一来源，避免漂移）。
+/// 语义摘要的提交说明（软提醒／硬提醒／窗口块共用——单一来源，避免漂移）。
+/// 2026-10-27（369/370）：**不在 prompt 里内嵌模板**；只给工具指针。摘要的
+/// 自由文本形态由 `context_manage` 的工具描述承载，旧正文块仅兼容 fallback。
 fn summary_block_guide() -> String {
     format!(
-        "在回复中输出一个语义摘要块，机械层据此把**工作现场之外**的旧分块替换成该摘要\
-         （逐字原文仍全量留档、可按块回放；**至少命中 2 个小节**才被机械层识别）：\n{}",
-        summary_block_skeleton()
-    )
-}
-
-/// f15（0bv，2026-09-26）：语义摘要块**可照抄骨架**——软提醒／硬提醒／窗口块
-/// 与 `context_compress` 压缩回执共用（单一来源）。c 轮实证：回执只教「产出
-/// 摘要块」而没给落点与骨架，前两次投递落空；回执现在直接内嵌本骨架。
-fn summary_block_skeleton() -> String {
-    format!(
-        "{MODEL_SUMMARY_PREFIX}]\n\
-         {label} 1-4（可选：不给则由机械层按最旧闭合块优先）\n\
-         目标: …\n已完成: …\n关键决策: …\n未决问题: …\n下一步: …\n关键文件: …\n\
-         {MODEL_SUMMARY_END}",
-        label = MODEL_SUMMARY_BLOCK_LABEL,
+        "需要压缩时调用 {CONTEXT_MANAGE_TOOL_NAME}(mode=compress, summary=…)：\
+         summary 是自由文本、无固定模板，机械层据此把**工作现场之外**的旧分块替换成\
+         该摘要（逐字原文仍全量留档、可按块回放）。回复文本里的 \
+         `[SEMANTIC_SUMMARY]` 块仅兼容旧路径，不要作为首选。"
     )
 }
 
@@ -569,12 +559,17 @@ pub fn compression_window_block(milestone_tokens: u64) -> String {
 /// T1 线（必定压缩）的强制压缩窗口任务块——两级询问（2026-09-24 用户裁决的
 /// 三步升级）：`attempt`＝第几次询问（1＝首问；2＝升级再询问，明示质量衰减
 /// 与最后机会）。FR-3 口径不变：不锁工具面；量尺＝模型面阶梯。
-/// 0bn R2（2026-09-24 复审补口，v8 §15）：**摘要格式模板自嵌块本体**——
+/// 0bn R2（2026-09-24 复审补口，v8 §15）：**提交方式自嵌块本体**——
 /// 不再依赖任何早前注入的「见上」指称（H1 块可被移出／单轮暴涨被最高档抑制
 /// ／恢复会话不回放注入块），块随窗口注入即自带说明。
 ///
-/// 0bs ④（2026-09-25）：不再内嵌整表——摘要模板仍自嵌（R2 不动），
+/// 0bs ④（2026-09-25）：不再内嵌整表——提交方式仍自嵌（R2 不动），
 /// 分块索引改单源指向窗口尾部表（判据＝单源一次）。
+///
+/// 2026-10-27（R-369-02，369/370）：自嵌物从「摘要格式模板」改为
+/// [`summary_block_guide`] 工具指针——prompt 不再内嵌正文摘要骨架
+/// （模板/段门槛/示例只留工具描述与 fallback 兼容面），0bn R2 的
+/// 「自嵌、不依赖早前注入」不变量保留。
 pub fn mandatory_compression_window_block(
     milestone_tokens: u64,
     attempt: u32,
@@ -604,9 +599,10 @@ pub fn mandatory_compression_window_block(
     };
     format!(
         "{head}\n\
-         1. 产出语义摘要块，覆盖**工作现场以外的全部已闭合分块**\
-         （不给 `{MODEL_SUMMARY_BLOCK_LABEL}` 行 ＝ 按全部处理；也可写区间收窄）。\
-         摘要块格式（自嵌本块，不依赖早前注入）：\n\
+         1. 调用 {CONTEXT_MANAGE_TOOL_NAME}(mode=compress, summary=…) 提交语义摘要\
+         （自由文本），覆盖**工作现场以外的全部已闭合分块**\
+         （summary 不含 `{MODEL_SUMMARY_BLOCK_LABEL}` 行 ＝ 按全部处理；也可写区间收窄）。\
+         提交方式自嵌本块，不依赖早前注入：\n\
          {guide}\n\
          2. 若有关键结论需要跨压缩长期留存，一并固化到黑板\
          （{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes；黑板不受上下文窗口影响）。\n\
@@ -621,11 +617,13 @@ pub fn mandatory_compression_window_block(
     )
 }
 
-/// 窗口内模型未产出摘要块时的机械提示（单空格，0AE-C13 文案纪律）。
+/// 窗口内模型未产出摘要时的机械提示（单空格，0AE-C13 文案纪律）。
+/// 2026-10-27（R-369-02）：教学改工具指针；正文块仅作兼容性提及。
 pub fn window_remaining_notice(rounds_left: u32) -> String {
     format!(
-        "{WINDOW_NOTICE_PREFIX}] 窗口剩余 {rounds_left} 轮：尚未检测到语义摘要块。\
-         请输出 `{MODEL_SUMMARY_PREFIX}] … {MODEL_SUMMARY_END}`（或把必要结论写入黑板）。"
+        "{WINDOW_NOTICE_PREFIX}] 窗口剩余 {rounds_left} 轮：尚未检测到语义摘要。\
+         请调用 {CONTEXT_MANAGE_TOOL_NAME}(mode=compress, summary=…) 提交自由文本摘要\
+         （回复文本里的 `{MODEL_SUMMARY_PREFIX}] … {MODEL_SUMMARY_END}` 块仍兼容；或把必要结论写入黑板）。"
     )
 }
 
@@ -652,27 +650,39 @@ pub fn context_compress_response(
 ) -> String {
     let table = crate::model_face::render_slider_readout_line(readout);
     let total = readout.total_blocks;
-    // f15（0bv，2026-09-26）：回执直接给出**落点与可照抄骨架**——摘要块必须
-    // 写在回复文本里（写黑板/工具参数不触发折叠），c 轮前两次投递落空即此因。
+    // 2026-10-27（369/370）：回执只给工具指针，不再内嵌正文摘要模板。
     let head = match state {
         CompressRequestState::Requested => format!(
             "压缩窗口已请求：下一个安全边界将开启模型参与压缩窗口（≤3 轮）。\
-             窗口轮请产出语义摘要块（机械层据以折叠主滑块外的已闭合分块），\
-             必要时用 {BLACKBOARD_WRITE_TOOL_NAME} 固化关键结论。{}\
-             落点＝**回复文本**（写黑板或工具参数不会触发折叠）；可照抄骨架：\n{}",
-            target_tier_advice(),
-            summary_block_skeleton()
+             首选下一轮调用 {CONTEXT_MANAGE_TOOL_NAME}(mode=compress, summary=…) 提交自由文本摘要\
+             （无固定模板；可含 `压缩块:` 行），机械层会直接按块压缩；\
+             回复文本里的 `[SEMANTIC_SUMMARY]` 块仍兼容。必要时用 {BLACKBOARD_WRITE_TOOL_NAME} 固化关键结论。{}",
+            target_tier_advice()
         ),
         CompressRequestState::InProgress => format!(
-            "压缩窗口已在程中（in_progress）：本轮即窗口轮，请直接产出语义摘要块或固化黑板；无需重复发起。\
-             落点＝**回复文本**（写黑板或工具参数不会触发折叠）；可照抄骨架：\n{}",
-            summary_block_skeleton()
+            "压缩窗口已在程中（in_progress）：本轮即窗口轮，请调用 {CONTEXT_MANAGE_TOOL_NAME}\
+             (mode=compress, summary=…) 提交自由文本摘要，或继续回复文本摘要块；无需重复发起。"
         ),
         CompressRequestState::NothingToCompress => {
             "主滑块之外没有可压缩分块：无需压缩，未开窗。".to_string()
         }
     };
     format!("{head}\n滑块读数：{table}（主滑块外共 {total} 块）。")
+}
+
+/// 2026-10-27（369）：`context_manage(mode=compress, summary=…)` 的**紧凑
+/// 回执**——一次性摘要已排队，等下一个 loop-top 安全间隙按块压缩。回执
+/// 必须短且明确“继续当前任务”，避免模型把压缩当收尾。
+pub fn context_compress_queued_response(
+    summary_chars: usize,
+    readout: &crate::model_face::SliderReadout,
+) -> String {
+    let table = crate::model_face::render_slider_readout_line(readout);
+    format!(
+        "压缩摘要已接收（{summary_chars} 字），已排队；继续当前任务。\n\
+         滑块读数：{table}（主滑块外共 {} 块）。",
+        readout.total_blocks
+    )
 }
 
 /// **语义摘要块的机械识别**：从模型回复文本中抽取最后一块摘要（前缀到结束
@@ -694,6 +704,64 @@ pub fn extract_model_summary(text: &str) -> Option<String> {
         return None;
     }
     Some(body.trim().to_string())
+}
+
+/// **纯语义摘要控制轮**（2026-10-27，367 后续修复）：整段回复除摘要块外
+/// 没有实质文本。这样的回合是模型在执行「压缩」指令，不是交付终答；
+/// loop 不得按「无 tool_calls ⇒ 回合结束」把压缩摘要当终答交付并收 run。
+///
+/// 与 `extract_model_summary` 同源：块本身须至少命中两个段标签（防误识别）；
+/// 摘要块之前/之后的可见文本必须为空。`[RUN_END]` 等声明不在本函数判定，
+/// 由调用方另判（声明 + 摘要 = 真实终答，不按控制轮处理）。
+pub fn is_summary_only(text: &str) -> bool {
+    let Some(start) = text.rfind(MODEL_SUMMARY_PREFIX) else {
+        return false;
+    };
+    if extract_model_summary(text).is_none() {
+        return false;
+    }
+    let rest = &text[start..];
+    let after = match rest.find(MODEL_SUMMARY_END) {
+        Some(end) => &rest[end + MODEL_SUMMARY_END.len()..],
+        None => "",
+    };
+    text[..start].trim().is_empty() && after.trim().is_empty()
+}
+
+/// `context_manage(mode=compress, summary=…)` 的摘要长度上限（字符）。
+/// 与 `blackboard_write` 的单次写入上限同量级；工具参数不是用户正文，
+/// 不设段模板——自由文本由模型按当前任务组织。
+pub const TOOL_SUMMARY_MAX_CHARS: usize = 8192;
+
+/// 2026-10-27（369）：工具摘要归一化——**不做段模板校验**。工具调用本身
+/// 已是类型化控制面（不是 assistant 正文），无需靠“至少两个段标签”防
+/// 误识别；只校验非空/长度，并统一包成内部 `[SEMANTIC_SUMMARY]` 块供既有
+/// marker/档案/区间解析复用。
+pub fn normalize_tool_summary(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("summary 为空：请给出自由文本工作现场摘要；本次未压缩。".to_string());
+    }
+    let chars = trimmed.chars().count();
+    if chars > TOOL_SUMMARY_MAX_CHARS {
+        return Err(format!(
+            "summary 过长（{chars} 字符，上限 {TOOL_SUMMARY_MAX_CHARS}）；本次未压缩。"
+        ));
+    }
+    let without_prefix = trimmed
+        .strip_prefix("[SEMANTIC_SUMMARY]")
+        .or_else(|| trimmed.strip_prefix(MODEL_SUMMARY_PREFIX))
+        .unwrap_or(trimmed);
+    let body = without_prefix
+        .strip_suffix(MODEL_SUMMARY_END)
+        .unwrap_or(without_prefix)
+        .trim();
+    if body.is_empty() {
+        return Err("summary 为空：请给出自由文本工作现场摘要；本次未压缩。".to_string());
+    }
+    Ok(format!(
+        "{MODEL_SUMMARY_PREFIX}]\n{body}\n{MODEL_SUMMARY_END}"
+    ))
 }
 
 /// `压缩块:` 区间指令的三态解析结果（0bk S1，2026-09-24）。
@@ -831,6 +899,9 @@ mod tests {
         // 读数表三态同源（设计 §3：辅面自带同表）。
         for text in [requested, in_progress, nothing] {
             assert!(text.contains("滑块读数："), "{text}");
+            // R-369-02（2026-10-27）：三态回执均不得再教正文摘要模板。
+            assert!(!text.contains("摘要块格式"), "{text}");
+            assert!(!text.contains("至少命中 2 个小节"), "{text}");
         }
     }
 
@@ -1052,23 +1123,30 @@ mod tests {
         assert!(empty.contains("（无）"), "{empty}");
     }
 
-    /// 0bn R2 钉②（2026-09-24 复审补口，v8 §15）：**强制窗块自嵌摘要模板**
-    /// ——模板（含「至少命中 2 个小节」识别门槛）必须在两级询问块文本内可见，
-    /// 不再依赖任何早前注入的「（见上）」指称；否则 H1 块被移出／单轮暴涨被
-    /// 最高档抑制／恢复会话不回放时模型从未见过格式 ⇒ 产出形状错判「未产出」
-    /// ⇒ 直推升级/截断。
+    /// 0bn R2 钉②（2026-09-24 复审补口，v8 §15；2026-10-27 R-369-02 改钉）：
+    /// **强制窗块自嵌提交方式**——`context_manage(mode=compress, summary=…)`
+    /// 工具指针必须在两级询问块文本内可见，不依赖任何早前注入的「（见上）」
+    /// 指称；prompt 不再内嵌正文摘要模板（骨架/段门槛/示例行退出两级询问块，
+    /// 只留工具描述与 fallback 兼容面），否则旧教学会把模型引回正文 fallback。
     #[test]
-    fn mandatory_window_block_embeds_the_summary_template_self_contained() {
+    fn mandatory_window_block_embeds_the_summary_tool_pointer_self_contained() {
         for ask in [
             mandatory_compression_window_block(500_000, 1, 500_000),
             mandatory_compression_window_block(500_000, 2, 500_000),
         ] {
-            assert!(ask.contains(MODEL_SUMMARY_PREFIX), "{ask}");
-            assert!(ask.contains(MODEL_SUMMARY_END), "{ask}");
+            assert!(
+                ask.contains(&format!(
+                    "{CONTEXT_MANAGE_TOOL_NAME}(mode=compress, summary="
+                )),
+                "{ask}"
+            );
+            assert!(ask.contains("无固定模板"), "{ask}");
             assert!(ask.contains(MODEL_SUMMARY_BLOCK_LABEL), "{ask}");
-            assert!(ask.contains("至少命中 2 个小节"), "{ask}");
-            assert!(ask.contains("目标: …"), "{ask}");
-            // 模板就地成立：不得残留依赖早前注入的指称。
+            // R-369-02：模板/段门槛/示例行不再进 prompt。
+            assert!(!ask.contains("摘要块格式"), "{ask}");
+            assert!(!ask.contains("至少命中 2 个小节"), "{ask}");
+            assert!(!ask.contains("目标: …"), "{ask}");
+            // 自嵌不变量（0bn R2）：不得残留依赖早前注入的指称。
             assert!(!ask.contains("（见上）"), "{ask}");
         }
     }
@@ -1091,6 +1169,43 @@ mod tests {
             parse_block_selection("[SEMANTIC_SUMMARY]\n目标: x\n"),
             BlockSelection::NotSpecified
         );
+    }
+
+    #[test]
+    fn summary_only_distinguishes_control_turn_from_mixed_final_answer() {
+        let block = "[SEMANTIC_SUMMARY]\n目标: x\n已完成: y\n[/SEMANTIC_SUMMARY]";
+        assert!(is_summary_only(block));
+        assert!(is_summary_only(&format!("\n  {block}\n  ")));
+        assert!(
+            !is_summary_only(&format!("收尾说明。\n{block}")),
+            "摘要块前的实质文本 ⇒ 终答，不是控制轮"
+        );
+        assert!(
+            !is_summary_only(&format!("{block}\n任务完成。")),
+            "摘要块后的实质文本 ⇒ 终答，不是控制轮"
+        );
+        assert!(
+            !is_summary_only("[SEMANTIC_SUMMARY]\n目标: 只有一个段\n[/SEMANTIC_SUMMARY]"),
+            "少于两个段标签本来就不是可识别摘要"
+        );
+    }
+
+    #[test]
+    fn tool_summary_accepts_free_text_without_section_template() {
+        let summary = normalize_tool_summary("正在改 state 工具；下一步跑 host 测试。")
+            .expect("free text must be accepted");
+        assert!(summary.starts_with(MODEL_SUMMARY_PREFIX));
+        assert!(summary.ends_with(MODEL_SUMMARY_END));
+        assert!(summary.contains("正在改 state 工具"));
+        // 已带标记也接受，且不重复包裹。
+        let wrapped = format!("{MODEL_SUMMARY_PREFIX}]\n压缩块: 1-2\n随记\n{MODEL_SUMMARY_END}");
+        let normalized = normalize_tool_summary(&wrapped).unwrap();
+        assert_eq!(normalized.matches(MODEL_SUMMARY_PREFIX).count(), 1);
+        assert!(normalized.contains("压缩块: 1-2"));
+        // 空白/超长拒绝。
+        assert!(normalize_tool_summary("  \n  ").is_err());
+        let too_long = "x".repeat(TOOL_SUMMARY_MAX_CHARS + 1);
+        assert!(normalize_tool_summary(&too_long).is_err());
     }
 
     /// 0bk S2 钉①（2026-09-24）：**带注解区间解析**——行内注解（中/英括号、

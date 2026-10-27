@@ -43,6 +43,7 @@ pub(crate) fn str_of(value: Option<&Value>) -> Option<&str> {
 pub(crate) mod toolsets {
     use crate::tool_names::{
         BLACKBOARD_WRITE_TOOL_NAME, CONTEXT_COMPRESS_TOOL_NAME, CONTEXT_MANAGE_TOOL_NAME,
+        STATE_READ_TOOL_NAME, STATE_WRITE_TOOL_NAME,
     };
     pub const WORK_TOOLS: &[&str] = &[
         "read_file",
@@ -71,6 +72,11 @@ pub(crate) mod toolsets {
         // 清零）——三处同批先例照抄（探针/判官/Python 镜像；判别规则零
         // 改动，表格数据同步）。
         CONTEXT_MANAGE_TOOL_NAME,
+        // 0ds M1-S1（2026-10-27）：`state_read` / `state_write` 入工作工具表
+        // （黑板 state 分区窄读/写面；纯内存、ReadOnly 类）——三处同批
+        // 先例照抄（探针/判官/Python 镜像；表格数据同步、判别规则零改动）。
+        STATE_READ_TOOL_NAME,
+        STATE_WRITE_TOOL_NAME,
         "todo_write",
         "update_goal",
         "enter_plan_mode",

@@ -738,6 +738,13 @@ pub struct Blackboard {
     /// 会话快照零迁移）。
     #[serde(default)]
     pub findings: Vec<NoteEntry>,
+    /// 0ds M1-S1（2026-10-27，366 章程 / 架构 §4.1）：会话级「当前事实」
+    /// 薄层——`state_read/state_write` 与 `blackboard_read/write
+    /// section=state` 的落点。结构见 [`crate::state::StateSection`]；
+    /// serde(default)＝旧板/旧会话快照零迁移；不进 epoch 快照（跨 plan
+    /// 轮换保留，语义为会话事实而非 epoch 笔记）。
+    #[serde(default)]
+    pub state: crate::state::StateSection,
     /// PULL 自描述分区版本计数（2026-08-31，P2-11 第 1 项）——每个分区
     /// 可见内容变化计 1 次，供 `blackboard_read` 增量头读取；仅内存、
     /// 不进任何序列化面（`#[serde(skip)]`，epoch 快照/会话存档不携带）。
@@ -754,6 +761,8 @@ pub struct PartitionRevisions {
     pub notes: u64,
     /// 0cu（2026-10-07）：`findings` 分区版本计数（与 notes 同一 bump 落点）。
     pub findings: u64,
+    /// 0ds M1-S1（2026-10-27）：`state` 分区版本计数（写入/清空/会话恢复）。
+    pub state: u64,
     pub exec: u64,
     pub edits: u64,
     pub tool_actions: u64,
@@ -906,6 +915,61 @@ impl Blackboard {
         render_note_entries(&self.findings)
     }
 
+    /// 0ds M1-S1：`blackboard_read section=state` / `state_read` 渲染单源。
+    pub fn render_state_section(&self) -> String {
+        self.state.render()
+    }
+
+    /// 0ds M1-S1：合并写入 state（校验/预算失败不改变原状态）；成功 bump
+    /// `state` 分区版本计数。`updated` 由调用方按既有 (round, domain, ts)
+    /// 盖章纪律传入。
+    pub fn write_state(
+        &mut self,
+        update: &crate::state::StateUpdate,
+        updated: String,
+    ) -> Result<(), crate::state::StateError> {
+        self.state.apply(update, updated)?;
+        self.revisions.state = self.revisions.state.saturating_add(1);
+        Ok(())
+    }
+
+    /// 0ds M1-S1：`blackboard_write section=state` 文档形态（`key: value`
+    /// 行）解析后写入；与 `state_write` 共用同一校验/预算/版本计数单源。
+    pub fn write_state_document(
+        &mut self,
+        document: &str,
+        updated: String,
+    ) -> Result<(), crate::state::StateError> {
+        let update = crate::state::StateSection::parse_document(document)?;
+        self.write_state(&update, updated)
+    }
+
+    /// 0ds M1-S1：`blackboard_write section=state op=replace_all` 的整节
+    /// 替换语义——以空 state 为基底应用本次字段（未提供字段归 none），
+    /// 预算/校验失败不改变原状态；成功 bump 恰 1。
+    pub fn replace_state(
+        &mut self,
+        update: &crate::state::StateUpdate,
+        updated: String,
+    ) -> Result<(), crate::state::StateError> {
+        let mut next = crate::state::StateSection::default();
+        next.apply(update, updated)?;
+        self.state = next;
+        self.revisions.state = self.revisions.state.saturating_add(1);
+        Ok(())
+    }
+
+    /// 0ds M1-S1：清空 state（`blackboard_write op=clear section=state`）。
+    /// 返回是否原本非空；版本计数在真正变化时 bump 恰 1。
+    pub fn clear_state(&mut self) -> bool {
+        if self.state.is_empty() {
+            return false;
+        }
+        self.state.clear();
+        self.revisions.state = self.revisions.state.saturating_add(1);
+        true
+    }
+
     /// 0ae D0：`blackboard_read section=plan` 的模型笔记尾段（plan 视图
     /// 主体由既有 render_section 渲染，本段追加其后）。
     pub fn render_plan_model_notes_tail(&self) -> Option<String> {
@@ -965,6 +1029,7 @@ impl Blackboard {
             plan: 1,
             notes: 1,
             findings: 1,
+            state: 1,
             exec: 1,
             edits: 1,
             tool_actions: 1,
@@ -1011,6 +1076,7 @@ impl Blackboard {
             ("plan", self.revisions.plan),
             ("notes", self.revisions.notes),
             ("findings", self.revisions.findings),
+            ("state", self.revisions.state),
             ("exec", self.revisions.exec),
             ("edits", self.revisions.edits),
             ("tool_actions", self.revisions.tool_actions),
@@ -1337,6 +1403,48 @@ mod tests {
         let r = bb.read();
         assert_eq!(r.gate_log.gate_decisions.len(), 1);
         assert_eq!(r.gate_log.orientation_checks.len(), 1);
+    }
+
+    /// R-M1S1-02（2026-10-27，370 §8.2 步 5）：`replace_state` 失败原子性
+    /// ——预算超限拒绝时原 state 与版本计数都不得变。replace 以空 state
+    /// 为基底装配（`next` 局部量），失败即整体弃置，绝不半提交。
+    #[test]
+    fn replace_state_failure_is_atomic() {
+        let bb = SharedBlackboard::new();
+        {
+            let mut w = bb.write();
+            w.write_state(
+                &crate::state::StateUpdate {
+                    goal: Some("旧状态".into()),
+                    ..Default::default()
+                },
+                "r1@normal t".into(),
+            )
+            .unwrap();
+        }
+        let (before_state, before_rev) = {
+            let r = bb.read();
+            (r.state.clone(), r.revisions.state)
+        };
+        {
+            let mut w = bb.write();
+            let err = w
+                .replace_state(
+                    &crate::state::StateUpdate {
+                        now: Some("长".repeat(1_000)),
+                        ..Default::default()
+                    },
+                    "r2@normal t".into(),
+                )
+                .unwrap_err();
+            assert!(matches!(
+                err,
+                crate::state::StateError::BudgetExceeded { .. }
+            ));
+        }
+        let r = bb.read();
+        assert_eq!(r.state, before_state, "replace 失败必须保持原 state 不变");
+        assert_eq!(r.revisions.state, before_rev, "失败不得 bump 版本计数");
     }
 
     #[test]
@@ -4505,14 +4613,55 @@ mod tests {
         let rev = restored.partition_revisions();
         for (name, value) in rev {
             match name {
-                "plan" | "notes" | "findings" | "exec" | "edits" | "tool_actions" | "actions"
-                | "internal_ret" | "external_ret" | "entities" => {
+                "plan" | "notes" | "findings" | "state" | "exec" | "edits" | "tool_actions"
+                | "actions" | "internal_ret" | "external_ret" | "entities" => {
                     assert_eq!(value, 1, "{name} shows one restore change")
                 }
                 "deps" => assert_eq!(value, 0, "deps stays silent (empty graph until touched)"),
                 other => panic!("unexpected partition {other}"),
             }
         }
+    }
+
+    /// 0ds M1-S1（2026-10-27）：state 分区写入/替换/清空/会话快照回环
+    /// ——纯黑板 API 层（工具级回环另测）。跨压缩保留的机械前提是
+    /// conversation_snapshot 克隆 state 且 restore 后版本计数归 1。
+    #[test]
+    fn state_partition_write_replace_clear_and_snapshot_roundtrip() {
+        let mut bb = Blackboard::new();
+        bb.write_state_document(
+            "state v1\ngoal: 落地 M1-S1\nnow: 写 state 工具\nopen: A；B\nconstraints: 不提交",
+            "r1@normal 2026-10-27T20:00:00Z".to_string(),
+        )
+        .unwrap();
+        assert_eq!(bb.state.goal.as_deref(), Some("落地 M1-S1"));
+        assert_eq!(bb.state.open, vec!["A", "B"]);
+        assert_eq!(bb.revisions.state, 1);
+        assert!(bb.state.estimated_tokens() <= crate::state::STATE_MAX_TOKENS);
+
+        let snap = bb.conversation_snapshot();
+        let mut restored = Blackboard::new();
+        restored.restore_conversation_snapshot(snap);
+        assert_eq!(restored.state.goal.as_deref(), Some("落地 M1-S1"));
+        assert_eq!(restored.state.open, vec!["A", "B"]);
+        assert_eq!(restored.revisions.state, 1, "restore = one change");
+
+        // replace_all：未提供字段归 none（整节替换，非合并）。
+        restored
+            .replace_state(
+                &crate::state::StateUpdate {
+                    next: Some("下一步".to_string()),
+                    ..Default::default()
+                },
+                "r2@normal 2026-10-27T20:05:00Z".to_string(),
+            )
+            .unwrap();
+        assert!(restored.state.goal.is_none());
+        assert_eq!(restored.state.next.as_deref(), Some("下一步"));
+
+        assert!(restored.clear_state());
+        assert!(restored.state.is_empty());
+        assert!(!restored.clear_state(), "second clear is a no-op");
     }
 
     /// TER T1.6 (2026-09-04): `blackboard_read section=processes` 经真实
@@ -4597,6 +4746,114 @@ mod tests {
         assert!(
             sections.iter().any(|v| v.as_str() == Some("processes")),
             "processes must be declared in the section enum: {sections:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0ds M1-S1（2026-10-27）：`state_write` → `state_read` 真实工具链
+    /// 回环——窄 schema 写入、读面回读、journal `state_write` 事件留痕，
+    /// 且两工具在请求面无条件声明。
+    #[tokio::test]
+    async fn state_write_then_state_read_roundtrip_through_tool_chain() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "state_write".to_string(),
+                arguments: serde_json::json!({
+                    "goal": "落地 0ds M1-S1",
+                    "now": "跑工具回环",
+                    "next": "补批档",
+                    "open": ["journal 事件", "预算边界"],
+                    "constraints": ["不提交"],
+                }),
+                call_id: "call-s1".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "state_read".to_string(),
+                arguments: serde_json::json!({}),
+                call_id: "call-s2".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-STATE".to_string(),
+            1,
+            "构建".to_string(),
+            vec!["侦查".to_string()],
+        );
+        controller
+            .run_turn(
+                &host,
+                "写读 state",
+                "RUN-STATE1",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-s2"))
+            })
+            .expect("round carrying state_read reply");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-s2"))
+            .expect("state_read tool result message");
+        assert!(reply.content.contains("goal: 落地 0ds M1-S1"), "{reply:?}");
+        assert!(reply.content.contains("next: 补批档"), "{reply:?}");
+        assert!(
+            reply.content.contains("open: journal 事件; 预算边界"),
+            "{reply:?}"
+        );
+        assert!(reply.content.contains("updated: r"), "{reply:?}");
+        for name in ["state_read", "state_write"] {
+            assert!(
+                round.tools.iter().any(|t| t.name == name),
+                "{name} must be declared on the request face"
+            );
+        }
+
+        let events = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+        let state_events: Vec<serde_json::Value> = events
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|event| event["event_type"] == "state_write")
+            .collect();
+        assert_eq!(state_events.len(), 1, "one accepted state_write event");
+        assert_eq!(state_events[0]["payload"]["outcome"], "accepted");
+        assert_eq!(
+            state_events[0]["payload"]["fields"],
+            serde_json::json!(["goal", "now", "next", "open", "constraints"])
+        );
+        assert!(
+            state_events[0]["payload"]["estimated_tokens"]
+                .as_u64()
+                .unwrap()
+                <= crate::state::STATE_MAX_TOKENS
         );
 
         let _ = std::fs::remove_dir_all(&dir);

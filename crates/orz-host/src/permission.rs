@@ -31,6 +31,7 @@ use agent_client_protocol as acp;
 use agent_client_protocol::{ToolCallId, ToolCallUpdate, ToolCallUpdateFields};
 use orz_assurance::tool_names::{
     BLACKBOARD_WRITE_TOOL_NAME, CONTEXT_COMPRESS_TOOL_NAME, CONTEXT_MANAGE_TOOL_NAME,
+    STATE_READ_TOOL_NAME, STATE_WRITE_TOOL_NAME,
 };
 use orz_loop::host::{PermitDecision, PermitError, PermitSource, RiskClass};
 use orz_workspace::permission::{
@@ -689,6 +690,12 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
         // fold），桥臂漏登，宿主护栏覆盖断言（本文件测试）按设计拦下
         // （246 批 §5.4）。
         || tool == CONTEXT_MANAGE_TOOL_NAME
+        // 0ds M1-S1（2026-10-27，366 章程 / 架构 §4.1/§11）：`state_read` /
+        // `state_write` 只读写内存黑板的 state 分区——无文件/网络/外部
+        // 副作用，与 blackboard_read/write 同族；两表同批（控制器
+        // READ_ONLY_EXEMPT_TOOLS 与本桥 arm 必须同时登记）。
+        || tool == STATE_READ_TOOL_NAME
+        || tool == STATE_WRITE_TOOL_NAME
         // 0dm（2026-10-21）：`self_check` 只返回三问模板，无文件/网络/外部
         // 副作用——与 blackboard_read 同族，ReadOnly 自动放行。
         || tool == "self_check"
@@ -1155,6 +1162,9 @@ mod tests {
                 CONTEXT_MANAGE_TOOL_NAME,
                 serde_json::json!({"mode": "clear", "handover": "x"}),
             ),
+            // 0ds M1-S1：state 窄读/写面代表调用。
+            (STATE_READ_TOOL_NAME, serde_json::json!({})),
+            (STATE_WRITE_TOOL_NAME, serde_json::json!({"next": "下一步"})),
             // 0dm：自查工具无参数。
             ("self_check", serde_json::json!({})),
             // 358：spawn_scout 只读侦察（loop 合成；代表调用取任务契约）。
@@ -1520,6 +1530,9 @@ mod tests {
                 // 0ap：纯内存压缩状态操作——ReadOnly 类全策略自动放行
                 //（权限桥放行链钉，S1 判据④）。
                 (CONTEXT_COMPRESS_TOOL_NAME, serde_json::json!({})),
+                // 0ds M1-S1：state 窄读/写面同族（内存黑板）。
+                (STATE_READ_TOOL_NAME, serde_json::json!({})),
+                (STATE_WRITE_TOOL_NAME, serde_json::json!({"next": "下一步"})),
             ] {
                 let decision = bridge
                     .request(RiskClass::ReadOnly, tool, &args)

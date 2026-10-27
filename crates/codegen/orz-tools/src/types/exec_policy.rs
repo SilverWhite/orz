@@ -953,33 +953,34 @@ pub fn review_command_with(
 /// ⑧ encoded-exec 管道臂：原串词法扫描——`|` 后（跳过空白）的词落 shell
 /// 解释器闭集即命中，返回该词。`&&`/`;` 段首解释器不命中（合法脚本装配
 /// 形态，warn 只收管道直投执行面）。
+///
+/// 370 断连修复（2026-10-27）：本函数此前按 `as_bytes()` 偏移游走并以同
+/// 偏移切片原串——多字节 UTF-8 词内含 0xA0/0x85 字节（`byte as char` 为
+/// U+00A0/U+0085，`is_whitespace()` 为真）时扫描停在字符中间，切片
+/// panic；release `panic = "abort"` → 0xC0000409 进程死亡，即 370 批
+/// §8.1 三次断连的根因（12 次同类崩溃同源）。现按 `char_indices()` 推
+/// 进：空白/断词判定用真实 `char`（「格」等非空白词照常收满整词，判定
+/// 语义不变），切片与前进偏移恒落字符边界。
 fn pipe_interpreter_hit(command: &str) -> Option<String> {
     const INTERPRETERS: [&str; 7] = ["sh", "bash", "dash", "zsh", "ksh", "powershell", "pwsh"];
-    let bytes = command.as_bytes();
-    let mut i = 0;
-    while let Some(pos) = command[i..].find('|') {
-        let mut j = i + pos + 1;
-        while j < bytes.len() && (bytes[j] as char).is_whitespace() {
-            j += 1;
+    let mut search_from = 0;
+    loop {
+        let pos = command[search_from..].find('|')?;
+        let after_pipe = &command[search_from + pos + '|'.len_utf8()..];
+        let word = after_pipe
+            .trim_start()
+            .chars()
+            .take_while(|c| !(c.is_whitespace() || matches!(c, '|' | ';' | '"' | '\'')))
+            .collect::<String>()
+            .trim()
+            .to_ascii_lowercase();
+        let word = word.strip_suffix(".exe").unwrap_or(&word).to_string();
+        if INTERPRETERS.contains(&word.as_str()) {
+            return Some(word);
         }
-        let start = j;
-        while j < bytes.len() {
-            let c = bytes[j] as char;
-            if c.is_whitespace() || c == '|' || c == ';' || c == '"' || c == '\'' {
-                break;
-            }
-            j += 1;
-        }
-        if j > start {
-            let word = command[start..j].trim().to_ascii_lowercase();
-            let word = word.strip_suffix(".exe").unwrap_or(&word).to_string();
-            if INTERPRETERS.contains(&word.as_str()) {
-                return Some(word);
-            }
-        }
-        i = j.max(i + pos + 1);
+        // 词内无 `|`（断词条件），自管道后重扫即可命中下一个管道臂。
+        search_from += pos + '|'.len_utf8();
     }
-    None
 }
 
 // ─── 318 审查 P0-2：规则 1 目标面扩展（catastrophic-recursive-delete）────
@@ -2817,6 +2818,45 @@ mod tests {
             "python -m pytest -q",
             "git status && git diff --stat",
             "echo pipe char in prose: a|b is not a pipe arm",
+        ] {
+            let r = review_command_with(
+                Path::new("/tmp/ws"),
+                cmd,
+                &write_control::HostStateTargets::default(),
+                &[],
+            );
+            assert_eq!(r, CommandReview::Allow, "`{cmd}` must stay allow: {r:?}");
+        }
+    }
+
+    /// 370 断连修复回归（2026-10-27）：管道臂字节扫描曾在多字节 UTF-8 词
+    /// 内 0xA0/0x85 字节处停在字符中间并以非边界偏移切片 → panic（release
+    /// = 0xC0000409 进程死亡）。修后须字符安全：真实崩溃命令与合成边界
+    /// 用例一律不 panic，且判定语义不变（中文词非解释器 → allow）。
+    #[test]
+    fn pipe_interpreter_hit_is_char_boundary_safe() {
+        // 合成边界钉：格＝E6 A0 BC，0xA0 曾被 `as char` 误判为空白。
+        assert_eq!(pipe_interpreter_hit("cat x | 格式"), None);
+        assert_eq!(pipe_interpreter_hit("cat x |格式.exe"), None);
+        // 命中面不回退：中文 pattern 之后真实管道投递解释器仍须命中。
+        assert_eq!(
+            pipe_interpreter_hit("Select-String -Pattern '中|文' | bash").as_deref(),
+            Some("bash")
+        );
+        assert_eq!(
+            pipe_interpreter_hit("echo a | pwsh"),
+            Some("pwsh".to_string())
+        );
+    }
+
+    /// 370 断连修复回归（2026-10-27）：RUN-7ef4c983-11/12 journal 里的
+    /// 崩溃原命令全原文——修前在审查臂即 panic（tool_started 后 <1s 进程
+    /// 死亡，无 tool_completed）；修后须完整走完审查且维持 allow。
+    #[test]
+    fn encoded_exec_survives_real_crash_commands_with_chinese_patterns() {
+        for cmd in [
+            r"cd D:\CLI\orz; Select-String -Path crates\orz-loop\src\context_scale.rs -Pattern 'summary_block_skeleton|语义摘要块|摘要块格式' | Select-Object LineNumber,Line; git status --short | Select-Object -First 25",
+            r"cd D:\CLI\orz; Select-String -Path crates\orz-loop\src\context_scale.rs -Pattern 'window_remaining_notice|至少命中|MODEL_SUMMARY_PREFIX|摘要块格式|语义摘要块' | Select-Object LineNumber,Line",
         ] {
             let r = review_command_with(
                 Path::new("/tmp/ws"),
