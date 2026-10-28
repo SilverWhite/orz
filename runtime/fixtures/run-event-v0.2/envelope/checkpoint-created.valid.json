@@ -1,0 +1,20 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-CHECKPOINT-CREATED",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-10-28T00:00:00Z",
+  "event_type": "checkpoint_created",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "checkpoint_id": "CKPT-CONF-0001",
+    "generation": 1,
+    "state_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "path": ".gsa/checkpoints/CKPT-CONF-0001.json"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

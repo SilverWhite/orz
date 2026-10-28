@@ -3192,6 +3192,128 @@ PAYLOAD_BAD_V02["tool_heartbeat"] = {
     "elapsed_ms": -1,
 }
 
+# 0ds M1-S1（2026-10-27）：state 持久薄层写事件；M1-S4（2026-10-28）
+# 补 generator 表，避免下一次 regeneration 把已提交 fixture 当 stale 删掉。
+V02_PAYLOAD_EVENTS += [
+    "state_write",
+    "context_pulled",
+    "checkpoint_created",
+    "capability_use",
+]
+V02_EVENT_TYPES += [
+    "state_write",
+    "context_pulled",
+    "checkpoint_created",
+    "capability_use",
+]
+SLUGS_V02.update({
+    "state_write": "state-write",
+    "context_pulled": "context-pulled",
+    "checkpoint_created": "checkpoint-created",
+    "capability_use": "capability-use",
+})
+V02_ENVELOPE_IDENTITY_OVERRIDES.update({
+    # Committed envelopes carry the M1 batch identities/timestamps; pin them
+    # so a regeneration stays byte-identical.
+    "state_write": (
+        "RUN-CONF-STATE-WRITE",
+        "EVT-CONF-000",
+        "2026-10-27T00:00:00Z",
+    ),
+    "context_pulled": (
+        "RUN-CONF-CONTEXT-PULLED",
+        "EVT-CONF-000",
+        "2026-10-28T00:00:00Z",
+    ),
+    "checkpoint_created": (
+        "RUN-CONF-CHECKPOINT-CREATED",
+        "EVT-CONF-000",
+        "2026-10-28T00:00:00Z",
+    ),
+    "capability_use": (
+        "RUN-CONF-CAPABILITY-USE",
+        "EVT-CONF-000",
+        "2026-10-28T00:00:00Z",
+    ),
+})
+
+PAYLOAD_GOOD_V02["state_write"] = {
+    "outcome": "accepted",
+    "fields": ["goal", "next"],
+    "goal": "落地 M1-S1",
+    "state": "state v1\ngoal: 落地 M1-S1\nnow: none\nnext: 全量回归\nopen: none\nconstraints: none\nupdated: r3@normal 2026-10-27T20:00:00Z",
+    "content_chars": 120,
+    "estimated_tokens": 60,
+    "updated": "r3@normal 2026-10-27T20:00:00Z",
+}
+
+PAYLOAD_BAD_V02["state_write"] = {
+    # violates exactly one constraint: estimated_tokens must be ≤ 200.
+    "outcome": "accepted",
+    "fields": ["goal"],
+    "state": "goal: x",
+    "content_chars": 900,
+    "estimated_tokens": 201,
+}
+
+PAYLOAD_GOOD_V02["context_pulled"] = {
+    "mode": "map",
+    "read_only": True,
+    "token_estimate": 210,
+    "blocks": 3,
+    "total_blocks": 3,
+    "omitted_blocks": 0,
+    "recent_rounds": 0,
+    "total_recent_rounds": 0,
+    "omitted_rounds": 0,
+    "output_sha256": ZERO_HASH,
+    "output_chars": 420,
+}
+
+PAYLOAD_BAD_V02["context_pulled"] = {
+    # violates exactly one constraint: token_estimate must be ≤ 1024.
+    "mode": "map",
+    "read_only": True,
+    "token_estimate": 1025,
+    "blocks": 3,
+    "total_blocks": 3,
+    "omitted_blocks": 0,
+    "recent_rounds": 0,
+    "total_recent_rounds": 0,
+    "omitted_rounds": 0,
+    "output_sha256": ZERO_HASH,
+    "output_chars": 420,
+}
+
+PAYLOAD_GOOD_V02["checkpoint_created"] = {
+    "checkpoint_id": "CKPT-CONF-0001",
+    "generation": 1,
+    "state_sha256": ZERO_HASH,
+    "path": ".gsa/checkpoints/CKPT-CONF-0001.json",
+}
+
+PAYLOAD_BAD_V02["checkpoint_created"] = {
+    # violates exactly one constraint: generation must be ≥ 0.
+    "checkpoint_id": "CKPT-CONF-0001",
+    "generation": -1,
+    "state_sha256": ZERO_HASH,
+    "path": ".gsa/checkpoints/CKPT-CONF-0001.json",
+}
+
+PAYLOAD_GOOD_V02["capability_use"] = {
+    "tool": "read_file",
+    "rights": ["read"],
+    "decision": "granted",
+    "preopen_root": "/tmp/session-root",
+}
+
+PAYLOAD_BAD_V02["capability_use"] = {
+    # violates exactly one constraint: denied decisions require a reason.
+    "tool": "not_a_real_tool",
+    "rights": ["write"],
+    "decision": "denied",
+}
+
 
 def _envelope(event_type: str, payload: dict, sequence: int, previous: str | None) -> dict:
     return {

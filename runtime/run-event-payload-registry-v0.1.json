@@ -162,6 +162,18 @@
         "schema": "runtime/context-compressed-event-payload-v0.2.schema.json",
         "slug": "context-compressed"
       },
+      "context_pulled": {
+        "schema": "runtime/context-pulled-event-payload-v0.2.schema.json",
+        "slug": "context-pulled"
+      },
+      "checkpoint_created": {
+        "schema": "runtime/checkpoint-created-event-payload-v0.2.schema.json",
+        "slug": "checkpoint-created"
+      },
+      "capability_use": {
+        "schema": "runtime/capability-use-event-payload-v0.2.schema.json",
+        "slug": "capability-use"
+      },
       "context_recovery_truncated": {
         "schema": "runtime/context-recovery-truncated-event-payload-v0.2.schema.json",
         "slug": "context-recovery-truncated"

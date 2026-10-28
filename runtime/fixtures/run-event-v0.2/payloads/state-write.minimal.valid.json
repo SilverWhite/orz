@@ -1,6 +1,9 @@
 {
   "outcome": "accepted",
-  "fields": ["goal", "next"],
+  "fields": [
+    "goal",
+    "next"
+  ],
   "goal": "落地 M1-S1",
   "state": "state v1\ngoal: 落地 M1-S1\nnow: none\nnext: 全量回归\nopen: none\nconstraints: none\nupdated: r3@normal 2026-10-27T20:00:00Z",
   "content_chars": 120,

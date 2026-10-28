@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/capability-use-event-payload-v0.2.schema.json",
+  "title": "Capability-use event payload v0.2 (0ds M1 v1 thin registry)",
+  "description": "0ds M1 v1 (2026-10-28, 366 charter §1 item 4): one mechanical capability-registry decision for a tool call. The row contains the tool name, mechanical rights label, grant/deny decision, optional stable reason and optional session preopen root. It never contains raw tool arguments, file contents, tokens or other secret material; permission policy remains the separate policy gate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tool", "rights", "decision"],
+  "properties": {
+    "tool": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Tool name as declared to the model."
+    },
+    "rights": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["read", "write", "execute", "network"]
+      },
+      "description": "Mechanical risk-class label; not a permission-policy grant."
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["granted", "denied"]
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["capability_not_declared"],
+      "description": "Stable audit key; no free-form error text."
+    },
+    "preopen_root": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "description": "Session preopen root label; omitted when the registry has no session root."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "decision": { "const": "granted" } },
+        "required": ["decision"]
+      },
+      "then": {
+        "not": { "required": ["reason"] }
+      }
+    },
+    {
+      "if": {
+        "properties": { "decision": { "const": "denied" } },
+        "required": ["decision"]
+      },
+      "then": {
+        "required": ["reason"]
+      }
+    }
+  ]
+}

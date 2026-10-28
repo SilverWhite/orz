@@ -1,0 +1,13 @@
+{
+  "mode": "map",
+  "read_only": true,
+  "token_estimate": 1025,
+  "blocks": 3,
+  "total_blocks": 3,
+  "omitted_blocks": 0,
+  "recent_rounds": 0,
+  "total_recent_rounds": 0,
+  "omitted_rounds": 0,
+  "output_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "output_chars": 420
+}

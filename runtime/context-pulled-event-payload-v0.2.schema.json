@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/context-pulled-event-payload-v0.2.schema.json",
+  "title": "Context-pulled event payload v0.2 (0ds M1-S4 read-only context pull)",
+  "description": "0ds M1-S4 (2026-10-28, 366 charter / architecture §13-5; 0ds M1 v1 audit fix): a read-only context pull served by `context_manage(mode=map|recenter)`. The payload is a mechanical audit row — mode, provider-token estimate, delivered/candidate block or round counts and the rendered-output digest — not the rendered text itself; the text stays in the tool result and is never injected as resident context. `blocks` / `recent_rounds` are what the model actually received; `total_*` is the pre-truncation candidate count and `omitted_*` is total-delivered. `mode=map` reads the compact block table (recent_rounds=0, total_recent_rounds=0); `mode=recenter` reads state + the last complete rounds (blocks=0, total_blocks=0).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "mode",
+    "read_only",
+    "token_estimate",
+    "blocks",
+    "total_blocks",
+    "omitted_blocks",
+    "recent_rounds",
+    "total_recent_rounds",
+    "omitted_rounds",
+    "output_sha256",
+    "output_chars"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["mode"],
+        "properties": { "mode": { "const": "map" } }
+      },
+      "then": {
+        "properties": {
+          "recent_rounds": { "const": 0 },
+          "total_recent_rounds": { "const": 0 },
+          "omitted_rounds": { "const": 0 }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["mode"],
+        "properties": { "mode": { "const": "recenter" } }
+      },
+      "then": {
+        "properties": {
+          "blocks": { "const": 0 },
+          "total_blocks": { "const": 0 },
+          "omitted_blocks": { "const": 0 }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["map", "recenter"],
+      "description": "Read-only context view that was served."
+    },
+    "read_only": {
+      "type": "boolean",
+      "const": true,
+      "description": "Always true: this event records a pull, never a mutation."
+    },
+    "token_estimate": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1024,
+      "description": "Provider-tokenizer count of the rendered output (M1 contract: <=1K)."
+    },
+    "blocks": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of compact-map rows actually delivered to the model (0 for recenter)."
+    },
+    "total_blocks": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Pre-truncation candidate block count (0 for recenter)."
+    },
+    "omitted_blocks": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "total_blocks - blocks (0 for recenter)."
+    },
+    "recent_rounds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5,
+      "description": "Number of complete tool rounds actually delivered by recenter (0 for map)."
+    },
+    "total_recent_rounds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5,
+      "description": "Pre-truncation candidate round count (0 for map)."
+    },
+    "omitted_rounds": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "total_recent_rounds - recent_rounds (0 for map)."
+    },
+    "output_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the exact rendered output handed to the model."
+    },
+    "output_chars": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unicode scalar count of the rendered output."
+    }
+  }
+}

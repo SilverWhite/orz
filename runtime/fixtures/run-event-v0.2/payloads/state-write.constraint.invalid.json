@@ -1,6 +1,8 @@
 {
   "outcome": "accepted",
-  "fields": ["goal"],
+  "fields": [
+    "goal"
+  ],
   "state": "goal: x",
   "content_chars": 900,
   "estimated_tokens": 201

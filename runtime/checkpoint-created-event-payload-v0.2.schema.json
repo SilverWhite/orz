@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/checkpoint-created-event-payload-v0.2.schema.json",
+  "title": "Checkpoint-created event payload v0.2 (0ds M1-S4 schema registration)",
+  "description": "0ds M1 v1 (2026-10-28, 366 charter / architecture §13-5): a durable checkpoint was written on the state-write path. M1 produces an atomic state snapshot under <session>/.gsa/checkpoints/; the full M4 checkpoint/recovery service remains a later slice. The payload identifies the checkpoint by id, generation, state digest and path — never the state body or secrets.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "checkpoint_id",
+    "generation",
+    "state_sha256",
+    "path"
+  ],
+  "properties": {
+    "checkpoint_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable checkpoint identity."
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic checkpoint generation."
+    },
+    "state_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the checkpointed state document."
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Checkpoint archive path."
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "tool": "read_file",
+  "rights": [
+    "read"
+  ],
+  "decision": "granted",
+  "preopen_root": "/tmp/session-root"
+}
