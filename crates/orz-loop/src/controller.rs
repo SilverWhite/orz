@@ -1845,10 +1845,6 @@ impl AgentLoopController {
         self
     }
 
-    pub(crate) fn plan_enabled(&self) -> bool {
-        self.plan_enabled
-    }
-
     pub(crate) fn plan_gate_enabled(&self) -> bool {
         self.plan_gate_enabled
     }
@@ -4326,6 +4322,7 @@ impl AgentLoopController {
                              最近 N 个完整轮次在窗口内（0＝仅留当前轮）。",
                         },
                     },
+                    "additionalProperties": false,
                     "required": ["mode"],
                 }),
             });
@@ -5916,6 +5913,7 @@ mod tests {
                 // before its model_output.
                 EventType::FaceFingerprint,
                 EventType::ModelOutput,
+                EventType::CapabilityUse,
                 EventType::PermissionRequested,
                 EventType::PermissionDecision,
                 EventType::ToolStarted,

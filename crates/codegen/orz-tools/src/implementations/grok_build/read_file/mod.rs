@@ -784,9 +784,7 @@ pub(crate) async fn run_read_file(
     if let Some(range) = input.range.take() {
         let start = range.start.max(1);
         input.offset = Some(start);
-        input.limit = range
-            .end
-            .map(|end| (end - start + 1).max(0) as usize);
+        input.limit = range.end.map(|end| (end - start + 1).max(0) as usize);
     }
     let (cwd, display_cwd, fs, hints_enabled, skill_roots, session_volume);
     let session_volume_access;

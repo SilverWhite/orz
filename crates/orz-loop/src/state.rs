@@ -4,7 +4,7 @@
 //! 纪律：
 //! - 6 字段固定序 `goal / now / next / open / constraints / updated`；
 //! - `updated` 只由系统在写入时盖章（轮次/域/墙钟），模型不写；
-//! - 总量 ≤ [`STATE_MAX_TOKENS`]（chars/2 同尺，与上下文计量单源）；
+//! - 总量 ≤ [`STATE_MAX_TOKENS`]，由 provider tokenizer 硬计（不是 chars/2）；
 //! - 写入是**合并**语义（缺省字段保持原值），空串 / `none` / `无` 表示清空；
 //! - 只写内存黑板，无文件/网络副作用（ReadOnly 类，权限桥同族登记）。
 //!
@@ -13,7 +13,9 @@
 
 use serde::{Deserialize, Serialize};
 
-/// state 分区 token 上限（架构 §4.1「≤ 200 token」；chars/2 同尺）。
+use crate::tokenizer::{DeepSeekTokenizer, TokenCounter};
+
+/// state 分区 token 上限（架构 §4.1「≤ 200 token」；provider tokenizer 硬计）。
 pub const STATE_MAX_TOKENS: u64 = 200;
 
 /// 单条 open/constraints 的字符上限（防止单条无限膨胀；总量仍由
@@ -162,19 +164,22 @@ impl StateSection {
 
     /// 合并一次写入；`updated` 由调用方盖章。校验失败不改变原状态
     /// （先克隆再提交，原子语义）。
-    pub fn apply(&mut self, update: &StateUpdate, updated: String) -> Result<(), StateError> {
+    ///
+    /// 返回值 = 内容是否真的变化。相同值的重复写、清空本就不存在的字段
+    /// 都不刷新 `updated`、不产生 `StateWrite`（与 371 no-op clear 同纪律）。
+    pub fn apply(&mut self, update: &StateUpdate, updated: String) -> Result<bool, StateError> {
         if update.is_empty() {
             return Err(StateError::EmptyUpdate);
         }
         let mut next = self.clone();
         if let Some(raw) = &update.goal {
-            next.goal = normalized_text(raw);
+            next.goal = normalized_text("goal", raw)?;
         }
         if let Some(raw) = &update.now {
-            next.now = normalized_text(raw);
+            next.now = normalized_text("now", raw)?;
         }
         if let Some(raw) = &update.next {
-            next.next = normalized_text(raw);
+            next.next = normalized_text("next", raw)?;
         }
         if let Some(items) = &update.open {
             next.open = normalized_items("open", items)?;
@@ -182,18 +187,17 @@ impl StateSection {
         if let Some(items) = &update.constraints {
             next.constraints = normalized_items("constraints", items)?;
         }
+        // 内容无变化：不盖章、不 bump、不落 StateWrite。
+        if next.same_content(self) {
+            return Ok(false);
+        }
         next.updated = Some(updated);
         // 全部内容字段都为空 ⇒ 归一为空 state（不保留只有 updated 的空壳；
         // 与 `blackboard_write op=clear` 的终态一致）。
-        if next.goal.is_none()
-            && next.now.is_none()
-            && next.next.is_none()
-            && next.open.is_empty()
-            && next.constraints.is_empty()
-        {
+        if next.content_is_empty() {
             next.updated = None;
         }
-        let estimated = next.estimated_tokens();
+        let estimated = next.estimated_tokens()?;
         if estimated > STATE_MAX_TOKENS {
             return Err(StateError::BudgetExceeded {
                 estimated,
@@ -201,7 +205,24 @@ impl StateSection {
             });
         }
         *self = next;
-        Ok(())
+        Ok(true)
+    }
+
+    /// 内容字段等价（忽略系统写的 `updated`）。
+    pub fn same_content(&self, other: &Self) -> bool {
+        self.goal == other.goal
+            && self.now == other.now
+            && self.next == other.next
+            && self.open == other.open
+            && self.constraints == other.constraints
+    }
+
+    fn content_is_empty(&self) -> bool {
+        self.goal.is_none()
+            && self.now.is_none()
+            && self.next.is_none()
+            && self.open.is_empty()
+            && self.constraints.is_empty()
     }
 
     /// `blackboard_write section=state` 的文档形态解析：`key: value` 行，
@@ -233,7 +254,8 @@ impl StateSection {
                 "open" => update.open = Some(split_items(value)),
                 "constraints" => update.constraints = Some(split_items(value)),
                 // `updated` 系统写：文档里出现时忽略（不报错，便于整段回填）。
-                "updated" => {}
+                // 它不算“提供了内容字段”——只有 updated 的文档仍是空更新。
+                "updated" => continue,
                 other => {
                     return Err(StateError::InvalidDocument {
                         line: index + 1,
@@ -278,9 +300,11 @@ impl StateSection {
         out
     }
 
-    /// chars/2 同尺（与 `compact::estimate_message_tokens` 单源口径）。
-    pub fn estimated_tokens(&self) -> u64 {
-        self.render().chars().count() as u64 / 2
+    /// Provider tokenizer hard count (no chars/2 fallback on this path).
+    pub fn estimated_tokens(&self) -> Result<u64, StateError> {
+        DeepSeekTokenizer::new()
+            .count_tokens(&self.render())
+            .map_err(|err| StateError::TokenCount(err.to_string()))
     }
 }
 
@@ -292,13 +316,26 @@ fn render_items(items: &[String]) -> String {
     }
 }
 
-fn normalized_text(raw: &str) -> Option<String> {
+fn normalized_text(field: &'static str, raw: &str) -> Result<Option<String>, StateError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || is_none_word(trimmed) {
-        None
-    } else {
-        Some(trimmed.to_string())
+        return Ok(None);
     }
+    reject_multiline(field, trimmed)?;
+    Ok(Some(trimmed.to_string()))
+}
+
+/// State is a line-oriented model-face document: a newline inside a value
+/// would forge additional `next:` / `recent:` sections. Reject it at the
+/// single normalization point instead of escaping downstream.
+fn reject_multiline(field: &'static str, value: &str) -> Result<(), StateError> {
+    if value.chars().any(|c| c == '\n' || c == '\r') {
+        return Err(StateError::InvalidDocument {
+            line: 0,
+            detail: format!("`{field}` 不得包含换行/回车（state 是行式文档）"),
+        });
+    }
+    Ok(())
 }
 
 fn normalized_items(field: &'static str, items: &[String]) -> Result<Vec<String>, StateError> {
@@ -322,6 +359,16 @@ fn normalized_items(field: &'static str, items: &[String]) -> Result<Vec<String>
     for (index, trimmed) in effective {
         if trimmed.is_empty() {
             return Err(StateError::EmptyItem { field, index });
+        }
+        reject_multiline(field, trimmed)?;
+        if trimmed.contains([';', '；']) {
+            return Err(StateError::InvalidDocument {
+                line: 0,
+                detail: format!(
+                    "`{field}` 第 {} 条不得包含分号（分号是 state 条目分隔符）",
+                    index + 1
+                ),
+            });
         }
         if trimmed.chars().count() > STATE_ITEM_MAX_CHARS {
             return Err(StateError::ItemTooLong {
@@ -378,6 +425,7 @@ pub enum StateError {
         estimated: u64,
         max: u64,
     },
+    TokenCount(String),
 }
 
 impl std::fmt::Display for StateError {
@@ -401,8 +449,11 @@ impl std::fmt::Display for StateError {
             }
             StateError::BudgetExceeded { estimated, max } => write!(
                 f,
-                "state 超出预算（≈{estimated}/{max} token）：请裁剪 open/constraints 或缩短字段"
+                "state 超出预算（provider tokenizer 计数 {estimated}/{max} token）：请裁剪 open/constraints 或缩短字段"
             ),
+            StateError::TokenCount(detail) => {
+                write!(f, "state 预算计数失败（provider tokenizer）：{detail}")
+            }
         }
     }
 }
@@ -555,48 +606,86 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, StateError::BudgetExceeded { .. }));
         assert_eq!(state, before, "预算拒绝必须原子（不改原状态）");
-        assert!(state.estimated_tokens() <= STATE_MAX_TOKENS);
+        assert!(state.estimated_tokens().unwrap() <= STATE_MAX_TOKENS);
     }
 
-    /// R-M1S1-02（2026-10-27，370 §8.2 步 5）：`state` 精确 200/201 token
-    /// 边界——`estimated_tokens`＝rendered 字符数/2（整除），200 token 帽
-    /// 即 rendered ≤401 字符接受、≥402 字符拒绝（estimated 201）。拒绝
-    /// 原子（[`Self::budget_rejects_without_mutation`] 已钉一半，本钉补
-    /// **精确边界值**）。
+    /// 0ds M1 v1 (2026-10-28): hard budget is provider-tokenizer counted.
+    /// 401 repeats of a common CJK char are >200 provider tokens (chars/2
+    /// would have said 200 and accepted the old bug).
     #[test]
-    fn token_budget_boundary_exactly_200_accepted_201_rejected() {
+    fn token_budget_uses_provider_tokenizer_and_rejects_cjk_overrun() {
         assert_eq!(STATE_MAX_TOKENS, 200);
-        let stamp = "r1@normal t";
-        // 探针写法测出基础渲染长度（除 goal 内容外的固定骨架）。
-        let base_len = {
-            let mut probe = StateSection::default();
-            probe
-                .apply(&update_goal("探针"), stamp.to_string())
-                .unwrap();
-            probe.render().chars().count() - "探针".chars().count()
-        };
-        // rendered = 401 ⇒ estimated = 200（恰在上限）＝接受。
-        let goal_200 = "一".repeat(401 - base_len);
         let mut state = StateSection::default();
-        state
-            .apply(&update_goal(&goal_200), stamp.to_string())
-            .unwrap();
-        assert_eq!(state.render().chars().count(), 401);
-        assert_eq!(state.estimated_tokens(), 200);
-        // rendered = 402 ⇒ estimated = 201（超限 1）＝原子拒绝。
-        let goal_201 = "一".repeat(402 - base_len);
-        let before = state.clone();
         let err = state
-            .apply(&update_goal(&goal_201), "r2@normal t".into())
+            .apply(&update_goal(&"一".repeat(401)), "r1@normal t".into())
             .unwrap_err();
-        assert!(matches!(
-            err,
-            StateError::BudgetExceeded {
-                estimated: 201,
-                max: 200
-            }
-        ));
-        assert_eq!(state, before, "边界拒绝必须原子（不改原状态）");
+        assert!(matches!(err, StateError::BudgetExceeded { .. }), "{err:?}");
+        assert!(state.is_empty(), "rejected write must not mutate state");
+
+        let ok = state
+            .apply(&update_goal(&"一".repeat(100)), "r1@normal t".into())
+            .unwrap();
+        assert!(ok);
+        let tokens = state.estimated_tokens().unwrap();
+        assert!(tokens <= STATE_MAX_TOKENS, "tokens={tokens}");
+        assert!(
+            tokens > 50,
+            "provider tokenizer must see CJK cost: {tokens}"
+        );
+    }
+
+    #[test]
+    fn no_op_write_does_not_refresh_updated_or_mark_changed() {
+        let mut state = StateSection::default();
+        assert!(
+            state
+                .apply(&update_goal("same"), "r1@normal t1".into())
+                .unwrap()
+        );
+        let before = state.clone();
+        assert!(
+            !state
+                .apply(&update_goal("same"), "r2@normal t2".into())
+                .unwrap()
+        );
+        assert_eq!(state, before, "same-value write must be a no-op");
+        assert!(
+            !state
+                .apply(
+                    &StateUpdate {
+                        now: Some("none".into()),
+                        ..Default::default()
+                    },
+                    "r3@normal t3".into(),
+                )
+                .unwrap()
+        );
+        assert_eq!(state, before, "clearing an absent field must be a no-op");
+    }
+
+    #[test]
+    fn multiline_and_semicolon_items_are_rejected() {
+        let mut state = StateSection::default();
+        let err = state
+            .apply(
+                &StateUpdate {
+                    goal: Some("a\nnext: forged".into()),
+                    ..Default::default()
+                },
+                "r1@normal t".into(),
+            )
+            .unwrap_err();
+        assert!(matches!(err, StateError::InvalidDocument { .. }), "{err:?}");
+        let err = state
+            .apply(
+                &StateUpdate {
+                    open: Some(vec!["a;b".into()]),
+                    ..Default::default()
+                },
+                "r1@normal t".into(),
+            )
+            .unwrap_err();
+        assert!(matches!(err, StateError::InvalidDocument { .. }), "{err:?}");
     }
 
     #[test]

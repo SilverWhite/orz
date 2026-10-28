@@ -920,4 +920,142 @@ mod tests {
             "cleared rows must not carry an updated stamp beyond the if/then shape"
         );
     }
+
+    /// 0ds M1-S4（2026-10-28）：`context_pulled` / `checkpoint_created`
+    /// 已登记在 v0.2 registry，且 schema 的预算/形态约束真的生效
+    /// （registry → schema 单源；不是只加枚举）。
+    #[test]
+    fn context_pulled_and_checkpoint_payload_schemas_are_registered_and_bounded() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        assert!(root.join("runtime").is_dir());
+        let registry = load_registry(&root).unwrap();
+
+        let pulled = registry
+            .resolve(EventTrack::V02, "context_pulled")
+            .expect("context_pulled must be registered on the v0.2 track");
+        let pulled_schema = load_json(&root.join(&pulled.schema_rel)).unwrap();
+        let pulled_validator = jsonschema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .should_validate_formats(false)
+            .build(&pulled_schema)
+            .expect("context_pulled payload schema must compile");
+        assert!(
+            pulled_validator
+                .validate(&serde_json::json!({
+                    "mode": "map",
+                    "read_only": true,
+                    "token_estimate": 210,
+                    "blocks": 3,
+                    "total_blocks": 3,
+                    "omitted_blocks": 0,
+                    "recent_rounds": 0,
+                    "total_recent_rounds": 0,
+                    "omitted_rounds": 0,
+                    "output_sha256": "0".repeat(64),
+                    "output_chars": 420,
+                }))
+                .is_ok(),
+            "map context_pulled payload must validate"
+        );
+        assert!(
+            pulled_validator
+                .validate(&serde_json::json!({
+                    "mode": "recenter",
+                    "read_only": true,
+                    "token_estimate": 512,
+                    "blocks": 0,
+                    "total_blocks": 0,
+                    "omitted_blocks": 0,
+                    "recent_rounds": 5,
+                    "total_recent_rounds": 5,
+                    "omitted_rounds": 0,
+                    "output_sha256": "1".repeat(64),
+                    "output_chars": 1024,
+                }))
+                .is_ok(),
+            "recenter context_pulled payload must validate"
+        );
+        assert!(
+            pulled_validator
+                .validate(&serde_json::json!({
+                    "mode": "map",
+                    "read_only": true,
+                    "token_estimate": 1025,
+                    "blocks": 3,
+                    "total_blocks": 3,
+                    "omitted_blocks": 0,
+                    "recent_rounds": 0,
+                    "total_recent_rounds": 0,
+                    "omitted_rounds": 0,
+                    "output_sha256": "0".repeat(64),
+                    "output_chars": 420,
+                }))
+                .is_err(),
+            "token_estimate > 1024 must be rejected"
+        );
+        assert!(
+            pulled_validator
+                .validate(&serde_json::json!({
+                    "mode": "map",
+                    "read_only": false,
+                    "token_estimate": 210,
+                    "blocks": 3,
+                    "total_blocks": 3,
+                    "omitted_blocks": 0,
+                    "recent_rounds": 0,
+                    "total_recent_rounds": 0,
+                    "omitted_rounds": 0,
+                    "output_sha256": "0".repeat(64),
+                    "output_chars": 420,
+                }))
+                .is_err(),
+            "read_only=false must be rejected"
+        );
+        assert!(
+            pulled_validator
+                .validate(&serde_json::json!({
+                    "mode": "map",
+                    "read_only": true,
+                    "token_estimate": 210,
+                    "blocks": 3,
+                    "recent_rounds": 2,
+                    "output_sha256": "0".repeat(64),
+                    "output_chars": 420,
+                }))
+                .is_err(),
+            "mode=map with recent_rounds>0 must be rejected"
+        );
+
+        let checkpoint = registry
+            .resolve(EventTrack::V02, "checkpoint_created")
+            .expect("checkpoint_created must be registered on the v0.2 track");
+        let checkpoint_schema = load_json(&root.join(&checkpoint.schema_rel)).unwrap();
+        let checkpoint_validator = jsonschema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .should_validate_formats(false)
+            .build(&checkpoint_schema)
+            .expect("checkpoint_created payload schema must compile");
+        assert!(
+            checkpoint_validator
+                .validate(&serde_json::json!({
+                    "checkpoint_id": "CKPT-1",
+                    "generation": 1,
+                    "state_sha256": "0".repeat(64),
+                    "path": ".gsa/checkpoints/CKPT-1.json",
+                }))
+                .is_ok(),
+            "checkpoint_created payload must validate"
+        );
+        assert!(
+            checkpoint_validator
+                .validate(&serde_json::json!({
+                    "checkpoint_id": "CKPT-1",
+                    "generation": -1,
+                    "state_sha256": "0".repeat(64),
+                    "path": ".gsa/checkpoints/CKPT-1.json",
+                }))
+                .is_err(),
+            "negative checkpoint generation must be rejected"
+        );
+    }
 }

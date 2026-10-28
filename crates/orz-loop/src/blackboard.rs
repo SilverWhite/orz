@@ -927,10 +927,12 @@ impl Blackboard {
         &mut self,
         update: &crate::state::StateUpdate,
         updated: String,
-    ) -> Result<(), crate::state::StateError> {
-        self.state.apply(update, updated)?;
-        self.revisions.state = self.revisions.state.saturating_add(1);
-        Ok(())
+    ) -> Result<bool, crate::state::StateError> {
+        let changed = self.state.apply(update, updated)?;
+        if changed {
+            self.revisions.state = self.revisions.state.saturating_add(1);
+        }
+        Ok(changed)
     }
 
     /// 0ds M1-S1：`blackboard_write section=state` 文档形态（`key: value`
@@ -939,7 +941,7 @@ impl Blackboard {
         &mut self,
         document: &str,
         updated: String,
-    ) -> Result<(), crate::state::StateError> {
+    ) -> Result<bool, crate::state::StateError> {
         let update = crate::state::StateSection::parse_document(document)?;
         self.write_state(&update, updated)
     }
@@ -951,12 +953,15 @@ impl Blackboard {
         &mut self,
         update: &crate::state::StateUpdate,
         updated: String,
-    ) -> Result<(), crate::state::StateError> {
+    ) -> Result<bool, crate::state::StateError> {
         let mut next = crate::state::StateSection::default();
         next.apply(update, updated)?;
+        if next.same_content(&self.state) {
+            return Ok(false);
+        }
         self.state = next;
         self.revisions.state = self.revisions.state.saturating_add(1);
-        Ok(())
+        Ok(true)
     }
 
     /// 0ds M1-S1：清空 state（`blackboard_write op=clear section=state`）。
@@ -4637,7 +4642,10 @@ mod tests {
         assert_eq!(bb.state.goal.as_deref(), Some("落地 M1-S1"));
         assert_eq!(bb.state.open, vec!["A", "B"]);
         assert_eq!(bb.revisions.state, 1);
-        assert!(bb.state.estimated_tokens() <= crate::state::STATE_MAX_TOKENS);
+        assert!(
+            bb.state.estimated_tokens().unwrap() <= crate::state::STATE_MAX_TOKENS,
+            "provider tokenizer state budget"
+        );
 
         let snap = bb.conversation_snapshot();
         let mut restored = Blackboard::new();

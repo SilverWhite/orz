@@ -174,6 +174,19 @@ pub enum EventType {
     // A6 explicit context compaction (2026-08-08 — controller-written;
     // mirrors run-event schema)
     ContextCompressed,
+    // 0ds M1-S4 (2026-10-28, 366 charter / architecture §13-5): a read-only
+    // context pull (`context_manage(mode=map|recenter)`) was served. The
+    // payload carries the mode, token estimate and output digest only — the
+    // rendered text itself stays in the tool result, not in the journal.
+    ContextPulled,
+    // 0ds M1-S4 (2026-10-28, 366 charter / architecture §13-5): checkpoint
+    // event schema is registered for M4; no producer writes it until the
+    // orz-system checkpoint/recovery slice lands.
+    CheckpointCreated,
+    // 0ds M1 v1 (2026-10-28, 366 charter §1 item 4): thin capability
+    // registry decision row. Records tool/rights/decision only — never
+    // tool arguments or secret values.
+    CapabilityUse,
     // D2-2 (2026-08-14, ADR-0010 v1.10 — CONTEXT_COMPACTION_DESIGN §6):
     // a restored conversation was mechanically truncated before the first
     // request (recovery pre-check over the conservative window threshold;

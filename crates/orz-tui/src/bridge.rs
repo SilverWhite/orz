@@ -507,6 +507,11 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
         // 0ds M1-S1：state 写入是黑板簿记事实（无专用 TUI 卡片，
         // 降级 Unknown 与其余机械事实族同姿态）。
         | EventType::StateWrite
+        // 0ds M1-S4：只读上下文拉取与 checkpoint schema 登记都是机械
+        // 审计事实（无专用 TUI 卡片，同姿态）。
+        | EventType::ContextPulled
+        | EventType::CheckpointCreated
+        | EventType::CapabilityUse
         // 0bw③：写入管控命令审查事实——机器审计面（无专用 TUI 卡片，
         // 降级 Unknown 与其余宿主事实族同姿态）。
         | EventType::WriteControlReview

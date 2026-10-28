@@ -32,6 +32,10 @@ tracing = { workspace = true }
 # Unicode-word + CJK tokenization for the output-health guard's 3-gram
 # fallback (migrated from the retired runtime stagnation guard).
 regex = { workspace = true }
+# 0ds M1 v1 (2026-10-28): provider tokenizer for hard state/context budgets.
+# DeepSeek's HF tokenizer (vocab 129280) is embedded from
+# `assets/deepseek-v3-tokenizer.json`; no network at runtime.
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 
 [target.'cfg(windows)'.dependencies]
 # Credential Manager API-key read (credentials.rs, ADR-0006)

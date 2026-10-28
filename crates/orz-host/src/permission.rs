@@ -130,9 +130,9 @@ pub fn yolo_env_or_default() -> Result<bool, String> {
 
 /// 354c（0dr §4.6，2026-10-25）：审批模式一行事实的单一实现——
 /// `build_host` 装配期由 [`PermissionPolicy`]＋[`yolo_env_or_default`]
-/// 算好、经 `OrzHost::with_permission_mode_line` 注入；主车道每 run 拼
-/// 进系统提示（agent_loop §4.6 挂点）。只读事实、不参与判定（判定权威
-/// 仍是 PermissionBridge）；§7.5 预算＝每 run 至多 1 类注入的本类。
+/// 算好、经 `OrzHost::with_permission_mode_line` 保存；0ds M1 v1 起**不再**
+/// 拼进系统提示（resident 清理），只作为宿主/UI 的只读诊断事实。只读事实、
+/// 不参与判定（判定权威仍是 PermissionBridge）。
 pub fn permission_mode_line(policy: &PermissionPolicy) -> String {
     match policy {
         PermissionPolicy::ReadOnly => "[permission] mode=readonly source=policy".to_string(),

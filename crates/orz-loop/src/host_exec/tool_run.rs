@@ -41,6 +41,18 @@ fn readout_conversation<'a>(
     conversation.unwrap_or(messages)
 }
 
+/// 0ds M1 v1: `context_manage` is a control-plane tool. Unknown keys must
+/// fail closed instead of being silently ignored (a typo must not turn a
+/// read-only map/recenter call into a compression/clear action).
+fn unexpected_context_manage_arg(args: &Value, allowed: &[&str]) -> Option<String> {
+    args.as_object().and_then(|object| {
+        object
+            .keys()
+            .find(|key| !allowed.contains(&key.as_str()))
+            .cloned()
+    })
+}
+
 /// 354a T4b（0dr，2026-10-25，设计稿 §4.5①）：在途工具墙钟心跳的默认节
 /// 拍——20s（设计稿 §4.5「默认 20s」）；`ORZ_TOOL_HEARTBEAT_SECS` 可调，
 /// 0＝禁用（负值/非法值按默认走）。心跳只落 journal（`tool_heartbeat`，
@@ -341,6 +353,58 @@ impl AgentLoopController {
                 })),
             ));
         }
+        // 0ds M1 v1 (2026-10-28, 366 charter §1 item 4): thin capability
+        // registry. The decision is journaled before any permission/ticket
+        // gate; an undeclared tool is rejected here with no ToolStarted and
+        // no side effect. No arguments/secrets enter the payload.
+        let capability = crate::capability::CapabilityRegistry::for_session(host.session_cwd())
+            .evaluate(&tc.name);
+        writer
+            .record(EventType::CapabilityUse, capability.payload())
+            .await?;
+        if !capability.allowed {
+            let msg = format!(
+                "tool '{}' — capability registry 未声明（本次未执行、无副作用）",
+                tc.name
+            );
+            let mut completed = serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": 1,
+                "status": "error",
+                "error": "capability_denied",
+            });
+            stamp_direct(&mut completed);
+            writer.record(EventType::ToolCompleted, completed).await?;
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+            self.feed_lif_deny(None, "capability_denied");
+            return Ok((
+                ToolResult {
+                    output: msg,
+                    exit_code: Some(1),
+                    output_encoding: None,
+                    structured: Some(serde_json::json!({
+                        "error": "capability_denied",
+                    })),
+                    ..Default::default()
+                },
+                Some(PolicyFeedback::Denied(DenialKey {
+                    tool_name: tc.name.clone(),
+                    reason_code: "capability_denied".to_string(),
+                    policy_revision: self
+                        .policy_revision
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                })),
+            ));
+        }
+
         // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24, ADR-0010 §14.39 /
         // FUS-READ-ANCHOR-WRITE-GUARD)：read-anchor 写前核证的 direct 面
         // 落点——编辑直接调用携带 `expected_anchor`（read_file 返回的
@@ -1275,11 +1339,83 @@ impl AgentLoopController {
         // #2/#3 同批登记）。不在并行读批白名单（PARALLEL_READ_TOOLS）⇒
         // 恒串行、messages 即真会话。advisory——不联动任何硬门。
         if tc.name == CONTEXT_MANAGE_TOOL_NAME {
-            let mode = tc
-                .arguments
-                .get("mode")
-                .and_then(|v| v.as_str())
-                .unwrap_or("compress");
+            macro_rules! reject_ctx {
+                ($mode:expr, $message:expr) => {{
+                    let output: String = $message;
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 1,
+                        "mode": $mode,
+                        "error": output,
+                    });
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    return Ok((
+                        ToolResult {
+                            output,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                            ..Default::default()
+                        },
+                        None,
+                    ));
+                }};
+            }
+
+            let mode = match tc.arguments.get("mode") {
+                Some(Value::String(mode)) => mode.as_str(),
+                Some(other) => reject_ctx!(
+                    "invalid",
+                    format!("{CONTEXT_MANAGE_TOOL_NAME} mode 必须是字符串（收到 {other}）")
+                ),
+                None => reject_ctx!(
+                    "missing",
+                    format!(
+                        "{CONTEXT_MANAGE_TOOL_NAME} 需要 mode（compress|map|recenter|clear|clear_all）"
+                    )
+                ),
+            };
+            if !matches!(
+                mode,
+                "compress" | "map" | "recenter" | "clear" | "clear_all"
+            ) {
+                reject_ctx!(
+                    mode,
+                    format!(
+                        "未知 {CONTEXT_MANAGE_TOOL_NAME} mode `{mode}`（限 compress|map|recenter|clear|clear_all）"
+                    )
+                );
+            }
+            let allowed_args: &[&str] = match mode {
+                "compress" => &["mode", "summary", "whitelist"],
+                "map" | "recenter" => &["mode"],
+                "clear" | "clear_all" => &["mode", "handover", "keep_recent_rounds"],
+                _ => unreachable!(),
+            };
+            if let Some(key) = unexpected_context_manage_arg(&tc.arguments, allowed_args) {
+                reject_ctx!(
+                    mode,
+                    format!(
+                        "mode={mode} 不接受参数 `{key}`（本次未读、未改状态；允许参数：{}）",
+                        allowed_args.join("/")
+                    )
+                );
+            }
             // M1-S2（2026-10-28，366 章程 / 架构 §5/§13）：`mode=map` 是
             // **纯读**——复用 blocks_outside_slider/face_markers/台账定位与
             // 回放路径，渲染 ≤1K token 的紧凑分块表；不置压缩窗口、不写
@@ -1340,20 +1476,87 @@ impl AgentLoopController {
                 );
                 let archive_tag =
                     crate::model_face::archive_tag(self.session_id.as_deref(), writer.run_id());
-                let output = crate::model_face::render_context_map(
+                let rendered = match crate::model_face::render_context_map(
                     &blocks,
                     &markers,
                     &readout,
                     Some(&archive_tag),
                     writer.run_id(),
-                );
-                let token_estimate = output.chars().count() / 2;
+                ) {
+                    Ok(rendered) => rendered,
+                    Err(err) => {
+                        let output = format!("context_map 渲染失败（provider tokenizer）：{err}");
+                        let mut completed = serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "mode": "map",
+                            "error": output,
+                        });
+                        stamp_direct(&mut completed);
+                        writer.record(EventType::ToolCompleted, completed).await?;
+                        self.push_tool_action_stamped(
+                            ToolDispatcher::action_category(&tc.name).to_string(),
+                            tc.name.clone(),
+                            chrono_utc_now(),
+                        );
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content: output.clone(),
+                            tool_call_id: Some(tc.call_id.clone()),
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                            round: None,
+                        });
+                        return Ok((
+                            ToolResult {
+                                output,
+                                exit_code: Some(1),
+                                output_encoding: None,
+                                structured: None,
+                                ..Default::default()
+                            },
+                            None,
+                        ));
+                    }
+                };
+                let output = rendered.text;
+                let output_chars = output.chars().count();
+                let token_estimate = rendered.token_estimate;
+                let omitted_blocks = rendered
+                    .total_blocks
+                    .saturating_sub(rendered.rendered_blocks);
+                // 0ds M1-S4（2026-10-28，366 章程 / 架构 §13-5）：只读拉取
+                // 也留审计行；payload 只带机械读数与输出摘要，渲染文本本身
+                // 仍在工具结果里，不写 journal、不进常驻。blocks 是**实际
+                // 进模型面的行数**，total/omitted 另列，避免审计把省略行也
+                // 算作“已交付”。
+                writer
+                    .record(
+                        EventType::ContextPulled,
+                        serde_json::json!({
+                            "mode": "map",
+                            "read_only": true,
+                            "token_estimate": token_estimate,
+                            "blocks": rendered.rendered_blocks,
+                            "total_blocks": rendered.total_blocks,
+                            "omitted_blocks": omitted_blocks,
+                            "recent_rounds": 0,
+                            "output_sha256": orz_assurance::journal::sha256_hex(
+                                output.as_bytes()
+                            ),
+                            "output_chars": output_chars,
+                        }),
+                    )
+                    .await?;
                 let mut completed = serde_json::json!({
                     "tool": tc.name,
                     "call_id": tc.call_id,
                     "exit_code": 0,
                     "mode": "map",
-                    "blocks": blocks.len(),
+                    "blocks": rendered.rendered_blocks,
+                    "total_blocks": rendered.total_blocks,
+                    "omitted_blocks": omitted_blocks,
                     "compressible_blocks": readout.compressible_blocks,
                     "token_estimate": token_estimate,
                 });
@@ -1430,16 +1633,83 @@ impl AgentLoopController {
                 }
                 let state = self.blackboard.read().state.clone();
                 let session = readout_conversation(messages, conversation);
-                let output = crate::recenter::render_recenter(&state, session, writer.run_id());
-                let token_estimate = output.chars().count() / 2;
+                let rendered =
+                    match crate::recenter::render_recenter(&state, session, writer.run_id()) {
+                        Ok(rendered) => rendered,
+                        Err(err) => {
+                            let output = format!("recenter 渲染失败（provider tokenizer）：{err}");
+                            let mut completed = serde_json::json!({
+                                "tool": tc.name,
+                                "call_id": tc.call_id,
+                                "exit_code": 1,
+                                "mode": "recenter",
+                                "error": output,
+                            });
+                            stamp_direct(&mut completed);
+                            writer.record(EventType::ToolCompleted, completed).await?;
+                            self.push_tool_action_stamped(
+                                ToolDispatcher::action_category(&tc.name).to_string(),
+                                tc.name.clone(),
+                                chrono_utc_now(),
+                            );
+                            messages.push(Message {
+                                role: Role::Tool,
+                                content: output.clone(),
+                                tool_call_id: Some(tc.call_id.clone()),
+                                tool_calls: Vec::new(),
+                                reasoning_content: None,
+                                round: None,
+                            });
+                            return Ok((
+                                ToolResult {
+                                    output,
+                                    exit_code: Some(1),
+                                    output_encoding: None,
+                                    structured: None,
+                                    ..Default::default()
+                                },
+                                None,
+                            ));
+                        }
+                    };
+                let output = rendered.text;
+                let output_chars = output.chars().count();
+                let token_estimate = rendered.token_estimate;
                 let next = state.next.clone().unwrap_or_else(|| "none".to_string());
-                let recent_rounds = crate::recenter::recent_round_count(session);
+                let omitted_rounds = rendered
+                    .available_rounds
+                    .saturating_sub(rendered.rendered_rounds);
+                // 0ds M1-S4：recenter 与 map 同纪律——只读拉取留审计行，
+                // 不把 state/最近轮文本复制进 journal。recent_rounds 是**实际
+                // 交付行数**，available/omitted 另列。
+                writer
+                    .record(
+                        EventType::ContextPulled,
+                        serde_json::json!({
+                            "mode": "recenter",
+                            "read_only": true,
+                            "token_estimate": token_estimate,
+                            "blocks": 0,
+                            "total_blocks": 0,
+                            "omitted_blocks": 0,
+                            "recent_rounds": rendered.rendered_rounds,
+                            "total_recent_rounds": rendered.available_rounds,
+                            "omitted_rounds": omitted_rounds,
+                            "output_sha256": orz_assurance::journal::sha256_hex(
+                                output.as_bytes()
+                            ),
+                            "output_chars": output_chars,
+                        }),
+                    )
+                    .await?;
                 let mut completed = serde_json::json!({
                     "tool": tc.name,
                     "call_id": tc.call_id,
                     "exit_code": 0,
                     "mode": "recenter",
-                    "recent_rounds": recent_rounds,
+                    "recent_rounds": rendered.rendered_rounds,
+                    "total_recent_rounds": rendered.available_rounds,
+                    "omitted_rounds": omitted_rounds,
                     "token_estimate": token_estimate,
                     "next": next,
                 });
@@ -1950,19 +2220,20 @@ impl AgentLoopController {
             let replace_all = state_via_blackboard && op == "replace_all";
             let applied = parsed.and_then(|update| {
                 let mut board = self.blackboard.write();
-                if replace_all {
-                    board.replace_state(&update, stamp.clone())?;
+                let changed = if replace_all {
+                    board.replace_state(&update, stamp.clone())?
                 } else {
-                    board.write_state(&update, stamp.clone())?;
-                }
+                    board.write_state(&update, stamp.clone())?
+                };
                 let state = board.state.clone();
-                Ok((update, state))
+                let estimated_tokens = state.estimated_tokens()?;
+                Ok((update, state, changed, estimated_tokens))
             });
             match applied {
-                Ok((update, state)) => {
+                Ok((update, state, changed, estimated_tokens)) => {
                     let rendered = state.render();
                     let content_chars = rendered.chars().count();
-                    let estimated_tokens = state.estimated_tokens();
+                    let empty_state = state.is_empty();
                     let goal_preview: String = state
                         .goal
                         .as_deref()
@@ -1978,9 +2249,19 @@ impl AgentLoopController {
                     // model_output 参数）。上限 2048 字符为防御性口径；200
                     // token 设计帽使渲染文档常态 ≈400 字符。
                     let state_snapshot: String = rendered.chars().take(2048).collect();
-                    writer
-                        .record(
-                            EventType::StateWrite,
+                    if changed {
+                        let payload = if empty_state {
+                            // 清空最后一个内容字段：cleared 行不带 updated，
+                            // 与 schema if/then 及 op=clear 的终态一致。
+                            serde_json::json!({
+                                "outcome": "cleared",
+                                "fields": update.touched_fields(),
+                                "goal": goal_preview,
+                                "state": "",
+                                "content_chars": 0,
+                                "estimated_tokens": 0,
+                            })
+                        } else {
                             serde_json::json!({
                                 "outcome": "accepted",
                                 "fields": update.touched_fields(),
@@ -1989,20 +2270,52 @@ impl AgentLoopController {
                                 "content_chars": content_chars,
                                 "estimated_tokens": estimated_tokens,
                                 "updated": stamp,
-                            }),
-                        )
-                        .await?;
+                            })
+                        };
+                        writer.record(EventType::StateWrite, payload).await?;
+                        // 0ds M1 v1 (366 §1 item 5): checkpoint the state
+                        // write path. Best-effort: a checkpoint failure must
+                        // not roll back an already-accepted state write; the
+                        // StateWrite row remains the provenance record.
+                        if !empty_state {
+                            let generation = self.blackboard.read().revisions.state;
+                            if let Ok(checkpoint) = crate::system_checkpoint::write_checkpoint(
+                                &host.session_cwd(),
+                                generation,
+                                &rendered,
+                            ) {
+                                writer
+                                    .record(
+                                        EventType::CheckpointCreated,
+                                        serde_json::json!({
+                                            "checkpoint_id": checkpoint.checkpoint_id,
+                                            "generation": checkpoint.generation,
+                                            "state_sha256": checkpoint.state_sha256,
+                                            "path": checkpoint.relative_path,
+                                        }),
+                                    )
+                                    .await?;
+                            }
+                        }
+                    }
                     self.push_tool_action_stamped(
                         ToolDispatcher::action_category(&tc.name).to_string(),
                         tc.name.clone(),
                         chrono_utc_now(),
                     );
                     let watermark = self.blackboard_watermark_label();
-                    let output = format!(
-                        "state 已写入（{stamp}；≈{estimated_tokens}/{} token）；用 state_read \
-                         回读。live 水位{watermark}。",
-                        crate::state::STATE_MAX_TOKENS,
-                    );
+                    let output = if changed {
+                        format!(
+                            "state 已写入（{stamp}；provider tokenizer {estimated_tokens}/{} token）；\
+                             用 state_read 回读。live 水位{watermark}。",
+                            crate::state::STATE_MAX_TOKENS,
+                        )
+                    } else {
+                        format!(
+                            "state 未变化（no-op：相同值/清空不存在字段；不刷新 updated、不落 StateWrite）；\
+                             用 state_read 回读。live 水位{watermark}。"
+                        )
+                    };
                     let mut completed = serde_json::json!({
                         "tool": tc.name,
                         "call_id": tc.call_id,
@@ -2010,6 +2323,7 @@ impl AgentLoopController {
                         "section": "state",
                         "fields": update.touched_fields(),
                         "estimated_tokens": estimated_tokens,
+                        "changed": changed,
                     });
                     stamp_direct(&mut completed);
                     writer.record(EventType::ToolCompleted, completed).await?;
@@ -5676,6 +5990,7 @@ mod tests {
                 // before its model_output.
                 EventType::FaceFingerprint,
                 EventType::ModelOutput,
+                EventType::CapabilityUse,
                 EventType::PermissionRequested,
                 EventType::PermissionDecision,
                 EventType::ToolStarted,

@@ -549,7 +549,9 @@ pub(crate) struct LoopProfile {
     /// nudge）。主车道 true；grill/检索 false——车道能力位，不再用
     /// `role == Main` 判断（grill 的 role 也是 Main）。
     pub terminal_declaration: bool,
-    /// 0dm：本车道是否注入常驻反例自查软提示 / 暴露 `self_check` 语义。
+    /// 0dm：本车道是否暴露 `self_check` 语义（0ds M1 v1 起不再注入常驻
+    /// 软提示，仅保留车道能力位与测试可见性）。
+    #[allow(dead_code)]
     pub self_check_prompt: bool,
     /// 0di（2026-10-18，ADR-0010 §14.88）：本车道是否在 loop-top drain 会话
     /// 级中途补充队列——**主 run 车道独占**。grill 轮的 `role` 也是 Main，
@@ -3345,47 +3347,11 @@ pub(crate) async fn run_agent_loop(
                 crate::prompt::build_retrieval_system_prompt(*role, goal, "")
             }
         };
-        // 0dm（2026-10-21）：主车道常驻软提示（用户指定文案，逐字）＋终态
-        // 语法短行。放系统提示（不进对话侧车、不增加模型面消息条数）。
-        let system = if profile.self_check_prompt
-            && !crate::prompt::plain_input_enabled()
-            && crate::prompt::self_check_resident_enabled()
-        {
-            // 353：终态声明缺省关闭——只有显式 required 的车道才在系统提示
-            // 里挂"结束前输出"这一句（它每轮都在把"继续"翻译成"收尾"）。
-            let declaration = if crate::model_stop::terminal_declaration_required() {
-                "\n结束前输出 [RUN_END]（intent/reason/summary）。"
-            } else {
-                ""
-            };
-            format!(
-                "{}\n\n{}{}",
-                system,
-                crate::prompt::SELF_CHECK_RESIDENT_LINE,
-                declaration
-            )
-        } else {
-            system
-        };
-        // 354c（0dr §4.6，2026-10-25）：审批模式可见——宿主装配期算好的
-        // 一行只读事实（`[permission] mode=… source=…`）拼进系统提示；
-        // 模型据此决定是否需要「等批准」话术。空串＝宿主未提供（默认
-        // no-op，测试/一次性宿主零注入）；常量跨轮稳定，不动前缀缓存。
-        let permission_mode_line = host.permission_mode_line();
-        let system = if permission_mode_line.is_empty() {
-            system
-        } else {
-            format!("{}\n\n{}", system, permission_mode_line)
-        };
-        // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 计划型执行框架
-        // 在系统提示词层无条件注入（plan_first 会话；主/检索子代理同一
-        // 入口）——不依赖 AGENTS.md 是否存在（D2 全覆盖，审查收口
-        // 2026-08-16）。常量跨轮稳定，不影响前缀缓存。
-        let system = if controller.plan_enabled() {
-            format!("{}\n\n{}", crate::planning::PLAN_FRAMEWORK_BLOCK, system)
-        } else {
-            system
-        };
+        // 0ds M1 v1 (2026-10-28, 366 charter §1 item 6): resident
+        // meta-directives are removed. `[permission]`, the plan framework and
+        // the self-check soft line are no longer appended to every system
+        // prompt; their tool descriptions / on-demand results carry the same
+        // information without re-teaching it every round.
         // v8（2026-09-16 实现批，审查 R-9）：阶梯/守卫量尺＝模型面估算 ＋
         // **静态开销**（系统提示词 ＋ 工具定义）。此处与请求装配同刻刷新，
         // 供下一轮 loop-top 的阶梯判定与守卫使用（首轮为 0，属保守侧偏差）。
@@ -9587,6 +9553,14 @@ mod tests {
                 .all(|e| e.event_type != EventType::ContextCompressed),
             "mode=map 不得触发压缩: {events:?}"
         );
+        let pulled = events
+            .iter()
+            .find(|e| e.event_type == EventType::ContextPulled)
+            .expect("mode=map 必须留下 context_pulled 审计行");
+        assert_eq!(pulled.payload["mode"], "map");
+        assert_eq!(pulled.payload["read_only"], true);
+        assert_eq!(pulled.payload["recent_rounds"], 0);
+        assert_eq!(pulled.payload["blocks"], completed.payload["blocks"]);
         let requests = fake.received_requests();
         let map_text = requests
             .iter()
@@ -9597,6 +9571,14 @@ mod tests {
         assert!(map_text.contains("[context_map v1]"), "{map_text}");
         assert!(map_text.contains(" 5Ktk L"), "{map_text}");
         assert!(map_text.contains("r1-"), "{map_text}");
+        assert_eq!(
+            pulled.payload["output_sha256"],
+            orz_assurance::journal::sha256_hex(map_text.as_bytes())
+        );
+        assert_eq!(
+            pulled.payload["output_chars"],
+            map_text.chars().count() as u64
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -9747,6 +9729,17 @@ mod tests {
                 .all(|e| e.event_type != EventType::ContextCompressed),
             "mode=recenter 不得触发压缩: {events:?}"
         );
+        let pulled = events
+            .iter()
+            .find(|e| e.event_type == EventType::ContextPulled)
+            .expect("mode=recenter 必须留下 context_pulled 审计行");
+        assert_eq!(pulled.payload["mode"], "recenter");
+        assert_eq!(pulled.payload["read_only"], true);
+        assert_eq!(pulled.payload["blocks"], 0);
+        assert_eq!(
+            pulled.payload["recent_rounds"],
+            completed.payload["recent_rounds"]
+        );
         let requests = fake.received_requests();
         let recenter = requests
             .iter()
@@ -9757,6 +9750,14 @@ mod tests {
         assert!(recenter.contains("state v1"), "{recenter}");
         assert!(recenter.contains("next: 跑测试"), "{recenter}");
         assert!(recenter.contains("recent:"), "{recenter}");
+        assert_eq!(
+            pulled.payload["output_sha256"],
+            orz_assurance::journal::sha256_hex(recenter.as_bytes())
+        );
+        assert_eq!(
+            pulled.payload["output_chars"],
+            recenter.chars().count() as u64
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -10304,6 +10305,84 @@ mod tests {
             "设计帽：≤200 token"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0ds M1 v1 (2026-10-28): same-value state write is a no-op (no
+    /// StateWrite, `changed=false`, no refreshed updated); clearing the last
+    /// content field emits a `cleared` row without `updated` and skips the
+    /// empty checkpoint.
+    #[tokio::test]
+    async fn state_write_noop_and_empty_clear_are_event_consistent() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "state_write".to_string(),
+                arguments: serde_json::json!({ "goal": "same" }),
+                call_id: "call-s1".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "state_write".to_string(),
+                arguments: serde_json::json!({ "goal": "same" }),
+                call_id: "call-s2".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "state_write".to_string(),
+                arguments: serde_json::json!({ "goal": "none" }),
+                call_id: "call-s3".to_string(),
+            }]),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake;
+        let controller = AgentLoopController::with_gateway(gateway);
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ok_result()),
+        };
+        controller
+            .run_turn(
+                &host,
+                "state no-op 测试",
+                "RUN-STATE-NOOP",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let writes: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::StateWrite)
+            .collect();
+        assert_eq!(writes.len(), 2, "{writes:?}");
+        assert_eq!(writes[0].payload["outcome"], "accepted");
+        assert_eq!(writes[1].payload["outcome"], "cleared");
+        assert!(writes[1].payload.get("updated").is_none());
+        assert_eq!(writes[1].payload["state"], "");
+        let changed: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "state_write"
+            })
+            .map(|e| e.payload["changed"].as_bool())
+            .collect();
+        assert_eq!(
+            changed,
+            vec![Some(true), Some(false), Some(true)],
+            "{changed:?}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::CheckpointCreated)
+                .count(),
+            1,
+            "only the non-empty accepted write gets a checkpoint"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -11534,6 +11613,68 @@ mod tests {
             "3 个已完成模型轮（两工具轮＋终轮）后消费: {rounds_since}"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0ds M1 v1 (2026-10-28, 366 §1 item 4): an undeclared tool is denied
+    /// by the capability registry *and* leaves a mechanical audit row.
+    #[tokio::test]
+    async fn capability_registry_denies_undeclared_tool_and_audits_it() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "frobnicate_not_declared".to_string(),
+                arguments: serde_json::json!({ "path": "/tmp/secret" }),
+                call_id: "call-cap-deny".to_string(),
+            }]),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake;
+        let controller = AgentLoopController::with_gateway(gateway);
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "must not run".to_string(),
+                ..ok_result()
+            }),
+        };
+        controller
+            .run_turn(
+                &host,
+                "capability deny 测试",
+                "RUN-CAP-DENY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let use_row = events
+            .iter()
+            .find(|e| e.event_type == EventType::CapabilityUse)
+            .expect("capability_use row");
+        assert_eq!(use_row.payload["tool"], "frobnicate_not_declared");
+        assert_eq!(use_row.payload["decision"], "denied");
+        assert_eq!(use_row.payload["reason"], "capability_not_declared");
+        assert!(use_row.payload.get("arguments").is_none());
+        assert!(use_row.payload.get("path").is_none());
+        assert!(use_row.payload.get("secret").is_none());
+        assert!(
+            events.iter().all(|e| {
+                !(e.event_type == EventType::ToolStarted
+                    && e.payload["tool"] == "frobnicate_not_declared")
+            }),
+            "denied capability must not emit ToolStarted: {events:?}"
+        );
+        assert!(events.iter().any(|e| {
+            e.event_type == EventType::ToolCompleted
+                && e.payload["tool"] == "frobnicate_not_declared"
+                && e.payload["error"] == "capability_denied"
+        }));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

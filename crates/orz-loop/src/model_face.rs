@@ -57,6 +57,7 @@
 //! 无需新的侧车字段）。
 
 use crate::gateway::model::{Message, ToolCall};
+use crate::tokenizer::{DeepSeekTokenizer, TokenCountError, TokenCounter};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -1283,11 +1284,10 @@ pub fn render_block_table(
     lines.push("[/上下文分块表]".to_string());
     lines.join("\n")
 }
-
 /// M1-S2（2026-10-28，366 章程 / 架构 §5/§13）：`context_map` 的硬预算
-/// （token；与全仓上下文计量同尺 chars/2）。超过时只保留前缀行并如实
-/// 标注省略块数——不把长表塞进模型面。
-pub const CONTEXT_MAP_MAX_TOKENS: usize = 1_024;
+/// （provider tokenizer 计数）。超过时只保留前缀行并如实标注省略块数——
+/// 不把长表塞进模型面；审计 payload 同时记录 total/rendered/omitted。
+pub const CONTEXT_MAP_MAX_TOKENS: u64 = 1_024;
 
 /// 单个分块的紧凑状态字母（图例见渲染尾行）：
 /// `T`＝已截断，`C`＝已压缩，`X`＝整块已清零，`B`＝跨清零边界（前段已移出），
@@ -1314,70 +1314,126 @@ fn context_map_state(
     }
 }
 
+/// Rendered map + actual row counts. A `+N blocks` marker means the model
+/// received fewer rows than `total_blocks`; journal payload must not report
+/// the pre-truncation candidate length as if it were delivered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextMapRender {
+    pub text: String,
+    pub total_blocks: usize,
+    pub rendered_blocks: usize,
+    pub token_estimate: u64,
+}
+
+fn compose_context_map(
+    header: &str,
+    rows: &[String],
+    marker: Option<&str>,
+    legend: Option<&str>,
+) -> String {
+    let mut out = String::from(header);
+    if rows.is_empty() {
+        out.push_str("\nno blocks outside slider");
+    } else {
+        for row in rows {
+            out.push('\n');
+            out.push_str(row);
+        }
+        if let Some(marker) = marker {
+            out.push('\n');
+            out.push_str(marker);
+        }
+    }
+    if let Some(legend) = legend {
+        out.push('\n');
+        out.push_str(legend);
+    }
+    out
+}
+
 /// M1-S2：`context_manage(mode=map)` 的紧凑分块表渲染（**纯函数、无副作用、
 /// 不常驻**）。每行＝块号 / 轮次 / token / 状态 / 台账 seq / 定位符 / 回放
-/// 路径；只列 `blocks_outside_slider` 的分块。≤[`CONTEXT_MAP_MAX_TOKENS`]
-/// token（chars/2 口径），超出时保留前缀并标注省略数。
+/// 路径；只列 `blocks_outside_slider` 的分块。预算由 provider tokenizer
+/// 硬计；`next` 不适用于 map，但省略标记与图例也必须计入同一预算。
 pub fn render_context_map(
     blocks: &[ContextBlock],
     markers: &FaceMarkers,
     readout: &SliderReadout,
     archive_tag: Option<&str>,
     run_id: &str,
-) -> String {
-    let max_chars = CONTEXT_MAP_MAX_TOKENS * 2;
-    let mut lines = vec![format!(
+) -> Result<ContextMapRender, TokenCountError> {
+    let counter = DeepSeekTokenizer::new();
+    let header = format!(
         "[context_map v1] run={run_id} total={} compressible={}",
         blocks.len(),
         readout.compressible_blocks
-    )];
-    if blocks.is_empty() {
-        lines.push("no blocks outside slider".to_string());
-    } else {
-        let mut used: usize = lines[0].chars().count() + 1;
-        let mut kept = 0usize;
-        for block in blocks {
-            let (state, path) = context_map_state(block, markers, archive_tag);
-            let mut line = format!(
-                "#{} r{}-{} {}tk {}",
-                block.number,
-                block.first_round + 1,
-                block.last_round + 1,
-                estimate_tokens_label(block.estimate_tokens),
-                state
-            );
-            if let Some((from, to)) = markers.ledger_range(block.number) {
-                line.push_str(&format!(" seq={from}-{to}"));
-            }
-            if let Some(ptr) = markers.pointer_for(block.number, block.first_round) {
-                line.push_str(&format!(" ptr={ptr}"));
-            }
-            if let Some(path) = path {
-                line.push_str(&format!(" path={path}"));
-            }
-            let line_chars = line.chars().count() + 1;
-            // 预留尾行（图例/省略提示）空间，避免最后一行把预算顶破。
-            if used + line_chars + 80 > max_chars {
-                break;
-            }
-            used += line_chars;
-            lines.push(line);
-            kept += 1;
-        }
-        let omitted = blocks.len().saturating_sub(kept);
-        if omitted > 0 {
-            lines.push(format!(
-                "... +{omitted} blocks（map 1K token 上限；按块号回查 .gsa/ledger/current.md）"
-            ));
-        }
-    }
+    );
     let legend = "图例: T=截断 C=压缩 X=清零 B=跨边界 L=原文 R=残段；path=按块回放";
-    if lines.iter().map(|l| l.chars().count() + 1).sum::<usize>() + legend.chars().count() + 1
-        <= max_chars
-    {
-        lines.push(legend.to_string());
+
+    let mut rows: Vec<String> = Vec::new();
+    for block in blocks {
+        let (state, path) = context_map_state(block, markers, archive_tag);
+        let mut line = format!(
+            "#{} r{}-{} {}tk {}",
+            block.number,
+            block.first_round + 1,
+            block.last_round + 1,
+            estimate_tokens_label(block.estimate_tokens),
+            state
+        );
+        if let Some((from, to)) = markers.ledger_range(block.number) {
+            line.push_str(&format!(" seq={from}-{to}"));
+        }
+        if let Some(ptr) = markers.pointer_for(block.number, block.first_round) {
+            line.push_str(&format!(" ptr={ptr}"));
+        }
+        if let Some(path) = path {
+            line.push_str(&format!(" path={path}"));
+        }
+        let mut candidate = rows.clone();
+        candidate.push(line);
+        let omitted = blocks.len().saturating_sub(candidate.len());
+        let marker = (omitted > 0).then(|| {
+            format!("... +{omitted} blocks（map 1K token 上限；按块号回查 .gsa/ledger/current.md）")
+        });
+        let text = compose_context_map(&header, &candidate, marker.as_deref(), None);
+        if counter.count_tokens(&text)? <= CONTEXT_MAP_MAX_TOKENS {
+            rows = candidate;
+        } else {
+            break;
+        }
     }
-    lines.join("\n")
+
+    // The omission marker can itself push the output over budget. Drop the
+    // last rendered row (never the header) until marker + header fit.
+    loop {
+        let omitted = blocks.len().saturating_sub(rows.len());
+        let marker = (omitted > 0).then(|| {
+            format!("... +{omitted} blocks（map 1K token 上限；按块号回查 .gsa/ledger/current.md）")
+        });
+        let without_legend = compose_context_map(&header, &rows, marker.as_deref(), None);
+        if counter.count_tokens(&without_legend)? > CONTEXT_MAP_MAX_TOKENS {
+            if rows.pop().is_none() {
+                return Err(TokenCountError::Encode(
+                    "context_map header exceeds the 1K provider-token budget".to_string(),
+                ));
+            }
+            continue;
+        }
+        let with_legend = compose_context_map(&header, &rows, marker.as_deref(), Some(legend));
+        let text = if counter.count_tokens(&with_legend)? <= CONTEXT_MAP_MAX_TOKENS {
+            with_legend
+        } else {
+            without_legend
+        };
+        let token_estimate = counter.count_tokens(&text)?;
+        return Ok(ContextMapRender {
+            text,
+            total_blocks: blocks.len(),
+            rendered_blocks: rows.len(),
+            token_estimate,
+        });
+    }
 }
 
 /// 分块回放档案（绝对路径）：`{cwd}/.gsa/compaction/blocks/<tag>-block-<k>.md`。
@@ -2488,7 +2544,9 @@ mod tests {
         markers.ledger_seq.insert(1, (10, 20));
         markers.journal_seq.insert(1, (30, 40));
         let readout = slider_readout(&messages, 12_000, 12_000);
-        let map = render_context_map(&blocks, &markers, &readout, Some("sess0001"), "RUN-TEST");
+        let map =
+            render_context_map(&blocks, &markers, &readout, Some("sess0001"), "RUN-TEST").unwrap();
+        let map = map.text;
         assert!(map.starts_with("[context_map v1]"), "{map}");
         assert!(map.contains("#1"), "{map}");
         assert!(map.contains("C"), "{map}");
@@ -2499,8 +2557,8 @@ mod tests {
         assert!(map.contains("block-0002.md"), "{map}");
         assert!(map.contains("r1-"), "{map}");
         assert!(
-            map.chars().count() / 2 <= CONTEXT_MAP_MAX_TOKENS,
-            "map token estimate must fit 1K: {map}"
+            DeepSeekTokenizer::new().count_tokens(&map).unwrap() <= CONTEXT_MAP_MAX_TOKENS,
+            "map provider-token budget must fit 1K: {map}"
         );
     }
 
@@ -2509,11 +2567,23 @@ mod tests {
     fn context_map_marks_cleared_and_boundary_blocks() {
         let messages = conversation(10, 8_000);
         let blocks = blocks_outside_slider(&messages, 12_000, 12_000);
-        let mut markers = FaceMarkers::default();
-        markers.cleared_before_round = Some(999);
         let readout = slider_readout(&messages, 12_000, 12_000);
-        let map = render_context_map(&blocks, &markers, &readout, Some("sess0001"), "RUN");
+
+        let mut whole = FaceMarkers::default();
+        whole.cleared_before_round = Some(999);
+        let map = render_context_map(&blocks, &whole, &readout, Some("sess0001"), "RUN")
+            .unwrap()
+            .text;
         assert!(map.contains(" X "), "{map}");
+        assert!(map.contains("-clear.md"), "{map}");
+
+        // Boundary after the first round but not after the last ⇒ B (not X).
+        let mut crossing = FaceMarkers::default();
+        crossing.cleared_before_round = Some(2);
+        let map = render_context_map(&blocks, &crossing, &readout, Some("sess0001"), "RUN")
+            .unwrap()
+            .text;
+        assert!(map.contains(" B "), "expected B block: {map}");
         assert!(map.contains("-clear.md"), "{map}");
     }
 
@@ -2540,11 +2610,18 @@ mod tests {
             compressible_estimate_tokens: 960_000,
             total_blocks: 80,
         };
-        let map = render_context_map(&blocks, &markers, &readout, Some("sess0001"), "RUN-BUDGET");
-        assert!(map.contains("... +"), "{map}");
+        let rendered =
+            render_context_map(&blocks, &markers, &readout, Some("sess0001"), "RUN-BUDGET")
+                .unwrap();
+        assert!(rendered.text.contains("... +"), "{}", rendered.text);
+        assert!(rendered.rendered_blocks < rendered.total_blocks);
         assert!(
-            map.chars().count() / 2 <= CONTEXT_MAP_MAX_TOKENS,
-            "budget exceeded: {map}"
+            DeepSeekTokenizer::new()
+                .count_tokens(&rendered.text)
+                .unwrap()
+                <= CONTEXT_MAP_MAX_TOKENS,
+            "budget exceeded: {}",
+            rendered.text
         );
     }
 
@@ -2555,9 +2632,20 @@ mod tests {
             compressible_estimate_tokens: 0,
             total_blocks: 0,
         };
-        let map = render_context_map(&[], &FaceMarkers::default(), &readout, None, "RUN");
-        assert!(map.contains("no blocks outside slider"), "{map}");
-        assert!(map.chars().count() / 2 <= CONTEXT_MAP_MAX_TOKENS);
+        let rendered =
+            render_context_map(&[], &FaceMarkers::default(), &readout, None, "RUN").unwrap();
+        assert!(
+            rendered.text.contains("no blocks outside slider"),
+            "{}",
+            rendered.text
+        );
+        assert_eq!(rendered.rendered_blocks, 0);
+        assert!(
+            DeepSeekTokenizer::new()
+                .count_tokens(&rendered.text)
+                .unwrap()
+                <= CONTEXT_MAP_MAX_TOKENS
+        );
     }
 
     #[test]

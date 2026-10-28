@@ -10,10 +10,6 @@ use crate::blackboard::{
     DirectStepEvidence, DoneEvidence, FailedEvidence, PlanAction, PlanStep, StepStatus,
 };
 
-/// Canonical PLAN-FIRST execution-style framework block (shared with the
-/// external AGENTS.md wrapper; see orz-assurance `plan::framework`).
-pub(crate) use orz_assurance::plan::framework::PLAN_FRAMEWORK_BLOCK;
-
 pub const PLAN_WRITE_TOOL: &str = "plan_write";
 pub const BLACKBOARD_READ_TOOL: &str = "blackboard_read";
 
@@ -1915,71 +1911,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// D2 全覆盖（2026-08-16 审查收口）：plan_first 会话的系统提示词注入
-    /// <plan_framework>（不依赖 AGENTS.md）；关闭态不注入。
+    /// 0ds M1 v1 (2026-10-28): the plan framework is no longer a resident
+    /// system-prompt preamble in either gate state; plan_write's own tool
+    /// description is the on-demand pointer.
     #[tokio::test]
-    async fn plan_first_framework_block_follows_gate_switch() {
-        let enabled_dir = test_dir();
-        let enabled_fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-fw", valid_plan_json())]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let enabled_gateway: Arc<dyn ModelGateway> = enabled_fake.clone();
-        let enabled_controller = AgentLoopController::with_gateway(enabled_gateway)
-            .with_plan_first_enabled(true)
-            .with_max_tool_rounds(1);
-        enabled_controller
-            .run_turn(
-                &TestHost {
-                    journal: JournalRecorder::new(enabled_dir.clone()),
-                    tool_result: None,
-                },
-                "hi",
-                "RUN-PF-FW-ON",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        let received = enabled_fake.received_requests();
-        assert!(
-            received[0].system.contains("<plan_framework>"),
-            "plan-first system prompt must carry the framework block"
-        );
-        let _ = std::fs::remove_dir_all(&enabled_dir);
-
-        let off_dir = test_dir();
-        let off_fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let off_gateway: Arc<dyn ModelGateway> = off_fake.clone();
-        let off_controller = AgentLoopController::with_gateway(off_gateway).with_max_tool_rounds(1);
-        off_controller
-            .run_turn(
-                &TestHost {
-                    journal: JournalRecorder::new(off_dir.clone()),
-                    tool_result: None,
-                },
-                "hi",
-                "RUN-PF-FW-OFF",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        let received = off_fake.received_requests();
-        assert!(
-            !received[0].system.contains("<plan_framework>"),
-            "legacy (gate-off) system prompt must not carry the framework block"
-        );
-        let _ = std::fs::remove_dir_all(&off_dir);
+    async fn plan_framework_is_not_injected_as_resident_text() {
+        for (name, plan_enabled) in [("RUN-PF-FW-ON", true), ("RUN-PF-FW-OFF", false)] {
+            let dir = test_dir();
+            let fake = Arc::new(FakeProvider::new(vec![ScriptedResponse::text("完成")]));
+            let gateway: Arc<dyn ModelGateway> = fake.clone();
+            let controller = AgentLoopController::with_gateway(gateway)
+                .with_plan_enabled(plan_enabled)
+                .with_max_tool_rounds(1);
+            controller
+                .run_turn(
+                    &TestHost {
+                        journal: JournalRecorder::new(dir.clone()),
+                        tool_result: None,
+                    },
+                    "hi",
+                    name,
+                    MANIFEST,
+                    0,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            let received = fake.received_requests();
+            assert!(
+                !received[0].system.contains("<plan_framework>"),
+                "plan framework must not be resident in the system prompt ({name})"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

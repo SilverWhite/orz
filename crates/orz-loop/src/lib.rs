@@ -14,6 +14,7 @@ pub mod action_ledger;
 mod agent_loop;
 pub mod agents;
 pub mod blackboard;
+pub mod capability;
 pub(crate) mod checkpoint;
 mod compact;
 pub mod complexity;
@@ -54,6 +55,10 @@ pub mod selfhistory;
 /// 0ds M1-S1：`state` 分区（黑板当前事实薄层）。
 pub mod state;
 pub mod summary;
+/// 0ds M1 v1：状态写路径的最小持久 checkpoint producer（M4 恢复服务留后）。
+pub mod system_checkpoint;
+/// 0ds M1 v1（2026-10-28）：provider tokenizer 硬预算单一源。
+pub mod tokenizer;
 pub mod tool;
 pub mod tool_probe;
 pub(crate) mod usage_meter;
