@@ -9665,6 +9665,102 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// M1-S3（2026-10-28）：`context_manage(mode=recenter)` 只读返回
+    /// state + 最近完整轮摘要 + 显式 next；不触发压缩、不写状态。
+    #[tokio::test]
+    async fn context_manage_recenter_returns_state_recent_and_next_read_only() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "state_write".to_string(),
+                arguments: serde_json::json!({
+                    "goal": "M1-S3 recenter",
+                    "now": "验证回中",
+                    "next": "跑测试",
+                }),
+                call_id: "call-s1".to_string(),
+            }])
+            .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "context_manage".to_string(),
+                arguments: serde_json::json!({ "mode": "recenter" }),
+                call_id: "call-recenter".to_string(),
+            }])
+            .with_prompt_tokens(100),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
+            .with_session_id(Some("SESSION-CM-RECENTER".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "R".repeat(10_000),
+                ..ok_result()
+            }),
+        };
+        let outcome = controller
+            .run_turn(
+                &host,
+                "recenter 回中测试",
+                "RUN-CM-RECENTER",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.0, "终答");
+
+        let events = events(&dir);
+        let completed = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload["tool"] == "context_manage"
+                    && e.payload["mode"] == "recenter"
+            })
+            .expect("recenter tool_completed");
+        assert_eq!(completed.payload["exit_code"], 0);
+        assert_eq!(completed.payload["next"], "跑测试");
+        assert!(
+            completed.payload["recent_rounds"].as_u64().unwrap_or(0) >= 1,
+            "测试夹具至少有一个完整轮: {completed:?}"
+        );
+        assert!(
+            completed.payload["token_estimate"]
+                .as_u64()
+                .unwrap_or(u64::MAX)
+                <= 1024,
+            "recenter 必须 ≤1K token: {completed:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .all(|e| e.event_type != EventType::ContextCompressed),
+            "mode=recenter 不得触发压缩: {events:?}"
+        );
+        let requests = fake.received_requests();
+        let recenter = requests
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .map(|m| m.content.as_str())
+            .find(|c| c.contains("[recenter v1]"))
+            .expect("recenter tool result must reach the model face");
+        assert!(recenter.contains("state v1"), "{recenter}");
+        assert!(recenter.contains("next: 跑测试"), "{recenter}");
+        assert!(recenter.contains("recent:"), "{recenter}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// R-369-03 回归钉（2026-10-27，370 §8.2 步 2）：**summary 先校验再
     /// whitelist**——非法 summary 的整调用拒绝不得携带 whitelist 副作用。
     /// 修前 whitelist 先落盘/存档、之后才 normalize summary ⇒ 拒绝时白名单

@@ -1383,6 +1383,92 @@ impl AgentLoopController {
                     None,
                 ));
             }
+            // M1-S3（2026-10-28，366 章程 / 架构 §5）：`mode=recenter` 是
+            // **纯读回中**——state（黑板 state 分区）＋最近 5 个完整工具轮
+            // 摘要＋显式 next；≤1K token；不写会话、不改投影、不注入常驻
+            // 文本。与 map 同纪律：只接受 mode 本身，夹带动作参数整调用拒绝。
+            if mode == "recenter" {
+                let extra = ["summary", "whitelist", "handover", "keep_recent_rounds"]
+                    .iter()
+                    .any(|key| tc.arguments.get(*key).is_some());
+                if extra {
+                    let output = "mode=recenter 是只读回中；不接受 summary/whitelist/\
+                                  handover/keep_recent_rounds 参数（本次未读、未改状态）。"
+                        .to_string();
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 1,
+                        "mode": "recenter",
+                        "error": output,
+                    });
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    return Ok((
+                        ToolResult {
+                            output,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                            ..Default::default()
+                        },
+                        None,
+                    ));
+                }
+                let state = self.blackboard.read().state.clone();
+                let session = readout_conversation(messages, conversation);
+                let output = crate::recenter::render_recenter(&state, session, writer.run_id());
+                let token_estimate = output.chars().count() / 2;
+                let next = state.next.clone().unwrap_or_else(|| "none".to_string());
+                let recent_rounds = crate::recenter::recent_round_count(session);
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 0,
+                    "mode": "recenter",
+                    "recent_rounds": recent_rounds,
+                    "token_estimate": token_estimate,
+                    "next": next,
+                });
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: output.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                return Ok((
+                    ToolResult {
+                        output,
+                        exit_code: Some(0),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    },
+                    None,
+                ));
+            }
             // 0da S2（设计 §6.1/§6.3）：mode ∈ {clear, clear_all} 共走清零核
             // ——clear_all＝一键清理（先清黑板三分区后写 handover，见执行核）；
             // 防裸清 handover 两 mode 同必填（护栏不对称：黑板臂才豁免）。

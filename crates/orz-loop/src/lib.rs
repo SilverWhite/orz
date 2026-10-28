@@ -47,6 +47,7 @@ pub mod relay;
 // 362 S5（2026-10-26）：把 loop 侧合成的工具声明单源导出，供 host 的
 // capabilities 面取真实 schema（此前 spawn_scout 只能标 curated/null）。
 pub use relay::spawn_scout_tool_def;
+pub mod recenter;
 pub mod render_fold;
 mod retrieval;
 pub mod selfhistory;
