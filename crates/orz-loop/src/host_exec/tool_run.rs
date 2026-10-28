@@ -1280,6 +1280,109 @@ impl AgentLoopController {
                 .get("mode")
                 .and_then(|v| v.as_str())
                 .unwrap_or("compress");
+            // M1-S2（2026-10-28，366 章程 / 架构 §5/§13）：`mode=map` 是
+            // **纯读**——复用 blocks_outside_slider/face_markers/台账定位与
+            // 回放路径，渲染 ≤1K token 的紧凑分块表；不置压缩窗口、不写
+            // 黑板、不改投影。只允许 mode 本身；夹带压缩/清零参数整调用
+            // 拒绝，避免“读一下却顺手压缩/清零”的歧义。
+            if mode == "map" {
+                let extra = ["summary", "whitelist", "handover", "keep_recent_rounds"]
+                    .iter()
+                    .any(|key| tc.arguments.get(*key).is_some());
+                if extra {
+                    let output = "mode=map 是只读分块表；不接受 summary/whitelist/\
+                                  handover/keep_recent_rounds 参数（本次未读、未改状态）。"
+                        .to_string();
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 1,
+                        "mode": "map",
+                        "error": output,
+                    });
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    return Ok((
+                        ToolResult {
+                            output,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                            ..Default::default()
+                        },
+                        None,
+                    ));
+                }
+                let session = readout_conversation(messages, conversation);
+                let blocks = crate::model_face::blocks_outside_slider(
+                    session,
+                    self.context_compact.slider_window_tokens,
+                    self.context_compact.model_face_block_tokens,
+                );
+                let markers = crate::model_face::face_markers(session);
+                let readout = crate::model_face::slider_readout(
+                    session,
+                    self.context_compact.slider_window_tokens,
+                    self.context_compact.model_face_block_tokens,
+                );
+                let archive_tag =
+                    crate::model_face::archive_tag(self.session_id.as_deref(), writer.run_id());
+                let output = crate::model_face::render_context_map(
+                    &blocks,
+                    &markers,
+                    &readout,
+                    Some(&archive_tag),
+                    writer.run_id(),
+                );
+                let token_estimate = output.chars().count() / 2;
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 0,
+                    "mode": "map",
+                    "blocks": blocks.len(),
+                    "compressible_blocks": readout.compressible_blocks,
+                    "token_estimate": token_estimate,
+                });
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: output.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                return Ok((
+                    ToolResult {
+                        output,
+                        exit_code: Some(0),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    },
+                    None,
+                ));
+            }
             // 0da S2（设计 §6.1/§6.3）：mode ∈ {clear, clear_all} 共走清零核
             // ——clear_all＝一键清理（先清黑板三分区后写 handover，见执行核）；
             // 防裸清 handover 两 mode 同必填（护栏不对称：黑板臂才豁免）。

@@ -1284,6 +1284,102 @@ pub fn render_block_table(
     lines.join("\n")
 }
 
+/// M1-S2（2026-10-28，366 章程 / 架构 §5/§13）：`context_map` 的硬预算
+/// （token；与全仓上下文计量同尺 chars/2）。超过时只保留前缀行并如实
+/// 标注省略块数——不把长表塞进模型面。
+pub const CONTEXT_MAP_MAX_TOKENS: usize = 1_024;
+
+/// 单个分块的紧凑状态字母（图例见渲染尾行）：
+/// `T`＝已截断，`C`＝已压缩，`X`＝整块已清零，`B`＝跨清零边界（前段已移出），
+/// `L`＝原文仍在窗口，`R`＝未闭合残段。
+fn context_map_state(
+    block: &ContextBlock,
+    markers: &FaceMarkers,
+    archive_tag: Option<&str>,
+) -> (&'static str, Option<String>) {
+    let clear_path = archive_tag.map(relative_clear_archive);
+    let block_path = archive_tag.map(|tag| relative_block_archive(tag, block.number));
+    if block.closed && markers.is_block_cleared(block.first_round, block.last_round) {
+        ("X", clear_path)
+    } else if block.closed && markers.is_round_cleared(block.first_round) {
+        ("B", clear_path)
+    } else {
+        match (block.closed, markers.state(block.number)) {
+            (false, _) => ("R", None),
+            (true, BlockState::Live) => ("L", None),
+            (true, BlockState::Compressed) => ("C", block_path),
+            (true, BlockState::Truncated) => ("T", block_path),
+            (true, BlockState::Cleared) => ("X", clear_path),
+        }
+    }
+}
+
+/// M1-S2：`context_manage(mode=map)` 的紧凑分块表渲染（**纯函数、无副作用、
+/// 不常驻**）。每行＝块号 / 轮次 / token / 状态 / 台账 seq / 定位符 / 回放
+/// 路径；只列 `blocks_outside_slider` 的分块。≤[`CONTEXT_MAP_MAX_TOKENS`]
+/// token（chars/2 口径），超出时保留前缀并标注省略数。
+pub fn render_context_map(
+    blocks: &[ContextBlock],
+    markers: &FaceMarkers,
+    readout: &SliderReadout,
+    archive_tag: Option<&str>,
+    run_id: &str,
+) -> String {
+    let max_chars = CONTEXT_MAP_MAX_TOKENS * 2;
+    let mut lines = vec![format!(
+        "[context_map v1] run={run_id} total={} compressible={}",
+        blocks.len(),
+        readout.compressible_blocks
+    )];
+    if blocks.is_empty() {
+        lines.push("no blocks outside slider".to_string());
+    } else {
+        let mut used: usize = lines[0].chars().count() + 1;
+        let mut kept = 0usize;
+        for block in blocks {
+            let (state, path) = context_map_state(block, markers, archive_tag);
+            let mut line = format!(
+                "#{} r{}-{} {}tk {}",
+                block.number,
+                block.first_round + 1,
+                block.last_round + 1,
+                estimate_tokens_label(block.estimate_tokens),
+                state
+            );
+            if let Some((from, to)) = markers.ledger_range(block.number) {
+                line.push_str(&format!(" seq={from}-{to}"));
+            }
+            if let Some(ptr) = markers.pointer_for(block.number, block.first_round) {
+                line.push_str(&format!(" ptr={ptr}"));
+            }
+            if let Some(path) = path {
+                line.push_str(&format!(" path={path}"));
+            }
+            let line_chars = line.chars().count() + 1;
+            // 预留尾行（图例/省略提示）空间，避免最后一行把预算顶破。
+            if used + line_chars + 80 > max_chars {
+                break;
+            }
+            used += line_chars;
+            lines.push(line);
+            kept += 1;
+        }
+        let omitted = blocks.len().saturating_sub(kept);
+        if omitted > 0 {
+            lines.push(format!(
+                "... +{omitted} blocks（map 1K token 上限；按块号回查 .gsa/ledger/current.md）"
+            ));
+        }
+    }
+    let legend = "图例: T=截断 C=压缩 X=清零 B=跨边界 L=原文 R=残段；path=按块回放";
+    if lines.iter().map(|l| l.chars().count() + 1).sum::<usize>() + legend.chars().count() + 1
+        <= max_chars
+    {
+        lines.push(legend.to_string());
+    }
+    lines.join("\n")
+}
+
 /// 分块回放档案（绝对路径）：`{cwd}/.gsa/compaction/blocks/<tag>-block-<k>.md`。
 pub fn block_archive_path(root: &Path, tag: &str, number: u32) -> PathBuf {
     root.join(".gsa")
@@ -2377,6 +2473,91 @@ mod tests {
             face.len(),
             "计数必须与物化面一致"
         );
+    }
+
+    /// M1-S2（2026-10-28）：context_map 紧凑行必须覆盖块号/轮次/token/状态/
+    /// 回放路径，且整体不超过 1K token（chars/2 口径）。
+    #[test]
+    fn context_map_compact_rows_cover_state_and_replay_path() {
+        let messages = conversation(10, 8_000);
+        let blocks = blocks_outside_slider(&messages, 12_000, 12_000);
+        assert!(blocks.len() >= 2, "test fixture must yield ≥2 blocks");
+        let mut markers = FaceMarkers::default();
+        markers.compressed.insert(1);
+        markers.truncated.insert(2);
+        markers.ledger_seq.insert(1, (10, 20));
+        markers.journal_seq.insert(1, (30, 40));
+        let readout = slider_readout(&messages, 12_000, 12_000);
+        let map = render_context_map(&blocks, &markers, &readout, Some("sess0001"), "RUN-TEST");
+        assert!(map.starts_with("[context_map v1]"), "{map}");
+        assert!(map.contains("#1"), "{map}");
+        assert!(map.contains("C"), "{map}");
+        assert!(map.contains("block-0001.md"), "{map}");
+        assert!(map.contains("seq=10-20"), "{map}");
+        assert!(map.contains("ptr=r1·b1·s30"), "{map}");
+        assert!(map.contains("T"), "{map}");
+        assert!(map.contains("block-0002.md"), "{map}");
+        assert!(map.contains("r1-"), "{map}");
+        assert!(
+            map.chars().count() / 2 <= CONTEXT_MAP_MAX_TOKENS,
+            "map token estimate must fit 1K: {map}"
+        );
+    }
+
+    /// 清零态使用清零现场存档（不是按块档案）；跨边界块标 B。
+    #[test]
+    fn context_map_marks_cleared_and_boundary_blocks() {
+        let messages = conversation(10, 8_000);
+        let blocks = blocks_outside_slider(&messages, 12_000, 12_000);
+        let mut markers = FaceMarkers::default();
+        markers.cleared_before_round = Some(999);
+        let readout = slider_readout(&messages, 12_000, 12_000);
+        let map = render_context_map(&blocks, &markers, &readout, Some("sess0001"), "RUN");
+        assert!(map.contains(" X "), "{map}");
+        assert!(map.contains("-clear.md"), "{map}");
+    }
+
+    /// 超过 1K 预算时保留前缀并如实标注省略块数。
+    #[test]
+    fn context_map_respects_budget_and_reports_omitted_rows() {
+        let blocks: Vec<ContextBlock> = (1..=80)
+            .map(|n| ContextBlock {
+                number: n,
+                first_round: (n as usize).saturating_sub(1),
+                last_round: (n as usize).saturating_sub(1),
+                msg_start: 0,
+                msg_end: 0,
+                estimate_tokens: 12_000,
+                closed: true,
+                tools: Vec::new(),
+                targets: Vec::new(),
+            })
+            .collect();
+        let mut markers = FaceMarkers::default();
+        markers.compressed = (1..=80).collect();
+        let readout = SliderReadout {
+            compressible_blocks: 80,
+            compressible_estimate_tokens: 960_000,
+            total_blocks: 80,
+        };
+        let map = render_context_map(&blocks, &markers, &readout, Some("sess0001"), "RUN-BUDGET");
+        assert!(map.contains("... +"), "{map}");
+        assert!(
+            map.chars().count() / 2 <= CONTEXT_MAP_MAX_TOKENS,
+            "budget exceeded: {map}"
+        );
+    }
+
+    #[test]
+    fn context_map_empty_is_explicit_and_within_budget() {
+        let readout = SliderReadout {
+            compressible_blocks: 0,
+            compressible_estimate_tokens: 0,
+            total_blocks: 0,
+        };
+        let map = render_context_map(&[], &FaceMarkers::default(), &readout, None, "RUN");
+        assert!(map.contains("no blocks outside slider"), "{map}");
+        assert!(map.chars().count() / 2 <= CONTEXT_MAP_MAX_TOKENS);
     }
 
     #[test]

@@ -9513,6 +9513,158 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// M1-S2（2026-10-28）：`context_manage(mode=map)` 是纯读——返回紧凑
+    /// 分块表（块号/轮次/token/状态/回放路径），不触发压缩、不改投影。
+    #[tokio::test]
+    async fn context_manage_map_is_read_only_and_returns_compact_map() {
+        let old_round = "M".repeat(10_000);
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "context_manage".to_string(),
+                arguments: serde_json::json!({ "mode": "map" }),
+                call_id: "call-map".to_string(),
+            }])
+            .with_prompt_tokens(100),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
+            .with_session_id(Some("SESSION-CM-MAP".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: old_round,
+                ..ok_result()
+            }),
+        };
+        let outcome = controller
+            .run_turn(
+                &host,
+                "context_map 只读测试",
+                "RUN-CM-MAP",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.0, "终答");
+
+        let events = events(&dir);
+        let completed = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_manage"
+            })
+            .expect("context_manage tool_completed");
+        assert_eq!(completed.payload["mode"], "map");
+        assert_eq!(completed.payload["exit_code"], 0);
+        assert_eq!(completed.payload["summary_queued"], serde_json::Value::Null);
+        assert!(
+            completed.payload["token_estimate"]
+                .as_u64()
+                .unwrap_or(u64::MAX)
+                <= 1024,
+            "map 必须 ≤1K token: {completed:?}"
+        );
+        assert!(
+            completed.payload["blocks"].as_u64().unwrap_or(0) > 0,
+            "测试夹具应有窗口外分块: {completed:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .all(|e| e.event_type != EventType::ContextCompressed),
+            "mode=map 不得触发压缩: {events:?}"
+        );
+        let requests = fake.received_requests();
+        let map_text = requests
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .map(|m| m.content.as_str())
+            .find(|c| c.contains("[context_map v1]"))
+            .expect("map tool result must reach the model face");
+        assert!(map_text.contains("[context_map v1]"), "{map_text}");
+        assert!(map_text.contains(" 5Ktk L"), "{map_text}");
+        assert!(map_text.contains("r1-"), "{map_text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M1-S2：mode=map 只接受 mode 本身；夹带 summary/whitelist/清零参数
+    /// 整调用拒绝，避免“读一下却顺手改状态”。
+    #[tokio::test]
+    async fn context_manage_map_rejects_action_arguments_without_side_effects() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "context_manage".to_string(),
+                arguments: serde_json::json!({
+                    "mode": "map",
+                    "summary": "不应被接受",
+                }),
+                call_id: "call-map-bad".to_string(),
+            }])
+            .with_prompt_tokens(100),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake;
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
+            .with_session_id(Some("SESSION-CM-MAP-BAD".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "R".repeat(10_000),
+                ..ok_result()
+            }),
+        };
+        let outcome = controller
+            .run_turn(
+                &host,
+                "context_map 参数拒绝测试",
+                "RUN-CM-MAP-BAD",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.0, "终答");
+        let events = events(&dir);
+        let completed = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_manage"
+            })
+            .expect("context_manage tool_completed");
+        assert_eq!(completed.payload["exit_code"], 1);
+        assert_eq!(completed.payload["mode"], "map");
+        assert!(
+            events
+                .iter()
+                .all(|e| e.event_type != EventType::ContextCompressed),
+            "拒绝的 map 调用不得触发压缩"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// R-369-03 回归钉（2026-10-27，370 §8.2 步 2）：**summary 先校验再
     /// whitelist**——非法 summary 的整调用拒绝不得携带 whitelist 副作用。
     /// 修前 whitelist 先落盘/存档、之后才 normalize summary ⇒ 拒绝时白名单

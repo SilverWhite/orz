@@ -2162,7 +2162,8 @@ impl AgentLoopController {
              （分块表/压缩回执里直接复制；section=journal anchor=… 点读 ≤512B）。\
              压缩＝旧上下文换摘要（原文在本地档案、可回放；摘要用 {cm} 的 \
              mode=compress+summary 提交，自由文本、无固定模板，不写成 assistant 正文；\
-             是否压缩由模型决定，机械不强制）。清零＝把边界前上下文整体移出窗口继续工作（未销毁、\
+             是否压缩由模型决定，机械不强制；mode=map 只读分块表——块号/轮次/token/\
+             状态/回放路径，≤1K token、不常驻、不改状态）。清零＝把边界前上下文整体移出窗口继续工作（未销毁、\
              可回放；需先写交接摘要）；一键清理＝清零＋黑板三分区一并清空\
              （handover 成为清空后板面唯一条目）；清空黑板分区＝blackboard_write \
              op=clear（历史全量在 journal 可回查）。域（start/normal/pressure/\
@@ -4261,7 +4262,9 @@ impl AgentLoopController {
         {
             tool_defs.push(ToolDef {
                 name: orz_assurance::tool_names::CONTEXT_MANAGE_TOOL_NAME.to_string(),
-                description: "Manage your own context window. mode=compress: with an \
+                description: "Manage your own context window. mode=map: read-only compact \
+                     context map (block number, rounds, token estimate, state, replay path; \
+                     ≤1K tokens, pull-only, never resident). mode=compress: with an \
                      optional free-form `summary`, compress immediately (preferred; no fixed \
                      field template, optional `压缩块: 1-4` line); without `summary`, open a \
                      compression window (≤3 rounds) and submit a summary later. Do not write \
@@ -4277,11 +4280,12 @@ impl AgentLoopController {
                     "properties": {
                         "mode": {
                             "type": "string",
-                            "enum": ["compress", "clear", "clear_all"],
-                            "description": "compress = 开压缩窗口（知情发起，承继 0ap 管线）；\
-                             clear = 主动清零（边界前全部内容移出当前窗口；未销毁、可回放）；\
-                             clear_all = 一键清理（上下文清零＋黑板三分区清空，handover 成为\
-                             清空后板面唯一条目）。",
+                            "enum": ["map", "compress", "clear", "clear_all"],
+                            "description": "map = 只读紧凑分块表（块号/轮次/token/状态/回放路径；\
+                             ≤1K token，不常驻、不改状态）；compress = 开压缩窗口（知情发起，\
+                             承继 0ap 管线）；clear = 主动清零（边界前全部内容移出当前窗口；\
+                             未销毁、可回放）；clear_all = 一键清理（上下文清零＋黑板三分区清空，\
+                             handover 成为清空后板面唯一条目）。",
                         },
                         "summary": {
                             "type": "string",
