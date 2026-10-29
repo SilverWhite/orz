@@ -5,7 +5,7 @@
  * journal 事件（事实面，运行留痕）——去重语义照 orz-tui projection.rs。
  */
 
-import { state, vm } from './state.js';
+import { state, vm, isEmptyModelCard } from './state.js';
 import { setToken, fetchBoot, fetchConversations, fetchArchives, fetchArchive, postArchive, unarchiveSession, deleteSession, grantTrust, switchWorkspace, fetchRecall } from './api.js';
 import * as acp from './acp.js';
 import { refreshRuns, replayRun, tailRun, closeTail } from './journal.js';
@@ -1650,9 +1650,16 @@ ui.scrollToItem = (itemIndex) => {
     renderContent();
   }
   // renderContent 会在截断提示存在时多渲染一个首行，DOM 序号需偏移。
+  // 0dt 审查批（383）：renderContent 跳过空正文模型卡（isEmptyModelCard，
+  // 与 state.js 同一谓词），DOM 序号是「非隐藏条目序」——目标之前的隐藏
+  // 卡逐个扣除后才是真正的 DOM 下标，否则锚点跳转在隐藏卡之后整体错位。
+  let domIndex = 0;
+  for (let i = 0; i < itemIndex; i++) {
+    if (!isEmptyModelCard(state.content.items[i])) domIndex++;
+  }
   const offset = state.content.droppedItems > 0 ? 1 : 0;
   const nodes = ui.contentScroll.children;
-  nodes[itemIndex + offset]?.scrollIntoView({ block: 'start' });
+  nodes[domIndex + offset]?.scrollIntoView({ block: 'start' });
 };
 
 ui.findInConversation = (query, scope) => {

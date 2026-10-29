@@ -175,6 +175,13 @@ function sanitizeText(s) {
   return String(s ?? '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
 }
 
+/* 0dt 审查批（383）：空正文模型卡判定——渲染跳空（widgets.js）与标记
+ * 跳转寻址映射（main.js scrollToItem）共用的同一谓词，两处必须字面同一
+ * 口径，否则隐藏卡后锚点跳转会错位。 */
+export function isEmptyModelCard(item) {
+  return item?.kind === 'message' && item.role === '模型' && item.content === '';
+}
+
 export const vm = {
   sanitizeText,
 
@@ -204,7 +211,7 @@ export const vm = {
   },
 
   addModelMessage(text, turn, warning) {
-    pushContentItem({ kind: 'message', role: '模型', content: sanitizeText(text), turn, warning: !!warning, collapsed: false });
+    pushContentItem({ kind: 'message', role: '模型', content: sanitizeText(text), turn, warning: !!warning, collapsed: false, settled: true });
     state.content.currentModelIndex = state.content.items.length - 1;
     // 中间轮/流式段不产锚点（走查反馈二 2026-09-25：只标最终正式输出）；
     // 终态时由 anchorFinalOutput() 统一回溯定锚。
@@ -227,11 +234,17 @@ export const vm = {
     }
   },
 
+  /* 0dt 审查批（383）：流式追加目标卡的建立语义（TUI `begin_streaming_card`
+   * 同构）。指针为空、指向的卡不是模型卡、或该卡已收口（settled——journal
+   * 投影/归档装填落下）时一律开新卡：已收口卡是上一轮的可见答案，下一轮
+   * 流式绝不在其上追加（同卡拼接＝另一形态的双卡病），reset 也不得清空它
+   * （悬垂指针＋zero-chunk 重试会误清上一轮答案）。 */
   ensureCurrentModelCard() {
-    if (state.content.currentModelIndex == null) {
-      pushContentItem({ kind: 'message', role: '模型', content: '', turn: state.turnCounter, warning: false, collapsed: false });
-      state.content.currentModelIndex = state.content.items.length - 1;
-    }
+    const idx = state.content.currentModelIndex;
+    const cur = idx != null ? state.content.items[idx] : null;
+    if (cur?.kind === 'message' && cur.role === '模型' && !cur.settled) return;
+    pushContentItem({ kind: 'message', role: '模型', content: '', turn: state.turnCounter, warning: false, collapsed: false, settled: false });
+    state.content.currentModelIndex = state.content.items.length - 1;
   },
 
   appendTextDelta(text) {
@@ -243,12 +256,13 @@ export const vm = {
   /* 0dt（2026-10-29，R-379-00 流式重复卡）：流式重置——传输重试重发前
    * (`_orz/stream_reset`) 清空当前流式卡内容（指针保留，重发 delta 原地
    * 重填）；journal model_output 收口时 P1-3 精确相等去重折叠，单卡收口。
-   * 无当前卡（卡内尚无内容）＝no-op。 */
+   * 无当前卡（卡内尚无内容）＝no-op。383 审查批补 settled 守卫：已收口
+   * 卡（journal 投影）永不清空。 */
   resetStreamingCard() {
     const idx = state.content.currentModelIndex;
     if (idx == null) return;
     const card = state.content.items[idx];
-    if (card?.kind === 'message' && card.role === '模型') card.content = '';
+    if (card?.kind === 'message' && card.role === '模型' && !card.settled) card.content = '';
   },
 
   addSystemMessage(text, warning) {
@@ -261,7 +275,7 @@ export const vm = {
   // 产 ▸ 锚与实时视图同语义；模型卡不逐轮产锚，由 anchorFinalOutput
   // 统一回溯定「最终输出」锚。
   addArchivedMessage(role, content, turn) {
-    pushContentItem({ kind: 'message', role, content: sanitizeText(content), turn: turn || 0, warning: false, collapsed: false });
+    pushContentItem({ kind: 'message', role, content: sanitizeText(content), turn: turn || 0, warning: false, collapsed: false, settled: true });
     if (role === '用户') {
       const item = state.content.items[state.content.items.length - 1];
       item.anchor = {

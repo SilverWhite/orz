@@ -16,6 +16,12 @@ pub struct ChatMessage {
     pub collapsible: bool,
     pub warning: bool,
     pub collapsed: bool,
+    /// 0dt 审查批（383，2026-10-29）：收口卡标志——journal 投影（或归档
+    /// 装填）落下的卡为 true，流式追加目标卡（`begin_streaming_card` 建）
+    /// 为 false。不变量：reset/appendTextDelta 只摸非收口卡——已收口卡
+    /// 既不可被流式重置清空（悬垂指针＋zero-chunk 重试会误清上一轮可见
+    /// 答案），也不可被下一轮 delta 追加（同卡拼接＝另一形态的双卡病）。
+    pub settled: bool,
 }
 
 /// One entry in a tool trace line.
@@ -72,8 +78,10 @@ impl Default for ContentPane {
 impl ContentPane {
     /// All text entering the view model is sanitized at the boundary —
     /// model/tool output is untrusted and could carry terminal escape
-    /// sequences (review P2-1).
-    fn sanitize(s: &str) -> String {
+    /// sequences (review P2-1). 0dt 审查批（383）：P1-3 精确相等比较也经
+    /// 本函数——流式卡内容是逐 delta 净化拼接的，journal 原文必须以同一
+    /// 口径净化后再比，含转义序列的输出才能折叠单卡（sanitize 对称）。
+    pub fn sanitize(s: &str) -> String {
         crate::theme::sanitize_text(s)
     }
 
@@ -85,6 +93,7 @@ impl ContentPane {
             collapsible: true,
             warning: false,
             collapsed: false,
+            settled: true,
         }));
     }
 
@@ -96,6 +105,7 @@ impl ContentPane {
             collapsible: true,
             warning,
             collapsed: false,
+            settled: true,
         }));
         self.current_model_index = Some(self.items.len() - 1);
     }
@@ -109,7 +119,36 @@ impl ContentPane {
             collapsible: !warning,
             warning,
             collapsed: false,
+            settled: true,
         }));
+    }
+
+    /// Ensure a live streaming card exists and return its index — the
+    /// append target for text deltas (0dt 审查批命名，承接 projection 层
+    /// 原先的 `is_none → add_model_message("")` 建卡). A pointer at a
+    /// settled (journal-projected) card is NOT reused: the next turn's
+    /// stream starts a fresh card instead of concatenating onto settled
+    /// output.
+    pub fn begin_streaming_card(&mut self, turn: u32) -> usize {
+        if let Some(idx) = self.current_model_index
+            && let Some(ContentItem::Message(msg)) = self.items.get(idx)
+            && msg.role == "模型"
+            && !msg.settled
+        {
+            return idx;
+        }
+        self.items.push(ContentItem::Message(ChatMessage {
+            role: "模型".into(),
+            content: String::new(),
+            turn,
+            collapsible: true,
+            warning: false,
+            collapsed: false,
+            settled: false,
+        }));
+        let idx = self.items.len() - 1;
+        self.current_model_index = Some(idx);
+        idx
     }
 
     /// Append streaming text to the current model card (Python
@@ -125,16 +164,19 @@ impl ContentPane {
         }
     }
 
-    /// 0dt（2026-10-29，R-379-00 流式重复卡）：流式重置——传输重试重发前
-    /// 清空当前流式卡内容（指针保留，重发 delta 原地重填）；journal
-    /// `model_output` 收口时 P1-3 精确相等去重折叠，单卡收口。无当前卡
-    /// ＝no-op（web `vm.resetStreamingCard` 同语义）。
+    /// 0dt（2026-10-29，R-379-00 流式重置）：传输重试重发前清空当前流式
+    /// 卡内容（指针保留，重发 delta 原地重填）；journal `model_output`
+    /// 收口时 P1-3 精确相等去重折叠，单卡收口。无当前卡或当前卡已收口
+    /// （settled——journal 投影卡）＝no-op：收口卡是上一轮的可见答案，
+    /// 悬垂指针下的 zero-chunk 重试不得误清（web `vm.resetStreamingCard`
+    /// 同语义，383 批审查补 settled 守卫）。
     pub fn reset_streaming_card(&mut self) {
         let Some(idx) = self.current_model_index else {
             return;
         };
         if let Some(ContentItem::Message(msg)) = self.items.get_mut(idx)
             && msg.role == "模型"
+            && !msg.settled
         {
             msg.content.clear();
         }
@@ -868,5 +910,92 @@ mod tests {
         marker.clear_search_hits();
         assert_eq!(marker.markers.len(), 1);
         assert_eq!(marker.markers[0].kind, MarkerKind::UserInput);
+    }
+
+    // ── 0dt（R-379-00 流式重置）＋383 审查批：settled 不变量与 reset 语义 ──
+
+    #[test]
+    fn reset_streaming_card_clears_content_keeps_pointer() {
+        let mut pane = ContentPane::default();
+        let idx = pane.begin_streaming_card(1);
+        pane.append_text_delta("残段");
+        pane.append_text_delta("-中断");
+        pane.reset_streaming_card();
+        let ContentItem::Message(msg) = &pane.items[idx] else {
+            panic!("expected message");
+        };
+        assert_eq!(msg.content, "", "reset must clear the in-flight card");
+        assert_eq!(pane.current_model_index, Some(idx), "pointer kept");
+        // 重发 delta 原地重填同一张卡（不新开卡）。
+        pane.append_text_delta("重发全文");
+        assert_eq!(pane.content_items_model_texts(), vec!["重发全文"]);
+    }
+
+    #[test]
+    fn reset_streaming_card_is_noop_without_card_or_on_settled() {
+        let mut pane = ContentPane::default();
+        // 无当前卡：no-op。
+        pane.reset_streaming_card();
+        assert!(pane.items.is_empty());
+
+        // 已收口卡（journal 投影落下）：不得被流式重置清空——悬垂指针下
+        // zero-chunk 重试的 reset 会误清上一轮可见答案（383 审查风险 2）。
+        pane.add_model_message("上一轮答案", 1, false);
+        pane.reset_streaming_card();
+        let ContentItem::Message(msg) = &pane.items[0] else {
+            panic!("expected message");
+        };
+        assert_eq!(msg.content, "上一轮答案", "settled card must survive reset");
+    }
+
+    #[test]
+    fn begin_streaming_card_reuses_live_and_freshens_settled() {
+        let mut pane = ContentPane::default();
+        // 无卡 → 建（settled=false）。
+        let idx = pane.begin_streaming_card(1);
+        assert_eq!(pane.current_model_index, Some(idx));
+        assert!(!pane.message_at(idx).settled);
+        // 活流式卡 → 原地复用。
+        assert_eq!(pane.begin_streaming_card(1), idx);
+        // 收口卡 → 拒绝复用，开新卡（下一轮流式不拼接上一轮答案）。
+        pane.add_model_message("收口答案", 1, false);
+        let settled_idx = pane.current_model_index.unwrap();
+        let fresh = pane.begin_streaming_card(2);
+        assert_ne!(fresh, settled_idx, "settled card must not be reused");
+        assert!(!pane.message_at(fresh).settled);
+        assert_eq!(pane.message_at(fresh).content, "");
+    }
+
+    #[test]
+    fn add_model_message_marks_settled() {
+        let mut pane = ContentPane::default();
+        pane.add_model_message("journal 全文", 1, false);
+        assert!(
+            pane.message_at(0).settled,
+            "journal-projected card is settled"
+        );
+        pane.add_user_message("问");
+        pane.add_system_message("系统行", false);
+        assert!(pane.message_at(1).settled && pane.message_at(2).settled);
+    }
+
+    /// Test helper — contents of every model card, in items order.
+    impl ContentPane {
+        fn content_items_model_texts(&self) -> Vec<&str> {
+            self.items
+                .iter()
+                .filter_map(|i| match i {
+                    ContentItem::Message(m) if m.role == "模型" => Some(m.content.as_str()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn message_at(&self, idx: usize) -> &ChatMessage {
+            match &self.items[idx] {
+                ContentItem::Message(m) => m,
+                _ => panic!("expected message at {idx}"),
+            }
+        }
     }
 }

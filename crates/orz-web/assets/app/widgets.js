@@ -5,7 +5,7 @@
  * 展开工具清单 pin-to-top（CONTENT_PANE_CONVERSATION_RENDERING_v0.1 §2–§5）。
  */
 
-import { state, vm } from './state.js';
+import { state, vm, isEmptyModelCard } from './state.js';
 import { renderMarkdown } from './md.js';
 
 export const ui = {};
@@ -445,6 +445,11 @@ export function renderContent() {
       if (item.role === '系统') {
         scroll.appendChild(el('div', `system-line${item.warning ? ' warning' : ''}`, item.content));
       } else {
+        // 0dt 审查批（383）：空正文模型卡不渲染——流式重置清空后到重发
+        // delta 到达前（退避＋RTT，可达数秒）以及重试链最终失败后，卡内
+        // 只剩空壳；跳过渲染＝空壳不可见（items 事实不动，重发照常原地
+        // 重填）。main.js scrollToItem 用同一谓词做寻址映射，锚点不漂移。
+        if (isEmptyModelCard(item)) continue;
         const card = el('div', `msg-card${item.warning ? ' warning' : ''}${item.collapsed ? ' collapsed' : ''}`);
         const head = el('div', 'msg-head', `[${item.role}]${item.turn ? ` · turn ${item.turn}` : ''}`);
         head.addEventListener('click', () => {

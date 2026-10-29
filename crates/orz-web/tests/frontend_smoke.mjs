@@ -493,6 +493,32 @@ assert.equal(state.content.items.length, streamedCards.length, '无卡 reset 零
 assert.equal(state.content.currentModelIndex, null, '无卡 reset 不复活指针');
 console.log('ok  0dt 流式重置：残段→reset→重发→收口 单卡');
 
+// 383 审查批补钉：① sanitize 对称——流式 delta 与 journal 原文都含终端
+// 转义序列时，两侧同口径净化后仍须单卡折叠（旧实现拿原文硬比必失配双卡）；
+// ② settled 守卫——journal 投影收口卡（mismatch 路径建）不得被后续 reset
+// 清空（悬垂指针＋zero-chunk 重试会误清上一轮可见答案）。
+state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
+state.marker = [];
+state.turnCounter = 0;
+applyAcpUpdate('s', chunk('[31m红色'));
+applyJournalEvent({ event_type: 'model_output', payload: { text: '[31m红色' } });
+const escCards = state.content.items.filter((it) => it.kind === 'message' && it.role === '模型');
+assert.equal(escCards.length, 1, '转义序列两侧同口径净化后仍单卡折叠');
+assert.equal(escCards[0].content, '红色', 'web 净化剥完整 CSI 序列（view_model 口径保留 [31m，两侧各自对称）');
+assert.equal(state.content.currentModelIndex, null, '折叠后指针复位');
+
+state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
+state.marker = [];
+applyJournalEvent({ event_type: 'model_output', payload: { text: '上一轮答案' } });
+assert.equal(state.content.items[0].settled, true, 'journal 投影卡必须标 settled');
+vm.resetStreamingCard();
+assert.equal(state.content.items[0].content, '上一轮答案', 'settled 收口卡不得被 reset 清空');
+const { isEmptyModelCard } = await import('../assets/app/state.js');
+assert.equal(isEmptyModelCard(state.content.items[0]), false, '非空卡不命中空卡谓词');
+assert.equal(isEmptyModelCard({ kind: 'message', role: '模型', content: '' }), true, '空模型卡命中谓词');
+assert.equal(isEmptyModelCard({ kind: 'message', role: '用户', content: '' }), false, '空用户卡不命中谓词');
+console.log('ok  0dt 审查批：sanitize 对称折叠＋settled 卡 reset 免疫＋空卡谓词');
+
 /* ── 8. 归档投影钉子（0br S3 新增面 2026-09-25）：API 面／只读转写／
  *    探索器三组重构＋归档动作键＋进行中/未完成语义 ── */
 
@@ -844,6 +870,25 @@ const css = readFileSync(new URL('../assets/app.css', import.meta.url), 'utf8');
 assert.match(css, /\.msg-card \.msg-body\.plain \{ white-space: pre-wrap; \}/, 'app.css 必须含 .plain pre-wrap 规则');
 assert.match(css, /\.system-line \{[^}]*white-space: pre-wrap/s, '系统行同面补 pre-wrap');
 console.log('ok  0dg ① 对话卡 pre-wrap（.plain 作用面限定＋system-line 同面）');
+
+/* ── 12.5 0dt 审查批（383）：空模型卡渲染跳空＋锚点寻址映射 ──
+ * 流式重置清空后到重发 delta 到达前（退避＋RTT）以及重试链最终失败后，
+ * 空模型卡只渲染出空壳——renderContent 跳过它；scrollToItem 用同一谓词
+ * 扣除隐藏卡，锚点跳转不得因隐藏卡整体错位。 */
+state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
+state.marker = [];
+state.turnCounter = 0;
+vm.addUserMessage('问题');                                       // item 0
+state.content.items.push({ kind: 'message', role: '模型', content: '', turn: 1, warning: false, collapsed: false, settled: false }); // item 1（空壳）
+state.content.items.push({ kind: 'message', role: '模型', content: '上一轮答案', turn: 1, warning: false, collapsed: false, settled: true }); // item 2
+widgets.renderContent();
+const paneKids = ui.contentScroll.children;
+assert.equal(paneKids.length, 3, '空模型卡必须被渲染跳过（两卡＋收尾 gap）');
+for (const c of paneKids) c.scrollIntoView = function () { this.__scrolled = true; };
+ui.scrollToItem(2);
+assert.equal(paneKids.filter((c) => c.__scrolled).length, 1, '锚点跳转恰命中一个节点');
+assert.equal(paneKids[1].__scrolled === true, true, 'item 2 须映射到扣除隐藏卡后的 DOM 下标 1（上一轮答案卡）');
+console.log('ok  12.5 空模型卡渲染跳空＋scrollToItem 寻址映射（锚点不漂移）');
 
 // ②输入框内 Ctrl+Z＝放行原生文本撤销（不调 stopRun、不 preventDefault）；
 //   输入框外仍取消运行；闲置期按下给「当前无运行中」反馈（不再静默 return）。
@@ -2230,6 +2275,39 @@ assert.ok(
   'deleted 必须如实提示「已删除」',
 );
 console.log('ok  16.7 session_state closing 禁发＋deleted 解绑');
+
+// 16.7b 0dt 审查批（383）补钉：`_orz/stream_reset` 线格式帧穿透 acp.js
+// 分发分支与 main.js 跨会话过滤——同会话清卡、异会话拒绝（各一行接线
+// 若方法串/过滤笔误，纯状态面钉子抓不住）。
+resetView();
+await withFetch(fallbackApi(), async () => {
+  await ui.openUri('workspace://live');
+});
+await flush();
+hooks.setBinding('0d75ae57-1111-2222-3333-444455556666', 'D:\CLI\orz');
+const wireUpdate = (sid, text) =>
+  currentAcpSocket().onmessage({
+    data: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionId: sid,
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } },
+      },
+    }),
+  });
+const wireReset = (sid) =>
+  currentAcpSocket().onmessage({
+    data: JSON.stringify({ jsonrpc: '2.0', method: '_orz/stream_reset', params: { sessionId: sid } }),
+  });
+wireUpdate('0d75ae57-1111-2222-3333-444455556666', '残段');
+assert.equal(state.content.items.at(-1).content, '残段', '前提：update 线格式帧可建流式卡');
+wireReset('0d75ae57-1111-2222-3333-444455556666');
+assert.equal(state.content.items.at(-1).content, '', '同会话 streamReset 必须穿透分发并清卡');
+wireUpdate('0d75ae57-1111-2222-3333-444455556666', '重发全文');
+wireReset('deadbeef-aaaa-bbbb-cccc-ddddeeeeffff');
+assert.equal(state.content.items.at(-1).content, '重发全文', '异会话 streamReset 必须被跨会话过滤拒绝');
+console.log('ok  16.7b streamReset 分发穿透（同会话清卡、异会话拒绝）');
 
 // 16.8 空闲刷新不弹确认（334 §5.9）：无运行/队列/后台时 beforeunload 放行。
 state.running = false;

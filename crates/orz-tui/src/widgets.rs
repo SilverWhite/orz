@@ -220,7 +220,17 @@ fn render_content_pane(pane: &ContentPane, inner_w: usize) -> Vec<String> {
     let inner_w = inner_w.max(4) as u16;
     for item in &pane.items {
         match item {
-            ContentItem::Message(msg) => lines.extend(render_chat_message(msg, inner_w)),
+            ContentItem::Message(msg) => {
+                // 0dt 审查批（383）：空正文模型卡不渲染——流式重置清空后
+                // 到重发 delta 到达前（退避＋RTT，可达数秒）以及重试链最终
+                // 失败后，卡内只剩空壳；跳过渲染＝空壳不可见（items 事实
+                // 不动，重发照常原地重填）。空正文工具轮占位卡随之隐形，
+                // 与 web 2026-09-25「不留空卡」走查口径对齐。
+                if msg.role == "模型" && msg.content.is_empty() {
+                    continue;
+                }
+                lines.extend(render_chat_message(msg, inner_w));
+            }
             ContentItem::ToolTrace(trace) => {
                 if trace.expanded {
                     lines.extend(render_expanded_tool(trace, inner_w));
@@ -1016,6 +1026,7 @@ mod tests {
             collapsible: true,
             warning: false,
             collapsed: false,
+            settled: false,
         };
         let lines = render_chat_message(&msg, 20);
         // Title = " [用户] · turn 1" (16 cols), inner = 18 → fill 0;
@@ -1041,6 +1052,7 @@ mod tests {
             collapsible: true,
             warning: false,
             collapsed: false,
+            settled: false,
         };
         let lines = render_content_pane(
             &ContentPane {
@@ -1068,6 +1080,7 @@ mod tests {
             collapsible: true,
             warning: false,
             collapsed: true,
+            settled: false,
         };
         let lines = render_chat_message(&msg, 40);
         assert_eq!(lines.len(), 1);
@@ -1084,6 +1097,7 @@ mod tests {
             collapsible: false,
             warning: true,
             collapsed: true,
+            settled: false,
         };
         let lines = render_chat_message(&msg, 20);
         assert!(lines[0].starts_with("┌"), "warning must never collapse");

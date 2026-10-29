@@ -171,19 +171,31 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             // different text means a new model output (next turn / final
             // answer after a tool round), which must get its own card
             // (review P1-3: matching any non-empty card dropped turn-2+).
+            //
+            // 0dt 审查批（383）两处收紧：① sanitize 对称——流式卡内容是
+            // 逐 delta 净化拼接的，journal 原文须以同一口径净化后再比，含
+            // 转义序列的输出才能折叠单卡；② settled 守卫——只有非收口
+            // （流式追加）卡参与折叠判定，journal 投影的收口卡永不复用
+            // （防止误折叠/追加到上一轮可见答案）。
+            let clean = crate::view_model::ContentPane::sanitize(&text);
             let streamed_match = app.content.current_model_index.is_some_and(|idx| {
                 matches!(
                     app.content.items.get(idx),
                     Some(crate::view_model::ContentItem::Message(m))
-                        if m.role == "模型" && m.content == text
+                        if m.role == "模型" && !m.settled && m.content == clean
                 )
             });
             if streamed_match {
                 app.content.current_model_index = None;
-            } else if !text.is_empty() {
+            } else if !clean.is_empty() {
                 app.content.add_model_message(&text, turn, false);
             } else if !tool_calls.is_empty() {
                 app.content.add_model_message("", turn, false);
+            } else {
+                // 纯空轮次（无正文无工具）：与 web projection.js 同形——
+                // 不留卡、复位流式指针（原先 TUI 漏了复位，仅靠 run 终态
+                // 事件兜底）。
+                app.content.current_model_index = None;
             }
             let _ = finish_reason;
             vec![format!("模型输出（turn {turn}）")]
@@ -764,10 +776,11 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
 
         // ── synthetic ──
         TuiEvent::TextDelta { text } => {
-            // First delta of a turn creates the card (Python `_on_text_delta`).
-            if app.content.current_model_index.is_none() {
-                app.content.add_model_message("", app.turn_counter, false);
-            }
+            // First delta of a turn creates the card (Python
+            // `_on_text_delta`). 0dt 审查批（383）：建卡改走
+            // `begin_streaming_card`——指针若停在已收口卡上，本轮流式必须
+            // 开新卡而非把 delta 追加进上一轮的可见答案（同卡拼接病）。
+            app.content.begin_streaming_card(app.turn_counter);
             app.content.append_text_delta(&text);
             app.status.set_model("模型");
             vec![]
@@ -1521,5 +1534,123 @@ mod tests {
             .filter(|i| matches!(i, ContentItem::Message(m) if m.role == "模型"))
             .count();
         assert_eq!(model_cards, 1);
+    }
+
+    // ── 0dt（R-379-00 流式重置）＋383 审查批：TUI 全链场景与 sanitize 对称 ──
+
+    /// runner StreamReset 臂同款调用形（`app.content.reset_streaming_card`）
+    /// 驱动的全链场景：delta×2 → reset → delta → `ModelOutput` ⇒ 单卡收口、
+    /// 内容==journal 全文、指针复位。
+    #[test]
+    fn stream_reset_then_resend_folds_into_single_card() {
+        let mut a = app();
+        a.accept_event(TuiEvent::TextDelta {
+            text: "残段".into(),
+        });
+        a.accept_event(TuiEvent::TextDelta {
+            text: "-中断".into(),
+        });
+        a.content.reset_streaming_card();
+        a.accept_event(TuiEvent::TextDelta {
+            text: "重发完整全文".into(),
+        });
+        a.accept_event(TuiEvent::ModelOutput {
+            text: "重发完整全文".into(),
+            tool_calls: vec![],
+            finish_reason: "stop".into(),
+        });
+        let cards: Vec<&str> = a
+            .content
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                ContentItem::Message(m) if m.role == "模型" => Some(m.content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(cards, vec!["重发完整全文"], "reset 后重发必须单卡收口");
+        assert_eq!(a.content.current_model_index, None, "P1-3 折叠复位指针");
+    }
+
+    /// P1-3 sanitize 对称（383 审查风险 1）：流式卡内容逐 delta 净化拼接，
+    /// journal 原文含终端转义序列时旧实现拿原文硬比必失配 → 双卡；净化后
+    /// 同口径比较即可折叠。
+    #[test]
+    fn model_output_with_escape_sequences_still_folds() {
+        let mut a = app();
+        a.accept_event(TuiEvent::TextDelta {
+            text: "\x1b[31m红色".into(),
+        });
+        a.accept_event(TuiEvent::ModelOutput {
+            text: "\x1b[31m红色".into(),
+            tool_calls: vec![],
+            finish_reason: "stop".into(),
+        });
+        let cards: Vec<&str> = a
+            .content
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                ContentItem::Message(m) if m.role == "模型" => Some(m.content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            cards,
+            vec!["[31m红色"],
+            // TUI sanitize 口径＝剔除控制字符本身（ESC 去除、`[31m` 保留）；
+            // 关键在两侧同口径——delta 侧与 journal 侧都经 ContentPane::sanitize，
+            // 含转义序列的输出同样精确相等、折叠单卡（web 侧正则剥完整 CSI
+            // 序列，呈现更净，但折叠判据的对称性两端一致）。
+            "escape sequences are sanitized on both sides; single card folds"
+        );
+        assert_eq!(a.content.current_model_index, None);
+    }
+
+    /// settled 不变量（383 审查风险 2）：上一轮收口卡在悬垂指针下不得被
+    /// zero-chunk 重试的 reset 误清；下一轮 delta 开新卡而非拼接。
+    #[test]
+    fn settled_card_survives_reset_and_next_turn_starts_fresh() {
+        let mut a = app();
+        // 上一轮：journal 投影收口卡（mismatch 路径，指针停在它上）。
+        a.accept_event(TuiEvent::ModelOutput {
+            text: "上一轮答案".into(),
+            tool_calls: vec![],
+            finish_reason: "stop".into(),
+        });
+        // 下一轮 zero-chunk 重试：reset 到达。
+        a.content.reset_streaming_card();
+        let cards: Vec<&str> = a
+            .content
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                ContentItem::Message(m) if m.role == "模型" => Some(m.content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            cards,
+            vec!["上一轮答案"],
+            "settled card must survive a stream reset"
+        );
+        // 下一轮流式：开新卡，不拼接上一轮答案。
+        a.accept_event(TuiEvent::TextDelta {
+            text: "新轮".into(),
+        });
+        let cards: Vec<&str> = a
+            .content
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                ContentItem::Message(m) if m.role == "模型" => Some(m.content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            cards,
+            vec!["上一轮答案", "新轮"],
+            "next turn's stream must start a fresh card, never concatenate"
+        );
     }
 }

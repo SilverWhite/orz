@@ -3599,13 +3599,14 @@ mod tests {
         .await;
         let t = mock_transport_with_retry(&base, short_retry_policy());
         let mut chunks = Vec::new();
+        let mut resets = Vec::new();
         let err = t
             .generate_stream(
                 request(),
                 None,
                 None,
                 &mut |c| chunks.push(c.to_string()),
-                &mut || {},
+                &mut || resets.push(()),
             )
             .await
             .unwrap_err();
@@ -3617,6 +3618,13 @@ mod tests {
             chunks,
             vec![repeated.clone()],
             "all deltas up to the trip must reach the journal"
+        );
+        // 0dt reset 触发矩阵（383 批审查补钉）：退化守卫中断不重试不重置
+        // ——残段保留（journal partial 与 live 卡同源），P1-3 去重仍折叠。
+        assert_eq!(
+            resets.len(),
+            0,
+            "degeneration interruption never retries, so it must never reset"
         );
         let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(
@@ -5192,13 +5200,14 @@ mod tests {
             }
         });
         let mut chunks = Vec::new();
+        let mut resets = Vec::new();
         let err = t
             .generate_stream(
                 request(),
                 Some(&cancel),
                 None,
                 &mut |c| chunks.push(c.to_string()),
-                &mut || {},
+                &mut || resets.push(()),
             )
             .await
             .unwrap_err();
@@ -5213,6 +5222,9 @@ mod tests {
             !chunks.iter().any(|c| c.contains("done")),
             "frames after the cancel must not be projected: {chunks:?}"
         );
+        // 0dt reset 触发矩阵（383 批审查补钉）：用户取消不重试 ⇒ 不重置
+        // （残段保留，与 journal abort partial 同口径）。
+        assert_eq!(resets.len(), 0, "a cancelled stream must never reset");
     }
 
     #[tokio::test]
@@ -5582,17 +5594,27 @@ mod tests {
         .await;
         let t = mock_transport_with_retry(&base, short_retry_policy());
         let mut chunks = Vec::new();
+        let mut resets = Vec::new();
         let r = t
             .generate_stream(
                 request(),
                 None,
                 None,
                 &mut |c| chunks.push(c.to_string()),
-                &mut || {},
+                &mut || resets.push(()),
             )
             .await
             .unwrap();
         assert_eq!(r.text.as_deref(), Some("ok-after-eof"));
+        // 0dt reset 触发矩阵（383 批审查补钉）：zero-chunk 路径首试零
+        // delta——重发前恰发一次 Reset（卡内无本请求内容，重置为无害
+        // no-op；与 midstream 信号序钉合成「midstream/zero-chunk 统一
+        // 触发」设计声明的两半）。
+        assert_eq!(
+            resets.len(),
+            1,
+            "zero-chunk retry must fire the stream reset exactly once before the resend"
+        );
         let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(n, 2, "zero-chunk EOF must retry exactly once: {n}");
     }
@@ -5720,13 +5742,14 @@ mod tests {
         .await;
         let t = mock_transport_with_retry(&base, short_retry_policy());
         let mut chunks = Vec::new();
+        let mut resets = Vec::new();
         let err = t
             .generate_stream(
                 request(),
                 None,
                 None,
                 &mut |c| chunks.push(c.to_string()),
-                &mut || {},
+                &mut || resets.push(()),
             )
             .await
             .unwrap_err();
@@ -5735,6 +5758,13 @@ mod tests {
             "midstream retry exhaustion must surface StreamInterrupted(attempts=1, saw_chunk=true): {err:?}"
         );
         assert_eq!(chunks, vec!["half", "-done", "half", "-done"]);
+        // 0dt reset 触发矩阵（383 批审查补钉）：预算内重发前恰一次 Reset，
+        // 最终失败后不再发（无重发即无重置）。
+        assert_eq!(
+            resets.len(),
+            1,
+            "exactly one reset before the single resend; none after the final failure"
+        );
         let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(
             n, 2,

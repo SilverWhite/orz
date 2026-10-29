@@ -3422,7 +3422,10 @@ pub(crate) async fn run_agent_loop(
         // 0dt（2026-10-29，R-379-00）：`Mutex` 共享——delta 与重置两个
         // 回调闭包并行传给 run_round（回调面是 `FnMut + Send`，闭包捕获
         // 须 Send ⇒ `&Mutex` 而非 `&RefCell`），都要摸 partial 累计（重置
-        // 时清空）；运行期内无争用（单线程推进），lock 恒即时返回。
+        // 时清空）；383 批审查措辞精校：无争用并非靠线程模型保证（tokio
+        // 多线程 executor 下 future 可跨线程迁移），而是靠 `&mut dyn FnMut`
+        // 独占借用——两回调被 transport 在同一 poll 内内联串行调用，构造
+        // 性互斥，lock 恒即时返回。
         let partial_text = std::sync::Mutex::new(Vec::<String>::new());
         // P0-D S2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN
         // §3) + 动态上下文滑块 S1 (2026-09-15, 设计 §3.1/§3.2): the
@@ -3651,7 +3654,14 @@ pub(crate) async fn run_agent_loop(
                     // F-06 (2026-08-07 review): accumulate the streamed
                     // content deltas — on an abort (watchdog/timeout)
                     // the partial output must still reach the journal.
-                    partial_text.lock().unwrap().push(chunk.to_string());
+                    // 0dt reset exception (383 批注记): after a stream
+                    // reset the discarded pre-retry residual is *not*
+                    // audit material — the cleared accumulator leaves
+                    // only the resent stream for the abort path below.
+                    partial_text
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(chunk.to_string());
                     // Subagent text has no live consumer — deltas are
                     // dropped (F-03, matching the pre-split one-shot pass).
                     if profile.role == AgentRole::Main {
@@ -3665,7 +3675,10 @@ pub(crate) async fn run_agent_loop(
                     // 重试后中止会把残段＋重发段拼接进 journal partial，与
                     // live 卡同样发散）；主车道经宿主把 `_orz/stream_reset`
                     // 控制面通知推给 live 客户端（headless/子代理 no-op）。
-                    partial_text.lock().unwrap().clear();
+                    partial_text
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clear();
                     if profile.role == AgentRole::Main {
                         host.on_stream_reset();
                     }
@@ -3776,7 +3789,16 @@ pub(crate) async fn run_agent_loop(
                 // records the failure. Previously the partial text went
                 // only to live deltas; the journal had a run_failed with
                 // no trace of what was produced (2026-08-07 review).
-                let partial = partial_text.lock().unwrap().concat();
+                // 0dt reset exception (383 批注记): a stream reset
+                // deliberately drops the pre-retry residual from this
+                // accumulator (the resent stream is the sole authority),
+                // so what lands here after a reset is the resent stream
+                // only — the discarded residual lives on solely in the
+                // `transport_retry` journal event's retry facts.
+                let partial = partial_text
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .concat();
                 if !partial.is_empty() {
                     writer
                         .record(

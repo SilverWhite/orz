@@ -448,6 +448,46 @@ mod tests {
     use orz_loop::gateway::model::ToolCall;
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    /// 0dt 审查批（383）补钉：ext_notification 映射——`orz/stream_reset`
+    /// ⇒ `ClientMsg::StreamReset`；其余 ext 通知维持缺省 no-op（零回归）。
+    /// 线格式 `_orz/` 前缀由 agent-client-protocol 出线加/入线剥，handler
+    /// 收到的是剥前缀名（与 host 发送侧对称）。
+    #[tokio::test]
+    async fn ext_notification_maps_stream_reset_and_ignores_others() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handler = TuiClientHandler { msg_tx: tx };
+        let params = serde_json::value::to_raw_value(&serde_json::json!({
+            "sessionId": "sess-1"
+        }))
+        .unwrap();
+        acp::Client::ext_notification(
+            &handler,
+            acp::ExtNotification::new("orz/stream_reset", params.into()),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(rx.recv().await, Some(ClientMsg::StreamReset)),
+            "orz/stream_reset must map to ClientMsg::StreamReset"
+        );
+
+        let other = serde_json::value::to_raw_value(&serde_json::json!({
+            "sessionId": "sess-1",
+            "state": "closing"
+        }))
+        .unwrap();
+        acp::Client::ext_notification(
+            &handler,
+            acp::ExtNotification::new("orz/session_state", other.into()),
+        )
+        .await
+        .unwrap();
+        assert!(
+            rx.try_recv().is_err(),
+            "non-reset ext notifications must stay no-op (no ClientMsg emitted)"
+        );
+    }
+
     static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
 
     fn test_dir() -> PathBuf {

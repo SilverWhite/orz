@@ -98,16 +98,22 @@ export function applyJournalEvent(ev) {
       }
       // 流式去重（projection.rs P1-3）：卡片内容与 journal 全文精确一致
       // ⇒ 只复位流式指针；不同文本 ⇒ 新卡片（工具轮后的下一段输出）。
+      // 0dt 审查批（383）两处收紧：① sanitize 对称——流式卡内容是逐
+      // delta 净化拼接的，journal 原文须以同一口径净化后再比，含转义
+      // 序列的输出才能折叠单卡；② settled 守卫——只有非收口（流式追加）
+      // 卡参与折叠判定，journal 投影的收口卡永不复用。
       const text = str(p, 'text');
+      const clean = vm.sanitizeText(text);
       const idx = state.content.currentModelIndex;
+      const card = idx != null ? state.content.items[idx] : null;
       const streamed =
-        idx != null &&
-        state.content.items[idx]?.kind === 'message' &&
-        state.content.items[idx].role === '模型' &&
-        state.content.items[idx].content === text;
+        card?.kind === 'message' &&
+        card.role === '模型' &&
+        !card.settled &&
+        card.content === clean;
       if (streamed) {
         state.content.currentModelIndex = null;
-      } else if (text) {
+      } else if (clean) {
         vm.addModelMessage(text, turn, false);
       } else {
         // 纯工具调用、无正文的轮次：不留空白对话卡（走查反馈 2026-09-25
