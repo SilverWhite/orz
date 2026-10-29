@@ -1023,6 +1023,16 @@ pub trait LoopHost: Send + Sync {
     /// path is fire-and-forget (a dropped client must not stall the turn).
     fn on_text_delta(&self, _text: &str) {}
 
+    /// 0dt（2026-10-29，R-379-00 流式重复卡）：流式重置钩子——传输层
+    /// midstream/zero-chunk 重试**重发前**由 run 层调用（见 gateway
+    /// `stream_once_with_retry`）。重发流是唯一权威内容：宿主据此把
+    /// 「清空当前流式卡」控制面通知转发给 live 客户端（`_orz/stream_reset`
+    /// ext notification），重发 delta 原地重填，journal `model_output`
+    /// 收口时前端按 P1-3 精确相等去重折叠成单卡。与 [`Self::on_text_delta`]
+    /// 同语义：live-only、不进 journal（重试事实已有 `transport_retry`
+    /// 事件）、fire-and-forget。默认 no-op（headless/一次性宿主零行为）。
+    fn on_stream_reset(&self) {}
+
     /// P0-1（0dq，2026-10-25）：回合级写前落盘检查点——消息面推进到
     /// 「provider 一致」状态时由 loop 调用：①含 `tool_calls` 的
     /// assistant 声明入列后（任何副作用发生前，写前）；②工具结果入列

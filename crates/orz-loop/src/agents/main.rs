@@ -44,6 +44,7 @@ impl MainAgent {
         cancel: Option<&tokio_util::sync::CancellationToken>,
         heartbeat: Option<&ActivityClock>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+        on_reset: &mut (dyn FnMut() + Send),
     ) -> Result<ModelResponse, GatewayError> {
         self.gateway
             .generate_stream(
@@ -57,6 +58,7 @@ impl MainAgent {
                 cancel,
                 heartbeat,
                 on_chunk,
+                on_reset,
             )
             .await
     }
@@ -80,9 +82,10 @@ impl RoundAgent for MainAgent {
         cancel: Option<&tokio_util::sync::CancellationToken>,
         heartbeat: Option<&ActivityClock>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+        on_reset: &mut (dyn FnMut() + Send),
     ) -> Result<ModelResponse, GatewayError> {
         self.run_round(
-            system, messages, tools, max_tokens, cancel, heartbeat, on_chunk,
+            system, messages, tools, max_tokens, cancel, heartbeat, on_chunk, on_reset,
         )
         .await
     }

@@ -166,6 +166,7 @@ impl ModelGateway for FakeProvider {
         cancel: Option<&tokio_util::sync::CancellationToken>,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+        _on_reset: &mut (dyn FnMut() + Send),
     ) -> Result<ModelResponse, GatewayError> {
         self.received
             .lock()
@@ -286,7 +287,13 @@ mod tests {
         let provider = FakeProvider::from_texts(vec!["你好世界ABC"]).with_chunk_size(2);
         let mut chunks: Vec<String> = Vec::new();
         let response = provider
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap();
         assert_eq!(chunks, vec!["你好", "世界", "AB", "C"]);
@@ -304,7 +311,13 @@ mod tests {
             let provider = FakeProvider::from_texts(vec![text]).with_chunk_size(size);
             let mut joined = String::new();
             let response = provider
-                .generate_stream(request(), None, None, &mut |c| joined.push_str(c))
+                .generate_stream(
+                    request(),
+                    None,
+                    None,
+                    &mut |c| joined.push_str(c),
+                    &mut || {},
+                )
                 .await
                 .unwrap();
             // Python text_delta invariant: deltas accumulate to the full text.
@@ -323,7 +336,7 @@ mod tests {
         let provider = FakeProvider::new(vec![ScriptedResponse::tool_calls(vec![call])]);
         let mut chunk_count = 0;
         let response = provider
-            .generate_stream(request(), None, None, &mut |_| chunk_count += 1)
+            .generate_stream(request(), None, None, &mut |_| chunk_count += 1, &mut || {})
             .await
             .unwrap();
         assert_eq!(chunk_count, 0);
@@ -335,12 +348,13 @@ mod tests {
     async fn generate_stream_exhausted_script_errors() {
         let provider = FakeProvider::from_texts(vec!["only one"]).with_chunk_size(2);
         let mut on_chunk = |_c: &str| {};
+        let mut on_reset = || {};
         provider
-            .generate_stream(request(), None, None, &mut on_chunk)
+            .generate_stream(request(), None, None, &mut on_chunk, &mut on_reset)
             .await
             .unwrap();
         let err = provider
-            .generate_stream(request(), None, None, &mut on_chunk)
+            .generate_stream(request(), None, None, &mut on_chunk, &mut on_reset)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("script exhausted"), "{err}");
@@ -350,8 +364,9 @@ mod tests {
     async fn generate_stream_records_received_request() {
         let provider = FakeProvider::from_texts(vec!["ok"]).with_chunk_size(2);
         let mut on_chunk = |_c: &str| {};
+        let mut on_reset = || {};
         provider
-            .generate_stream(request(), None, None, &mut on_chunk)
+            .generate_stream(request(), None, None, &mut on_chunk, &mut on_reset)
             .await
             .unwrap();
         let received = provider.received_requests();

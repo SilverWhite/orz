@@ -431,6 +431,12 @@ async fn run_loop(
                             app.accept_event(TuiEvent::TextDelta { text: text_chunk });
                         }
                     }
+                    Some(ClientMsg::StreamReset) => {
+                        // 0dt（2026-10-29，R-379-00）：传输重试重发前的清卡
+                        // 控制面——与 web 同语义（指针保留，重发 delta 原地
+                        // 重填；journal 收口后 P1-3 精确相等去重折叠单卡）。
+                        app.content.reset_streaming_card();
+                    }
                     Some(ClientMsg::SupplementQueued { depth, error }) => {
                         match error {
                             None => app.content.add_system_message(
@@ -1014,7 +1020,8 @@ mod tests {
                         // 0di：新消息面与本测试无关，照常跳过。
                         ClientMsg::SupplementQueued { .. }
                         | ClientMsg::RewindPreview { .. }
-                        | ClientMsg::RecallDone { .. } => {}
+                        | ClientMsg::RecallDone { .. }
+                        | ClientMsg::StreamReset => {}
                     }
                 };
                 let response = completed.expect("cancel is a success response");
@@ -1101,7 +1108,8 @@ mod tests {
                         // 0di：新消息面与本测试无关，照常跳过。
                         ClientMsg::SupplementQueued { .. }
                         | ClientMsg::RewindPreview { .. }
-                        | ClientMsg::RecallDone { .. } => {}
+                        | ClientMsg::RecallDone { .. }
+                        | ClientMsg::StreamReset => {}
                     }
                 }
                 let _ = std::fs::remove_dir_all(&base);
@@ -1175,7 +1183,8 @@ mod tests {
                         // 0di：新消息面与本测试无关，照常跳过。
                         ClientMsg::SupplementQueued { .. }
                         | ClientMsg::RewindPreview { .. }
-                        | ClientMsg::RecallDone { .. } => {}
+                        | ClientMsg::RecallDone { .. }
+                        | ClientMsg::StreamReset => {}
                     }
                 };
                 let response = completed.expect("cancel is a success response");
@@ -1483,7 +1492,8 @@ mod tests {
                         // 0di：新消息面与本测试无关，照常跳过。
                         ClientMsg::SupplementQueued { .. }
                         | ClientMsg::RewindPreview { .. }
-                        | ClientMsg::RecallDone { .. } => {}
+                        | ClientMsg::RecallDone { .. }
+                        | ClientMsg::StreamReset => {}
                     }
                 };
                 assert!(completed.is_ok(), "prompt failed: {completed:?}");

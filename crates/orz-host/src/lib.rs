@@ -2326,6 +2326,26 @@ impl LoopHost for OrzHost {
         }
     }
 
+    /// 0dt（2026-10-29，R-379-00 流式重复卡）：流式重置控制面转发——传输层
+    /// 重试重发前 loop 调用 [`LoopHost::on_stream_reset`]；这里把
+    /// `_orz/stream_reset` ext notification 推给 live ACP 客户端（web 前端
+    /// 清空当前流式卡后原地重填重发 delta，TUI 同语义）。与 `on_text_delta`
+    /// 同纪律：fire-and-forget、dropped receiver 静默降级（debug 留痕）；
+    /// headless（无 gateway/无会话）直接丢弃。
+    fn on_stream_reset(&self) {
+        let (Some(gateway), Some(session_id)) = (&self.gateway, &self.session_id) else {
+            return;
+        };
+        let params = serde_json::json!({ "sessionId": session_id });
+        let Ok(raw) = serde_json::value::to_raw_value(&params) else {
+            return;
+        };
+        let notification = acp::ExtNotification::new("orz/stream_reset", std::sync::Arc::from(raw));
+        if !gateway.forward_fire_and_forget(notification) {
+            tracing::debug!("on_stream_reset: gateway receiver dropped, reset discarded");
+        }
+    }
+
     /// P0-1（0dq，2026-10-25）：回合级写前落盘——转发给装配期挂载的
     /// sink。未挂载（`None`）＝no-op；挂载后的序列化/落盘失败由 sink
     /// 闭包内部记日志，这里不再上抛（best-effort，写失败绝不 fail run）。
@@ -4069,6 +4089,53 @@ mod tests {
                 )
                 .expect("headless host");
                 headless.on_text_delta("丢弃");
+
+                let _ = std::fs::remove_dir_all(&dir);
+            })
+            .await
+    }
+
+    /// 0dt（2026-10-29，R-379-00 流式重复卡）：`on_stream_reset` 把
+    /// `_orz/stream_reset` ext notification 转发给 live 客户端（web/TUI
+    /// 清空当前流式卡）；headless（无 gateway）静默丢弃。
+    #[tokio::test]
+    async fn on_stream_reset_forwards_ext_notification_to_gateway() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let dir = test_dir();
+                let (tx, mut rx) =
+                    tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+                let sender = xai_acp_lib::AcpAgentGatewaySender::new(tx);
+                let host = OrzHost::with_bridge(
+                    "sess-reset",
+                    JournalRecorder::new(dir.join("j")),
+                    &dir,
+                    WorkspaceTrust::ObservedTrusted,
+                    Some(sender),
+                )
+                .expect("host with bridge");
+
+                host.on_stream_reset();
+
+                let msg = rx.recv().await.expect("ext notification");
+                match msg {
+                    xai_acp_lib::AcpClientMessage::ExtNotification(args) => {
+                        assert_eq!(args.request.method.as_ref(), "orz/stream_reset");
+                        let value: serde_json::Value =
+                            serde_json::from_str(args.request.params.get()).unwrap();
+                        assert_eq!(value["sessionId"], "sess-reset");
+                    }
+                    other => panic!("unexpected message: {other:?}"),
+                }
+
+                // Headless host (no gateway): on_stream_reset is a silent no-op.
+                let headless = OrzHost::new(
+                    JournalRecorder::new(dir.join("j2")),
+                    &dir,
+                    WorkspaceTrust::ObservedTrusted,
+                )
+                .expect("headless host");
+                headless.on_stream_reset();
 
                 let _ = std::fs::remove_dir_all(&dir);
             })

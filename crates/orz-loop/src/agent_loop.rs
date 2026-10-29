@@ -73,6 +73,7 @@ pub(crate) trait RoundAgent: Send + Sync {
         cancel: Option<&tokio_util::sync::CancellationToken>,
         heartbeat: Option<&ActivityClock>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+        on_reset: &mut (dyn FnMut() + Send),
     ) -> Result<ModelResponse, GatewayError>;
 }
 
@@ -3418,7 +3419,11 @@ pub(crate) async fn run_agent_loop(
             last_request_header = Some(current_header);
         }
 
-        let mut partial_text: Vec<String> = Vec::new();
+        // 0dt（2026-10-29，R-379-00）：`Mutex` 共享——delta 与重置两个
+        // 回调闭包并行传给 run_round（回调面是 `FnMut + Send`，闭包捕获
+        // 须 Send ⇒ `&Mutex` 而非 `&RefCell`），都要摸 partial 累计（重置
+        // 时清空）；运行期内无争用（单线程推进），lock 恒即时返回。
+        let partial_text = std::sync::Mutex::new(Vec::<String>::new());
         // P0-D S2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN
         // §3) + 动态上下文滑块 S1 (2026-09-15, 设计 §3.1/§3.2): the
         // MODEL-VISIBLE view 驱逐最旧的连续完整轮（成为台账摘要行），
@@ -3646,11 +3651,23 @@ pub(crate) async fn run_agent_loop(
                     // F-06 (2026-08-07 review): accumulate the streamed
                     // content deltas — on an abort (watchdog/timeout)
                     // the partial output must still reach the journal.
-                    partial_text.push(chunk.to_string());
+                    partial_text.lock().unwrap().push(chunk.to_string());
                     // Subagent text has no live consumer — deltas are
                     // dropped (F-03, matching the pre-split one-shot pass).
                     if profile.role == AgentRole::Main {
                         host.on_text_delta(chunk);
+                    }
+                },
+                &mut || {
+                    // 0dt（2026-10-29，R-379-00 流式重复卡）：传输重试重发前
+                    // 的流式重置——重发流是唯一权威内容，前次尝试已送出的
+                    // 残段整卡作废：abort 路径的 partial 累计一并清空（否则
+                    // 重试后中止会把残段＋重发段拼接进 journal partial，与
+                    // live 卡同样发散）；主车道经宿主把 `_orz/stream_reset`
+                    // 控制面通知推给 live 客户端（headless/子代理 no-op）。
+                    partial_text.lock().unwrap().clear();
+                    if profile.role == AgentRole::Main {
+                        host.on_stream_reset();
                     }
                 },
             )
@@ -3759,12 +3776,13 @@ pub(crate) async fn run_agent_loop(
                 // records the failure. Previously the partial text went
                 // only to live deltas; the journal had a run_failed with
                 // no trace of what was produced (2026-08-07 review).
-                if !partial_text.is_empty() {
+                let partial = partial_text.lock().unwrap().concat();
+                if !partial.is_empty() {
                     writer
                         .record(
                             EventType::ModelOutput,
                             serde_json::json!({
-                                "text": partial_text.concat(),
+                                "text": partial,
                                 "tool_calls": [],
                                 // No natural finish reached — closest
                                 // enum value; the terminal run_failed

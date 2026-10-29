@@ -6664,6 +6664,7 @@ mod tests {
                 _cancel: Option<&tokio_util::sync::CancellationToken>,
                 _heartbeat: Option<&crate::gateway::model::ActivityClock>,
                 on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+                _on_reset: &mut (dyn FnMut() + Send),
             ) -> Result<ModelResponse, GatewayError> {
                 on_chunk("partial answer...");
                 Err(GatewayError::Transport("stream aborted mid-way".into()))
@@ -6740,10 +6741,11 @@ mod tests {
                 cancel: Option<&tokio_util::sync::CancellationToken>,
                 heartbeat: Option<&crate::gateway::model::ActivityClock>,
                 on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+                on_reset: &mut (dyn FnMut() + Send),
             ) -> Result<ModelResponse, GatewayError> {
                 let mut response = self
                     .inner
-                    .generate_stream(request, cancel, heartbeat, on_chunk)
+                    .generate_stream(request, cancel, heartbeat, on_chunk, on_reset)
                     .await?;
                 // 仅第一次模型请求携带重试摘要（counterexample gate 轮
                 // 保持无重试，断言事件恰好一条）。
@@ -6830,6 +6832,7 @@ mod tests {
                 _cancel: Option<&tokio_util::sync::CancellationToken>,
                 _heartbeat: Option<&crate::gateway::model::ActivityClock>,
                 _on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+                _on_reset: &mut (dyn FnMut() + Send),
             ) -> Result<ModelResponse, GatewayError> {
                 Err(GatewayError::StreamInterrupted {
                     attempts: 3,

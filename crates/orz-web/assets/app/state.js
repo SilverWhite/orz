@@ -240,6 +240,17 @@ export const vm = {
     card.content = sanitizeText(card.content + text);
   },
 
+  /* 0dt（2026-10-29，R-379-00 流式重复卡）：流式重置——传输重试重发前
+   * (`_orz/stream_reset`) 清空当前流式卡内容（指针保留，重发 delta 原地
+   * 重填）；journal model_output 收口时 P1-3 精确相等去重折叠，单卡收口。
+   * 无当前卡（卡内尚无内容）＝no-op。 */
+  resetStreamingCard() {
+    const idx = state.content.currentModelIndex;
+    if (idx == null) return;
+    const card = state.content.items[idx];
+    if (card?.kind === 'message' && card.role === '模型') card.content = '';
+  },
+
   addSystemMessage(text, warning) {
     pushContentItem({ kind: 'message', role: '系统', content: sanitizeText(text), turn: state.turnCounter, warning: !!warning, collapsed: false });
   },

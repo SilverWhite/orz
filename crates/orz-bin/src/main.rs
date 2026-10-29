@@ -2971,6 +2971,7 @@ mod tests {
                 _cancel: Option<&tokio_util::sync::CancellationToken>,
                 _heartbeat: Option<&orz_loop::gateway::model::ActivityClock>,
                 _on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+                _on_reset: &mut (dyn FnMut() + Send),
             ) -> Result<ModelResponse, GatewayError> {
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                 Ok(ModelResponse::text_response("never"))
@@ -3386,7 +3387,8 @@ mod conformance_capture {
                         // 0di：新消息面与本测试无关，照常跳过。
                         orz_tui::acp_client::ClientMsg::SupplementQueued { .. }
                         | orz_tui::acp_client::ClientMsg::RewindPreview { .. }
-                        | orz_tui::acp_client::ClientMsg::RecallDone { .. } => {}
+                        | orz_tui::acp_client::ClientMsg::RecallDone { .. }
+                        | orz_tui::acp_client::ClientMsg::StreamReset => {}
                     }
                 };
                 assert!(completed.is_ok(), "prompt failed: {completed:?}");

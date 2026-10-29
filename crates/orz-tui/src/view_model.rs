@@ -125,6 +125,21 @@ impl ContentPane {
         }
     }
 
+    /// 0dt（2026-10-29，R-379-00 流式重复卡）：流式重置——传输重试重发前
+    /// 清空当前流式卡内容（指针保留，重发 delta 原地重填）；journal
+    /// `model_output` 收口时 P1-3 精确相等去重折叠，单卡收口。无当前卡
+    /// ＝no-op（web `vm.resetStreamingCard` 同语义）。
+    pub fn reset_streaming_card(&mut self) {
+        let Some(idx) = self.current_model_index else {
+            return;
+        };
+        if let Some(ContentItem::Message(msg)) = self.items.get_mut(idx)
+            && msg.role == "模型"
+        {
+            msg.content.clear();
+        }
+    }
+
     /// Add a tool trace entry; same tool name reuses the line (scrolls to
     /// newest), different tool gets a new line (Python
     /// `add_or_update_tool_trace`).

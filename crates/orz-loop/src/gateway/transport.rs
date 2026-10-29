@@ -1442,6 +1442,7 @@ impl DeepSeekTransport {
         cancel: Option<&CancellationToken>,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+        on_reset: &mut (dyn FnMut() + Send),
     ) -> Result<ModelResponse, GatewayError> {
         let policy = &self.config.retry;
         // Same backoff shape as the fork's client: default ExponentialBackoff
@@ -1459,7 +1460,7 @@ impl DeepSeekTransport {
         let mut retry_info = TransportRetryInfo::default();
         loop {
             match self
-                .stream_once(request, thinking, cancel, heartbeat, on_chunk)
+                .stream_once(request, thinking, cancel, heartbeat, on_chunk, on_reset)
                 .await
             {
                 Ok(mut response) => {
@@ -1551,6 +1552,15 @@ impl DeepSeekTransport {
                     if let Some(h) = heartbeat {
                         h.stamp();
                     }
+                    // 0dt（2026-10-29，R-379-00 流式重复卡）：重发前发流式
+                    // 重置——重发流是唯一权威内容，前次尝试已推给 live 客户
+                    // 端的残段必须整卡清空（否则残段＋重发全文拼进同一张卡，
+                    // 与 journal 收口文本发散 → web/TUI 双卡）。midstream 与
+                    // zero-chunk 统一触发：zero-chunk 时卡内无本请求内容，
+                    // 重置为无害 no-op；混合序列（midstream 后接 zero-chunk
+                    // 再重试）同理幂等。控制面 live-only：不进 journal（重试
+                    // 事实已有 `transport_retry` 事件），不影响重试预算。
+                    on_reset();
                     attempts += 1;
                 }
                 Err(e) => return Err(e),
@@ -1565,6 +1575,7 @@ impl DeepSeekTransport {
         cancel: Option<&CancellationToken>,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+        _on_reset: &mut (dyn FnMut() + Send),
     ) -> Result<ModelResponse, GatewayError> {
         // Pre-cancel check (2026-08-06 implementation review P2-2): an
         // already-cancelled run must not open a connection at all.
@@ -2134,6 +2145,7 @@ impl ModelGateway for DeepSeekTransport {
         cancel: Option<&CancellationToken>,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+        on_reset: &mut (dyn FnMut() + Send),
     ) -> Result<ModelResponse, GatewayError> {
         // D-6 empty-content retry chain on the streaming path
         // (OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20, ADR-0010
@@ -2166,7 +2178,7 @@ impl ModelGateway for DeepSeekTransport {
         let mut total_retry_info = TransportRetryInfo::default();
         loop {
             match self
-                .stream_once_with_retry(&request, thinking, cancel, heartbeat, on_chunk)
+                .stream_once_with_retry(&request, thinking, cancel, heartbeat, on_chunk, on_reset)
                 .await
             {
                 Ok(response) => {
@@ -3588,7 +3600,13 @@ mod tests {
         let t = mock_transport_with_retry(&base, short_retry_policy());
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap_err();
         assert!(
@@ -3818,7 +3836,13 @@ mod tests {
             mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
         let mut chunks = Vec::new();
         let r = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap();
         assert_eq!(r.text.as_deref(), Some("降级答案"));
@@ -3843,7 +3867,7 @@ mod tests {
         let t =
             mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
         let err = t
-            .generate_stream(request(), None, None, &mut |_| {})
+            .generate_stream(request(), None, None, &mut |_| {}, &mut || {})
             .await
             .unwrap_err();
         assert!(
@@ -3884,7 +3908,7 @@ mod tests {
         let t =
             mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
         let err = t
-            .generate_stream(request(), None, None, &mut |_| {})
+            .generate_stream(request(), None, None, &mut |_| {}, &mut || {})
             .await
             .unwrap_err();
         assert!(
@@ -3893,7 +3917,7 @@ mod tests {
         );
         // 第二请求：同一 transport 仍从 max 起始（档位不被哨兵改动）。
         let r2 = t
-            .generate_stream(request(), None, None, &mut |_| {})
+            .generate_stream(request(), None, None, &mut |_| {}, &mut || {})
             .await
             .unwrap();
         assert_eq!(r2.text.as_deref(), Some("降级答案"));
@@ -3923,7 +3947,7 @@ mod tests {
             ThinkingMode::EnabledHigh,
         );
         let r = t
-            .generate_stream(request(), None, None, &mut |_| {})
+            .generate_stream(request(), None, None, &mut |_| {}, &mut || {})
             .await
             .unwrap();
         let expected_reasoning = "t".repeat(801);
@@ -3969,7 +3993,7 @@ mod tests {
         );
         for _ in 0..2 {
             let err = t
-                .generate_stream(request(), None, None, &mut |_| {})
+                .generate_stream(request(), None, None, &mut |_| {}, &mut || {})
                 .await
                 .unwrap_err();
             assert!(
@@ -3978,7 +4002,7 @@ mod tests {
             );
         }
         let err = t
-            .generate_stream(request(), None, None, &mut |_| {})
+            .generate_stream(request(), None, None, &mut |_| {}, &mut || {})
             .await
             .unwrap_err();
         assert!(
@@ -4010,7 +4034,7 @@ mod tests {
         let t =
             mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::Disabled);
         let err = t
-            .generate_stream(request(), None, None, &mut |_| {})
+            .generate_stream(request(), None, None, &mut |_| {}, &mut || {})
             .await
             .unwrap_err();
         assert!(
@@ -4051,7 +4075,7 @@ mod tests {
         // run 1：连续 3 次 trip，第 3 次带 run_invalidated 标记。
         for _ in 0..2 {
             let err = t
-                .generate_stream(request(), None, None, &mut |_| {})
+                .generate_stream(request(), None, None, &mut |_| {}, &mut || {})
                 .await
                 .unwrap_err();
             assert!(
@@ -4060,7 +4084,7 @@ mod tests {
             );
         }
         let err = t
-            .generate_stream(request(), None, None, &mut |_| {})
+            .generate_stream(request(), None, None, &mut |_| {}, &mut || {})
             .await
             .unwrap_err();
         assert!(
@@ -4071,7 +4095,7 @@ mod tests {
         // `for_new_run`）。
         let fresh = t.for_new_run();
         let err = fresh
-            .generate_stream(request(), None, None, &mut |_| {})
+            .generate_stream(request(), None, None, &mut |_| {}, &mut || {})
             .await
             .unwrap_err();
         assert!(
@@ -4103,7 +4127,7 @@ mod tests {
         let t =
             mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
         let err = t
-            .generate_stream(request(), None, None, &mut |_| {})
+            .generate_stream(request(), None, None, &mut |_| {}, &mut || {})
             .await
             .unwrap_err();
         assert!(
@@ -4155,7 +4179,7 @@ mod tests {
             ThinkingMode::EnabledHigh,
         );
         let err = t
-            .generate_stream(request(), None, None, &mut |_| {})
+            .generate_stream(request(), None, None, &mut |_| {}, &mut || {})
             .await
             .unwrap_err();
         assert!(
@@ -4204,7 +4228,7 @@ mod tests {
             ThinkingMode::EnabledHigh,
         );
         let response = t
-            .generate_stream(request(), None, None, &mut |_| {})
+            .generate_stream(request(), None, None, &mut |_| {}, &mut || {})
             .await
             .expect("low-tier success must recover");
         assert!(response.text.as_deref().unwrap_or("").contains("ok"));
@@ -4933,7 +4957,13 @@ mod tests {
         let t = mock_transport(&base);
         let mut chunks = Vec::new();
         let r = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap();
         assert_eq!(chunks, vec!["Hel", "lo!"]);
@@ -4976,7 +5006,13 @@ mod tests {
         let t = mock_transport(&base);
         let mut chunks = Vec::new();
         let r = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap();
         assert!(chunks.is_empty(), "tool-call round: no text chunks");
@@ -5027,7 +5063,13 @@ mod tests {
         let t = mock_transport(&base);
         let mut chunks = Vec::new();
         let r = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap();
         assert!(chunks.is_empty(), "tool-call round: no text chunks");
@@ -5064,7 +5106,13 @@ mod tests {
         let t = mock_transport(&base);
         let mut chunks = Vec::new();
         let r = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap();
         assert_eq!(chunks, vec!["done", "-now"]);
@@ -5098,7 +5146,13 @@ mod tests {
         let t = mock_transport(&base);
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap_err();
         assert!(
@@ -5139,9 +5193,13 @@ mod tests {
         });
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), Some(&cancel), None, &mut |c| {
-                chunks.push(c.to_string())
-            })
+            .generate_stream(
+                request(),
+                Some(&cancel),
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap_err();
         assert!(
@@ -5170,9 +5228,13 @@ mod tests {
         cancel.cancel();
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), Some(&cancel), None, &mut |c| {
-                chunks.push(c.to_string())
-            })
+            .generate_stream(
+                request(),
+                Some(&cancel),
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap_err();
         assert!(
@@ -5411,7 +5473,13 @@ mod tests {
         let t = mock_transport_with_retry(&base, policy);
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap_err();
         assert!(
@@ -5472,7 +5540,13 @@ mod tests {
         let t = mock_transport_with_retry(&base, short_retry_policy());
         let mut chunks = Vec::new();
         let r = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap();
         assert_eq!(r.text.as_deref(), Some("ok-after-retry"));
@@ -5509,7 +5583,13 @@ mod tests {
         let t = mock_transport_with_retry(&base, short_retry_policy());
         let mut chunks = Vec::new();
         let r = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap();
         assert_eq!(r.text.as_deref(), Some("ok-after-eof"));
@@ -5554,7 +5634,13 @@ mod tests {
         let t = mock_transport_with_retry(&base, short_retry_policy());
         let mut chunks = Vec::new();
         let r = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap();
         assert_eq!(r.text.as_deref(), Some("ok-after-retry"));
@@ -5567,6 +5653,56 @@ mod tests {
         assert_eq!(
             n, 2,
             "midstream truncation must retry exactly once: {n} connections"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_midstream_retry_resets_stream_before_resend() {
+        // 0dt（2026-10-29，R-379-00 流式重复卡）：midstream 重试**重发前**
+        // 必须发流式重置——重发流是唯一权威内容，前次尝试已推给 live 通道
+        // 的残段须整卡作废（web/TUI 清卡重填，否则残段＋重发全文拼进同一
+        // 张卡、与 journal 收口发散 → 双卡）。信号序钉：delta…→reset→delta…
+        // （reset 严格介于首试残段与重发流之间；成功路径无多余 reset）。
+        let body = midstream_truncation_sse_body();
+        let ok = ok_sse_body("ok-after-retry");
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                MockResponse::sse(vec![&body], std::time::Duration::ZERO)
+            } else {
+                MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+            }
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, short_retry_policy());
+        #[derive(Debug, PartialEq, Eq)]
+        enum Signal {
+            Delta(String),
+            Reset,
+        }
+        let signals = std::sync::Mutex::new(Vec::new());
+        let r = t
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| signals.lock().unwrap().push(Signal::Delta(c.to_string())),
+                &mut || signals.lock().unwrap().push(Signal::Reset),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.text.as_deref(), Some("ok-after-retry"));
+        assert_eq!(
+            signals.into_inner().unwrap(),
+            vec![
+                Signal::Delta("half".into()),
+                Signal::Delta("-done".into()),
+                Signal::Reset,
+                Signal::Delta("ok-after-retry".into()),
+            ],
+            "reset must fire between the failed attempt's deltas and the resent stream, exactly once"
         );
     }
 
@@ -5585,7 +5721,13 @@ mod tests {
         let t = mock_transport_with_retry(&base, short_retry_policy());
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap_err();
         assert!(
@@ -5625,7 +5767,7 @@ mod tests {
         .await;
         let t = mock_transport_with_retry(&base, short_retry_policy());
         let err = t
-            .generate_stream(request(), None, None, &mut |_| {})
+            .generate_stream(request(), None, None, &mut |_| {}, &mut || {})
             .await
             .unwrap_err();
         assert!(
@@ -5658,7 +5800,13 @@ mod tests {
         let t = mock_transport_with_retry(&base, policy);
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap_err();
         assert!(
@@ -5699,7 +5847,13 @@ mod tests {
         let t = mock_transport_with_retry(&base, policy);
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap_err();
         assert!(
@@ -5741,9 +5895,13 @@ mod tests {
         // must win long before.
         let result = tokio::time::timeout(
             std::time::Duration::from_millis(400),
-            t.generate_stream(request(), Some(&cancel), None, &mut |c| {
-                chunks.push(c.to_string())
-            }),
+            t.generate_stream(
+                request(),
+                Some(&cancel),
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            ),
         )
         .await;
         let err = result
@@ -5779,7 +5937,13 @@ mod tests {
         let t = mock_transport_with_retry(&base, short_timeout_policy());
         let mut chunks = Vec::new();
         let r = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap();
         assert_eq!(r.text.as_deref(), Some("ok-after-hang"));
@@ -5817,7 +5981,13 @@ mod tests {
         let t = mock_transport_with_retry(&base, short_timeout_policy());
         let mut chunks = Vec::new();
         let err = t
-            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .generate_stream(
+                request(),
+                None,
+                None,
+                &mut |c| chunks.push(c.to_string()),
+                &mut || {},
+            )
             .await
             .unwrap_err();
         assert!(

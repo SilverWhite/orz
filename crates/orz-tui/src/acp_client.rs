@@ -33,6 +33,10 @@ pub enum ClientMsg {
         session_id: String,
         text_chunk: String,
     },
+    /// 0dt（2026-10-29，R-379-00 流式重复卡）：流式重置控制面
+    /// （`_orz/stream_reset`）——传输重试重发前 host 转发；TUI 清空当前
+    /// 流式卡，重发 delta 原地重填，journal 收口后 P1-3 精确相等去重折叠。
+    StreamReset,
     /// 0di：补充入队回执（`_orz/queue_append`）——depth＝入队后队列深度；
     /// error＝拒绝原因（容量上限/会话未知）。
     SupplementQueued { depth: u64, error: Option<String> },
@@ -111,6 +115,16 @@ impl acp::Client for TuiClientHandler {
                 session_id: args.session_id.0.to_string(),
                 text_chunk: text,
             });
+        }
+        Ok(())
+    }
+
+    async fn ext_notification(&self, args: acp::ExtNotification) -> acp::Result<()> {
+        // 0dt（2026-10-29，R-379-00 流式重复卡）：流式重置控制面——传输
+        // 重试重发前 host 转发的 `_orz/stream_reset`；TUI 与 web 同病同修
+        // （同 P1-3 精确相等去重口径）。其余 ext 通知维持缺省 no-op。
+        if args.method.as_ref() == "orz/stream_reset" {
+            let _ = self.msg_tx.send(ClientMsg::StreamReset);
         }
         Ok(())
     }
@@ -495,7 +509,8 @@ mod tests {
                 // 0di：新消息面与本测试无关，照常跳过。
                 ClientMsg::SupplementQueued { .. }
                 | ClientMsg::RewindPreview { .. }
-                | ClientMsg::RecallDone { .. } => {}
+                | ClientMsg::RecallDone { .. }
+                | ClientMsg::StreamReset => {}
             }
         }
     }
@@ -897,7 +912,8 @@ mod tests {
                         // 0di：新消息面与本测试无关，照常跳过。
                         ClientMsg::SupplementQueued { .. }
                         | ClientMsg::RewindPreview { .. }
-                        | ClientMsg::RecallDone { .. } => {}
+                        | ClientMsg::RecallDone { .. }
+                        | ClientMsg::StreamReset => {}
                     }
                 };
                 let response = completed.expect("cancel resolves as a success response");
@@ -991,7 +1007,8 @@ mod tests {
                         // 0di：新消息面与本测试无关，照常跳过。
                         ClientMsg::SupplementQueued { .. }
                         | ClientMsg::RewindPreview { .. }
-                        | ClientMsg::RecallDone { .. } => {}
+                        | ClientMsg::RecallDone { .. }
+                        | ClientMsg::StreamReset => {}
                     }
                 };
                 assert!(second_done.is_ok(), "run #2 completes: {second_done:?}");

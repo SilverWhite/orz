@@ -87,6 +87,7 @@ impl RoundAgent for RetrievalSubagent {
         cancel: Option<&tokio_util::sync::CancellationToken>,
         heartbeat: Option<&ActivityClock>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+        on_reset: &mut (dyn FnMut() + Send),
     ) -> Result<ModelResponse, GatewayError> {
         self.gateway
             .generate_stream(
@@ -100,6 +101,7 @@ impl RoundAgent for RetrievalSubagent {
                 cancel,
                 heartbeat,
                 on_chunk,
+                on_reset,
             )
             .await
     }
@@ -477,6 +479,7 @@ mod tests {
                 None,
                 None,
                 &mut |_| {},
+                &mut || {},
             )
             .await
             .unwrap();

@@ -36,6 +36,11 @@ const handlers = {
   // 0dk S2（332）：会话状态转移通知 `_orz/session_state`
   // （{sessionId,state,reason}）——关闭/驱逐/删除的服务端事实。
   state: null, // (params) => void
+  // 0dt（2026-10-29，R-379-00 流式重复卡）：流式重置控制面通知
+  // `_orz/stream_reset`（{sessionId}）——传输重试重发前 host 转发；
+  // 前端清空当前流式卡，重发 delta 原地重填，journal 收口后 P1-3
+  // 精确相等去重折叠成单卡。
+  streamReset: null, // (params) => void
 };
 
 function send(obj) {
@@ -213,6 +218,9 @@ export function connect(token, root, sessionId) {
         handlers.replay?.(msg.params || {});
       } else if (msg.method === '_orz/session_state') {
         handlers.state?.(msg.params || {});
+      } else if (msg.method === '_orz/stream_reset') {
+        // 0dt：流式重置（传输重试重发前的清卡控制面，live-only）。
+        handlers.streamReset?.(msg.params || {});
       } else if (msg.method === 'session/request_permission') {
         // 必须回应（否则 agent 等待超时）：交给 dialogs 的权限弹窗。
         Promise.resolve(handlers.permission?.(msg.params)).then((result) => {

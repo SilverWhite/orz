@@ -1906,6 +1906,21 @@ acp.on('update', (sessionId, update) => {
 });
 acp.on('permission', (request) => dialogs.showPermission(request));
 
+/* 0dt（2026-10-29，R-379-00 流式重复卡）：流式重置——传输重试重发前 host
+ * 转发的 `_orz/stream_reset`；与 update 同一跨会话过滤（只清当前绑定/
+ * 恢复目标的卡），清空后重发 delta 原地重填，journal 收口即单卡。 */
+acp.on('streamReset', (params) => {
+  const sid = params?.sessionId;
+  const accepted =
+    sid === acpSessionId ||
+    (state.loadingSession && sid === pendingLoadSessionId);
+  if (!accepted) return;
+  const viewed = viewedConversation8();
+  if (!liveMode && viewed !== String(sid).slice(0, 8)) return;
+  vm.resetStreamingCard();
+  scheduleRender();
+});
+
 /* 334（§4.6）：权限弹窗被顶掉/关闭/Esc 时已如实回 cancelled，main 补一条
  * 可回查的四要素系统行；用户主动点「取消」也如实说明但不夸张（不标红）。 */
 function onPermissionCancelled(info = {}) {

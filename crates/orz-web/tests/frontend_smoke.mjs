@@ -463,6 +463,36 @@ assert.equal(state.turnCounter, 18, 'turn 必须取 run 序号 17＋1');
 assert.match(state.marker[0]?.label || '', /T18 输入/, '恢复后标记栏不得从 T1 重排');
 console.log('ok  恢复后 turn 号按 run 序号锚定（标记栏）');
 
+/* ── 7.5 0dt（2026-10-29，R-379-00 流式重复卡）：流式重置单卡收口 ──
+ * 传输 midstream 重试重发前的 `_orz/stream_reset` ⇒ 前端清空当前流式卡，
+ * 重发 delta 原地重填；journal model_output 到达时 P1-3 精确相等去重折叠，
+ * 单卡收口（缺陷现场：无重置时残段＋重发全文拼进同一张卡，与 journal
+ * 收口卡并存＝双卡）。 */
+state.content = { items: [], currentModelIndex: null, droppedItems: 0 };
+state.marker = [];
+state.turnCounter = 0;
+const { applyAcpUpdate } = await import('../assets/app/projection.js');
+const chunk = (text) => ({
+  sessionUpdate: 'agent_message_chunk',
+  content: { type: 'text', text },
+});
+applyAcpUpdate('s', chunk('残段'));
+applyAcpUpdate('s', chunk('-中断'));
+vm.resetStreamingCard();
+applyAcpUpdate('s', chunk('重发完整全文'));
+applyJournalEvent({ event_type: 'model_output', payload: { text: '重发完整全文' } });
+const streamedCards = state.content.items.filter(
+  (it) => it.kind === 'message' && it.role === '模型' && it.content,
+);
+assert.equal(streamedCards.length, 1, '流式重置后收口必须单卡（不双卡）');
+assert.equal(streamedCards[0].content, '重发完整全文', '单卡内容与 journal 全文一致');
+assert.equal(state.content.currentModelIndex, null, 'P1-3 折叠后流式指针复位');
+// 无当前流式卡时 reset 必须 no-op（指针已复位 ⇒ 不动任何条目）。
+vm.resetStreamingCard();
+assert.equal(state.content.items.length, streamedCards.length, '无卡 reset 零副作用（不产卡）');
+assert.equal(state.content.currentModelIndex, null, '无卡 reset 不复活指针');
+console.log('ok  0dt 流式重置：残段→reset→重发→收口 单卡');
+
 /* ── 8. 归档投影钉子（0br S3 新增面 2026-09-25）：API 面／只读转写／
  *    探索器三组重构＋归档动作键＋进行中/未完成语义 ── */
 

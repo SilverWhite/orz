@@ -459,6 +459,13 @@ pub trait ModelGateway: Send + Sync {
         cancel: Option<&tokio_util::sync::CancellationToken>,
         heartbeat: Option<&ActivityClock>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+        // 0dt（2026-10-29，R-379-00 流式重复卡）：流式重置控制面——传输层
+        // midstream/zero-chunk 重试**重发前**调用。重发流是唯一权威内容：
+        // 宿主据此通知 live 客户端清空当前流式卡（重发 delta 原地重填），
+        // journal `model_output` 收口时按 P1-3 精确相等去重折叠成单卡。
+        // live-only、不进 journal（重试事实已有 `transport_retry` 事件）。
+        // 缺省缓冲实现单块整发、从不重试，重置无意义——忽略。
+        _on_reset: &mut (dyn FnMut() + Send),
     ) -> Result<ModelResponse, GatewayError> {
         let _ = cancel;
         let response = self.generate(request).await?;
@@ -508,6 +515,7 @@ mod tests {
                 None,
                 None,
                 &mut |c| chunks.push(c.to_string()),
+                &mut || {},
             )
             .await
             .unwrap();
