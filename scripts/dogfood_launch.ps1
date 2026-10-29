@@ -19,6 +19,10 @@
   （0bm F6 一族；修复后日志中文与机械文案可读）。
   0bt②（2026-09-26）：⑯ 版本旁路——carrier 版本读载体自带 `--build-info`
   （打包面单一源；Rust 载体无 Win32 VersionInfo，不再显示 unknown）。
+  0du（2026-10-29）：缺省载体／ACAF 根迁出测评目录——`$BinDir` 缺省改指装机位
+  （%LOCALAPPDATA%\orz\bin）、`$AcafRoot` 缺省改指 `%LOCALAPPDATA%\orz\acaf`；
+  载体位（重建 staging）语义改为重建批显式传 `-BinDir`。PROTOC 改 `-Protoc`
+  显式传参（原测评目录内 protoc 25.3 随 tb-eval 清理删除，不再有隐式缺省）。
 .PARAMETER TaskFile
   题面文件路径（相对 $Workspace 或绝对路径；惯例 .tmp-*-task.txt）。
 .PARAMETER RliOff
@@ -33,10 +37,13 @@
 #>
 param(
     [string]$Workspace = 'D:\CLI',
-    [string]$BinDir = 'D:\tb-eval\orz-windows',
-    [string]$AcafRoot = 'D:\tb-eval\orz-windows\acaf',
+    # 0du（2026-10-29）：缺省改指装机位与新 ACAF 根（原 D:\tb-eval\orz-windows
+    # 系登记载体位，随 tb-eval 清理删除后成死指针——签名器启动即退、票据全灭）。
+    [string]$BinDir = "$env:LOCALAPPDATA\orz\bin",
+    [string]$AcafRoot = "$env:LOCALAPPDATA\orz\acaf",
     [Parameter(Mandatory = $true)][string]$TaskFile,
     [string]$MaxWallclock = '0',
+    [string]$Protoc = '',
     [switch]$Shadow,
     [switch]$RliOff,
     [switch]$DryRun
@@ -153,8 +160,10 @@ $env:ORZ_ACAF_FAIL_CLOSED = if ($Shadow) { '0' } else { '1' }
 # -RliOff ⇒ 显式 0。写清单保证会话姿态可核（0bc 轮缺口：靠会话 env 透传、
 # 装配清单未显式）。
 $env:ORZ_LIF_RLI_SHADOW = if ($RliOff) { '0' } else { '1' }
-$protoc = 'D:\tb-eval\.tools\protoc-25.3\bin\protoc.exe'
-if (Test-Path -LiteralPath $protoc) { $env:PROTOC = $protoc }
+# 0du（2026-10-29）：PROTOC 改显式传参（-Protoc）——原隐式缺省指向测评目录内
+# protoc（`D:\tb-eval\.tools\protoc-25.3`，随 tb-eval 清理删除）；需要 protoc
+# 的 run（工作区内 orz 源码构建链）以 -Protoc <path> 显式装配，缺省不设。
+if ($Protoc -and (Test-Path -LiteralPath $Protoc)) { $env:PROTOC = $Protoc }
 $grokHome = Join-Path $BinDir 'grok-home'
 if (Test-Path -LiteralPath $grokHome) { $env:GROK_HOME = $grokHome; $env:GROK_AGENT = '1' }
 

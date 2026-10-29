@@ -15,6 +15,9 @@
   任何东西到 stdout／host**；诊断只走 stderr，装配清单只在 -DryRun 打印。
   模型凭据不需要在此注入：Windows 走凭据管理器（ADR-0006），
   仅当需要覆盖时才设 ORZ_DEEPSEEK_API_KEY。
+  0du（2026-10-29）：缺省载体／ACAF 根迁出测评目录——`$BinDir` 缺省改指装机位
+  （%LOCALAPPDATA%\orz\bin）、`$AcafRoot` 缺省改指 `%LOCALAPPDATA%\orz\acaf`；
+  PROTOC 改 `-Protoc` 显式传参（原 protoc 随 tb-eval 清理删除）。
 .PARAMETER Client
   zed | vscode | jetbrains | custom —— 只影响 -DryRun 打印的配置片段。
 .PARAMETER ReadOnly
@@ -30,9 +33,12 @@
 #>
 param(
     [string]$Workspace = (Get-Location).Path,
-    [string]$BinDir = 'D:\tb-eval\orz-windows',
-    [string]$AcafRoot = 'D:\tb-eval\orz-windows\acaf',
+    # 0du（2026-10-29）：缺省改指装机位与新 ACAF 根（原 D:\tb-eval\orz-windows
+    # 系登记载体位，随 tb-eval 清理删除后成死指针——签名器启动即退、票据全灭）。
+    [string]$BinDir = "$env:LOCALAPPDATA\orz\bin",
+    [string]$AcafRoot = "$env:LOCALAPPDATA\orz\acaf",
     [string]$MaxWallclock = '0',
+    [string]$Protoc = '',
     [ValidateSet('zed', 'vscode', 'jetbrains', 'custom')][string]$Client = 'zed',
     [switch]$RliOff,
     [switch]$ReadOnly,
@@ -96,8 +102,9 @@ $env:ORZ_ACAF_BINARY      = $signer
 $env:ORZ_ACAF_FAIL_CLOSED = '1'
 $env:ORZ_LIF_RLI_SHADOW   = if ($RliOff) { '0' } else { '1' }
 if ($MaxWallclock -ne '0') { $env:ORZ_MAX_WALLCLOCK = $MaxWallclock }
-$protoc = 'D:\tb-eval\.tools\protoc-25.3\bin\protoc.exe'
-if (Test-Path -LiteralPath $protoc) { $env:PROTOC = $protoc }
+# 0du（2026-10-29）：PROTOC 改显式传参（-Protoc，与 dogfood_launch 同形）——
+# 原隐式缺省指向测评目录内 protoc（随 tb-eval 清理删除）；缺省不设。
+if ($Protoc -and (Test-Path -LiteralPath $Protoc)) { $env:PROTOC = $Protoc }
 $grokHome = Join-Path $BinDir 'grok-home'
 if (Test-Path -LiteralPath $grokHome) { $env:GROK_HOME = $grokHome; $env:GROK_AGENT = '1' }
 
