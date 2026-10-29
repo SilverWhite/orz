@@ -47,6 +47,14 @@
 - **§4.6 裁决落地**：用户令「跑分已经结束，丢了就丢了吧」——eval 线脚本（`gate_google_observe.ps1`／`freeze_rli_corpus.ps1`／`__wtest.ps1`）的 tb-eval 硬编码**不修**（评测域脚本本就以测评目录为家；依赖件已删、按用户裁决接受）。两启动器内 protoc 行已随 S1 处理（见上）。
 - 活体复验（S2）＝用户停栈重启后票据道恢复（`run_terminal_cmd` 出正常回执）；复验通过前 0du 保持开放（计数 68 不变）。
 
+## §7 S2 活体复验证据达成（2026-10-29，382 批顺带取证；闭合待用户裁决）
+
+- **重启事实**：现役栈已于 02:40:34 重启——bridge PID 16640（`orz.exe web --real`）＋ child PID 14716（`orz.exe --stdio`），命令行均自装机位 `C:\Users\1\AppData\Local\orz\bin\orz.exe`；启动时刻晚于 §6 env 三指针注册表改动（0DU 档定稿 02:39:05 之后），属「新终端新进程」语义。
+- **指针读回**：注册表 User 域 `ORZ_ACAF_KEYSTORE/MANIFEST/BINARY`＝新根三值（`%LOCALAPPDATA%\orz\acaf\keystore`／`…\signer-manifest.json`／`…\bin\orz-signer.exe`），与 §6 落码值逐字一致。
+- **票据道恢复**（工作区 `C:\Users\1\OneDrive\Desktop\新建文件夹\.gsa\runs\`）：会话 `224b39bd` 重启后 RUN-11～RUN-18 全部 `control_ticket_rejected=0`；RUN-18（最后事件 19:34:38，会话至今活跃）`control_ticket_issued`／`control_ticket_consumed` 正常配对各 6 次；八个 run 全量 `signer_unreachable` 零残留。判据「`run_terminal_cmd` 出正常回执」达成。
+- **交叉印证**：0du S1「只对新起进程生效」的边界被两面坐实——本机旧 shell（重启前起）持旧死指针，orz-bin/orz-tui 测试子进程启动即 `signer spawn failed (os error 3)`；带新根指针的进程全绿（382 批档 §3）。
+- **处置**：S1＋S2 判据面全达成，0du 可闭合（69 → 68）——**闭合待用户裁决**；裁决前计数保持 69。注：RUN-11 后台 MD 跑完无人观察即 0dv 立项现场，两档时间线互洽（重启后栈上发生，与 0du 无关）。
+
 ## 入口
 
 - BACKLOG `0du`（开放项计数 68）／TODO 0du 条目／索引头部 v4.342。
