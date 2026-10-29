@@ -53,3 +53,11 @@ R-379-00（web UI 同一终答双卡：midstream 重试残段＋重发全文拼�
 - 前序：[380 立项档](380_STREAMING_CARD_DUPLICATION_R37900_REGISTRATION_2026-10-28.md)（根因链/最优修复设计/测试判据）／[0du 登记档](0DU_ACAF_KEYSTORE_ROOT_EXIT_TB_EVAL_REGISTRATION_2026-10-29.md)（§7 S2 证据）。
 - 关键源位：`orz-loop/src/gateway/transport.rs`（stream_once_with_retry 重试循环 on_reset 决策点）／`orz-loop/src/agent_loop.rs`（run_round 双闭包＋partial Mutex 共享）／`orz-loop/src/host.rs`（LoopHost::on_stream_reset）／`orz-host/src/lib.rs`（OrzHost 转发）／`orz-web/assets/app/{acp,state,main}.js`／`orz-tui/src/{acp_client,view_model,runner}.rs`。
 - orz 子模块提交：见父仓 382 批提交信息（本批先提交 orz 再提交父仓）。
+
+## §7 勘误与措辞精校（383 审查批补记，2026-10-29）
+
+全面审查（四子代理分端＋实跑核证，详见 [383 批档](383_0DT_COMPREHENSIVE_REVIEW_REMEDIATION_2026-10-29.md)）逐条核对 §1 落码清单，实现与声明相符、无虚报；以下三处为**记账/措辞**勘误，代码无问题：
+
+1. **补臂数**：§1 TUI 行「另四处穷举 match 补忽略臂（runner×4＋acp_client×3＋orz-bin×1）」——括号枚举实为 4+3+1＝**8 处**，与本行「四处」及 orz 提交信息「七处」均不符；实际 8 处，全为纯忽略臂、零行为变化（runner.rs 测试×4＋acp_client.rs 测试×3＋orz-bin main.rs×1）。
+2. **「运行期单线程」措辞不严格**：tokio 多线程 executor 下 future 可跨线程迁移，无争用并非靠线程模型保证，而是靠 `&mut dyn FnMut` 独占借用——两回调被 transport 在同一 poll 内内联串行调用，构造性互斥（强于原表述）。383 批已在 `agent_loop.rs` 注释精校。
+3. **「清空 partial 累计」表述需澄清**：共享 `partial_text` 的**唯一** journal 消费者是 abort 路径（F-06）；成功路径落账用 `response.text`（同样只含重发流）。这恰是「live 卡 == journal 收口」双口径自洽的根据，§1 未点明。
