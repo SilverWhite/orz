@@ -815,18 +815,17 @@ pub struct AgentLoopController {
     /// 0bg S2（2026-09-22）：LIF 域迁移**连带记录**游标——已落机械记录的
     /// 累计迁移数；消费方 [`Self::take_new_lif_migrations`]（只记不发模型）。
     pub(crate) lif_migration_recorded: Mutex<u64>,
-    /// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：本时代累计用量句柄
-    /// （宿主侧车跨 run 累计；`with_era_usage` 注入。`None`＝裸测试/CLI
-    /// 单 run 控制器——在途折叠只计本 run meter，无跨 run 账面，如实登记）。
-    pub(crate) era_usage: Option<crate::era::SharedEraUsage>,
+    /// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：会话共享时代态句柄
+    /// （用量＋待命载荷统一账面，391 批；`with_era_usage` 注入。`None`
+    /// ＝裸测试/CLI 单 run 控制器——在途折叠只计本 run meter、待命载荷
+    /// 走内部回退态，无跨 run 账面，如实登记）。
+    pub(crate) era_state: Option<crate::era::SharedEraState>,
     /// 0dx：在途折叠时点的本 run meter 基线——run 尾宿主只把
     /// `meter_totals - baseline` 计入新时代（折叠前消耗属被关闭时代，已
     /// 入该时代事件载荷；`era_usage_delta` 单一读出口）。
     era_usage_fold_baseline: Mutex<(u64, u64)>,
-    /// 0dx：宿主 idle 路径折叠产出的待落账时代事件载荷（裸 `/checkpoint`
-    /// 不拉起 run ⇒ 载荷随侧车待命，下一 run 的 `run_started` 后落账；
-    /// run_turn_inner 取走即清——SUCCESS-ONLY 语义：失败 run 的载荷随
-    /// 会话续接包回退保留在侧车）。
+    /// 0dx：待落账时代事件载荷的**内部回退态**（仅裸测试/CLI——无共享
+    /// 态句柄时兜底；生产路径走 `era_state.pending_era_event`）。
     pending_era_boundary: Mutex<Option<serde_json::Value>>,
 }
 
@@ -1085,7 +1084,7 @@ impl AgentLoopController {
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             // 0bg S2：LIF 域迁移连带记录游标（只记不发模型）。
             lif_migration_recorded: Mutex::new(0),
-            era_usage: None,
+            era_state: None,
             era_usage_fold_baseline: Mutex::new((0, 0)),
             pending_era_boundary: Mutex::new(None),
             plan_enabled: false,
@@ -1282,11 +1281,13 @@ impl AgentLoopController {
         self
     }
 
-    /// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：注入本时代累计用量句柄
-    /// （宿主从会话侧车装载、跨 run 累计；在途折叠时本方法持有方读取并
-    /// 由 [`Self::apply_era_fold_in_run`] 清零换元）。
-    pub fn with_era_usage(mut self, era_usage: Option<crate::era::SharedEraUsage>) -> Self {
-        self.era_usage = era_usage;
+    /// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：注入会话共享时代态
+    /// （宿主从会话侧车装载、跨 run 累计；391 批统一账面——用量与待命
+    /// 载荷同置一个 `Arc<Mutex>`，宿主检查点 sink 与 controller 读写
+    /// 同一份，消灭双源漂移。在途折叠时本方法持有方清零换元；`None`
+    /// ＝裸测试/CLI，controller 内部回退态兜底）。
+    pub fn with_era_usage(mut self, era_state: Option<crate::era::SharedEraState>) -> Self {
+        self.era_state = era_state;
         self
     }
 
@@ -1303,7 +1304,15 @@ impl AgentLoopController {
     /// 0dx：登记宿主 idle 路径折叠产出的待落账时代事件载荷（裸
     /// `/checkpoint` 不拉起 run ⇒ 载荷随侧车待命；下一 run 的
     /// `run_started` 后由 [`Self::journal_pending_era_boundary`] 落账）。
+    /// 写入共享态（391 批统一账面）——宿主检查点 sink 同步可见。
     pub fn set_pending_era_boundary(&self, payload: serde_json::Value) {
+        if let Some(state) = &self.era_state {
+            state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pending_era_event = Some(payload);
+            return;
+        }
         *self
             .pending_era_boundary
             .lock()
@@ -1311,21 +1320,35 @@ impl AgentLoopController {
     }
 
     /// 0dx：落账待命的时代事件载荷（恰在 `run_started` 之后、
-    /// `prompt_submitted` 之前——时代切换先于新输入提交）。取走即清。
+    /// `prompt_submitted` 之前——时代切换先于新输入提交）。取走即清，
+    /// **清的是共享态**（391 批）：落账后宿主检查点 sink 写沿与 run 尾
+    /// 写回不再携带该载荷——失败 run 的重复落账窗口（390 批登记的
+    /// SUCCESS-ONLY 回退残留）自结构上闭合。
     pub(crate) async fn journal_pending_era_boundary(
         &self,
         writer: &mut EventWriter<'_>,
     ) -> Result<(), crate::controller::AgentLoopError> {
         // 取走与落账分离：MutexGuard 临时不得跨 await（future Send 纪律）。
-        let pending = self
-            .pending_era_boundary
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        let pending = self.take_pending_era_boundary();
         if let Some(payload) = pending {
             writer.record(EventType::EraBoundary, payload).await?;
         }
         Ok(())
+    }
+
+    /// 0dx：取走待命载荷（共享态优先，内部回退态兜底）。
+    fn take_pending_era_boundary(&self) -> Option<serde_json::Value> {
+        if let Some(state) = &self.era_state {
+            return state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pending_era_event
+                .take();
+        }
+        self.pending_era_boundary
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 
     /// 0dx：本 run meter 累计（调用数，prompt tokens）——宿主 run 尾把
@@ -1363,6 +1386,8 @@ impl AgentLoopController {
     /// 0dx：在途折叠（loop 主车道 drain 路径——排队无前缀项触发的时代
     /// 切换）。装配折叠核输入（活体 LIF 快照＋时代账面＋本 run meter），
     /// 成功后清零时代账面并记录 meter 基线。返回事件载荷（调用方 record）。
+    /// 391 批：清零写**共享态**（用量换元＋待命载荷取走）——宿主检查点
+    /// sink 写沿自此读到折叠后账面，「era2 消息＋era1 账面」混合态消灭。
     pub(crate) fn apply_era_fold_in_run(
         &self,
         messages: &mut Vec<Message>,
@@ -1371,14 +1396,18 @@ impl AgentLoopController {
         trigger: crate::era::EraTrigger,
     ) -> Result<serde_json::Value, String> {
         let meter_totals = self.run_usage_meter_totals();
-        let era_usage = match &self.era_usage {
-            Some(handle) => {
-                let mut usage = handle
+        let era_usage = match &self.era_state {
+            Some(state) => {
+                let mut shared = state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let mut closing = *usage;
+                let mut closing = shared.usage;
                 closing.saturating_add(meter_totals.0, meter_totals.1);
-                *usage = crate::era::EraUsage::default();
+                shared.usage = crate::era::EraUsage::default();
+                // 在途折叠当 run 直接落账；任何残留待命载荷一并取走
+                // （逻辑上不可达——待命载荷在本 run `run_started` 已落，
+                // 防御式清位防双落）。
+                shared.pending_era_event = None;
                 closing
             }
             // 裸控制器（无会话账面）：只计本 run 已耗——跨 run 缺账面如实。
@@ -1907,7 +1936,7 @@ impl AgentLoopController {
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             // 0bg S2：LIF 域迁移连带记录游标（只记不发模型）。
             lif_migration_recorded: Mutex::new(0),
-            era_usage: None,
+            era_state: None,
             era_usage_fold_baseline: Mutex::new((0, 0)),
             pending_era_boundary: Mutex::new(None),
             plan_enabled: false,
@@ -9202,6 +9231,80 @@ body"
             "era marker missing: {conversation:?}"
         );
         assert!(conversation.iter().any(|m| m.content == "换新话题：实现 X"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0dx（391 批语义钉）：无前缀项连排——设计 §1.1 字面语义＝每条无
+    /// 前缀输入各开一个新时代（条目一开时代 N+1，条目二抵达时条目一已
+    /// 在窗内、成为时代 N+2 的折叠内容之一），era 号 1→2 严格递增，两条
+    /// 照投；折叠间非 marker 尾 ⇒ 防空折守卫不触发（该守卫的 drain 侧
+    /// 拒绝臂 `fold_refused_same_era` 为恢复边界的防御审计臂，常规序不
+    /// 触达）。预算回退重试的重折抑制由 `SupplementItem.era_folded` 位
+    /// 承担（同批）。
+    #[tokio::test]
+    async fn era_consecutive_plain_items_each_open_their_own_era() {
+        let dir = test_dir();
+        let host = SupplementHost {
+            journal: JournalRecorder::new(dir.clone()),
+            queue: std::sync::Mutex::new(
+                [
+                    crate::era::SupplementItem::user("换话题一"),
+                    crate::era::SupplementItem::user("换话题二"),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec!["收到"]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let mut conversation: Vec<Message> = vec![Message {
+            role: Role::User,
+            content: "旧时代任务".to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        }];
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-ERA-SEQ",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .expect("run");
+
+        let events = read_supplement_test_events(&dir);
+        let era_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::EraBoundary)
+            .collect();
+        assert_eq!(era_events.len(), 2, "连排无前缀项各开一时代: {events:?}");
+        assert_eq!(era_events[0].payload["era"], 1);
+        assert_eq!(era_events[1].payload["era"], 2, "era 号严格递增");
+        assert_eq!(era_events[0].payload["archive"]["messages"], 2);
+        assert_eq!(
+            era_events[1].payload["archive"]["messages"], 4,
+            "第二条折叠范围含第一条输入与其 marker"
+        );
+        // 对话面恰两枚全形 marker（1→2 递进）。
+        let marker_count = conversation
+            .iter()
+            .filter(|m| crate::era::is_era_marker(&m.content))
+            .count();
+        assert_eq!(marker_count, 2, "全形 marker 恰两枚: {conversation:?}");
+        // 两条都照投。
+        let delivered: Vec<&str> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::SupplementDelivered)
+            .filter_map(|e| e.payload["text"].as_str())
+            .collect();
+        assert_eq!(delivered, vec!["换话题一", "换话题二"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

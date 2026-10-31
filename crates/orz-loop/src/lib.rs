@@ -68,5 +68,6 @@ pub(crate) mod usage_meter;
 pub(crate) mod controller_test_support;
 
 // Re-export core types
+pub use compact::{production_block_tokens, production_slider_tokens};
 pub use controller::AgentLoopController;
 pub use host::LoopHost;

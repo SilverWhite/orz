@@ -3471,7 +3471,7 @@ pub(crate) async fn run_agent_loop(
             if face_tokens < budget {
                 candidates.extend(host.drain_user_supplements());
             }
-            let mut accepted: Vec<(String, bool)> = Vec::new();
+            let mut accepted: Vec<(String, bool, bool)> = Vec::new();
             while let Some(mut item) = candidates.pop_front() {
                 // 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：队列项分流——
                 // 触发是输入的句法属性（外生、零模型参与，设计 §1.1）：
@@ -3480,7 +3480,10 @@ pub(crate) async fn run_agent_loop(
                 // 用户项＝时代触发——在 loop-top 安全边界先执行时代切换
                 // （无损折叠＋黑板模型分区清空＋`era_boundary` 落账），随后
                 // 该文本即新时代首条用户消息灌入。折叠中性拒绝（无可折叠
-                // 内容，如手动 /checkpoint 后首轮）照旧同代投递。
+                // 内容，如手动 /checkpoint 后首轮）照旧同代投递——391 批起
+                // 落 GateDecision 审计（与空 /btw、在途 /checkpoint 对称，
+                // 不再只 tracing）。已折叠项（预算越线回退后重试）不重折
+                // ——一次排队输入至多一次时代边界。
                 if !item.mechanical {
                     match crate::era::parse_input_intent(&item.text) {
                         crate::era::InputIntent::EmptySameEra => {
@@ -3511,20 +3514,44 @@ pub(crate) async fn run_agent_loop(
                             item.text = rest;
                         }
                         crate::era::InputIntent::Plain => {
-                            match controller.apply_era_fold_in_run(
-                                messages,
-                                host,
-                                writer.run_id(),
-                                crate::era::EraTrigger::UnprefixedQueuedInput,
-                            ) {
-                                Ok(payload) => {
-                                    writer.record(EventType::EraBoundary, payload).await?;
-                                }
-                                Err(reason) => {
-                                    tracing::info!(
-                                        %reason,
-                                        "era fold refused at loop-top (proceeding same-era)"
-                                    );
+                            if !item.era_folded {
+                                match controller.apply_era_fold_in_run(
+                                    messages,
+                                    host,
+                                    writer.run_id(),
+                                    crate::era::EraTrigger::UnprefixedQueuedInput,
+                                ) {
+                                    Ok(payload) => {
+                                        writer.record(EventType::EraBoundary, payload).await?;
+                                        item.era_folded = true;
+                                        // 折叠后即时 flush 检查点侧车（391
+                                        // 批）：marker/清零后账面/取走后的
+                                        // 待命位就此落盘——本 run 此后任何
+                                        // 时点失败（含首个 sink 写沿之前），
+                                        // 侧车都已是折叠后状态；重折叠重复
+                                        // 挂行与「era2 消息＋era1 账面」混
+                                        // 合态的窗口闭合。
+                                        checkpoint_conversation_sidecar(
+                                            host, controller, profile, messages,
+                                        )
+                                        .await;
+                                    }
+                                    Err(reason) => {
+                                        writer
+                                            .record(
+                                                EventType::GateDecision,
+                                                serde_json::json!({
+                                                    "gate": "era_supplement_intent",
+                                                    "decision": "fold_refused_same_era",
+                                                    "reason": reason,
+                                                }),
+                                            )
+                                            .await?;
+                                        tracing::info!(
+                                            %reason,
+                                            "era fold refused at loop-top (proceeding same-era)"
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -3544,6 +3571,7 @@ pub(crate) async fn run_agent_loop(
                     candidates.push_front(crate::era::SupplementItem {
                         text,
                         mechanical: item.mechanical,
+                        era_folded: item.era_folded,
                     });
                     break;
                 }
@@ -3556,7 +3584,7 @@ pub(crate) async fn run_agent_loop(
                     reasoning_content: None,
                     round: None,
                 });
-                accepted.push((text, item.mechanical));
+                accepted.push((text, item.mechanical, item.era_folded));
             }
             controller.sync_status_line_message(messages);
             // 复验：真实模型面可能因尾部/分块/状态行开销高于逐条和。
@@ -3565,7 +3593,7 @@ pub(crate) async fn run_agent_loop(
             while !accepted.is_empty()
                 && crate::model_face::estimate_model_face_tokens(messages, &face_params) >= budget
             {
-                let Some((text, mechanical)) = accepted.pop() else {
+                let Some((text, mechanical, era_folded)) = accepted.pop() else {
                     break;
                 };
                 if let Some(position) = messages
@@ -3574,10 +3602,16 @@ pub(crate) async fn run_agent_loop(
                 {
                     messages.remove(position);
                 }
-                candidates.push_front(crate::era::SupplementItem { text, mechanical });
+                // era_folded 位随项保留（391 批）：复验回退不撤销已落账的
+                // 时代边界——重试至多重投文本，不再触发第二次折叠。
+                candidates.push_front(crate::era::SupplementItem {
+                    text,
+                    mechanical,
+                    era_folded,
+                });
             }
             deferred_supplements = candidates;
-            for (text, _mechanical) in accepted {
+            for (text, _mechanical, _era_folded) in accepted {
                 supplement_seq = supplement_seq.saturating_add(1);
                 // 318 P1-C5：补充是真实用户输入——登记来源，写回过滤不因
                 // 其文本恰好以框架前缀开头而丢弃。

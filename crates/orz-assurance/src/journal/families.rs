@@ -2505,12 +2505,10 @@ pub fn verify_context_checkpoint_era(events: &[Value]) -> Vec<String> {
     let mut errors = Vec::new();
     let mut prev_era: u64 = 0;
     let mut prev_round: u64 = 0;
-    let mut seen = false;
     for (index, event) in events.iter().enumerate() {
         if event.get("event_type").and_then(Value::as_str) != Some("era_boundary") {
             continue;
         }
-        seen = true;
         let payload = &event["payload"];
         // era / boundary_round / trigger / boundary_at。
         match payload.get("era").and_then(Value::as_u64) {
@@ -2532,7 +2530,8 @@ pub fn verify_context_checkpoint_era(events: &[Value]) -> Vec<String> {
         match payload.get("trigger").and_then(Value::as_str) {
             Some(trigger) if TRIGGERS.contains(&trigger) => {}
             Some(other) => errors.push(format!(
-                "event {index}: era_boundary trigger {other:?} is not a known                  trigger (checkpoint_command|unprefixed_input|unprefixed_queued_input)"
+                "event {index}: era_boundary trigger {other:?} is not a known trigger \
+                 (checkpoint_command|unprefixed_input|unprefixed_queued_input)"
             )),
             None => errors.push(format!(
                 "event {index}: era_boundary missing string `trigger`"
@@ -2590,7 +2589,7 @@ pub fn verify_context_checkpoint_era(events: &[Value]) -> Vec<String> {
                 Some(Value::String(domain)) if DOMAINS.contains(&domain.as_str()) => {}
                 Some(Value::Null) | None => {}
                 Some(other) => errors.push(format!(
-                    "event {index}: era_boundary features domain {other} is not a                      known LIF domain or null"
+                    "event {index}: era_boundary features domain {other} is not a known \n                 LIF domain or null"
                 )),
             }
             for key in [
@@ -2639,25 +2638,31 @@ pub fn verify_context_checkpoint_era(events: &[Value]) -> Vec<String> {
                 "event {index}: era_boundary missing integer `board_entries_removed`"
             ));
         }
-        // 单调：era 严格递增（1, 2, …）；boundary_round 不回退。
+        // 单调：era 严格递增（1, 2, …）；boundary_round 不回退。391 批
+        // prev 守卫对齐 Python 冻结镜像：era/round < 1（或不可解析）的
+        // 事件只报形状错、**不进 prev 推进也不触发单调错**——此前 era=0
+        // 会双报「must be >= 1」＋「strictly increasing (previous 0)」，
+        // 与 Python 错误集形状漂移（布尔对拍不可见）。
         let era = payload.get("era").and_then(Value::as_u64);
         let round = payload.get("boundary_round").and_then(Value::as_u64);
-        if let (Some(era), Some(round)) = (era, round) {
+        if let (Some(era), Some(round)) = (era, round)
+            && era >= 1
+            && round >= 1
+        {
             if era <= prev_era {
                 errors.push(format!(
-                    "event {index}: era_boundary era {era} must be strictly                      increasing (previous {prev_era})"
+                    "event {index}: era_boundary era {era} must be strictly increasing                      (previous {prev_era})"
                 ));
             }
             if round < prev_round {
                 errors.push(format!(
-                    "event {index}: era_boundary boundary_round {round} must not                      decrease (previous {prev_round})"
+                    "event {index}: era_boundary boundary_round {round} must not decrease                      (previous {prev_round})"
                 ));
             }
             prev_era = era;
             prev_round = round;
         }
     }
-    let _ = seen;
     errors
 }
 
@@ -6724,9 +6729,15 @@ mod tests {
                 ],
             ),
             (
-                // 0dx：违例——era 号 0（≥1 破）＋trigger 越闭集＋第二次
-                // 切换 era 号不递增（3 → 2）＋archive digest 空串＋
-                // usage 缺键＋boundary_at 缺失（六案恰触本族）。
+                // 0dx：违例——七案恰触本族（391 批重构：三事件连排，
+                // 单调两规则的负例自此真实存在。390 批原数据 era=0→2
+                // 使「3→2 不递增」名存实亡、boundary_round 不回退全程
+                // 零负例）。逐案：
+                // 事件 0＝era 0（≥1 破）＋trigger 越闭集＋digest 空串
+                //   ＋usage 缺 prompt_tokens 键（四违例；<1 不进 prev）；
+                // 事件 1＝正形锚（era 3 / 轮 5，推进 prev）；
+                // 事件 2＝era 2（3→2 不递增破）＋轮 4（5→4 回退破）
+                //   ＋boundary_at 缺失（三违例）。
                 "context_checkpoint_era_violations",
                 vec![
                     ev(
@@ -6754,10 +6765,11 @@ mod tests {
                     ev(
                         "era_boundary",
                         json!({
-                            "era": 2, "boundary_round": 3,
+                            "era": 3, "boundary_round": 5,
                             "trigger": "unprefixed_input",
+                            "boundary_at": "2026-10-31T01:00:00Z",
                             "archive": {
-                                "path": ".gsa/compaction/blocks/sess-era-002.md",
+                                "path": ".gsa/compaction/blocks/sess-era-003.md",
                                 "digest_sha256": "aa",
                                 "rounds": 1, "messages": 1,
                                 "write_failed": false,
@@ -6770,6 +6782,27 @@ mod tests {
                             },
                             "usage": {"model_calls": 2, "prompt_tokens": 300},
                             "board_entries_removed": 0,
+                        }),
+                    ),
+                    ev(
+                        "era_boundary",
+                        json!({
+                            "era": 2, "boundary_round": 4,
+                            "trigger": "checkpoint_command",
+                            "archive": {
+                                "path": ".gsa/compaction/blocks/sess-era-002.md",
+                                "digest_sha256": "bb",
+                                "rounds": 1, "messages": 2,
+                                "write_failed": false,
+                            },
+                            "features": {
+                                "domain": "low_progress", "session_rounds": 4,
+                                "t_hat_secs": 2.5, "streak_max": 0,
+                                "spike_entries": 0, "spike_returns": 0,
+                                "domain_spikes": 0,
+                            },
+                            "usage": {"model_calls": 1, "prompt_tokens": 120},
+                            "board_entries_removed": 1,
                         }),
                     ),
                 ],
@@ -6836,8 +6869,10 @@ mod tests {
             "face_fingerprint_progression_and_violations",
             "face_fingerprint",
         );
-        // 0dx（2026-10-31）：era_boundary 违例场景——era 0／trigger 越集／
-        // era 不递增／digest 空串／usage 缺键／boundary_at 缺失六案恰触本族。
+        // 0dx（2026-10-31，391 批重构为三事件七违例）：era_boundary 违例
+        // 场景——era 0（≥1 破）／trigger 越集／digest 空串／usage 缺键／
+        // era 不递增（3→2）／boundary_round 回退（5→4）／boundary_at 缺失，
+        // 七案恰触本族；单调两规则负例自此真实在案。
         expect(
             "context_checkpoint_era_violations",
             "context_checkpoint_era",
@@ -7379,7 +7414,13 @@ fams = {
 data = json.load(sys.stdin)
 out = {}
 for sc in data:
-    out[sc["name"]] = {n: bool(fn(sc["events"])) for n, fn in fams.items()}
+    row = {n: bool(fn(sc["events"])) for n, fn in fams.items()}
+    # 0dx (391): the era family also reports its ERROR COUNT -- boolean
+    # parity only proves violated-or-not agrees; error-set shape drift
+    # (Rust double-report / Python missing-key leniency class) passed
+    # invisibly. The count check pins this family rule-by-rule.
+    row['#era_count'] = len(fams['context_checkpoint_era'](sc['events']))
+    out[sc["name"]] = row
 json.dump(out, sys.stdout)
 "#;
         let corpus_json = serde_json::to_string(
@@ -7428,7 +7469,7 @@ json.dump(out, sys.stdout)
             "python crosscheck failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let py_verdicts: BTreeMap<String, BTreeMap<String, bool>> =
+        let py_verdicts: BTreeMap<String, BTreeMap<String, Value>> =
             serde_json::from_slice(&output.stdout).expect("python verdict JSON");
 
         // Rust side + verdict comparison (0 差 = every cell agrees).
@@ -7439,9 +7480,11 @@ json.dump(out, sys.stdout)
                 .unwrap_or_else(|| panic!("python missing scenario {name}"));
             for family in ALL_FAMILIES {
                 let rust_violation = !verify_family(family, events).is_empty();
-                let py_violation = *py_row
+                let py_violation = py_row
                     .get(*family)
-                    .unwrap_or_else(|| panic!("python missing family {family}"));
+                    .unwrap_or_else(|| panic!("python missing family {family}"))
+                    .as_bool()
+                    .unwrap_or_else(|| panic!("python verdict for {family} is not a bool"));
                 assert_eq!(
                     rust_violation, py_violation,
                     "verdict mismatch on {name}/{family} \
@@ -7457,6 +7500,29 @@ json.dump(out, sys.stdout)
             ALL_FAMILIES.len() * corpus.len(),
             "crosscheck cell accounting drifted"
         );
+        // 0dx (391): era-family ERROR-COUNT parity -- for every corpus
+        // scenario that carries era_boundary events, the Rust and Python
+        // judges must produce the same number of errors (shape parity, not
+        // just the boolean verdict above).
+        for (name, events) in &corpus {
+            if !events
+                .iter()
+                .any(|e| e.get("event_type").and_then(Value::as_str) == Some("era_boundary"))
+            {
+                continue;
+            }
+            let py_count = py_verdicts
+                .get(name)
+                .and_then(|row| row.get("#era_count"))
+                .and_then(Value::as_u64)
+                .unwrap_or_else(|| panic!("python missing #era_count for {name}"))
+                as usize;
+            let rust_count = verify_context_checkpoint_era(events).len();
+            assert_eq!(
+                rust_count, py_count,
+                "era-family error-count mismatch on {name} (rust={rust_count},                  python={py_count}) -- rule sets have drifted"
+            );
+        }
         // 251 → 253 (0ay S1, 2026-09-20): +result_consistency_citation_audit_ok
         // / _mismatch (the auditability field's clean and drifting forms);
         // 253 → 256 (0az ④, 2026-09-20): +the 0ax-era mixed replay (F-1), the

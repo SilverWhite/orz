@@ -1910,11 +1910,13 @@ pub fn clear_marker(
 /// digest／时代边界时间戳），**无语义摘要槽**、无边界外追加（裁决 4），
 /// 特征与用量不入面（裁决 7）。边界之前的全部内容不再渲染（marker 本体
 /// 即留在窗口里的存根）；档案写入失败时如实标注（同清零口径）。
+/// `boundary_at` 由调用方单源传入（391 批：与事件载荷同一瞬时）。
 pub fn era_marker(
     boundary_round1: usize,
     ledger_lines: &[String],
     archive_relative: &str,
     digest: &str,
+    boundary_at: &str,
     session: Option<&str>,
     archive_write_failed: bool,
 ) -> String {
@@ -1936,12 +1938,11 @@ pub fn era_marker(
          {ledger_line}\
          时代存档: {archive_relative}（边界前全部轮次逐字留档；read_file offset/limit 分页）\n\
          时代 digest: sha256:{digest}\n\
-         时代边界时间戳: {}\n\
+         时代边界时间戳: {boundary_at}\n\
          黑板会话: {}\n\
          {failure_note}\
          == 模型面声明 ==\n{MODEL_FACE_DECLARATION}\n\
          [/前文上下文已换代]",
-        crate::controller::chrono_utc_now(),
         session.unwrap_or("（无）"),
     )
 }
@@ -3120,6 +3121,7 @@ mod tests {
                 &["块#1 [seq] 1-4".to_string()],
                 ".gsa/compaction/blocks/test-era-001.md",
                 "abc123",
+                "2026-10-31T00:00:00Z",
                 None,
                 false,
             ),

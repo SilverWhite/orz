@@ -625,6 +625,19 @@ pub fn model_face_guard_tokens_override() -> Option<u64> {
         .and_then(|s| parse_slider_tokens(&s))
 }
 
+/// 0dx（391 批）：主滑块参数的**生产解析单源**——env 覆盖优先、缺省同
+/// [`ContextCompactConfig::default`]（与控制器构造同一解析）。ext 折叠面
+/// 等无 controller 场景取同值——此前硬编码 160K/32K，env 配置偏离时与
+/// 主车道折叠的块号分组口径漂移（审查 D4 处置）。
+pub fn production_slider_tokens() -> u64 {
+    model_face_slider_tokens_override().unwrap_or(DEFAULT_MODEL_FACE_SLIDER_TOKENS)
+}
+
+/// 0dx（391 批）：分块参数的生产解析单源（同上）。
+pub fn production_block_tokens() -> u64 {
+    model_face_block_tokens_override().unwrap_or(DEFAULT_MODEL_FACE_BLOCK_TOKENS)
+}
+
 /// A6 §8 C.2 (2026-08-08): default cumulative character cap for the
 /// compaction whitelist (16K — user decision; ≈8K tokens ≈ ~9% of the
 /// 90K compacted target, small enough not to squeeze the kept rounds).

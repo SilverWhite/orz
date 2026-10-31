@@ -3805,6 +3805,12 @@ enum RunInFlight {
     /// record: restores are short host-side operations, not agent runs).
     /// The id lets the RAII guard remove only its own marker.
     Restore(u64),
+    /// 0dx（391 批）：ext `/checkpoint` 折叠窗口占位——与 Restore 同款
+    /// 短宿主操作语义（无取消令牌；id 供 RAII compare-and-remove）。审查
+    /// P3 处置：查 runs 表后不占位即折叠的 check-then-act 窗口（并发
+    /// prompt 可装载折叠前续接包、run 尾写回覆盖折叠后侧车）自结构上
+    /// 闭合——占位期间 prompt/restore/再次 checkpoint 一律 Busy。
+    Checkpoint(u64),
 }
 
 /// How long a remembered cancel stays valid. A cancel racing the prompt's
@@ -3901,6 +3907,54 @@ impl Drop for RestoreInflightGuard {
         if matches!(
             runs.get(&self.session),
             Some(RunInFlight::Restore(found)) if *found == self.marker_id
+        ) {
+            runs.remove(&self.session);
+        }
+    }
+}
+
+/// 0dx（391 批）：ext `/checkpoint` 折叠窗口的 RAII 占位——形态与
+/// [`RestoreInflightGuard`] 同构（id compare-and-remove：过期守卫不得
+/// 删除后继占位）。
+struct CheckpointInflightGuard {
+    runs: Arc<Mutex<HashMap<String, RunInFlight>>>,
+    session: String,
+    marker_id: u64,
+}
+
+impl CheckpointInflightGuard {
+    fn new(
+        runs: &Arc<Mutex<HashMap<String, RunInFlight>>>,
+        session_id: &str,
+    ) -> Result<Self, String> {
+        static NEXT_CHECKPOINT_MARKER: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(1);
+        let marker_id = NEXT_CHECKPOINT_MARKER.fetch_add(1, Ordering::Relaxed);
+        let mut guard = runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.contains_key(session_id) {
+            return Err(session_id.to_string());
+        }
+        guard.insert(session_id.to_string(), RunInFlight::Checkpoint(marker_id));
+        drop(guard);
+        Ok(Self {
+            runs: runs.clone(),
+            session: session_id.to_string(),
+            marker_id,
+        })
+    }
+}
+
+impl Drop for CheckpointInflightGuard {
+    fn drop(&mut self) {
+        let mut runs = self
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(
+            runs.get(&self.session),
+            Some(RunInFlight::Checkpoint(found)) if *found == self.marker_id
         ) {
             runs.remove(&self.session);
         }
@@ -4619,6 +4673,20 @@ impl AcpServer {
             }
             // LRU 刻度：每次 prompt 起点刷新（close/evict 只看它）。
             session.last_prompt_at = Instant::now();
+            // 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：idle 空 `/btw`（无内容
+            // 的同时代补充）——不拉起 run，机械回执。391 批：判定移到
+            // `prompt_count` 自增**之前**——机械回执不消耗 run 序号（原实现
+            // 在自增后早返，RUN-N 出现空洞；「不消耗」表述自此名实一致）。
+            if orz_loop::era::parse_input_intent(prompt) == orz_loop::era::InputIntent::EmptySameEra
+            {
+                return Ok(serde_json::json!({
+                    "session_id": session_id,
+                    "response": "",
+                    "status": "completed",
+                    "run_id": "",
+                    "user_notice": "同时代补充：内容为空，未拉起执行。",
+                }));
+            }
             let n = session.prompt_count;
             session.prompt_count += 1;
             (
@@ -4628,17 +4696,6 @@ impl AcpServer {
                 n,
             )
         };
-        // 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：idle 空 `/btw`（无内容
-        // 的同时代补充）——不拉起 run，机械回执（不消耗 bootstrap/run 目录）。
-        if orz_loop::era::parse_input_intent(prompt) == orz_loop::era::InputIntent::EmptySameEra {
-            return Ok(serde_json::json!({
-                "session_id": session_id,
-                "response": "",
-                "status": "completed",
-                "run_id": "",
-                "user_notice": "同时代补充：内容为空，未拉起执行。",
-            }));
-        }
         // 334：active 转移在 run 注册成功后发（设计 §4 不变量 8）。prompt
         // guard 已在上方占位；此处的行仍在表内（close 尚未发生）。
         self.emit_session_state(session_id, SessionState::Active, None);
@@ -4825,15 +4882,16 @@ impl AcpServer {
         // 就此入侧车——这正是事故修复面（磁盘前进、对话必须同样前进）；
         // in-session `session.continuation` 的 Err 臂纪律不变（保 None，
         // 下一 prompt 回落侧车＝检查点状态）。
-        // 0dx：时代账面/待命载荷经共享 cell 进检查点写沿——折叠发生在
-        // sink 装配之后（controller 装配完毕时），闭包按实时值重建；外层
-        // 克隆留给下方时代切换段刷新（局部变量，无全局态）。
-        let era_checkpoint_cell: Arc<
-            std::sync::Mutex<(orz_loop::era::EraUsage, Option<serde_json::Value>)>,
-        > = Arc::new(std::sync::Mutex::new((
-            era_usage_current,
-            pending_era_payload.clone(),
-        )));
+        // 0dx：时代账面/待命载荷统一共享态（391 批）——**单一**
+        // `Arc<Mutex<EraRunState>>` 同装用量与待命载荷：检查点 sink 闭包与
+        // controller（run_started 落账取走、在途折叠清零换元）读写同一份。
+        // 390 批的宿主 cell 初值快照与 controller 内部态双源漂移（折叠后
+        // run 失败窗口的账面/载荷失真根源）自结构上消灭。
+        let era_state: orz_loop::era::SharedEraState =
+            std::sync::Arc::new(std::sync::Mutex::new(orz_loop::era::EraRunState {
+                usage: era_usage_current,
+                pending_era_event: pending_era_payload.clone(),
+            }));
         {
             let checkpoint_base = base_dir.clone();
             let checkpoint_sid = session_id.to_string();
@@ -4841,7 +4899,7 @@ impl AcpServer {
             let checkpoint_burden = burden_tiers_notified.clone();
             let checkpoint_scale = restored_context_scale_notified.clone();
             let checkpoint_recall = restored_recall_log.clone();
-            let checkpoint_era_state = era_checkpoint_cell.clone();
+            let checkpoint_era_state = era_state.clone();
             host.set_conversation_checkpoint_sink(Arc::new(
                 move |messages: &[Message],
                       lif: &TemporalSessionSnapshot,
@@ -4856,12 +4914,12 @@ impl AcpServer {
                     full.burden_tiers_notified = checkpoint_burden.clone();
                     full.context_scale_notified = checkpoint_scale.clone();
                     full.recall_log = checkpoint_recall.clone();
-                    let (era_usage, pending) = checkpoint_era_state
+                    let state = checkpoint_era_state
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .clone();
-                    full.era_usage = Some(era_usage);
-                    full.pending_era_event = pending;
+                    full.era_usage = Some(state.usage);
+                    full.pending_era_event = state.pending_era_event;
                     if let Err(e) = persist_conversation_sidecar(&checkpoint_base, &full) {
                         tracing::warn!(
                             session_id = %checkpoint_sid,
@@ -4990,6 +5048,13 @@ impl AcpServer {
                 Ok(outcome) => {
                     pending_era_payload = Some(outcome.payload);
                     era_usage_current = orz_loop::era::EraUsage::default();
+                    *era_state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        orz_loop::era::EraRunState {
+                            usage: era_usage_current,
+                            pending_era_event: pending_era_payload.clone(),
+                        };
                     era_fold_notice = Some(format!(
                         "[时代已切换｜第 {} 时代已无损折叠，原文回放 {}；补充请用 /btw]",
                         outcome.era_closed, outcome.archive_relative
@@ -5014,10 +5079,32 @@ impl AcpServer {
                     tracing::info!(%reason, "era fold refused (proceeding same-era)");
                 }
             }
-            *era_checkpoint_cell
+        }
+        // 0dx：带随行输入的折叠——**折叠后先即时持久化续接包再拉起 run**
+        // （391 批）：marker、清零后时代账面与待命载荷就此落盘，本 run 此
+        // 后任何时点失败（含首个检查点写沿之前）侧车都已是折叠后状态——
+        // 「侧车回退折叠前、marker 丢失而 journal 已有时代事件」的失败窗
+        // 口闭合（裸 `/checkpoint` 不拉起 run，无此窗口，其写回在下方早返）。
+        if era_fold_notice.is_some() && !effective_prompt.is_empty() {
+            let lif = controller.lif_session_snapshot();
+            let blackboard = controller.blackboard_conversation_snapshot();
+            let mut persisted = StoredConversation::full(
+                session_id,
+                conversation.clone(),
+                &lif,
+                session_started_at,
+                &blackboard,
+            );
+            persisted.burden_tiers_notified = burden_tiers_notified.clone();
+            persisted.context_scale_notified = controller.context_scale_notified_keys();
+            persisted.recall_log = restored_recall_log.clone();
+            let state = era_state
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                (era_usage_current, pending_era_payload.clone());
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            persisted.era_usage = Some(state.usage);
+            persisted.pending_era_event = state.pending_era_event;
+            let _ = persist_conversation_sidecar(&base_dir, &persisted);
         }
         // 0dx：裸 `/checkpoint` 成功折叠——写回续接包（含时代账面清零与待命
         // 载荷），不拉起 run（设计 §1.1：无伴随输入则切换后不自动拉起）。
@@ -5060,14 +5147,17 @@ impl AcpServer {
             }));
         }
         // 0dx：待命载荷交 controller（run_turn_inner 在 run_started 后落账；
-        // 取走即清，SUCCESS-ONLY 语义随续接包回退保留侧车值）。
+        // 391 批：取走清的是共享态——落账后检查点 sink 与 run 尾写回不再
+        // 携带，失败 run 的重复落账窗口闭合）。
+        let carries_pending = pending_era_payload.is_some();
         if let Some(payload) = pending_era_payload.take() {
             controller.set_pending_era_boundary(payload);
         }
-        // 0dx：时代账面句柄注入（run 尾把 meter 增量计入新时代账面）。
-        let era_usage_handle: orz_loop::era::SharedEraUsage =
-            Arc::new(std::sync::Mutex::new(era_usage_current));
-        let controller = controller.with_era_usage(Some(era_usage_handle.clone()));
+        // 0dx（391 批）：携带待命载荷的 run——运行前快照会话面（仅载荷在
+        // 途时付出拷贝代价）：失败臂按共享态现值持久化（见下方失败臂注）。
+        let pre_run_conversation = carries_pending.then(|| conversation.clone());
+        // 0dx：统一时代态注入（run 尾把 meter 增量计入共享态的新时代账面）。
+        let controller = controller.with_era_usage(Some(era_state.clone()));
 
         let run_result = controller
             .run_turn_with_cancel(
@@ -5196,15 +5286,17 @@ impl AcpServer {
             full.context_scale_notified = controller.context_scale_notified_keys();
             // 0di：撤回审计日志原样带回（跨 prompt 延续；见 take-out 处注）。
             full.recall_log = restored_recall_log;
-            // 0dx：run 尾 meter 增量计入新时代账面（折叠基线后增量；无折叠
-            // ⇒ baseline (0,0) 恒等）。待命载荷已随本 run 落账 ⇒ 消费即清。
+            // 0dx：run 尾 meter 增量计入**共享态**新时代账面（折叠基线后
+            // 增量；无折叠 ⇒ baseline (0,0) 恒等）。待命载荷已随本 run 落账
+            // ⇒ 消费即清（共享态已由 controller 取走置空；此处对齐落盘）。
             {
                 let (delta_calls, delta_prompt) = controller.era_usage_delta();
-                let mut usage = era_usage_handle
+                let mut state = era_state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                usage.saturating_add(delta_calls, delta_prompt);
-                full.era_usage = Some(*usage);
+                state.usage.saturating_add(delta_calls, delta_prompt);
+                state.pending_era_event = None;
+                full.era_usage = Some(state.usage);
             }
             full.pending_era_event = None;
             let _ = persist_conversation_sidecar(&base_dir, &full);
@@ -5216,6 +5308,35 @@ impl AcpServer {
             {
                 session.continuation = Some(full);
             }
+        } else if let Some(pre_run) = pre_run_conversation {
+            // 0dx（391 批）：携带待命载荷的 run 失败——按**共享态现值**持久
+            // 化运行前会话面。事件已落账（run_started 后、首个检查点写沿
+            // 前失败——模型首调失败正是此形态）⇒ 待命位已随落账清零，此处
+            // 落盘防下个 prompt 重复落账（era 号会话内非递增、journal 重复
+            // 事件）；事件未落账（journal 写失败即败）⇒ 待命位保留，下个
+            // prompt 重试——恰一次语义两头保持。会话面取运行前快照
+            // （SUCCESS-ONLY：失败 run 的部分消息不入续接包，与 5159 臂同
+            // 纪律；此刻磁盘上不存在更新的检查点写沿——有则其本就带清位后
+            // 的共享态）。
+            let lif = controller.lif_session_snapshot();
+            let blackboard = controller.blackboard_conversation_snapshot();
+            let mut full = StoredConversation::full(
+                session_id,
+                pre_run,
+                &lif,
+                session_started_at,
+                &blackboard,
+            );
+            full.burden_tiers_notified = burden_tiers_notified;
+            full.context_scale_notified = restored_context_scale_notified;
+            full.recall_log = restored_recall_log;
+            let state = era_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            full.era_usage = Some(state.usage);
+            full.pending_era_event = state.pending_era_event;
+            let _ = persist_conversation_sidecar(&base_dir, &full);
         }
 
         // Every path: release the run token here (stale cancels become
@@ -6116,8 +6237,11 @@ impl AcpServer {
     /// `orz/checkpoint`；idle-only——设计 §1.1：无随行输入则切换后不拉起
     /// run）。宿主侧机械核执行五步折叠（无损块／投影边界／黑板模型分区
     /// 清空／时代标记／事件载荷待命——载荷随侧车待命，下一 run 的
-    /// `run_started` 后落账）。与 handle_recall 同款 idle-only 互斥口径
-    /// （runs 表查询；check-then-act 窗口与撤回面同级登记）。
+    /// `run_started` 后落账）。391 批：runs 表 RAII 占位（
+    /// `CheckpointInflightGuard`）——check-then-act 窗口闭合，占位语义
+    /// 与 prompt/restore 互斥同权；滑块/分块参数走
+    /// [`orz_loop::compact::production_slider_tokens`] 生产单源（原
+    /// 硬编码 160K/32K，env 偏离时块号口径漂移）。
     pub async fn handle_session_checkpoint(
         &self,
         session_id: &str,
@@ -6131,10 +6255,6 @@ impl AcpServer {
                 .sessions
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let runs = self
-                .runs
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let session = sessions
                 .get(session_id)
                 .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
@@ -6144,15 +6264,6 @@ impl AcpServer {
                         session_id: session_id.to_string(),
                         state: crate::session_ops::SessionState::Closing,
                         verb: "checkpoint",
-                    },
-                ));
-            }
-            if runs.contains_key(session_id) {
-                return Err(AcpError::SessionLifecycle(
-                    crate::session_ops::SessionError::Busy {
-                        session_id: session_id.to_string(),
-                        evidence: "a run is in flight; /checkpoint is idle-only".to_string(),
-                        waited_ms: 0,
                     },
                 ));
             }
@@ -6168,6 +6279,18 @@ impl AcpServer {
             )
         };
         let _ = queue_depth;
+        // 391 批：runs 表占位（查＋插原子；任何在途 prompt/restore/
+        // checkpoint 期间 Busy）。early-return 由 RAII 守卫释放占位。
+        let _checkpoint_guard =
+            CheckpointInflightGuard::new(&self.runs, session_id).map_err(|_sid| {
+                AcpError::SessionLifecycle(crate::session_ops::SessionError::Busy {
+                    session_id: session_id.to_string(),
+                    evidence: "a run, restore or checkpoint is in flight; /checkpoint is \
+                               idle-only"
+                        .to_string(),
+                    waited_ms: 0,
+                })
+            })?;
         if continuation.messages.is_empty() {
             return Ok(serde_json::json!({
                 "session_id": session_id,
@@ -6204,8 +6327,8 @@ impl AcpServer {
             features: orz_loop::era::EraFeatureSnapshot::from_temporal_snapshot(&lif_snapshot),
             era_usage: continuation.era_usage.unwrap_or_default(),
             ledger_path: &orz_loop::action_ledger::ledger_file_path(&base_dir),
-            slider_tokens: 160_000,
-            block_tokens: 32_000,
+            slider_tokens: orz_loop::production_slider_tokens(),
+            block_tokens: orz_loop::production_block_tokens(),
         });
         let outcome = match fold {
             Ok(outcome) => outcome,
@@ -6295,15 +6418,29 @@ impl AcpServer {
                 "supplement rejected: a restore or recall is in flight for session {session_id}"
             )));
         }
+        if matches!(runs.get(session_id), Some(RunInFlight::Checkpoint(_))) {
+            return Err(AcpError::InvalidRequest(format!(
+                "supplement rejected: an idle checkpoint switch is in flight for session \
+                 {session_id}"
+            )));
+        }
         // 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：`/checkpoint` 在途
         // 不受理（设计 §1.1——在途切换走无前缀路径；机械最简）。enqueue
-        // 点响亮拒绝（带区分性文案），不在途排队后静默丢弃。
+        // 点响亮拒绝（带区分性文案），不在途排队后静默丢弃。391 批：拒绝
+        // 扩至**带随行输入**形态——此前只有裸命令被拦，带参项入队后到
+        // loop-top 才被 GateDecision 连文本一起丢弃（设计「返回提示」违约；
+        // 随行输入一并蒸发的审查 P2-1 处置）。loop 内 GateDecision 拒绝
+        // 保留为兜底（enqueue 门绕行路径仍不静默）。
         if !mechanical
-            && orz_loop::era::parse_input_intent(text)
-                == orz_loop::era::InputIntent::Checkpoint(None)
+            && matches!(
+                orz_loop::era::parse_input_intent(text),
+                orz_loop::era::InputIntent::Checkpoint(_)
+            )
         {
             return Err(AcpError::InvalidRequest(format!(
-                "checkpoint rejected while a run is in flight for session {session_id}:                  /checkpoint is idle-only; an in-run input without the /btw prefix                  switches the era at the next safe boundary"
+                "checkpoint rejected while a run is in flight for session {session_id}: \
+                 /checkpoint is idle-only; an in-run input without the /btw prefix \
+                 switches the era at the next safe boundary"
             )));
         }
         let pushed = if mechanical {
@@ -12202,6 +12339,144 @@ mod tests {
                 .handle_queue_append("sess-qfifo-none", "x", false)
                 .is_err()
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // ── 0dx（2026-10-31 立项／391 批审查处置）：宿主触发面 ──
+
+    /// 391 批（审查 P2-1）：`/checkpoint` 在途入队门拒绝**含带随行输入**
+    /// 形态——此前只有裸命令被拦，带参项入队后到 loop-top 才被丢弃（设
+    /// 计 §1.1「返回提示」违约）。机械位放行保持。
+    #[tokio::test]
+    async fn queue_append_rejects_checkpoint_command_forms() {
+        let base = supplement_test_dir("q-ckpt");
+        let server = shadow_server();
+        server
+            .handle_session_new(
+                "sess-qckpt",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        assert!(
+            server
+                .handle_queue_append("sess-qckpt", "/checkpoint 修一下编译", false)
+                .is_err(),
+            "带参 /checkpoint 在途必须响亮拒绝"
+        );
+        assert!(
+            server
+                .handle_queue_append("sess-qckpt", "/checkpoint", false)
+                .is_err(),
+            "裸 /checkpoint 在途拒绝（390 口径保持）"
+        );
+        // 全角冒号拖尾（词界判空的裸命令形态）同拒。
+        assert!(
+            server
+                .handle_queue_append("sess-qckpt", "/checkpoint：", false)
+                .is_err()
+        );
+        // 机械位放行（来源显式声明，不参与时代分流）。
+        server
+            .handle_queue_append("sess-qckpt", "/checkpoint 直投", true)
+            .unwrap();
+        let queue = server
+            .sessions
+            .lock()
+            .unwrap()
+            .get("sess-qckpt")
+            .unwrap()
+            .supplement_queue
+            .clone();
+        assert_eq!(queue.depth(), 1, "只有机械位项入队");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 391 批（审查观察③）：idle 空 `/btw` 机械回执**不消耗 run 序号**
+    /// ——判定移到 `prompt_count` 自增之前，后续真实 prompt 仍取 0 号。
+    #[tokio::test]
+    async fn empty_btw_receipt_preserves_run_number() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = supplement_test_dir("era-btw");
+                let server = shadow_server();
+                server
+                    .handle_session_new(
+                        "sess-era-btw",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                let r = server
+                    .handle_session_prompt("sess-era-btw", "/btw")
+                    .await
+                    .unwrap();
+                assert_eq!(r["status"], "completed");
+                assert!(r["user_notice"].as_str().unwrap().contains("同时代补充"));
+                let count = server
+                    .sessions
+                    .lock()
+                    .unwrap()
+                    .get("sess-era-btw")
+                    .unwrap()
+                    .prompt_count;
+                assert_eq!(count, 0, "空 /btw 机械回执不消耗 run 序号");
+                // 后续真实 prompt 仍取 0 号（无 RUN 空洞）。
+                let r2 = server
+                    .handle_session_prompt("sess-era-btw", "hello")
+                    .await
+                    .unwrap();
+                assert!(
+                    r2["run_id"].as_str().unwrap().ends_with("-0"),
+                    "首个真实 prompt 应为 0 号 run: {r2}"
+                );
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
+    }
+
+    /// 391 批（审查 P3）：ext `/checkpoint` 折叠窗口的 runs 表 RAII 占位
+    /// ——占位期间 Busy（与 prompt/restore/再次 checkpoint 互斥），守卫
+    /// Drop 释放后恢复可用。
+    #[tokio::test]
+    async fn session_checkpoint_ext_busy_marker_and_release() {
+        let base = supplement_test_dir("era-ckbusy");
+        let server = shadow_server();
+        server
+            .handle_session_new(
+                "sess-ckbusy",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        server
+            .runs
+            .lock()
+            .unwrap()
+            .insert("sess-ckbusy".into(), RunInFlight::Checkpoint(0));
+        let err = server
+            .handle_session_checkpoint("sess-ckbusy")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AcpError::SessionLifecycle(crate::session_ops::SessionError::Busy { .. })
+            ),
+            "占位期间必须 Busy: {err:?}"
+        );
+        // 释放后恢复可用（空会话 → switched:false 回执而非 Busy）。
+        server.runs.lock().unwrap().remove("sess-ckbusy");
+        let r = server
+            .handle_session_checkpoint("sess-ckbusy")
+            .await
+            .unwrap();
+        assert_eq!(r["switched"], serde_json::json!(false));
+        // 守卫不留残位。
+        assert!(!server.runs.lock().unwrap().contains_key("sess-ckbusy"));
         let _ = std::fs::remove_dir_all(&base);
     }
 

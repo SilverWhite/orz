@@ -106,16 +106,42 @@ fn handle_chat_key(app: &mut TuiApp, key: KeyEvent) -> KeyOutcome {
             // `/checkpoint …`（带随行输入）不进命令层——按普通输入直通
             // prompt/queue 路径，前缀由宿主/loop 意图解析统一处理（idle
             // 剥前缀、无前缀换代、运行中排队后 loop-top 分流）。裸
-            // `/checkpoint` 仍走命令层（idle ext 切换面）。
+            // `/checkpoint` 仍走命令层（idle ext 切换面）。391 批：词界
+            // 判定与 `orz_loop::era::parse_input_intent` 同规则（紧邻标点
+            // `：，。；！？、` 与 ASCII `:` `,` 算边界）——TUI 预过滤与
+            // 宿主/loop 分流对同一输入必须同判（此前 `/checkpoint：` 这类
+            // 紧邻标点形态会落进未知命令层，两表面行为分叉）。
             let trimmed = line.trim_start();
-            let btw_prefixed = trimmed
-                .strip_prefix("/btw")
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace));
-            let checkpoint_with_args = trimmed.strip_prefix("/checkpoint").is_some_and(|rest| {
-                rest.starts_with(char::is_whitespace) && !rest.trim().is_empty()
-            });
+            let strip_bounded = |word: &str| -> Option<String> {
+                let rest = trimmed.strip_prefix(word)?;
+                const BOUNDARY_PUNCT: &[char] =
+                    &['：', '，', '。', '；', '！', '？', '、', ':', ','];
+                if rest.is_empty()
+                    || rest.starts_with(char::is_whitespace)
+                    || rest.starts_with(|c: char| !c.is_ascii())
+                    || BOUNDARY_PUNCT.iter().any(|p| rest.starts_with(*p))
+                {
+                    Some(
+                        rest.trim_start_matches(BOUNDARY_PUNCT)
+                            .trim_start()
+                            .to_string(),
+                    )
+                } else {
+                    None
+                }
+            };
+            let btw_prefixed = strip_bounded("/btw").is_some();
+            let checkpoint_bare = strip_bounded("/checkpoint").is_some_and(|r| r.is_empty());
+            let checkpoint_with_args = strip_bounded("/checkpoint").is_some_and(|r| !r.is_empty());
             if line.starts_with('/') && !btw_prefixed && !checkpoint_with_args {
-                for msg in app.dispatch_command(&line) {
+                // 裸 `/checkpoint`（含仅拖尾标点的 `/checkpoint：`——词界
+                // 同规则判空）归一化后进命令层（idle ext 切换面）。
+                let command_line = if checkpoint_bare {
+                    "/checkpoint".to_string()
+                } else {
+                    line
+                };
+                for msg in app.dispatch_command(&command_line) {
                     app.content.add_system_message(&msg, false);
                 }
                 KeyOutcome::Continue
@@ -456,6 +482,39 @@ mod tests {
     fn unknown_slash_shows_message() {
         let mut a = TuiApp::new();
         a.input.textarea.set_text("/nope");
+        handle_key(&mut a, key(KeyCode::Enter, M::NONE));
+        let last = a.content.items.last().unwrap();
+        assert!(format!("{last:?}").contains("未知命令"));
+    }
+
+    /// 0dx（391 批词界同规则钉）：TUI 预过滤与
+    /// `orz_loop::era::parse_input_intent` 对同一输入必须同判——用例清单
+    /// 与 `era.rs::input_intent_prefixes_are_word_bounded` 镜像（任一侧
+    /// 改词界规则必须同步另一侧并同改两处用例）。
+    #[test]
+    fn era_prefix_boundary_matches_host_intent_parsing() {
+        // 紧邻标点＝带参直通（宿主剥标点同代跑/带参切换）。
+        for line in ["/btw：补充一下", "/checkpoint修一下", "/btw, note"] {
+            let mut a = TuiApp::new();
+            a.input.textarea.set_text(line);
+            assert_eq!(
+                handle_key(&mut a, key(KeyCode::Enter, M::NONE)),
+                KeyOutcome::Prompt(line.into()),
+                "{line} 必须直通 prompt 通道"
+            );
+        }
+        // 裸命令（含拖尾标点判空的 `/checkpoint：`）归一化进命令层——
+        // idle 下置 pending_checkpoint（ext 切换面）。
+        let mut a = TuiApp::new();
+        a.input.textarea.set_text("/checkpoint：");
+        assert_eq!(
+            handle_key(&mut a, key(KeyCode::Enter, M::NONE)),
+            KeyOutcome::Continue
+        );
+        assert!(a.pending_checkpoint, "/checkpoint： 必须走命令层切换面");
+        // 字母紧随仍算普通命令词（未知命令层，不直通）。
+        let mut a = TuiApp::new();
+        a.input.textarea.set_text("/checkpoint2");
         handle_key(&mut a, key(KeyCode::Enter, M::NONE));
         let last = a.content.items.last().unwrap();
         assert!(format!("{last:?}").contains("未知命令"));
