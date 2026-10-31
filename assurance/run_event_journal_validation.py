@@ -4585,6 +4585,9 @@ def _verify_v02_context_checkpoint_era(events: list[dict[str, Any]]) -> list[str
                     f"event {index}: era_boundary features domain {domain!r} is "
                     "not a known LIF domain or null"
                 )
+            # 391 批对齐（Rust twin 侧缺键即错、schema required 在案）：
+            # Option 面**键必须在场**——缺失/不可解析即缺账，与 null（影子
+            # 未启用/legacy，不落假值）区分。
             for key in (
                 "session_rounds",
                 "streak_max",
@@ -4594,7 +4597,12 @@ def _verify_v02_context_checkpoint_era(events: list[dict[str, Any]]) -> list[str
                 "t_hat_secs",
             ):
                 value = features.get(key)
-                if value is not None and not isinstance(value, (int, float)):
+                if value is None and key not in features:
+                    errors.append(
+                        f"event {index}: era_boundary features `{key}` must be a "
+                        "number or null"
+                    )
+                elif value is not None and not isinstance(value, (int, float)):
                     errors.append(
                         f"event {index}: era_boundary features `{key}` must be a "
                         "number or null"
@@ -4603,9 +4611,15 @@ def _verify_v02_context_checkpoint_era(events: list[dict[str, Any]]) -> list[str
         if not isinstance(usage, dict):
             errors.append(f"event {index}: era_boundary missing object `usage`")
         else:
+            # 391 批对齐（Rust twin as_u64 侧拒绝负数；schema minimum: 0）：
+            # 负整数＝缺账同罪。bool 是 int 子类，显式排除。
             for key in ("model_calls", "prompt_tokens"):
                 value = usage.get(key)
-                if not isinstance(value, int) or isinstance(value, bool):
+                if (
+                    not isinstance(value, int)
+                    or isinstance(value, bool)
+                    or value < 0
+                ):
                     errors.append(
                         f"event {index}: era_boundary usage missing integer `{key}`"
                     )
