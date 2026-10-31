@@ -322,6 +322,10 @@
         "schema": "runtime/run-usage-metered-event-payload-v0.2.schema.json",
         "slug": "run-usage-metered"
       },
+      "era_boundary": {
+        "schema": "runtime/era-boundary-event-payload-v0.2.schema.json",
+        "slug": "era-boundary"
+      },
       "supplement_delivered": {
         "schema": "runtime/supplement-delivered-event-payload-v0.2.schema.json",
         "slug": "supplement-delivered"

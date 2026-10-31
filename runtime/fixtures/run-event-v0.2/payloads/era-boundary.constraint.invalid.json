@@ -1,0 +1,26 @@
+{
+  "era": 0,
+  "boundary_round": 3,
+  "trigger": "auto_magic",
+  "boundary_at": "",
+  "archive": {
+    "path": ".gsa/compaction/blocks/sess-era-001.md",
+    "digest_sha256": "",
+    "rounds": 2,
+    "messages": 5,
+    "write_failed": false
+  },
+  "features": {
+    "domain": "stuck",
+    "session_rounds": 2,
+    "t_hat_secs": 1.5,
+    "streak_max": 0,
+    "spike_entries": 0,
+    "spike_returns": 0,
+    "domain_spikes": 1
+  },
+  "usage": {
+    "model_calls": 1
+  },
+  "board_entries_removed": 2
+}

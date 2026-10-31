@@ -4501,6 +4501,138 @@ _USAGE_METER_TOKEN_FIELDS = (
 )
 
 
+def _verify_v02_context_checkpoint_era(events: list[dict[str, Any]]) -> list[str]:
+    """0dx 会话内检查点时代边界落账族 (2026-10-31, CONTEXT-CHECKPOINT-ERA) —
+    Rust twin `families.rs::verify_context_checkpoint_era`.
+
+    - Payload shape: era/boundary_round >= 1 整数；trigger 闭集
+      (checkpoint_command|unprefixed_input|unprefixed_queued_input)；
+      boundary_at 非空字符串；archive{path,digest_sha256 非空串,
+      rounds,messages 整数,write_failed 布尔}；features{domain ∈ LIF 闭集
+      或 null；其余 Option 面数字或 null}；usage{model_calls,prompt_tokens
+      整数}；board_entries_removed 整数.
+    - 单调：era 号严格递增；boundary_round 不回退.
+    - 特征与用量入账不入面（裁决 7）：本族只执法 journal 载荷，不触模型面.
+    """
+    triggers = ("checkpoint_command", "unprefixed_input", "unprefixed_queued_input")
+    domains = ("start", "normal", "pressure", "low_progress", "stuck")
+    errors: list[str] = []
+    prev_era = 0
+    prev_round = 0
+    for index, event in enumerate(events):
+        if event.get("event_type") != "era_boundary":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            errors.append(f"event {index}: era_boundary payload must be an object")
+            continue
+        era = payload.get("era")
+        if not isinstance(era, int) or isinstance(era, bool):
+            errors.append(f"event {index}: era_boundary missing integer `era`")
+        elif era < 1:
+            errors.append(f"event {index}: era_boundary era {era} must be >= 1")
+        round_value = payload.get("boundary_round")
+        if not isinstance(round_value, int) or isinstance(round_value, bool):
+            errors.append(
+                f"event {index}: era_boundary missing integer `boundary_round`"
+            )
+        elif round_value < 1:
+            errors.append(
+                f"event {index}: era_boundary boundary_round {round_value} "
+                "must be >= 1"
+            )
+        trigger = payload.get("trigger")
+        if not isinstance(trigger, str) or trigger not in triggers:
+            errors.append(
+                f"event {index}: era_boundary trigger {trigger!r} is not a known "
+                "trigger (checkpoint_command|unprefixed_input|unprefixed_queued_input)"
+            )
+        boundary_at = payload.get("boundary_at")
+        if not isinstance(boundary_at, str) or not boundary_at:
+            errors.append(
+                f"event {index}: era_boundary missing non-empty string `boundary_at`"
+            )
+        archive = payload.get("archive")
+        if not isinstance(archive, dict):
+            errors.append(f"event {index}: era_boundary missing object `archive`")
+        else:
+            for key in ("path", "digest_sha256"):
+                value = archive.get(key)
+                if not isinstance(value, str) or not value:
+                    errors.append(
+                        f"event {index}: era_boundary archive missing non-empty "
+                        f"string `{key}`"
+                    )
+            for key in ("rounds", "messages"):
+                value = archive.get(key)
+                if not isinstance(value, int) or isinstance(value, bool):
+                    errors.append(
+                        f"event {index}: era_boundary archive missing integer "
+                        f"`{key}`"
+                    )
+            if not isinstance(archive.get("write_failed"), bool):
+                errors.append(
+                    f"event {index}: era_boundary archive missing boolean "
+                    "`write_failed`"
+                )
+        features = payload.get("features")
+        if not isinstance(features, dict):
+            errors.append(f"event {index}: era_boundary missing object `features`")
+        else:
+            domain = features.get("domain")
+            if domain is not None and (not isinstance(domain, str) or domain not in domains):
+                errors.append(
+                    f"event {index}: era_boundary features domain {domain!r} is "
+                    "not a known LIF domain or null"
+                )
+            for key in (
+                "session_rounds",
+                "streak_max",
+                "spike_entries",
+                "spike_returns",
+                "domain_spikes",
+                "t_hat_secs",
+            ):
+                value = features.get(key)
+                if value is not None and not isinstance(value, (int, float)):
+                    errors.append(
+                        f"event {index}: era_boundary features `{key}` must be a "
+                        "number or null"
+                    )
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            errors.append(f"event {index}: era_boundary missing object `usage`")
+        else:
+            for key in ("model_calls", "prompt_tokens"):
+                value = usage.get(key)
+                if not isinstance(value, int) or isinstance(value, bool):
+                    errors.append(
+                        f"event {index}: era_boundary usage missing integer `{key}`"
+                    )
+        board_removed = payload.get("board_entries_removed")
+        if not isinstance(board_removed, int) or isinstance(board_removed, bool):
+            errors.append(
+                f"event {index}: era_boundary missing integer "
+                "`board_entries_removed`"
+            )
+        if isinstance(era, int) and not isinstance(era, bool) and era >= 1 \
+                and isinstance(round_value, int) and not isinstance(round_value, bool) \
+                and round_value >= 1:
+            if era <= prev_era:
+                errors.append(
+                    f"event {index}: era_boundary era {era} must be strictly "
+                    f"increasing (previous {prev_era})"
+                )
+            if round_value < prev_round:
+                errors.append(
+                    f"event {index}: era_boundary boundary_round {round_value} "
+                    f"must not decrease (previous {prev_round})"
+                )
+            prev_era = era
+            prev_round = round_value
+    return errors
+
+
 def _verify_v02_usage_metering(events: list[dict[str, Any]]) -> list[str]:
     """0df 任务级计费机械记录点 (2026-10-17, ADR-0010 §14.86): per-run
     metering coverage — Rust twin `families.rs::verify_usage_metering`.
@@ -4952,6 +5084,9 @@ def validate_journal_text(text: str) -> list[str]:
         # 0df (2026-10-17): per-run usage metering coverage — Rust twin in
         # `families.rs::verify_usage_metering` (same-day roster).
         errors.extend(_verify_v02_usage_metering(events))
+        # 0dx (2026-10-31): era boundary accounting — Rust twin in
+        # `families.rs::verify_context_checkpoint_era` (same-day roster).
+        errors.extend(_verify_v02_context_checkpoint_era(events))
     return errors
 
 

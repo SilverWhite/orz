@@ -1,0 +1,27 @@
+{
+  "era": 2,
+  "boundary_round": 6,
+  "trigger": "unprefixed_queued_input",
+  "boundary_at": "2026-10-31T00:10:00Z",
+  "archive": {
+    "path": ".gsa/compaction/blocks/sess-era-002.md",
+    "digest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "rounds": 1,
+    "messages": 3,
+    "write_failed": false
+  },
+  "features": {
+    "domain": null,
+    "session_rounds": null,
+    "t_hat_secs": null,
+    "streak_max": null,
+    "spike_entries": null,
+    "spike_returns": null,
+    "domain_spikes": null
+  },
+  "usage": {
+    "model_calls": 0,
+    "prompt_tokens": 0
+  },
+  "board_entries_removed": 0
+}

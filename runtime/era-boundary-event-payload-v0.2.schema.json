@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/era-boundary-event-payload-v0.2.schema.json",
+  "title": "era_boundary event payload (Rust track, v0.2)",
+  "description": "0dx 会话内检查点时代边界事件（2026-10-31，CONTEXT-CHECKPOINT-ERA）：会话＝话题分类器／时代＝话题内检查点／run＝一次执行。触发是输入的句法属性（`/checkpoint` 命令或无 `/btw` 前缀用户输入；在途沿 0di 排队、loop-top 安全边界执行），纯机械切换、零模型参与、零 API 调用。载荷＝被关闭时代号、边界轮、触发来源、边界时间戳、单块回放档案指针（路径＋digest＋轮次/消息数＋写盘失败位）＋LIF/RLI 特征快照与本时代用量（调用数/prompt tokens）——特征与用量**入账不入面**（裁决 7 用户终裁：P7 本线不写模型面＋0cp S4 提醒面在现实任务事实死亡＋D7 不能假设现实任务能被分出域特征；S4 读数若显示时代边界标签有真实消费面另行裁决再加）。跨事件执法（载荷形状＋era 号严格递增＋boundary_round 不回退）由 context_checkpoint_era 法官族核证：Rust `verify_context_checkpoint_era` ↔ Python `_verify_v02_context_checkpoint_era` 同形。journal/ledger 跨时代连续（会话级审计存储不清）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "era",
+    "boundary_round",
+    "trigger",
+    "boundary_at",
+    "archive",
+    "features",
+    "usage",
+    "board_entries_removed"
+  ],
+  "properties": {
+    "era": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "被关闭的时代号（1 基；＝折叠前既有时代 marker 数＋1，严格递增）。"
+    },
+    "boundary_round": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "时代边界轮号（1 基会话全局；轮 < R 的全部内容随时代折叠移出窗口）。"
+    },
+    "trigger": {
+      "type": "string",
+      "enum": ["checkpoint_command", "unprefixed_input", "unprefixed_queued_input"],
+      "description": "触发来源：`/checkpoint` 命令（idle 手动）／无前缀输入（idle 自动）／无前缀排队项（在途 loop-top 安全边界）。"
+    },
+    "boundary_at": {
+      "type": "string",
+      "minLength": 1,
+      "description": "时代边界时间戳（RFC 3339 UTC；时代标记入面字段同源）。"
+    },
+    "archive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest_sha256", "rounds", "messages", "write_failed"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "时代回放档案相对路径（`.gsa/compaction/blocks/{tag}-era-{n}.md`；单块逐字整段、不摘要不打包）。"
+        },
+        "digest_sha256": {
+          "type": "string",
+          "minLength": 1,
+          "description": "档案全文 sha256（marker「时代 digest」行同源绑定）。"
+        },
+        "rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "折叠轮数（完整轮口径）。"
+        },
+        "messages": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "折叠消息数（marker 之前全部消息）。"
+        },
+        "write_failed": {
+          "type": "boolean",
+          "description": "档案落盘失败位（best-effort；失败时原文仍在会话卷与 run journal 可回读，marker 如实标注）。"
+        }
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "session_rounds",
+        "t_hat_secs",
+        "streak_max",
+        "spike_entries",
+        "spike_returns",
+        "domain_spikes"
+      ],
+      "properties": {
+        "domain": {
+          "description": "LIF 当前驻留域（闭集；null＝legacy/缺快照——不落假值）。",
+          "type": ["string", "null"],
+          "enum": ["start", "normal", "pressure", "low_progress", "stuck", null]
+        },
+        "session_rounds": {
+          "description": "会话内已完成决策轮数（跨 prompt 单调）；null＝缺快照。",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "t_hat_secs": {
+          "description": "RLI 影子 T̂（秒）；影子未启用 ⇒ null。",
+          "type": ["number", "null"]
+        },
+        "streak_max": {
+          "description": "各通道持续越线计数最大值（RLI streak）；影子未启用 ⇒ null。",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "spike_entries": {
+          "description": "RLI 域 spike 进入端累计（0cp D7）；影子未启用 ⇒ null。",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "spike_returns": {
+          "description": "RLI 域 spike 回归端累计（0cp D7）；影子未启用 ⇒ null。",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "domain_spikes": {
+          "description": "LIF 域切换时间线条数；缺快照 ⇒ null。",
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_calls", "prompt_tokens"],
+      "properties": {
+        "model_calls": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "被关闭时代的模型调用累计（跨 run 会话账面；在途折叠含本 run 折叠前消耗）。"
+        },
+        "prompt_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "被关闭时代的 prompt tokens 累计（同上；S4 衰减读数面对账键）。"
+        }
+      }
+    },
+    "board_entries_removed": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "黑板模型分区清空移出条数（plan/notes/findings 条目＋state 1/0；机械分区与 journal/ledger 不动）。"
+    }
+  }
+}
