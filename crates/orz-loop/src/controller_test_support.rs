@@ -464,7 +464,7 @@ impl LoopHost for BlockedArchiveHost {
 /// 只消费 `LoopHost::drain_user_supplements` 面）。
 pub(crate) struct SupplementHost {
     pub(crate) journal: JournalRecorder,
-    pub(crate) queue: std::sync::Mutex<VecDeque<String>>,
+    pub(crate) queue: std::sync::Mutex<VecDeque<crate::era::SupplementItem>>,
 }
 
 #[async_trait]
@@ -478,7 +478,7 @@ impl LoopHost for SupplementHost {
     fn session_cwd(&self) -> std::path::PathBuf {
         self.journal.journal_dir().to_path_buf()
     }
-    fn drain_user_supplements(&self) -> Vec<String> {
+    fn drain_user_supplements(&self) -> Vec<crate::era::SupplementItem> {
         std::mem::take(&mut *self.queue.lock().unwrap_or_else(|e| e.into_inner()))
             .into_iter()
             .collect()

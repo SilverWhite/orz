@@ -40,6 +40,12 @@ pub enum ClientMsg {
     /// 0di：补充入队回执（`_orz/queue_append`）——depth＝入队后队列深度；
     /// error＝拒绝原因（容量上限/会话未知）。
     SupplementQueued { depth: u64, error: Option<String> },
+    /// 0dx（2026-10-31）：`/checkpoint` 切换回执（`_orz/checkpoint`）——
+    /// notice＝机械反馈行；error＝busy/失败。
+    CheckpointSwitched {
+        notice: String,
+        error: Option<String>,
+    },
     /// 0di：撤回预览应答（`_orz/recall_preview`）——entries＝用户消息清单
     /// （侧车真相面）；error＝读取失败原因。
     RewindPreview {
@@ -280,7 +286,7 @@ impl InProcessClient {
     /// Spawn a mid-run supplement enqueue (`_orz/queue_append`); ack rides
     /// [`ClientMsg::SupplementQueued`]. The queue is session-scoped —
     /// flushed at the loop's next-LLM-call boundary, never an interrupt.
-    pub fn spawn_queue_append(&self, text: String) {
+    pub fn spawn_queue_append(&self, text: String, mechanical: bool) {
         let Some(session_id) = self.session_id.clone() else {
             let _ = self.msg_tx.send(ClientMsg::SupplementQueued {
                 depth: 0,
@@ -291,11 +297,14 @@ impl InProcessClient {
         let conn = self.conn.clone();
         let msg_tx = self.msg_tx.clone();
         tokio::task::spawn_local(async move {
+            // 0dx：机械生产者显式声明位——机械项照旧逐字投递、不参与时代
+            // 触发判定（用户输入缺省 false＝无前缀项换代）。
             let request = Self::ext_params(
                 "orz/queue_append",
                 serde_json::json!({
                     "session_id": session_id,
                     "text": text,
+                    "mechanical": mechanical,
                 }),
             );
             let message = match conn.ext_method(request).await {
@@ -374,6 +383,49 @@ impl InProcessClient {
                 },
                 Err(e) => ClientMsg::RewindPreview {
                     entries: Vec::new(),
+                    error: Some(e.to_string()),
+                },
+            };
+            let _ = msg_tx.send(message);
+        });
+    }
+
+    /// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：手动时代切换
+    /// （`_orz/checkpoint`，idle-only）；回执走 [`ClientMsg::CheckpointSwitched`]。
+    pub fn spawn_checkpoint(&self) {
+        let Some(session_id) = self.session_id.clone() else {
+            let _ = self.msg_tx.send(ClientMsg::CheckpointSwitched {
+                notice: String::new(),
+                error: Some("no session started".into()),
+            });
+            return;
+        };
+        let conn = self.conn.clone();
+        let msg_tx = self.msg_tx.clone();
+        tokio::task::spawn_local(async move {
+            let request = Self::ext_params(
+                "orz/checkpoint",
+                serde_json::json!({
+                    "session_id": session_id,
+                }),
+            );
+            let message = match conn.ext_method(request).await {
+                Ok(resp) => match serde_json::from_str::<serde_json::Value>(resp.0.get()) {
+                    Ok(v) => ClientMsg::CheckpointSwitched {
+                        notice: v
+                            .get("user_notice")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("时代已切换")
+                            .to_string(),
+                        error: None,
+                    },
+                    Err(e) => ClientMsg::CheckpointSwitched {
+                        notice: String::new(),
+                        error: Some(e.to_string()),
+                    },
+                },
+                Err(e) => ClientMsg::CheckpointSwitched {
+                    notice: String::new(),
                     error: Some(e.to_string()),
                 },
             };
@@ -549,6 +601,7 @@ mod tests {
                 // 0di：新消息面与本测试无关，照常跳过。
                 ClientMsg::SupplementQueued { .. }
                 | ClientMsg::RewindPreview { .. }
+                | ClientMsg::CheckpointSwitched { .. }
                 | ClientMsg::RecallDone { .. }
                 | ClientMsg::StreamReset => {}
             }
@@ -953,6 +1006,7 @@ mod tests {
                         ClientMsg::SupplementQueued { .. }
                         | ClientMsg::RewindPreview { .. }
                         | ClientMsg::RecallDone { .. }
+                        | ClientMsg::CheckpointSwitched { .. }
                         | ClientMsg::StreamReset => {}
                     }
                 };
@@ -1048,6 +1102,7 @@ mod tests {
                         ClientMsg::SupplementQueued { .. }
                         | ClientMsg::RewindPreview { .. }
                         | ClientMsg::RecallDone { .. }
+                        | ClientMsg::CheckpointSwitched { .. }
                         | ClientMsg::StreamReset => {}
                     }
                 };

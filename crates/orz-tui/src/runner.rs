@@ -353,6 +353,11 @@ async fn run_loop(
                                 if let Some(ordinal) = std::mem::take(&mut app.pending_rewind) {
                                     client.spawn_rewind(ordinal);
                                 }
+                                // 0dx：`/checkpoint`——runner 持有异步
+                                // `_orz/checkpoint`（idle 手动时代切换）。
+                                if std::mem::take(&mut app.pending_checkpoint) {
+                                    client.spawn_checkpoint();
+                                }
                                 if let Some(hash) = std::mem::take(&mut app.pending_restore) {
                                     // Review D2-1: the loop suspends for the
                                     // whole restore await, so render a frame
@@ -370,8 +375,10 @@ async fn run_loop(
                             }
                             KeyOutcome::SelfCheck => {
                                 if app.running && !app.restoring && !app.grill_active {
+                                    // 0dx：机械生产者位＝true——不参与时代触发判定。
                                     client.spawn_queue_append(
                                         orz_loop::prompt::self_check_supplement().to_string(),
+                                        true,
                                     );
                                     app.content.add_system_message(
                                         "已排队反例自查（三问）——将在下一次模型调用边界投递",
@@ -405,7 +412,10 @@ async fn run_loop(
                                     // JSONL, never a run journal.
                                     run_grill_prompt(server, client, app, terminal, text).await?;
                                 } else if app.running {
-                                    client.spawn_queue_append(text);
+                                    // 0dx：用户项（mechanical=false）——无前缀
+                                    // 输入在 loop-top 触发时代切换；/btw 前缀
+                                    // 剥除后同时代投递。
+                                    client.spawn_queue_append(text, false);
                                 } else {
                                     run_prompt(client, app, &mut tail_state, cwd, text).await?;
                                 }
@@ -445,6 +455,16 @@ async fn run_loop(
                             ),
                             Some(e) => app.content.add_system_message(
                                 &format!("[错误] 补充入队失败: {e}"),
+                                true,
+                            ),
+                        }
+                    }
+                    Some(ClientMsg::CheckpointSwitched { notice, error }) => {
+                        // 0dx：时代切换回执（机械反馈行；设计 §5 用户面）。
+                        match error {
+                            None => app.content.add_system_message(&notice, false),
+                            Some(e) => app.content.add_system_message(
+                                &format!("[错误] 时代切换失败: {e}"),
                                 true,
                             ),
                         }
@@ -1021,6 +1041,7 @@ mod tests {
                         ClientMsg::SupplementQueued { .. }
                         | ClientMsg::RewindPreview { .. }
                         | ClientMsg::RecallDone { .. }
+                        | ClientMsg::CheckpointSwitched { .. }
                         | ClientMsg::StreamReset => {}
                     }
                 };
@@ -1109,6 +1130,7 @@ mod tests {
                         ClientMsg::SupplementQueued { .. }
                         | ClientMsg::RewindPreview { .. }
                         | ClientMsg::RecallDone { .. }
+                        | ClientMsg::CheckpointSwitched { .. }
                         | ClientMsg::StreamReset => {}
                     }
                 }
@@ -1184,6 +1206,7 @@ mod tests {
                         ClientMsg::SupplementQueued { .. }
                         | ClientMsg::RewindPreview { .. }
                         | ClientMsg::RecallDone { .. }
+                        | ClientMsg::CheckpointSwitched { .. }
                         | ClientMsg::StreamReset => {}
                     }
                 };
@@ -1493,6 +1516,7 @@ mod tests {
                         ClientMsg::SupplementQueued { .. }
                         | ClientMsg::RewindPreview { .. }
                         | ClientMsg::RecallDone { .. }
+                        | ClientMsg::CheckpointSwitched { .. }
                         | ClientMsg::StreamReset => {}
                     }
                 };

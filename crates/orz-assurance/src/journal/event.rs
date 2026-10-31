@@ -174,6 +174,12 @@ pub enum EventType {
     // A6 explicit context compaction (2026-08-08 — controller-written;
     // mirrors run-event schema)
     ContextCompressed,
+    // 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：时代边界事件——会话内
+    // 检查点时代切换的落账面。载荷＝被关闭时代号／边界轮／触发来源／边界
+    // 时间戳／单块档案指针（路径+digest+轮次）＋LIF/RLI 特征快照与本时代
+    // 用量（**入账不入面**——裁决 7 用户终裁：P7 本线不写模型面＋0cp S4
+    // 提醒面事实死亡＋D7 域特征无行为差异面）。纯机械切换、零模型参与。
+    EraBoundary,
     // 0ds M1-S4 (2026-10-28, 366 charter / architecture §13-5): a read-only
     // context pull (`context_manage(mode=map|recenter)`) was served. The
     // payload carries the mode, token estimate and output digest only — the

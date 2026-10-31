@@ -102,7 +102,19 @@ fn handle_chat_key(app: &mut TuiApp, key: KeyEvent) -> KeyOutcome {
             if line.is_empty() {
                 return KeyOutcome::Continue;
             }
-            if line.starts_with('/') {
+            // 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：`/btw …` 与
+            // `/checkpoint …`（带随行输入）不进命令层——按普通输入直通
+            // prompt/queue 路径，前缀由宿主/loop 意图解析统一处理（idle
+            // 剥前缀、无前缀换代、运行中排队后 loop-top 分流）。裸
+            // `/checkpoint` 仍走命令层（idle ext 切换面）。
+            let trimmed = line.trim_start();
+            let btw_prefixed = trimmed
+                .strip_prefix("/btw")
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace));
+            let checkpoint_with_args = trimmed.strip_prefix("/checkpoint").is_some_and(|rest| {
+                rest.starts_with(char::is_whitespace) && !rest.trim().is_empty()
+            });
+            if line.starts_with('/') && !btw_prefixed && !checkpoint_with_args {
                 for msg in app.dispatch_command(&line) {
                     app.content.add_system_message(&msg, false);
                 }

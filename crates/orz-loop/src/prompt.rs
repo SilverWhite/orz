@@ -261,6 +261,9 @@ pub const INJECTED_BLOCK_PREFIXES: &[&str] = &[
     // 0cz S2（2026-10-11，设计 §5）：`[前文上下文已清零 …]`——模型主动
     // 清零的投影层边界 marker，机械注入文本，绝不持久化。
     crate::model_face::CLEAR_MARKER_PREFIX,
+    // 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：`[前文上下文已换代 …]`——
+    // 时代折叠投影层边界 marker，机械注入文本（零模型参与），同族待遇。
+    crate::model_face::ERA_MARKER_PREFIX,
     // A6 §8 C.2 (2026-08-08): the resident compaction-whitelist
     // message repeats every round — mechanical injected text, never
     // persisted back (model-written, but a resident framework-
@@ -361,6 +364,10 @@ pub fn is_generated_injected_block(content: &str) -> bool {
     }
     if content.starts_with(crate::model_face::CLEAR_MARKER_PREFIX) {
         return closed("[前文上下文已清零 v0.", "[/前文上下文已清零]");
+    }
+    // 0dx：时代折叠 marker（与清零同族待遇——注入面过滤＋恢复保留）。
+    if content.starts_with(crate::model_face::ERA_MARKER_PREFIX) {
+        return closed("[前文上下文已换代 v0.", "[/前文上下文已换代]");
     }
     if content.starts_with(WHITELIST_PREFIX) {
         return closed("[压缩白名单 v0.", "[/压缩白名单]");
@@ -507,9 +514,12 @@ pub fn context_compressed_marker(
 /// 0cz S2（2026-10-11，设计 §5.1）：清零 marker（`[前文上下文已清零` 前缀）
 /// 同为 restore-retained——恢复后清零边界由此重建（会话是唯一真源、零新
 /// 侧车字段）。
+/// 0dx（2026-10-31）：时代折叠 marker（`[前文上下文已换代` 前缀）同待遇
+/// ——恢复后时代边界由此重建（face_markers 反解，零新侧车字段）。
 pub fn is_restore_retained_block(content: &str) -> bool {
     content.starts_with(CONTEXT_COMPRESSED_PREFIX)
         || content.starts_with(crate::model_face::CLEAR_MARKER_PREFIX)
+        || content.starts_with(crate::model_face::ERA_MARKER_PREFIX)
         || content.starts_with(WHITELIST_PREFIX)
 }
 

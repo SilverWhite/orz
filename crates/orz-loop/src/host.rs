@@ -913,7 +913,10 @@ pub trait LoopHost: Send + Sync {
     /// 主车道 loop-top（下一次 LLM 调用边界）取走自上次 drain 以来排队的
     /// 用户补充文本（FIFO 保序；取走即出队）。`None` 语义由默认空向量承载：
     /// 一次性车道/测试宿主零行为变化。队列归属与投递语义见设计稿 D1/D2。
-    fn drain_user_supplements(&self) -> Vec<String> {
+    /// 0dx：项升级为 [`crate::era::SupplementItem`]（文本＋来源位）——用户
+    /// 项做 `/btw`／`/checkpoint`／无前缀分流（无前缀＝时代触发），机械项
+    /// 照旧逐字投递。
+    fn drain_user_supplements(&self) -> Vec<crate::era::SupplementItem> {
         Vec::new()
     }
 

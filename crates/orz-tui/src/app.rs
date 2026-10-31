@@ -134,6 +134,9 @@ pub struct TuiApp {
     /// 0di：撤回选择器确认后的重放意图（ordinal）——runner 持有异步
     /// `_orz/recall` 调用。
     pub pending_rewind: Option<u32>,
+    /// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：`/checkpoint` 请求位——
+    /// runner 持有异步 `_orz/checkpoint`（idle 手动时代切换）。
+    pub pending_checkpoint: bool,
     /// A restore is in flight. The host has no restore in-flight marker
     /// (record P2-2) and no restore cancellation token (record P3-7), so
     /// the TUI is the only guard — it blocks new prompts, re-entry and
@@ -203,6 +206,7 @@ impl TuiApp {
             pending_restore: None,
             pending_rewind_open: false,
             pending_rewind: None,
+            pending_checkpoint: false,
             restoring: false,
             quit: false,
             turn_counter: 0,
@@ -821,6 +825,19 @@ impl TuiApp {
             "/snapshots" => {
                 if self.open_snapshots() {
                     messages.push("快照已打开".into());
+                }
+            }
+            // 0dx：手动时代切换（idle-only；带随行输入的 `/checkpoint xxx`
+            // 不进本臂——input 层直通 prompt 路径由宿主剥前缀）。
+            "/checkpoint" => {
+                if self.running || self.restoring {
+                    messages.push(
+                        "时代切换在运行/恢复中不受理——无 /btw 前缀的输入会在下一安全边界自动换代"
+                            .into(),
+                    );
+                } else {
+                    self.pending_checkpoint = true;
+                    messages.push("正在执行时代切换…".into());
                 }
             }
             "/rewind" => {

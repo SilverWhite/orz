@@ -82,6 +82,12 @@ impl RunUsageMeter {
         (self.prompt_tokens, self.completion_tokens)
     }
 
+    /// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：时代账面读数（调用数，
+    /// prompt tokens）——run 尾宿主经 controller 单读，增量计入新时代。
+    pub(crate) fn era_totals(&self) -> (u64, u64) {
+        (self.model_calls, self.prompt_tokens)
+    }
+
     /// `run_usage_metered` 事件 payload（每 run 终态前恰一条）。
     pub(crate) fn metered_payload(&self, model: &str, effort_tier: &str) -> serde_json::Value {
         serde_json::json!({

@@ -272,7 +272,7 @@ pub type ConversationCheckpointSink = dyn Fn(
 /// 队；close_session/进程退出即灭——会话域锚点与 terminal backend 一致）。
 #[derive(Default)]
 pub struct SupplementQueue {
-    inner: std::sync::Mutex<std::collections::VecDeque<String>>,
+    inner: std::sync::Mutex<std::collections::VecDeque<orz_loop::era::SupplementItem>>,
 }
 
 /// 队列深度上限（fail-closed；超出＝`InvalidRequest`，不静默截断）。
@@ -286,12 +286,24 @@ impl SupplementQueue {
     }
 
     /// 入队（FIFO 尾插）。容量超限返回带原因的 `Err`（调用方转协议错误，
-    /// fail-closed 不静默截断）。
+    /// fail-closed 不静默截断）。缺省来源＝用户输入（0dx：loop-top 做
+    /// `/btw`／`/checkpoint`／无前缀分流——无前缀即时代触发）。
     pub fn push(&self, text: &str) -> Result<(), &'static str> {
-        if text.is_empty() {
+        self.push_item(orz_loop::era::SupplementItem::user(text))
+    }
+
+    /// 0dx：机械生产者入队（如 SelfCheck 工具栏投递）——照旧逐字投递、
+    /// 不参与时代触发判定（来源在入队时显式声明，不靠文本形状猜）。
+    pub fn push_mechanical(&self, text: &str) -> Result<(), &'static str> {
+        self.push_item(orz_loop::era::SupplementItem::mechanical(text))
+    }
+
+    /// 入队内核（FIFO 尾插；容量 fail-closed 同前）。
+    fn push_item(&self, item: orz_loop::era::SupplementItem) -> Result<(), &'static str> {
+        if item.text.is_empty() {
             return Err("empty supplement text");
         }
-        if text.len() > SUPPLEMENT_MAX_BYTES {
+        if item.text.len() > SUPPLEMENT_MAX_BYTES {
             return Err("supplement exceeds the per-message byte cap");
         }
         let mut q = self
@@ -301,12 +313,12 @@ impl SupplementQueue {
         if q.len() >= SUPPLEMENT_QUEUE_MAX_DEPTH {
             return Err("supplement queue is at cap");
         }
-        q.push_back(text.to_string());
+        q.push_back(item);
         Ok(())
     }
 
     /// 出队全部（FIFO；drain 语义——取走即清）。
-    pub fn drain(&self) -> Vec<String> {
+    pub fn drain(&self) -> Vec<orz_loop::era::SupplementItem> {
         let mut q = self
             .inner
             .lock()
@@ -2002,7 +2014,8 @@ impl LoopHost for OrzHost {
 
     /// 0di（2026-10-18，ADR-0010 §14.88）：会话级补充队列 drain——FIFO 取走
     /// 全部在队补充（loop 主车道 loop-top 调用；未注入队列＝空向量）。
-    fn drain_user_supplements(&self) -> Vec<String> {
+    /// 0dx：项携带来源位（机械项不参与时代触发判定）。
+    fn drain_user_supplements(&self) -> Vec<orz_loop::era::SupplementItem> {
         self.supplement_queue
             .as_ref()
             .map(|q| q.drain())

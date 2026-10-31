@@ -2474,7 +2474,7 @@ pub(crate) async fn run_agent_loop(
     // ——drain 已把文本从宿主队列取走（LoopHost 无 requeue 面），本队列在
     // 每个 loop-top 重新尝试投递；run 尾仍投不出去时落 `GateDecision` 事件＋
     // tracing 警告（绝不静默蒸发）。不越硬上限（模型面 guard 线）是硬约束。
-    let mut deferred_supplements: std::collections::VecDeque<String> =
+    let mut deferred_supplements: std::collections::VecDeque<crate::era::SupplementItem> =
         std::collections::VecDeque::new();
     // 已落过 defer 事件的延迟深度（只在深度变化时落事件，防长 run 每 loop-top
     // 重复刷同一条 GateDecision）。
@@ -3466,13 +3466,71 @@ pub(crate) async fn run_agent_loop(
             let budget = svc.context_compact.model_face_guard_tokens;
             let mut face_tokens =
                 crate::model_face::estimate_model_face_tokens(messages, &face_params);
-            let mut candidates: std::collections::VecDeque<String> =
+            let mut candidates: std::collections::VecDeque<crate::era::SupplementItem> =
                 std::mem::take(&mut deferred_supplements);
             if face_tokens < budget {
                 candidates.extend(host.drain_user_supplements());
             }
-            let mut accepted: Vec<String> = Vec::new();
-            while let Some(text) = candidates.pop_front() {
+            let mut accepted: Vec<(String, bool)> = Vec::new();
+            while let Some(mut item) = candidates.pop_front() {
+                // 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：队列项分流——
+                // 触发是输入的句法属性（外生、零模型参与，设计 §1.1）：
+                // 机械项照旧逐字投递；`/btw`＝同时代补充（剥前缀投递）；
+                // `/checkpoint` 在途不受理（在途切换走无前缀路径）；无前缀
+                // 用户项＝时代触发——在 loop-top 安全边界先执行时代切换
+                // （无损折叠＋黑板模型分区清空＋`era_boundary` 落账），随后
+                // 该文本即新时代首条用户消息灌入。折叠中性拒绝（无可折叠
+                // 内容，如手动 /checkpoint 后首轮）照旧同代投递。
+                if !item.mechanical {
+                    match crate::era::parse_input_intent(&item.text) {
+                        crate::era::InputIntent::EmptySameEra => {
+                            writer
+                                .record(
+                                    EventType::GateDecision,
+                                    serde_json::json!({
+                                        "gate": "era_supplement_intent",
+                                        "decision": "drop_empty_btw",
+                                    }),
+                                )
+                                .await?;
+                            continue;
+                        }
+                        crate::era::InputIntent::Checkpoint(_) => {
+                            writer
+                                .record(
+                                    EventType::GateDecision,
+                                    serde_json::json!({
+                                        "gate": "era_supplement_intent",
+                                        "decision": "reject_checkpoint_inflight",
+                                    }),
+                                )
+                                .await?;
+                            continue;
+                        }
+                        crate::era::InputIntent::SameEra(rest) => {
+                            item.text = rest;
+                        }
+                        crate::era::InputIntent::Plain => {
+                            match controller.apply_era_fold_in_run(
+                                messages,
+                                host,
+                                writer.run_id(),
+                                crate::era::EraTrigger::UnprefixedQueuedInput,
+                            ) {
+                                Ok(payload) => {
+                                    writer.record(EventType::EraBoundary, payload).await?;
+                                }
+                                Err(reason) => {
+                                    tracing::info!(
+                                        %reason,
+                                        "era fold refused at loop-top (proceeding same-era)"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                let text = item.text;
                 let projected = face_tokens.saturating_add(estimate_message_tokens(&Message {
                     role: Role::User,
                     content: text.clone(),
@@ -3483,7 +3541,10 @@ pub(crate) async fn run_agent_loop(
                 }));
                 if projected >= budget {
                     // 越线：本条及其后全部留在延迟队列（FIFO 保序）。
-                    candidates.push_front(text);
+                    candidates.push_front(crate::era::SupplementItem {
+                        text,
+                        mechanical: item.mechanical,
+                    });
                     break;
                 }
                 face_tokens = projected;
@@ -3495,7 +3556,7 @@ pub(crate) async fn run_agent_loop(
                     reasoning_content: None,
                     round: None,
                 });
-                accepted.push(text);
+                accepted.push((text, item.mechanical));
             }
             controller.sync_status_line_message(messages);
             // 复验：真实模型面可能因尾部/分块/状态行开销高于逐条和。
@@ -3504,7 +3565,7 @@ pub(crate) async fn run_agent_loop(
             while !accepted.is_empty()
                 && crate::model_face::estimate_model_face_tokens(messages, &face_params) >= budget
             {
-                let Some(text) = accepted.pop() else {
+                let Some((text, mechanical)) = accepted.pop() else {
                     break;
                 };
                 if let Some(position) = messages
@@ -3513,10 +3574,10 @@ pub(crate) async fn run_agent_loop(
                 {
                     messages.remove(position);
                 }
-                candidates.push_front(text);
+                candidates.push_front(crate::era::SupplementItem { text, mechanical });
             }
             deferred_supplements = candidates;
-            for text in accepted {
+            for (text, _mechanical) in accepted {
                 supplement_seq = supplement_seq.saturating_add(1);
                 // 318 P1-C5：补充是真实用户输入——登记来源，写回过滤不因
                 // 其文本恰好以框架前缀开头而丢弃。
@@ -6139,7 +6200,7 @@ pub(crate) async fn run_agent_loop(
     if !deferred_supplements.is_empty() {
         let deferred_chars: usize = deferred_supplements
             .iter()
-            .map(|text| text.chars().count())
+            .map(|item| item.text.chars().count())
             .sum();
         tracing::warn!(
             deferred = deferred_supplements.len(),

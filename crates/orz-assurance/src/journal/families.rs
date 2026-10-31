@@ -1630,6 +1630,9 @@ pub const ALL_FAMILIES: &[&str] = &[
     // 0df (2026-10-17, ADR-0010 §14.86): per-run usage metering coverage
     // (grandfather anchor `usage_metering: "run-v1"`).
     "usage_metering",
+    // 0dx (2026-10-31, CONTEXT-CHECKPOINT-ERA): 会话内检查点时代边界落账族
+    // （era_boundary 载荷形状＋时代号/边界轮单调；特征与用量入账不入面）。
+    "context_checkpoint_era",
 ];
 
 // ---------------------------------------------------------------------------
@@ -2470,6 +2473,8 @@ pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
         "write_control_review" => verify_write_control_review(events),
         // 0df (2026-10-17): per-run usage metering coverage family.
         "usage_metering" => verify_usage_metering(events),
+        // 0dx (2026-10-31): 会话内检查点时代边界族.
+        "context_checkpoint_era" => verify_context_checkpoint_era(events),
         // 0bz S1 (2026-09-28): model-face prefix fingerprint family.
         "face_fingerprint" => verify_face_fingerprint(events),
         // 0ac S3-b (2026-09-13, F-007 裁决 (a)): immediate-feedback families.
@@ -2482,6 +2487,178 @@ pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
         }
         family => super::families_s2c::verify_s2c_family(family, events),
     }
+}
+
+/// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：时代边界落账族——
+/// `era_boundary` 事件载荷形状与时代号/边界轮单调。设计 §1.2-5：载荷＝
+/// era 边界、块号、触发来源、边界时间戳＋LIF/RLI 特征快照＋本时代用量
+/// （入账不入面，裁决 7）。形状错误逐条报；era 号必须自 1 起严格递增
+/// （时代切换的机械序）、boundary_round 随之单调不减（同一轮内多次切换
+/// 合法——在途排队折叠；不回退即真）。
+pub fn verify_context_checkpoint_era(events: &[Value]) -> Vec<String> {
+    const TRIGGERS: &[&str] = &[
+        "checkpoint_command",
+        "unprefixed_input",
+        "unprefixed_queued_input",
+    ];
+    const DOMAINS: &[&str] = &["start", "normal", "pressure", "low_progress", "stuck"];
+    let mut errors = Vec::new();
+    let mut prev_era: u64 = 0;
+    let mut prev_round: u64 = 0;
+    let mut seen = false;
+    for (index, event) in events.iter().enumerate() {
+        if event.get("event_type").and_then(Value::as_str) != Some("era_boundary") {
+            continue;
+        }
+        seen = true;
+        let payload = &event["payload"];
+        // era / boundary_round / trigger / boundary_at。
+        match payload.get("era").and_then(Value::as_u64) {
+            Some(era) if era >= 1 => {}
+            Some(era) => errors.push(format!(
+                "event {index}: era_boundary era {era} must be >= 1"
+            )),
+            None => errors.push(format!("event {index}: era_boundary missing integer `era`")),
+        }
+        match payload.get("boundary_round").and_then(Value::as_u64) {
+            Some(round) if round >= 1 => {}
+            Some(round) => errors.push(format!(
+                "event {index}: era_boundary boundary_round {round} must be >= 1"
+            )),
+            None => errors.push(format!(
+                "event {index}: era_boundary missing integer `boundary_round`"
+            )),
+        }
+        match payload.get("trigger").and_then(Value::as_str) {
+            Some(trigger) if TRIGGERS.contains(&trigger) => {}
+            Some(other) => errors.push(format!(
+                "event {index}: era_boundary trigger {other:?} is not a known                  trigger (checkpoint_command|unprefixed_input|unprefixed_queued_input)"
+            )),
+            None => errors.push(format!(
+                "event {index}: era_boundary missing string `trigger`"
+            )),
+        }
+        match payload.get("boundary_at").and_then(Value::as_str) {
+            Some(at) if !at.is_empty() => {}
+            _ => errors.push(format!(
+                "event {index}: era_boundary missing non-empty string `boundary_at`"
+            )),
+        }
+        // archive：path/digest_sha256/rounds/messages/write_failed。
+        let archive = payload.get("archive");
+        if archive.map(Value::is_object) != Some(true) {
+            errors.push(format!(
+                "event {index}: era_boundary missing object `archive`"
+            ));
+        } else {
+            let archive = archive.unwrap();
+            for key in ["path", "digest_sha256"] {
+                match archive.get(key).and_then(Value::as_str) {
+                    Some(v) if !v.is_empty() => {}
+                    _ => errors.push(format!(
+                        "event {index}: era_boundary archive missing non-empty string `{key}`"
+                    )),
+                }
+            }
+            for key in ["rounds", "messages"] {
+                if archive.get(key).and_then(Value::as_u64).is_none() {
+                    errors.push(format!(
+                        "event {index}: era_boundary archive missing integer `{key}`"
+                    ));
+                }
+            }
+            if archive
+                .get("write_failed")
+                .and_then(Value::as_bool)
+                .is_none()
+            {
+                errors.push(format!(
+                    "event {index}: era_boundary archive missing boolean `write_failed`"
+                ));
+            }
+        }
+        // features：domain ∈ 闭集或 null（LIF 关停/legacy 形态）；其余
+        // Option 面允许 null 但键必须在场（FR-7：不落假值、缺键即缺账）。
+        let features = payload.get("features");
+        if features.map(Value::is_object) != Some(true) {
+            errors.push(format!(
+                "event {index}: era_boundary missing object `features`"
+            ));
+        } else {
+            let features = features.unwrap();
+            match features.get("domain") {
+                Some(Value::String(domain)) if DOMAINS.contains(&domain.as_str()) => {}
+                Some(Value::Null) | None => {}
+                Some(other) => errors.push(format!(
+                    "event {index}: era_boundary features domain {other} is not a                      known LIF domain or null"
+                )),
+            }
+            for key in [
+                "session_rounds",
+                "streak_max",
+                "spike_entries",
+                "spike_returns",
+                "domain_spikes",
+            ] {
+                match features.get(key) {
+                    Some(Value::Null) | Some(Value::Number(_)) => {}
+                    _ => errors.push(format!(
+                        "event {index}: era_boundary features `{key}` must be a                          number or null"
+                    )),
+                }
+            }
+            match features.get("t_hat_secs") {
+                Some(Value::Null) | Some(Value::Number(_)) => {}
+                _ => errors.push(format!(
+                    "event {index}: era_boundary features `t_hat_secs` must be a                      number or null"
+                )),
+            }
+        }
+        // usage：两键非负整数（缺键即缺账——不允许 null）。
+        let usage = payload.get("usage");
+        if usage.map(Value::is_object) != Some(true) {
+            errors.push(format!(
+                "event {index}: era_boundary missing object `usage`"
+            ));
+        } else {
+            let usage = usage.unwrap();
+            for key in ["model_calls", "prompt_tokens"] {
+                if usage.get(key).and_then(Value::as_u64).is_none() {
+                    errors.push(format!(
+                        "event {index}: era_boundary usage missing integer `{key}`"
+                    ));
+                }
+            }
+        }
+        if payload
+            .get("board_entries_removed")
+            .and_then(Value::as_u64)
+            .is_none()
+        {
+            errors.push(format!(
+                "event {index}: era_boundary missing integer `board_entries_removed`"
+            ));
+        }
+        // 单调：era 严格递增（1, 2, …）；boundary_round 不回退。
+        let era = payload.get("era").and_then(Value::as_u64);
+        let round = payload.get("boundary_round").and_then(Value::as_u64);
+        if let (Some(era), Some(round)) = (era, round) {
+            if era <= prev_era {
+                errors.push(format!(
+                    "event {index}: era_boundary era {era} must be strictly                      increasing (previous {prev_era})"
+                ));
+            }
+            if round < prev_round {
+                errors.push(format!(
+                    "event {index}: era_boundary boundary_round {round} must not                      decrease (previous {prev_round})"
+                ));
+            }
+            prev_era = era;
+            prev_round = round;
+        }
+    }
+    let _ = seen;
+    errors
 }
 
 /// Run every rule family (Python call order) over a parsed journal.
@@ -6495,6 +6672,109 @@ mod tests {
                 ],
             ),
             (
+                // 0dx（2026-10-31）：era_boundary 正形——idle 命令切换
+                // ＋在途排队切换两案连排（era 严格递增、boundary_round
+                // 不回退；特征 Option 面全 null＝LIF 关停形态合法）。
+                "context_checkpoint_era_ok",
+                vec![
+                    ev(
+                        "era_boundary",
+                        json!({
+                            "era": 1, "boundary_round": 5,
+                            "trigger": "checkpoint_command",
+                            "boundary_at": "2026-10-31T00:00:00Z",
+                            "archive": {
+                                "path": ".gsa/compaction/blocks/sess-era-001.md",
+                                "digest_sha256": "abc123",
+                                "rounds": 4, "messages": 21,
+                                "write_failed": false,
+                            },
+                            "features": {
+                                "domain": "start", "session_rounds": 4,
+                                "t_hat_secs": null, "streak_max": null,
+                                "spike_entries": null, "spike_returns": null,
+                                "domain_spikes": 0,
+                            },
+                            "usage": {"model_calls": 9, "prompt_tokens": 12000},
+                            "board_entries_removed": 3,
+                        }),
+                    ),
+                    ev(
+                        "era_boundary",
+                        json!({
+                            "era": 2, "boundary_round": 6,
+                            "trigger": "unprefixed_queued_input",
+                            "boundary_at": "2026-10-31T00:10:00Z",
+                            "archive": {
+                                "path": ".gsa/compaction/blocks/sess-era-002.md",
+                                "digest_sha256": "def456",
+                                "rounds": 1, "messages": 3,
+                                "write_failed": false,
+                            },
+                            "features": {
+                                "domain": null, "session_rounds": null,
+                                "t_hat_secs": null, "streak_max": null,
+                                "spike_entries": null, "spike_returns": null,
+                                "domain_spikes": null,
+                            },
+                            "usage": {"model_calls": 0, "prompt_tokens": 0},
+                            "board_entries_removed": 0,
+                        }),
+                    ),
+                ],
+            ),
+            (
+                // 0dx：违例——era 号 0（≥1 破）＋trigger 越闭集＋第二次
+                // 切换 era 号不递增（3 → 2）＋archive digest 空串＋
+                // usage 缺键＋boundary_at 缺失（六案恰触本族）。
+                "context_checkpoint_era_violations",
+                vec![
+                    ev(
+                        "era_boundary",
+                        json!({
+                            "era": 0, "boundary_round": 3,
+                            "trigger": "auto_magic",
+                            "boundary_at": "2026-10-31T00:00:00Z",
+                            "archive": {
+                                "path": ".gsa/compaction/blocks/sess-era-001.md",
+                                "digest_sha256": "",
+                                "rounds": 2, "messages": 5,
+                                "write_failed": false,
+                            },
+                            "features": {
+                                "domain": "stuck", "session_rounds": 2,
+                                "t_hat_secs": 1.5, "streak_max": 0,
+                                "spike_entries": 0, "spike_returns": 0,
+                                "domain_spikes": 1,
+                            },
+                            "usage": {"model_calls": 1},
+                            "board_entries_removed": 2,
+                        }),
+                    ),
+                    ev(
+                        "era_boundary",
+                        json!({
+                            "era": 2, "boundary_round": 3,
+                            "trigger": "unprefixed_input",
+                            "archive": {
+                                "path": ".gsa/compaction/blocks/sess-era-002.md",
+                                "digest_sha256": "aa",
+                                "rounds": 1, "messages": 1,
+                                "write_failed": false,
+                            },
+                            "features": {
+                                "domain": "normal", "session_rounds": 3,
+                                "t_hat_secs": 2.0, "streak_max": 1,
+                                "spike_entries": 0, "spike_returns": 0,
+                                "domain_spikes": 1,
+                            },
+                            "usage": {"model_calls": 2, "prompt_tokens": 300},
+                            "board_entries_removed": 0,
+                        }),
+                    ),
+                ],
+            ),
+            (
                 // 288 处置（2026-10-17）：锚键存在但值非字符串（损坏形态）
                 // ——两侧同走「unknown version」错误（Rust 此前经 str_of
                 // 静默跳过，与 Python 冻结镜像相悖）；未锚定 ⇒ 计量行本体
@@ -6555,6 +6835,12 @@ mod tests {
         expect(
             "face_fingerprint_progression_and_violations",
             "face_fingerprint",
+        );
+        // 0dx（2026-10-31）：era_boundary 违例场景——era 0／trigger 越集／
+        // era 不递增／digest 空串／usage 缺键／boundary_at 缺失六案恰触本族。
+        expect(
+            "context_checkpoint_era_violations",
+            "context_checkpoint_era",
         );
         // 0df（2026-10-17）：usage_metering 违例场景——三行破恰一条＋末行终态
         // 后＋effort_tier 越闭集＋零轮非零和；ok 场景全族绿（默认行）。
@@ -7088,6 +7374,7 @@ fams = {
     "write_control_review": v._verify_v02_write_control_review,
     "face_fingerprint": v._verify_v02_face_fingerprint,
     "usage_metering": v._verify_v02_usage_metering,
+    "context_checkpoint_era": v._verify_v02_context_checkpoint_era,
 }
 data = json.load(sys.stdin)
 out = {}
@@ -7182,8 +7469,10 @@ json.dump(out, sys.stdout)
         // (锚定 run 的恰一行正形 ＋ 三行/终态后/越集/零轮非零和四违例).
         // 261 → 262 (288 处置, 2026-10-17): +usage_metering_non_string_anchor
         // (锚键非字符串损坏形态——Rust 对齐 Python 冻结镜像后锁进对拍).
+        // 262 → 264 (0dx, 2026-10-31): +context_checkpoint_era_ok /
+        // _violations (正形两案连排＋era0/越集/不递增/digest空/缺键/缺失六违例).
         assert_eq!(
-            scenario_count, 262,
+            scenario_count, 264,
             "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(

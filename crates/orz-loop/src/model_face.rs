@@ -105,6 +105,23 @@ pub const CLEAR_MARKER_VERSION: &str = "v0.1-清零";
 /// 清零 marker 机器行标签：边界轮号（1 基；轮 < R 的全部内容移出窗口）。
 pub const CLEAR_MARKER_BOUNDARY_LABEL: &str = "清零边界: 第 ";
 
+/// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：时代折叠 marker 版本号
+/// （自有前缀 `[前文上下文已换代`，与清零 marker 同族同构：指针字段齐全、
+/// 无语义摘要槽；边界前全部内容移出窗口且**白名单不豁免**——时代幸存面
+/// 封闭清单＝系统提示/工具定义/时代标记/新输入，设计 §1.3）。
+pub const ERA_MARKER_VERSION: &str = "v0.4-时代折叠";
+
+/// 时代 marker 前缀（注册进 `prompt::is_injected_block_text` 与
+/// `is_restore_retained_block`——注入面过滤与恢复边界重建同族待遇）。
+pub const ERA_MARKER_PREFIX: &str = "[前文上下文已换代";
+
+/// 时代 marker 机器行标签：边界轮号（1 基会话全局；轮 < R ⇒ 已折叠）。
+pub const ERA_MARKER_BOUNDARY_LABEL: &str = "时代边界: 第 ";
+
+/// 时代 marker 机器行标签：单块回放档案路径（`FaceMarkers` 反解，
+/// context_map 的时代折叠块回放指针来源）。
+pub const ERA_MARKER_ARCHIVE_LABEL: &str = "时代存档: ";
+
 /// 单个 marker 允许声明的最大块数（防手写/脏数据构造超大集合）。
 const MAX_MARKER_BLOCKS: usize = 512;
 
@@ -155,6 +172,13 @@ pub struct FaceMarkers {
     /// 0cz S2：清零边界（1 基轮号 R——轮 < R 的全部内容移出窗口）。
     /// 多枚清零 marker 时取**最后**一枚（边界单调前进；早前边界是其子集）。
     pub cleared_before_round: Option<u32>,
+    /// 0dx：时代折叠边界（1 基轮号 R——轮 < R 的全部内容随时代折叠移出
+    /// 窗口；多枚时代 marker 取最后一枚）。时代区间内**白名单不豁免**
+    /// （幸存面封闭清单）；与清零边界互不覆写，隐藏终点取两者较大值。
+    pub era_before_round: Option<u32>,
+    /// 0dx：时代 marker「时代存档」行反解的回放档案路径（context_map 的
+    /// 时代折叠块回放指针；缺失/脏数据 ⇒ `None`，不虚构）。
+    pub era_archive: Option<String>,
     /// 每块的**外挂台账 `[seq]` 闭区间**（marker 的「台账定位」行反解；
     /// 三元一致的第三键——2026-09-16 实现批补齐，设计 §2 §11）。
     pub ledger_seq: BTreeMap<u32, (u64, u64)>,
@@ -179,19 +203,39 @@ impl FaceMarkers {
         self.compressed.is_empty()
             && self.truncated.is_empty()
             && self.cleared_before_round.is_none()
+            && self.era_before_round.is_none()
+            && self.era_archive.is_none()
             && self.ledger_seq.is_empty()
             && self.journal_seq.is_empty()
     }
 
-    /// 0cz S2：该 0 基轮是否已被清零（轮 1 基号 < 边界 R ⇒ 已清零）。
+    /// 0cz S2：该 0 基轮是否已被移出窗口（清零**或**时代折叠；轮 1 基号
+    /// < 任一边界 R ⇒ 已移出）。压缩/截断资格排除与块表「已清零/已时代
+    /// 折叠」标态的单一判据。
     pub fn is_round_cleared(&self, round0: usize) -> bool {
-        match self.cleared_before_round {
-            Some(r) => (round0 as u64) + 1 < r as u64,
-            None => false,
+        let round1 = (round0 as u64) + 1;
+        let by_clear = self.cleared_before_round.is_some_and(|r| round1 < r as u64);
+        let by_era = self.era_before_round.is_some_and(|r| round1 < r as u64);
+        by_clear || by_era
+    }
+
+    /// 0dx：该 0 基轮是否被**时代折叠**（区别于模型主动清零——块表/context_map
+    /// 标态分流用；时代在后者优先表态）。
+    pub fn is_round_era_folded(&self, round0: usize) -> bool {
+        let round1 = (round0 as u64) + 1;
+        self.era_before_round.is_some_and(|r| round1 < r as u64)
+    }
+
+    /// 两边界中较大者（1 基轮号；隐藏区间 `轮 < R` 的联合语义）。
+    pub fn max_boundary_round(&self) -> Option<u32> {
+        match (self.cleared_before_round, self.era_before_round) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
         }
     }
 
     /// 0cz S2：清零隐藏区的消息终点（隐藏区间 `[0, end)`；＝边界轮的起点）。
+    /// **纯清零语义**（era 联合终点由 [`combined_boundary_ends`] 统一推导）。
     /// 轮次不足/无边界 ⇒ 0（无隐藏）。
     pub fn clear_hidden_end(&self, ranges: &[(usize, usize)]) -> usize {
         let Some(r) = self.cleared_before_round else {
@@ -449,6 +493,37 @@ pub fn face_markers(messages: &[Message]) -> FaceMarkers {
         if let Some(r) = parse_clear_boundary(&m.content) {
             out.cleared_before_round = Some(r);
         }
+        // 0dx：时代折叠 marker（自有前缀）——边界/存档行反解同族待遇。
+        if let Some(r) = parse_era_boundary(&m.content) {
+            out.era_before_round = Some(r);
+        }
+        if let Some(path) = parse_era_archive(&m.content) {
+            out.era_archive = Some(path);
+        }
+        // 台账/journal 定位行：对**全部 marker 族**（分块/截断/清零/时代）
+        // 反解——0dx 起时代 marker 与清零 marker 同样携带「台账定位」
+        // （执行面补挂折叠轮次行）；非 marker 消息不解析（用户文本里
+        // 恰好出现同形行不得污染块表）。
+        let is_marker_text = m
+            .content
+            .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)
+            || m.content.starts_with(CLEAR_MARKER_PREFIX)
+            || m.content.starts_with(ERA_MARKER_PREFIX);
+        if is_marker_text {
+            for (number, range) in parse_marker_ledger_seqs(&m.content) {
+                out.ledger_seq.insert(number, range);
+            }
+            // 0bh ⑮：journal seq 区间（指针 `s` 的权威来源）——同 marker 的
+            // 各块共享该区间；旧 marker 缺行则如实缺（pointer 退用台账 seq）。
+            if let Some(range) = parse_marker_journal_range(&m.content) {
+                for n in parse_marker_blocks(&m.content)
+                    .map(|(_, numbers)| numbers)
+                    .unwrap_or_default()
+                {
+                    out.journal_seq.insert(n, range);
+                }
+            }
+        }
         let Some((state, numbers)) = parse_marker_blocks(&m.content) else {
             continue;
         };
@@ -464,19 +539,6 @@ pub fn face_markers(messages: &[Message]) -> FaceMarkers {
                 BlockState::Live | BlockState::Cleared => {}
             }
         }
-        for (number, range) in parse_marker_ledger_seqs(&m.content) {
-            out.ledger_seq.insert(number, range);
-        }
-        // 0bh ⑮：journal seq 区间（指针 `s` 的权威来源）——同 marker 的
-        // 各块共享该区间；旧 marker 缺行则如实缺（pointer 退用台账 seq）。
-        if let Some(range) = parse_marker_journal_range(&m.content) {
-            for n in parse_marker_blocks(&m.content)
-                .map(|(_, numbers)| numbers)
-                .unwrap_or_default()
-            {
-                out.journal_seq.insert(n, range);
-            }
-        }
     }
     out
 }
@@ -489,6 +551,50 @@ pub fn clear_marker_index(messages: &[Message]) -> Option<usize> {
     messages
         .iter()
         .rposition(|m| m.content.starts_with(CLEAR_MARKER_PREFIX))
+}
+
+/// 0dx：时代折叠 marker 的**权威消息下标**（最后一枚的位置；隐藏区间
+/// `[0, idx)`——与清零同构：marker 本体即存根留在窗口）。
+pub fn era_marker_index(messages: &[Message]) -> Option<usize> {
+    messages
+        .iter()
+        .rposition(|m| m.content.starts_with(ERA_MARKER_PREFIX))
+}
+
+/// 反解时代 marker 的边界轮号（`时代边界: 第 R 轮`；1 基）。脏数据 ⇒
+/// `None`（边界不虚构）。多方读数一致：`face_markers` 据此维护
+/// `era_before_round`。
+pub fn parse_era_boundary(content: &str) -> Option<u32> {
+    if !content.starts_with(ERA_MARKER_PREFIX) {
+        return None;
+    }
+    let line = content
+        .lines()
+        .map(str::trim_start)
+        .find(|l| l.starts_with(ERA_MARKER_BOUNDARY_LABEL))?;
+    let rest = line.trim_start_matches(ERA_MARKER_BOUNDARY_LABEL);
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let r: u32 = digits.parse().ok()?;
+    (r >= 1).then_some(r)
+}
+
+/// 反解时代 marker 的存档行（`时代存档: <path>（…）`——取首个空白前
+/// token）。缺失/脏数据 ⇒ `None`（指针不虚构）。
+pub fn parse_era_archive(content: &str) -> Option<String> {
+    if !content.starts_with(ERA_MARKER_PREFIX) {
+        return None;
+    }
+    let line = content
+        .lines()
+        .map(str::trim_start)
+        .find(|l| l.starts_with(ERA_MARKER_ARCHIVE_LABEL))?;
+    let rest = line.trim_start_matches(ERA_MARKER_ARCHIVE_LABEL);
+    // 首个空白或全角左括号前 token（路径后随注释括注）。
+    let token: String = rest
+        .chars()
+        .take_while(|c| !c.is_whitespace() && *c != '（')
+        .collect();
+    (!token.is_empty()).then_some(token)
 }
 
 /// 反解清零 marker 的边界轮号（`清零边界: 第 R 轮`；1 基）。脏数据 ⇒
@@ -662,6 +768,38 @@ fn hidden_message_ranges(
     out
 }
 
+/// 0dx：清零 ∪ 时代折叠的**联合隐藏终点**推导（marker 下标权威，脏数据
+/// 回退边界轮推导——0cz/0da 同一 gated 语义）。返回 `(clear_end, era_end)`：
+/// `clear_end` ＝ 清零隐藏终点（era_end=0 时白名单豁免照旧），
+/// `era_end` ＝ 时代折叠终点（era 区内白名单**不**豁免——幸存面封闭清单；
+/// 联合隐藏区 ＝ `[0, max(clear_end, era_end))`）。各公开装配/估算入口恰算
+/// 一次，内部不再自查（242 批同纪律）。
+fn combined_boundary_ends(messages: &[Message], markers: &FaceMarkers) -> (usize, usize) {
+    let ranges = crate::action_ledger::round_ranges(messages);
+    let clear_end = if markers.cleared_before_round.is_some() {
+        clear_marker_index(messages).unwrap_or_else(|| markers.clear_hidden_end(&ranges))
+    } else {
+        0
+    };
+    let era_end = if markers.era_before_round.is_some() {
+        era_marker_index(messages).unwrap_or_else(|| era_floor(markers, &ranges))
+    } else {
+        0
+    };
+    (clear_end, era_end)
+}
+
+/// 时代边界的轮推导终点（era 单独取轮推导值，作脏 marker 回退）。
+fn era_floor(markers: &FaceMarkers, ranges: &[(usize, usize)]) -> usize {
+    let Some(r) = markers.era_before_round else {
+        return 0;
+    };
+    if r <= 1 {
+        return 0;
+    }
+    ranges.get(r as usize - 2).map(|&(_, e)| e).unwrap_or(0)
+}
+
 /// **模型面装配**（设计 §1 §2）。无分块时（整段会话即主滑块）除**常驻头
 /// （指针，0bz S3）＋窗口尾 D4 机械段（0bz S3′）**外原样返回 `messages`
 /// ——头部结构消息自首个轮次即在，开窗转换只剩尾部追加
@@ -690,16 +828,11 @@ pub fn build_model_face(
     // 清零隐藏区间有效起点：marker 在场取 marker 消息下标（0cz S2 权威），
     // 脏数据回退边界轮推导；未清零恒 0（各循环零行为变化）。
     let markers = face_markers(messages);
-    let clear_end = if markers.cleared_before_round.is_some() {
-        clear_marker_index(messages).unwrap_or_else(|| {
-            markers.clear_hidden_end(&crate::action_ledger::round_ranges(messages))
-        })
-    } else {
-        0
-    };
+    // 0dx：清零 ∪ 时代折叠联合隐藏终点（era 区白名单不豁免）。
+    let (clear_end, era_end) = combined_boundary_ends(messages, &markers);
     let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
     if blocks.is_empty() {
-        if clear_end > 0 {
+        if clear_end > 0 || era_end > 0 {
             return build_cleared_face(messages, &markers, params);
         }
         // 0bz S3（2026-09-28）：**常驻头（指针；0bz S3′ 后 D4 落窗口尾）自
@@ -714,7 +847,15 @@ pub fn build_model_face(
     }
     let ranges = crate::action_ledger::round_ranges(messages);
     let start = slider_start(messages, params.slider_tokens);
-    let hidden = hidden_message_ranges(messages, &ranges, &blocks, &markers, start, clear_end);
+    let combined_clear_end = clear_end.max(era_end);
+    let hidden = hidden_message_ranges(
+        messages,
+        &ranges,
+        &blocks,
+        &markers,
+        start,
+        combined_clear_end,
+    );
     let preamble_end = blocks[0].msg_start;
     // 0bc S2④：一次可失败预留（上界＝len＋4：前置＋指针/D4＋尾部消息＋块表
     // ＋结束自述通道行），此后 push 不再触发不可失败的增长重分配。
@@ -723,9 +864,13 @@ pub fn build_model_face(
         .map_err(alloc_err_io)?;
     // 前置段（0da S2 设计 §4.2）：**清零区间内仅保留白名单**（跨清零保留，
     // 0cz 设计 §5.3；常规路径此前无此豁免＝D1 修复面），区间外原序全推
-    // ——未清零（clear_end=0）时与旧口径逐条等价。
+    // ——未清零（clear_end=0）时与旧口径逐条等价。0dx：时代折叠区间内
+    // 白名单**不豁免**（幸存面封闭清单：era 区内一律随时代折叠，无论其
+    // 后是否另有清零边界——`era_end == 0 || i >= era_end`）。
     for (i, m) in messages.iter().enumerate().take(preamble_end) {
-        if i >= clear_end || m.content.starts_with(crate::prompt::WHITELIST_PREFIX) {
+        let whitelist_survives = m.content.starts_with(crate::prompt::WHITELIST_PREFIX)
+            && (era_end == 0 || i >= era_end);
+        if i >= combined_clear_end || whitelist_survives {
             view.push(try_clone_message(m)?);
         }
     }
@@ -738,13 +883,18 @@ pub fn build_model_face(
         if i < preamble_end {
             continue;
         }
-        // marker 永不隐藏（它承载压缩后的摘要行）。
+        // marker 永不隐藏（它承载压缩后的摘要行）——时代折叠区间除外
+        // （0dx：era 区内一切旧 marker 随时代折叠，era marker 本体是唯一存根）。
         if is_block_marker(&m.content) {
-            view.push(try_clone_message(m)?);
+            if era_end == 0 || i >= era_end {
+                view.push(try_clone_message(m)?);
+            }
             continue;
         }
         // 0da S2：白名单永不隐藏（跨压缩/截断/清零保留；与前置段豁免同口径）。
-        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) {
+        // 0dx：era 区内不豁免（幸存面封闭清单）。
+        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) && (era_end == 0 || i >= era_end)
+        {
             view.push(try_clone_message(m)?);
             continue;
         }
@@ -794,14 +944,15 @@ fn build_cleared_face(
     markers: &FaceMarkers,
     params: &ModelFaceParams,
 ) -> Result<Vec<Message>, std::io::Error> {
-    let ranges = crate::action_ledger::round_ranges(messages);
-    let hidden_end =
-        clear_marker_index(messages).unwrap_or_else(|| markers.clear_hidden_end(&ranges));
+    // 0dx：联合隐藏终点（era 区白名单不豁免——幸存面封闭清单）。
+    let (clear_end, era_end) = combined_boundary_ends(messages, markers);
+    let hidden_end = clear_end.max(era_end);
     let mut view: Vec<Message> = Vec::new();
     view.try_reserve_exact(messages.len() + 4)
         .map_err(alloc_err_io)?;
-    for m in messages.iter().take(hidden_end) {
-        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) {
+    for (i, m) in messages.iter().take(hidden_end).enumerate() {
+        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) && (era_end == 0 || i >= era_end)
+        {
             view.push(try_clone_message(m)?);
         }
     }
@@ -875,28 +1026,27 @@ fn try_clone_messages_with_resident_head(
 pub fn model_face_message_count(messages: &[Message], params: &ModelFaceParams) -> usize {
     // 0da S2（设计 §4.1/§4.3，D1＋D4）：`face_markers` 恰算一次；清零态
     // **不再**独立分支——与 build 同构走常规路径（无块清零面分支保留）。
+    // 0dx：联合隐藏终点（era 区白名单不豁免，与 build 同口径）。
     let markers = face_markers(messages);
-    let cleared = markers.cleared_before_round.is_some();
-    let clear_end = if cleared {
-        clear_marker_index(messages).unwrap_or_else(|| {
-            markers.clear_hidden_end(&crate::action_ledger::round_ranges(messages))
-        })
-    } else {
-        0
-    };
+    let (clear_end, era_end) = combined_boundary_ends(messages, &markers);
+    let combined_clear_end = clear_end.max(era_end);
     let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
     if blocks.is_empty() {
-        if clear_end > 0 {
-            // 无块清零面计数（build_cleared_face 同口径）。
+        if combined_clear_end > 0 {
+            // 无块清零/时代面计数（build_cleared_face 同口径）。
             let mut count = messages
                 .iter()
-                .take(clear_end)
-                .filter(|m| m.content.starts_with(crate::prompt::WHITELIST_PREFIX))
+                .enumerate()
+                .take(combined_clear_end)
+                .filter(|(i, m)| {
+                    m.content.starts_with(crate::prompt::WHITELIST_PREFIX)
+                        && (era_end == 0 || *i >= era_end)
+                })
                 .count();
             if params.ledger_path.is_some() {
                 count += 1;
             }
-            count += messages.len() - clear_end;
+            count += messages.len() - combined_clear_end;
             if params.d4_block.is_some() {
                 count += 1;
             }
@@ -916,14 +1066,25 @@ pub fn model_face_message_count(messages: &[Message], params: &ModelFaceParams) 
     }
     let ranges = crate::action_ledger::round_ranges(messages);
     let start = slider_start(messages, params.slider_tokens);
-    let hidden = hidden_message_ranges(messages, &ranges, &blocks, &markers, start, clear_end);
+    let hidden = hidden_message_ranges(
+        messages,
+        &ranges,
+        &blocks,
+        &markers,
+        start,
+        combined_clear_end,
+    );
     let preamble_end = blocks[0].msg_start;
     // 前置段计数（0da S2）：清零区间内仅白名单（与 build 前置段同口径）。
     let mut count = messages
         .iter()
         .enumerate()
         .take(preamble_end)
-        .filter(|(i, m)| *i >= clear_end || m.content.starts_with(crate::prompt::WHITELIST_PREFIX))
+        .filter(|(i, m)| {
+            *i >= combined_clear_end
+                || (m.content.starts_with(crate::prompt::WHITELIST_PREFIX)
+                    && (era_end == 0 || *i >= era_end))
+        })
         .count();
     if params.ledger_path.is_some() {
         count += 1;
@@ -936,11 +1097,14 @@ pub fn model_face_message_count(messages: &[Message], params: &ModelFaceParams) 
             continue;
         }
         if is_block_marker(&m.content) {
-            count += 1;
+            if era_end == 0 || i >= era_end {
+                count += 1;
+            }
             continue;
         }
         // 0da S2：白名单永不隐藏（与 build 主循环同口径）。
-        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) {
+        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) && (era_end == 0 || i >= era_end)
+        {
             count += 1;
             continue;
         }
@@ -1037,19 +1201,20 @@ pub fn model_face_estimate(messages: &[Message], params: &ModelFaceParams) -> u6
 pub fn estimate_model_face_tokens(messages: &[Message], params: &ModelFaceParams) -> u64 {
     // 0da S2（设计 §4.1/§4.3，D1＋D4）：`face_markers` 恰算一次；清零态
     // **不再**独立分支——与 build 同构走常规路径（无块清零面分支保留，
-    // estimate ≡ build 逐条同口径）。
+    // estimate ≡ build 逐条同口径）。0dx：联合隐藏终点（era 区白名单不豁免）。
     let markers = face_markers(messages);
-    let clear_end = if markers.cleared_before_round.is_some() {
-        clear_marker_index(messages).unwrap_or_else(|| {
-            markers.clear_hidden_end(&crate::action_ledger::round_ranges(messages))
-        })
-    } else {
-        0
-    };
+    let (clear_end, era_end) = combined_boundary_ends(messages, &markers);
+    let combined_clear_end = clear_end.max(era_end);
     let blocks = blocks_outside_slider(messages, params.slider_tokens, params.block_tokens);
     if blocks.is_empty() {
-        if clear_end > 0 {
-            return estimate_cleared_face_tokens(messages, &markers, params, clear_end);
+        if combined_clear_end > 0 {
+            return estimate_cleared_face_tokens(
+                messages,
+                &markers,
+                params,
+                combined_clear_end,
+                era_end,
+            );
         }
         // 0bz S3：常驻结构与 build_model_face 同口径——轮次成形后计入指针
         // （头部）与 D4（0bz S3′ 起居窗口尾；计数与位置无关）。
@@ -1068,12 +1233,22 @@ pub fn estimate_model_face_tokens(messages: &[Message], params: &ModelFaceParams
     }
     let ranges = crate::action_ledger::round_ranges(messages);
     let start = slider_start(messages, params.slider_tokens);
-    let hidden = hidden_message_ranges(messages, &ranges, &blocks, &markers, start, clear_end);
+    let hidden = hidden_message_ranges(
+        messages,
+        &ranges,
+        &blocks,
+        &markers,
+        start,
+        combined_clear_end,
+    );
     let preamble_end = blocks[0].msg_start;
     // 前置段（0da S2）：清零区间内仅白名单（与 build 前置段同口径）。
     let mut total = 0u64;
     for (i, m) in messages.iter().enumerate().take(preamble_end) {
-        if i >= clear_end || m.content.starts_with(crate::prompt::WHITELIST_PREFIX) {
+        if i >= combined_clear_end
+            || (m.content.starts_with(crate::prompt::WHITELIST_PREFIX)
+                && (era_end == 0 || i >= era_end))
+        {
             total = total.saturating_add(crate::controller::estimate_message_tokens(m));
         }
     }
@@ -1092,11 +1267,14 @@ pub fn estimate_model_face_tokens(messages: &[Message], params: &ModelFaceParams
             continue;
         }
         if is_block_marker(&m.content) {
-            total = total.saturating_add(crate::controller::estimate_message_tokens(m));
+            if era_end == 0 || i >= era_end {
+                total = total.saturating_add(crate::controller::estimate_message_tokens(m));
+            }
             continue;
         }
         // 0da S2：白名单永不隐藏（与 build 主循环同口径）。
-        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) {
+        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) && (era_end == 0 || i >= era_end)
+        {
             total = total.saturating_add(crate::controller::estimate_message_tokens(m));
             continue;
         }
@@ -1124,17 +1302,20 @@ fn injected_estimate(text: &str) -> u64 {
 }
 
 /// 0da S2：无块清零面估算（`build_cleared_face` 的不物化镜像——逐条同口径；
-/// 仅由 [`estimate_model_face_tokens`] 的无块清零分支到达，markers/clear_end
-/// 单次计算下传）。
+/// 仅由 [`estimate_model_face_tokens`] 的无块清零/时代分支到达，
+/// markers/clear_end 单次计算下传）。0dx：era 区白名单不豁免。
 fn estimate_cleared_face_tokens(
     messages: &[Message],
     markers: &FaceMarkers,
     params: &ModelFaceParams,
     clear_end: usize,
+    era_end: usize,
 ) -> u64 {
+    let _ = markers;
     let mut total = 0u64;
-    for m in messages.iter().take(clear_end) {
-        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) {
+    for (i, m) in messages.iter().take(clear_end).enumerate() {
+        if m.content.starts_with(crate::prompt::WHITELIST_PREFIX) && (era_end == 0 || i >= era_end)
+        {
             total = total.saturating_add(crate::controller::estimate_message_tokens(m));
         }
     }
@@ -1195,10 +1376,20 @@ pub fn render_block_table(
             .to_string(),
     );
     for block in blocks {
-        // 0cz S2：清零态优先（**整块**已清零——242 批收拢为 is_block_cleared
-        // 单一判据，与机制排除同源）。
-        let state = if block.closed && markers.is_block_cleared(block.first_round, block.last_round)
+        // 0dx：时代折叠态优先（整块已随时代折叠； era 边界恒后于清零边界
+        // ——era 判据在前不遮蔽既有清零表态）。
+        let state = if block.closed
+            && markers.is_round_era_folded(block.first_round)
+            && markers.is_round_era_folded(block.last_round)
         {
+            "已时代折叠"
+        } else if block.closed && markers.is_round_era_folded(block.first_round) {
+            // 跨时代边界块（首轮在时代边界前、尾轮在边界后）——边界前段已
+            // 由时代臂移出窗口、边界后段仍在窗口照常参与兜底（如实标态）。
+            "跨时代边界（前段已折叠）"
+        } else if block.closed && markers.is_block_cleared(block.first_round, block.last_round) {
+            // 0cz S2：清零态（**整块**已清零——242 批收拢为 is_block_cleared
+            // 单一判据，与机制排除同源）。
             "已清零"
         } else if block.closed && markers.is_round_cleared(block.first_round) {
             // 242 批（P2）：**跨清零边界块**（首轮在边界前、尾轮在边界后）
@@ -1271,6 +1462,15 @@ pub fn render_block_table(
                  首次读 `.gsa` 会附一次性 [session_volume_notice] 确认提示，\
                  不影响内容读取）"
             ));
+        } else if state == "已时代折叠" {
+            // 0dx：时代折叠块回放指针＝marker「时代存档」行反解的单块档案。
+            if let Some(path) = markers.era_archive.as_deref() {
+                line.push_str(&format!(
+                    " | 原文回放: {path}（read_file offset/limit 分页；\
+                     首次读 `.gsa` 会附一次性 [session_volume_notice] 确认提示，\
+                     不影响内容读取）"
+                ));
+            }
         }
         lines.push(line);
     }
@@ -1291,7 +1491,7 @@ pub const CONTEXT_MAP_MAX_TOKENS: u64 = 1_024;
 
 /// 单个分块的紧凑状态字母（图例见渲染尾行）：
 /// `T`＝已截断，`C`＝已压缩，`X`＝整块已清零，`B`＝跨清零边界（前段已移出），
-/// `L`＝原文仍在窗口，`R`＝未闭合残段。
+/// `E`＝整块已时代折叠（0dx），`L`＝原文仍在窗口，`R`＝未闭合残段。
 fn context_map_state(
     block: &ContextBlock,
     markers: &FaceMarkers,
@@ -1299,7 +1499,15 @@ fn context_map_state(
 ) -> (&'static str, Option<String>) {
     let clear_path = archive_tag.map(relative_clear_archive);
     let block_path = archive_tag.map(|tag| relative_block_archive(tag, block.number));
-    if block.closed && markers.is_block_cleared(block.first_round, block.last_round) {
+    if block.closed
+        && markers.is_round_era_folded(block.first_round)
+        && markers.is_round_era_folded(block.last_round)
+    {
+        // 0dx：时代折叠块的回放指针＝时代存档（marker 反解；缺失 ⇒ None）。
+        ("E", markers.era_archive.clone())
+    } else if block.closed && markers.is_round_era_folded(block.first_round) {
+        ("B", clear_path)
+    } else if block.closed && markers.is_block_cleared(block.first_round, block.last_round) {
         ("X", clear_path)
     } else if block.closed && markers.is_round_cleared(block.first_round) {
         ("B", clear_path)
@@ -1694,6 +1902,47 @@ pub fn clear_marker(
          请从台账继续。\n\
          == 模型面声明 ==\n{MODEL_FACE_DECLARATION}\n\
          [/前文上下文已清零]"
+    )
+}
+
+/// 0dx（CONTEXT-CHECKPOINT-ERA 设计 §1.2-3）：时代折叠 marker——v0.4 marker
+/// 同构的最小机械标记：指针字段齐全（块台账定位／轮次区间／存档路径／
+/// digest／时代边界时间戳），**无语义摘要槽**、无边界外追加（裁决 4），
+/// 特征与用量不入面（裁决 7）。边界之前的全部内容不再渲染（marker 本体
+/// 即留在窗口里的存根）；档案写入失败时如实标注（同清零口径）。
+pub fn era_marker(
+    boundary_round1: usize,
+    ledger_lines: &[String],
+    archive_relative: &str,
+    digest: &str,
+    session: Option<&str>,
+    archive_write_failed: bool,
+) -> String {
+    let ledger_line = if ledger_lines.is_empty() {
+        String::new()
+    } else {
+        format!("台账定位: {}\n", ledger_lines.join("; "))
+    };
+    let failure_note = if archive_write_failed {
+        "\n⚠ 时代档案写入失败（.gsa/compaction/blocks/ 落盘未成功）——被折叠内容的逐字原文\
+         仍在本会话档案（sidecar）与 run journal 中，可按 journal 回读。"
+    } else {
+        ""
+    };
+    format!(
+        "[前文上下文已换代 {ERA_MARKER_VERSION}]\n\
+         {ERA_MARKER_BOUNDARY_LABEL}{boundary_round1} 轮]\n\
+         已处理分块: （时代折叠——读数见分块表）\n\
+         {ledger_line}\
+         时代存档: {archive_relative}（边界前全部轮次逐字留档；read_file offset/limit 分页）\n\
+         时代 digest: sha256:{digest}\n\
+         时代边界时间戳: {}\n\
+         黑板会话: {}\n\
+         {failure_note}\
+         == 模型面声明 ==\n{MODEL_FACE_DECLARATION}\n\
+         [/前文上下文已换代]",
+        crate::controller::chrono_utc_now(),
+        session.unwrap_or("（无）"),
     )
 }
 
@@ -2859,6 +3108,206 @@ mod tests {
         twice.extend(messages.clone());
         let markers = face_markers(&twice);
         assert_eq!(markers.truncated.len(), 2);
+    }
+
+    // --- 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：时代折叠投影面 ---
+
+    fn era_marker_msg(boundary_round1: usize) -> Message {
+        Message {
+            role: Role::User,
+            content: era_marker(
+                boundary_round1,
+                &["块#1 [seq] 1-4".to_string()],
+                ".gsa/compaction/blocks/test-era-001.md",
+                "abc123",
+                None,
+                false,
+            ),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        }
+    }
+
+    #[test]
+    fn era_marker_round_trips_through_face_markers() {
+        let messages = vec![era_marker_msg(5)];
+        let markers = face_markers(&messages);
+        assert_eq!(markers.era_before_round, Some(5));
+        assert_eq!(
+            markers.era_archive.as_deref(),
+            Some(".gsa/compaction/blocks/test-era-001.md")
+        );
+        // 台账定位行照常反解（同族待遇）。
+        assert_eq!(markers.ledger_seq.get(&1), Some(&(1, 4)));
+        // 边界/存档行解析：须带 marker 前缀门；脏数据不虚构。
+        assert_eq!(parse_era_boundary("时代边界: 第 轮]"), None, "无前缀不解析");
+        assert_eq!(
+            parse_era_archive("时代存档: p.md（注）"),
+            None,
+            "无前缀不解析"
+        );
+        assert_eq!(
+            parse_era_boundary(&format!(
+                "{ERA_MARKER_PREFIX} {ERA_MARKER_VERSION}
+时代边界: 第 轮]"
+            )),
+            None,
+            "脏轮号不虚构"
+        );
+        {
+            let probe = format!(
+                "{ERA_MARKER_PREFIX} {ERA_MARKER_VERSION}
+时代存档: p.md（注）"
+            );
+            eprintln!("probe bytes: {probe:?}");
+            eprintln!("prefix gate: {}", probe.starts_with(ERA_MARKER_PREFIX));
+            assert_eq!(parse_era_archive(&probe), Some("p.md".to_string()));
+        }
+        assert!(crate::prompt::is_restore_retained_block(
+            &messages[0].content
+        ));
+        assert!(crate::prompt::is_injected_block_text(&messages[0].content));
+    }
+
+    #[test]
+    fn era_boundary_hides_everything_before_marker_and_whitelist_does_not_survive() {
+        // 2 轮完整内容＋前置白名单块；时代边界在第 3 轮（折叠全部既有轮）。
+        let whitelist_msg = Message {
+            role: Role::User,
+            content: crate::prompt::build_whitelist_block(&["旧时代任务事实".to_string()]),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        };
+        let mut messages = vec![
+            user_msg("任务：时代前的工作"),
+            whitelist_msg,
+            decl("c0", "read_file", "src/a.rs"),
+            tool("c0", "旧时代内容"),
+            decl("c1", "read_file", "src/b.rs"),
+            tool("c1", "旧时代内容二"),
+        ];
+        let params = ModelFaceParams {
+            slider_tokens: 1_000_000,
+            block_tokens: 32_000,
+            ledger_path: None,
+            archive_tag: Some("test".to_string()),
+            run_id: "RUN-ERA".to_string(),
+            d4_block: None,
+            static_overhead_tokens: 0,
+        };
+        // 折叠前：全部可见（含白名单）。
+        let before = build_model_face(&messages, &params).unwrap();
+        assert_eq!(before.len(), messages.len());
+        // 折叠：marker 插尾（边界轮＝ranges.len()+1 ＝ 3）。
+        messages.push(era_marker_msg(3));
+        let view = build_model_face(&messages, &params).unwrap();
+        // 仅剩 era marker 本体（幸存面封闭清单——白名单不豁免）。
+        assert_eq!(view.len(), 1);
+        assert!(
+            view[0]
+                .content
+                .starts_with(crate::model_face::ERA_MARKER_PREFIX)
+        );
+        // 估算与 build 同口径（>0 且远小于全量）。
+        let est = estimate_model_face_tokens(&messages, &params);
+        let full: u64 = crate::controller::estimate_messages_tokens(&messages);
+        assert!(est > 0 && est < full);
+        // 计数面 ≡ build。
+        assert_eq!(model_face_message_count(&messages, &params), view.len());
+        let _ = before;
+    }
+
+    #[test]
+    fn era_after_clear_keeps_combined_hidden_end_and_clear_whitelist_floor() {
+        // 清零（轮 2 起）之后又时代折叠（全部）——联合隐藏终点＝era marker
+        // 下标；era 区内白名单不豁免、era 区后（无）不适用。
+        let whitelist = Message {
+            role: Role::User,
+            content: crate::prompt::build_whitelist_block(&["跨清零事实".to_string()]),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        };
+        let mut messages = vec![
+            user_msg("最早内容"),
+            whitelist.clone(),
+            decl("c0", "read_file", "src/a.rs"),
+            tool("c0", "内容"),
+            decl("c1", "read_file", "src/b.rs"),
+            tool("c1", "内容二"),
+        ];
+        messages.push(Message {
+            role: Role::User,
+            content: format!(
+                "[前文上下文已清零 {}]\n清零边界: 第 3 轮]\n[/前文上下文已清零]",
+                CLEAR_MARKER_VERSION
+            ),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        });
+        messages.push(era_marker_msg(3));
+        let params = ModelFaceParams {
+            slider_tokens: 1_000_000,
+            block_tokens: 32_000,
+            ledger_path: None,
+            archive_tag: Some("test".to_string()),
+            run_id: "RUN-ERA2".to_string(),
+            d4_block: None,
+            static_overhead_tokens: 0,
+        };
+        let markers = face_markers(&messages);
+        assert_eq!(markers.cleared_before_round, Some(3));
+        assert_eq!(markers.era_before_round, Some(3));
+        let view = build_model_face(&messages, &params).unwrap();
+        // 全部旧内容与旧白名单均在时代折叠区内——只剩 era marker。
+        assert_eq!(view.len(), 1);
+        assert!(
+            view[0]
+                .content
+                .starts_with(crate::model_face::ERA_MARKER_PREFIX)
+        );
+    }
+
+    #[test]
+    fn era_folded_blocks_show_era_state_and_archive_in_block_table() {
+        // 10 轮 × 4K ⇒ 滑块（500）外 8 轮分块；时代边界在第 11 轮（折叠全部）。
+        let mut messages = conversation(10, 4_000);
+        messages.push(era_marker_msg(11));
+        let params = ModelFaceParams {
+            slider_tokens: 500,
+            block_tokens: 9_000,
+            ledger_path: None,
+            archive_tag: Some("test".to_string()),
+            run_id: "RUN-ERA3".to_string(),
+            d4_block: None,
+            static_overhead_tokens: 0,
+        };
+        let blocks = blocks_outside_slider(&messages, params.slider_tokens, params.block_tokens);
+        assert!(!blocks.is_empty());
+        let table = render_block_table(&blocks, &face_markers(&messages), &params);
+        assert!(table.contains("已时代折叠"), "{table}");
+        assert!(
+            table.contains(".gsa/compaction/blocks/test-era-001.md"),
+            "时代折叠行须带时代存档回放指针: {table}"
+        );
+        // context_map：E 态＋时代存档指针。
+        let readout = slider_readout(&messages, params.slider_tokens, params.block_tokens);
+        let map = render_context_map(
+            &blocks,
+            &face_markers(&messages),
+            &readout,
+            params.archive_tag.as_deref(),
+            &params.run_id,
+        )
+        .expect("context map renders");
+        assert!(map.text.contains("E"), "{}", map.text);
     }
 
     // --- 0bz S1（2026-09-28）：模型面前缀指纹钉子（先红后绿钉的机械面） ---

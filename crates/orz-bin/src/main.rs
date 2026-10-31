@@ -3388,6 +3388,7 @@ mod conformance_capture {
                         orz_tui::acp_client::ClientMsg::SupplementQueued { .. }
                         | orz_tui::acp_client::ClientMsg::RewindPreview { .. }
                         | orz_tui::acp_client::ClientMsg::RecallDone { .. }
+                        | orz_tui::acp_client::ClientMsg::CheckpointSwitched { .. }
                         | orz_tui::acp_client::ClientMsg::StreamReset => {}
                     }
                 };

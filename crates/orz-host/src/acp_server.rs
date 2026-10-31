@@ -561,6 +561,16 @@ struct StoredConversation {
     /// 产物；journal 已随归档删除时退化为就地配对修复。
     #[serde(default, skip_serializing_if = "is_false")]
     reconstructed_from_journal: bool,
+    /// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：本时代累计用量（调用数/
+    /// prompt tokens）——run 尾 SUCCESS 写回时把 meter 增量计入（折叠时
+    /// 清零换元）；旧侧车无此键 = 零（serde default，零迁移）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    era_usage: Option<orz_loop::era::EraUsage>,
+    /// 0dx：待落账的时代事件载荷——裸 `/checkpoint` 不拉起 run，折叠产出的
+    /// `era_boundary` 载荷随侧车待命，下一 run 的 `run_started` 后落账
+    /// （SUCCESS 消费即清；失败 run 随续接包回退保留）。旧侧车无此键 = None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_era_event: Option<serde_json::Value>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -598,6 +608,8 @@ impl StoredConversation {
             context_scale_notified: Vec::new(),
             recall_log: Vec::new(),
             reconstructed_from_journal: false,
+            era_usage: None,
+            pending_era_event: None,
         }
     }
 
@@ -631,6 +643,9 @@ impl StoredConversation {
             // 从被截断的 continuation 转移）。
             recall_log: Vec::new(),
             reconstructed_from_journal: false,
+            // 0dx：时代账面/待命载荷由调用方转移（take-out 现场带回）。
+            era_usage: None,
+            pending_era_event: None,
         }
     }
 }
@@ -4613,6 +4628,17 @@ impl AcpServer {
                 n,
             )
         };
+        // 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：idle 空 `/btw`（无内容
+        // 的同时代补充）——不拉起 run，机械回执（不消耗 bootstrap/run 目录）。
+        if orz_loop::era::parse_input_intent(prompt) == orz_loop::era::InputIntent::EmptySameEra {
+            return Ok(serde_json::json!({
+                "session_id": session_id,
+                "response": "",
+                "status": "completed",
+                "run_id": "",
+                "user_notice": "同时代补充：内容为空，未拉起执行。",
+            }));
+        }
         // 334：active 转移在 run 注册成功后发（设计 §4 不变量 8）。prompt
         // guard 已在上方占位；此处的行仍在表内（close 尚未发生）。
         self.emit_session_state(session_id, SessionState::Active, None);
@@ -4770,7 +4796,25 @@ impl AcpServer {
         // idle 臂写入；run 写回臂必须原样带回归还，否则下次成功 run 会把
         // 撤回历史清零）。
         let restored_recall_log = std::mem::take(&mut continuation.recall_log);
+        // 0dx：时代账面与待命载荷随续接包 take-out（SUCCESS 写回带回；
+        // 折叠成功时清零换元/替换载荷）。
+        let mut era_usage_current = continuation.era_usage.take().unwrap_or_default();
+        let mut pending_era_payload = continuation.pending_era_event.take();
         drop(continuation);
+        // 0dx S2①：触发解析（输入的句法属性，外生、零模型参与——设计 §1.1）。
+        // `/btw <rest>`＝同时代补充（剥前缀照常跑）；`/checkpoint [rest]`＝
+        // 手动时代切换；无前缀＋会话非空＝自动换代（否则＝首输入，同代）。
+        let (effective_prompt, era_trigger) = match orz_loop::era::parse_input_intent(prompt) {
+            orz_loop::era::InputIntent::SameEra(rest) => (rest, None),
+            orz_loop::era::InputIntent::Checkpoint(rest) => (
+                rest.unwrap_or_default(),
+                Some(orz_loop::era::EraTrigger::CheckpointCommand),
+            ),
+            orz_loop::era::InputIntent::Plain | orz_loop::era::InputIntent::EmptySameEra => (
+                prompt.to_string(),
+                (!conversation.is_empty()).then_some(orz_loop::era::EraTrigger::UnprefixedInput),
+            ),
+        };
         // P0-1（0dq，2026-10-25）：回合级写前落盘 sink——loop 在「声明入列
         // /工具结果入列」边界回调，这里沿 take-out 现场重建续接包落侧车。
         // 会话级字段（recall_log／负担档位／刻度水位）取 take-out 值：检查
@@ -4781,6 +4825,15 @@ impl AcpServer {
         // 就此入侧车——这正是事故修复面（磁盘前进、对话必须同样前进）；
         // in-session `session.continuation` 的 Err 臂纪律不变（保 None，
         // 下一 prompt 回落侧车＝检查点状态）。
+        // 0dx：时代账面/待命载荷经共享 cell 进检查点写沿——折叠发生在
+        // sink 装配之后（controller 装配完毕时），闭包按实时值重建；外层
+        // 克隆留给下方时代切换段刷新（局部变量，无全局态）。
+        let era_checkpoint_cell: Arc<
+            std::sync::Mutex<(orz_loop::era::EraUsage, Option<serde_json::Value>)>,
+        > = Arc::new(std::sync::Mutex::new((
+            era_usage_current,
+            pending_era_payload.clone(),
+        )));
         {
             let checkpoint_base = base_dir.clone();
             let checkpoint_sid = session_id.to_string();
@@ -4788,6 +4841,7 @@ impl AcpServer {
             let checkpoint_burden = burden_tiers_notified.clone();
             let checkpoint_scale = restored_context_scale_notified.clone();
             let checkpoint_recall = restored_recall_log.clone();
+            let checkpoint_era_state = era_checkpoint_cell.clone();
             host.set_conversation_checkpoint_sink(Arc::new(
                 move |messages: &[Message],
                       lif: &TemporalSessionSnapshot,
@@ -4802,6 +4856,12 @@ impl AcpServer {
                     full.burden_tiers_notified = checkpoint_burden.clone();
                     full.context_scale_notified = checkpoint_scale.clone();
                     full.recall_log = checkpoint_recall.clone();
+                    let (era_usage, pending) = checkpoint_era_state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
+                    full.era_usage = Some(era_usage);
+                    full.pending_era_event = pending;
                     if let Err(e) = persist_conversation_sidecar(&checkpoint_base, &full) {
                         tracing::warn!(
                             session_id = %checkpoint_sid,
@@ -4905,10 +4965,114 @@ impl AcpServer {
             }
         }
 
+        // 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：时代切换执行（idle
+        // 路径——宿主侧机械核；设计 §1.2 五步：无损折叠／工作窗重置／时代
+        // 标记／黑板模型分区清空／事件落账）。带随行输入 → 折叠后拉起 run
+        // 灌入；裸 `/checkpoint` → 折叠＋写回续接包、不拉起 run（事件载荷
+        // 随侧车待命，下一 run 落账）。折叠中性拒绝（无可折叠内容）＝同代
+        // 继续，如实回执。
+        let mut era_fold_notice: Option<String> = None;
+        if let Some(trigger) = era_trigger {
+            let fold = orz_loop::era::apply_era_fold(orz_loop::era::EraFoldInput {
+                messages: &mut conversation,
+                blackboard: controller.blackboard(),
+                session_id: Some(session_id),
+                cwd: &base_dir,
+                run_id: Some(&handle.run_id),
+                trigger,
+                features: controller.era_feature_snapshot(),
+                era_usage: era_usage_current,
+                ledger_path: &orz_loop::action_ledger::ledger_file_path(&base_dir),
+                slider_tokens: controller.context_compact_slider_tokens(),
+                block_tokens: controller.context_compact_block_tokens(),
+            });
+            match fold {
+                Ok(outcome) => {
+                    pending_era_payload = Some(outcome.payload);
+                    era_usage_current = orz_loop::era::EraUsage::default();
+                    era_fold_notice = Some(format!(
+                        "[时代已切换｜第 {} 时代已无损折叠，原文回放 {}；补充请用 /btw]",
+                        outcome.era_closed, outcome.archive_relative
+                    ));
+                }
+                Err(reason) => {
+                    let bare_checkpoint =
+                        matches!(trigger, orz_loop::era::EraTrigger::CheckpointCommand)
+                            && effective_prompt.is_empty();
+                    if bare_checkpoint {
+                        self.emit_idle_if_present(session_id);
+                        return Ok(serde_json::json!({
+                            "session_id": session_id,
+                            "response": "",
+                            "status": "completed",
+                            "run_id": handle.run_id,
+                            "user_notice": format!(
+                                "时代切换未执行：{reason}"
+                            ),
+                        }));
+                    }
+                    tracing::info!(%reason, "era fold refused (proceeding same-era)");
+                }
+            }
+            *era_checkpoint_cell
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                (era_usage_current, pending_era_payload.clone());
+        }
+        // 0dx：裸 `/checkpoint` 成功折叠——写回续接包（含时代账面清零与待命
+        // 载荷），不拉起 run（设计 §1.1：无伴随输入则切换后不自动拉起）。
+        if matches!(
+            era_trigger,
+            Some(orz_loop::era::EraTrigger::CheckpointCommand)
+        ) && effective_prompt.is_empty()
+        {
+            let lif = controller.lif_session_snapshot();
+            let blackboard = controller.blackboard_conversation_snapshot();
+            let mut full = StoredConversation::full(
+                session_id,
+                conversation,
+                &lif,
+                session_started_at,
+                &blackboard,
+            );
+            full.burden_tiers_notified = burden_tiers_notified;
+            full.context_scale_notified = controller.context_scale_notified_keys();
+            full.recall_log = restored_recall_log;
+            full.era_usage = Some(era_usage_current);
+            full.pending_era_event = pending_era_payload;
+            let _ = persist_conversation_sidecar(&base_dir, &full);
+            if let Some(session) = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get_mut(session_id)
+            {
+                session.continuation = Some(full);
+            }
+            let notice = era_fold_notice.unwrap_or_default();
+            self.emit_idle_if_present(session_id);
+            return Ok(serde_json::json!({
+                "session_id": session_id,
+                "response": notice,
+                "status": "completed",
+                "run_id": handle.run_id,
+                "user_notice": notice,
+            }));
+        }
+        // 0dx：待命载荷交 controller（run_turn_inner 在 run_started 后落账；
+        // 取走即清，SUCCESS-ONLY 语义随续接包回退保留侧车值）。
+        if let Some(payload) = pending_era_payload.take() {
+            controller.set_pending_era_boundary(payload);
+        }
+        // 0dx：时代账面句柄注入（run 尾把 meter 增量计入新时代账面）。
+        let era_usage_handle: orz_loop::era::SharedEraUsage =
+            Arc::new(std::sync::Mutex::new(era_usage_current));
+        let controller = controller.with_era_usage(Some(era_usage_handle.clone()));
+
         let run_result = controller
             .run_turn_with_cancel(
                 &host,
-                prompt,
+                &effective_prompt,
                 &handle.run_id,
                 &handle.run_manifest_sha256,
                 handle.next_sequence,
@@ -5032,6 +5196,17 @@ impl AcpServer {
             full.context_scale_notified = controller.context_scale_notified_keys();
             // 0di：撤回审计日志原样带回（跨 prompt 延续；见 take-out 处注）。
             full.recall_log = restored_recall_log;
+            // 0dx：run 尾 meter 增量计入新时代账面（折叠基线后增量；无折叠
+            // ⇒ baseline (0,0) 恒等）。待命载荷已随本 run 落账 ⇒ 消费即清。
+            {
+                let (delta_calls, delta_prompt) = controller.era_usage_delta();
+                let mut usage = era_usage_handle
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                usage.saturating_add(delta_calls, delta_prompt);
+                full.era_usage = Some(*usage);
+            }
+            full.pending_era_event = None;
             let _ = persist_conversation_sidecar(&base_dir, &full);
             if let Some(session) = self
                 .sessions
@@ -5080,9 +5255,22 @@ impl AcpServer {
                 "run_id": run_id,
                 });
                 // 用户侧机械附言（不进模型上下文）：0bf ③ 起为**单条**负担
-                // 提醒（复合总值口径——水位＋繁杂度增益；至多一条）。
-                if let Some(notice) = burden_notice_text {
-                    payload["user_notice"] = serde_json::Value::String(notice);
+                // 提醒（复合总值口径——水位＋繁杂度增益；至多一条）。0dx：
+                // 时代切换反馈行与负担提醒并存时换行拼接（均为机械附言）。
+                match (burden_notice_text, era_fold_notice) {
+                    (Some(burden), Some(era)) => {
+                        payload["user_notice"] = serde_json::Value::String(format!(
+                            "{burden}
+{era}"
+                        ));
+                    }
+                    (Some(burden), None) => {
+                        payload["user_notice"] = serde_json::Value::String(burden);
+                    }
+                    (None, Some(era)) => {
+                        payload["user_notice"] = serde_json::Value::String(era);
+                    }
+                    (None, None) => {}
                 }
                 Ok(payload)
             }
@@ -5924,10 +6112,162 @@ impl AcpServer {
     /// 0di（2026-10-18，ADR-0010 §14.88）：中途补充入队——运行中经 ext 方法
     /// `_orz/queue_append` 投递的用户输入，进会话级队列（跨 run 存活；
     /// cancel 不清队；主车道 loop-top drain）。容量超限 fail-closed。
+    /// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：手动时代切换（ext 方法
+    /// `orz/checkpoint`；idle-only——设计 §1.1：无随行输入则切换后不拉起
+    /// run）。宿主侧机械核执行五步折叠（无损块／投影边界／黑板模型分区
+    /// 清空／时代标记／事件载荷待命——载荷随侧车待命，下一 run 的
+    /// `run_started` 后落账）。与 handle_recall 同款 idle-only 互斥口径
+    /// （runs 表查询；check-then-act 窗口与撤回面同级登记）。
+    pub async fn handle_session_checkpoint(
+        &self,
+        session_id: &str,
+    ) -> Result<serde_json::Value, AcpError> {
+        if self.refuse_deleted_session(session_id) {
+            return Err(AcpError::SessionNotFound(session_id.to_string()));
+        }
+        // 334 锁序：sessions → runs（与 queue_append/close/evict 同序）。
+        let (base_dir, continuation, queue_depth) = {
+            let sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let runs = self
+                .runs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let session = sessions
+                .get(session_id)
+                .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
+            if session.closing {
+                return Err(AcpError::SessionLifecycle(
+                    crate::session_ops::SessionError::InvalidState {
+                        session_id: session_id.to_string(),
+                        state: crate::session_ops::SessionState::Closing,
+                        verb: "checkpoint",
+                    },
+                ));
+            }
+            if runs.contains_key(session_id) {
+                return Err(AcpError::SessionLifecycle(
+                    crate::session_ops::SessionError::Busy {
+                        session_id: session_id.to_string(),
+                        evidence: "a run is in flight; /checkpoint is idle-only".to_string(),
+                        waited_ms: 0,
+                    },
+                ));
+            }
+            let continuation = match session.continuation.clone() {
+                Some(cont) => cont,
+                None => load_conversation_sidecar(&session.base_dir, session_id)
+                    .unwrap_or_else(|| StoredConversation::empty(session_id, None)),
+            };
+            (
+                session.base_dir.clone(),
+                continuation,
+                session.supplement_queue.depth(),
+            )
+        };
+        let _ = queue_depth;
+        if continuation.messages.is_empty() {
+            return Ok(serde_json::json!({
+                "session_id": session_id,
+                "status": "completed",
+                "switched": false,
+                "user_notice": "时代切换未执行：会话为空，无可折叠内容。",
+            }));
+        }
+        // 黑板 live 视图（无 run——直接从续接包快照装载临时板）。
+        let board = std::sync::Arc::new(orz_loop::blackboard::SharedBlackboard::new());
+        if let Some(snapshot) = &continuation.blackboard {
+            board
+                .write()
+                .restore_conversation_snapshot(snapshot.clone());
+        }
+        let lif_snapshot = continuation.lif.clone().unwrap_or_else(|| {
+            orz_assurance::lif::TemporalSessionSnapshot {
+                round: 0,
+                has_success: false,
+                current_domain: orz_assurance::lif::Domain::Start,
+                entry_round: 0,
+                spikes: Vec::new(),
+                rli_shadow: None,
+            }
+        });
+        let mut conversation = continuation.messages.clone();
+        let fold = orz_loop::era::apply_era_fold(orz_loop::era::EraFoldInput {
+            messages: &mut conversation,
+            blackboard: &board,
+            session_id: Some(session_id),
+            cwd: &base_dir,
+            run_id: None,
+            trigger: orz_loop::era::EraTrigger::CheckpointCommand,
+            features: orz_loop::era::EraFeatureSnapshot::from_temporal_snapshot(&lif_snapshot),
+            era_usage: continuation.era_usage.unwrap_or_default(),
+            ledger_path: &orz_loop::action_ledger::ledger_file_path(&base_dir),
+            slider_tokens: 160_000,
+            block_tokens: 32_000,
+        });
+        let outcome = match fold {
+            Ok(outcome) => outcome,
+            Err(reason) => {
+                return Ok(serde_json::json!({
+                    "session_id": session_id,
+                    "status": "completed",
+                    "switched": false,
+                    "user_notice": format!("时代切换未执行：{reason}"),
+                }));
+            }
+        };
+        // 写回续接包（折叠后消息面＋折叠后黑板快照＋清零的时代账面＋待命
+        // 载荷；recall/burden/scale 原样带回）。
+        let board_snapshot = board.write().conversation_snapshot();
+        let mut full = StoredConversation::full(
+            session_id,
+            conversation,
+            &lif_snapshot,
+            continuation.session_started_at,
+            &board_snapshot,
+        );
+        full.burden_tiers_notified = continuation.burden_tiers_notified.clone();
+        full.context_scale_notified = continuation.context_scale_notified.clone();
+        full.recall_log = continuation.recall_log.clone();
+        full.era_usage = Some(orz_loop::era::EraUsage::default());
+        full.pending_era_event = Some(outcome.payload.clone());
+        let _ = persist_conversation_sidecar(&base_dir, &full);
+        if let Some(session) = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(session_id)
+        {
+            session.continuation = Some(full);
+        }
+        tracing::info!(
+            session_id,
+            era = outcome.era_closed,
+            boundary_round = outcome.boundary_round1,
+            "manual checkpoint: era folded (idle, no run pulled up)"
+        );
+        Ok(serde_json::json!({
+            "session_id": session_id,
+            "status": "completed",
+            "switched": true,
+            "era_closed": outcome.era_closed,
+            "boundary_round": outcome.boundary_round1,
+            "archive": outcome.archive_relative,
+            "board_entries_removed": outcome.board_entries_removed,
+            "user_notice": format!(
+                "[时代已切换｜第 {} 时代已无损折叠，原文回放 {}；补充请用 /btw]",
+                outcome.era_closed, outcome.archive_relative
+            ),
+        }))
+    }
+
     pub fn handle_queue_append(
         &self,
         session_id: &str,
         text: &str,
+        mechanical: bool,
     ) -> Result<serde_json::Value, AcpError> {
         // 0dk S2（332）：已删会话不得接收补充/撤回/恢复——与 prompt 同一
         // tombstone 执法口径（删除不复活）。
@@ -5955,7 +6295,23 @@ impl AcpServer {
                 "supplement rejected: a restore or recall is in flight for session {session_id}"
             )));
         }
-        queue.push(text).map_err(|reason| {
+        // 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：`/checkpoint` 在途
+        // 不受理（设计 §1.1——在途切换走无前缀路径；机械最简）。enqueue
+        // 点响亮拒绝（带区分性文案），不在途排队后静默丢弃。
+        if !mechanical
+            && orz_loop::era::parse_input_intent(text)
+                == orz_loop::era::InputIntent::Checkpoint(None)
+        {
+            return Err(AcpError::InvalidRequest(format!(
+                "checkpoint rejected while a run is in flight for session {session_id}:                  /checkpoint is idle-only; an in-run input without the /btw prefix                  switches the era at the next safe boundary"
+            )));
+        }
+        let pushed = if mechanical {
+            queue.push_mechanical(text)
+        } else {
+            queue.push(text)
+        };
+        pushed.map_err(|reason| {
             AcpError::InvalidRequest(format!(
                 "supplement rejected: {reason} (per-message cap {} bytes, depth cap {})",
                 crate::SUPPLEMENT_MAX_BYTES,
@@ -6940,7 +7296,7 @@ mod tests {
                 assert_eq!(first["status"], "completed");
 
                 let second = server
-                    .handle_session_prompt("test-session-two-prompts", "world")
+                    .handle_session_prompt("test-session-two-prompts", "/btw world")
                     .await
                     .unwrap();
                 assert_eq!(second["status"], "completed");
@@ -10684,7 +11040,7 @@ mod tests {
                     continuation.context_scale_notified = vec!["500k".to_string()];
                 }
                 let r2 = server
-                    .handle_session_prompt("sess-conv", "第二问")
+                    .handle_session_prompt("sess-conv", "/btw 第二问")
                     .await
                     .unwrap();
                 assert_eq!(r2["response"], "第二答");
@@ -10779,7 +11135,7 @@ mod tests {
                     .await
                     .unwrap();
                 server
-                    .handle_session_prompt("sess-bb", "第二问")
+                    .handle_session_prompt("sess-bb", "/btw 第二问")
                     .await
                     .unwrap();
 
@@ -10862,7 +11218,7 @@ mod tests {
                     .await
                     .unwrap();
                 server2
-                    .handle_session_prompt("sess-restart", "重启后的问题")
+                    .handle_session_prompt("sess-restart", "/btw 重启后的问题")
                     .await
                     .unwrap();
 
@@ -10938,7 +11294,7 @@ mod tests {
                     .await
                     .unwrap();
                 server
-                    .handle_session_prompt("sess-dangle", "新问题")
+                    .handle_session_prompt("sess-dangle", "/btw 新问题")
                     .await
                     .expect("prompt after repair");
 
@@ -11013,7 +11369,7 @@ mod tests {
                     .await
                     .unwrap();
                 let err = server
-                    .handle_session_prompt("sess-fail", "第二问")
+                    .handle_session_prompt("sess-fail", "/btw 第二问")
                     .await
                     .unwrap_err();
                 assert!(matches!(err, AcpError::AgentLoop(_)), "{err}");
@@ -11091,7 +11447,7 @@ mod tests {
                     .await
                     .unwrap();
                 server2
-                    .handle_session_prompt("sess-ckpt", "继续")
+                    .handle_session_prompt("sess-ckpt", "/btw 继续")
                     .await
                     .unwrap();
                 let reqs = fake2.received_requests();
@@ -11172,7 +11528,7 @@ mod tests {
                     }];
                 }
                 server
-                    .handle_session_prompt("sess-flg-rj", "问一")
+                    .handle_session_prompt("sess-flg-rj", "/btw 问一")
                     .await
                     .unwrap();
                 let reqs = fake.received_requests();
@@ -11232,7 +11588,7 @@ mod tests {
                     }];
                 }
                 server2
-                    .handle_session_prompt("sess-pln-rj", "问二")
+                    .handle_session_prompt("sess-pln-rj", "/btw 问二")
                     .await
                     .unwrap();
                 let reqs2 = fake2.received_requests();
@@ -11313,7 +11669,7 @@ mod tests {
                     .await
                     .unwrap();
                 server
-                    .handle_session_prompt("sess-act", "继续检索")
+                    .handle_session_prompt("sess-act", "/btw 继续检索")
                     .await
                     .unwrap();
 
@@ -11815,10 +12171,14 @@ mod tests {
             )
             .await
             .unwrap();
-        let r = server.handle_queue_append("sess-qfifo", "第一条").unwrap();
+        let r = server
+            .handle_queue_append("sess-qfifo", "第一条", false)
+            .unwrap();
         assert_eq!(r["queued"], serde_json::json!(true));
         assert_eq!(r["depth"], serde_json::json!(1));
-        server.handle_queue_append("sess-qfifo", "第二条").unwrap();
+        server
+            .handle_queue_append("sess-qfifo", "第二条", false)
+            .unwrap();
         let queue = server
             .sessions
             .lock()
@@ -11830,11 +12190,18 @@ mod tests {
         assert_eq!(queue.depth(), 2);
         assert_eq!(
             queue.drain(),
-            vec!["第一条".to_string(), "第二条".to_string()]
+            vec![
+                orz_loop::era::SupplementItem::user("第一条"),
+                orz_loop::era::SupplementItem::user("第二条"),
+            ]
         );
         assert_eq!(queue.depth(), 0, "drain must empty the queue");
         // 未知会话 fail-closed。
-        assert!(server.handle_queue_append("sess-qfifo-none", "x").is_err());
+        assert!(
+            server
+                .handle_queue_append("sess-qfifo-none", "x", false)
+                .is_err()
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -11851,12 +12218,14 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            server.handle_queue_append("sess-qcap", "").is_err(),
+            server.handle_queue_append("sess-qcap", "", false).is_err(),
             "empty text rejected"
         );
         let oversized = "x".repeat(crate::SUPPLEMENT_MAX_BYTES + 1);
         assert!(
-            server.handle_queue_append("sess-qcap", &oversized).is_err(),
+            server
+                .handle_queue_append("sess-qcap", &oversized, false)
+                .is_err(),
             "per-message byte cap must fail closed"
         );
         let queue = server
@@ -11871,10 +12240,83 @@ mod tests {
             queue.push(&format!("m{i}")).expect("within cap");
         }
         assert!(
-            server.handle_queue_append("sess-qcap", "overflow").is_err(),
+            server
+                .handle_queue_append("sess-qcap", "overflow", false)
+                .is_err(),
             "depth cap must fail closed, not silently truncate"
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：队列面在途 `/checkpoint`
+    /// 不受理（enqueue 点响亮拒绝）；`/btw` 项照常入队（loop-top 剥前缀）。
+    #[tokio::test]
+    async fn queue_append_rejects_bare_checkpoint_and_takes_btw() {
+        let base = supplement_test_dir("era-qguard");
+        let server = shadow_server();
+        server
+            .handle_session_new(
+                "sess-era-q",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        let err = server
+            .handle_queue_append("sess-era-q", "/checkpoint", false)
+            .expect_err("bare /checkpoint rejected at enqueue");
+        assert!(err.to_string().contains("checkpoint rejected"), "{err}");
+        // 机械位放行同文本（机械生产者不经时代分流）。
+        server
+            .handle_queue_append("sess-era-q", "/checkpoint", true)
+            .expect("mechanical item bypasses the era guard");
+        server
+            .handle_queue_append("sess-era-q", "/btw 补充", false)
+            .expect("btw item queues normally");
+        let sessions = server.sessions.lock().unwrap();
+        let queue = sessions
+            .get("sess-era-q")
+            .map(|s| s.supplement_queue.clone())
+            .expect("session");
+        let drained = queue.drain();
+        assert_eq!(drained.len(), 2);
+        assert!(drained[0].mechanical, "机械位保序入队");
+        assert!(!drained[1].mechanical);
+        assert_eq!(drained[1].text, "/btw 补充");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0dx：续接包时代字段（era_usage/pending_era_event）随侧车 round-trip；
+    /// 旧侧车（缺字段）零迁移解析。
+    #[test]
+    fn conversation_sidecar_era_fields_round_trip() {
+        let dir = supplement_test_dir("era-sidecar");
+        let mut conv = StoredConversation::empty("sess-era-sc", Some(1_700_000_000.0));
+        // persist 对空对话跳过（best-effort 语义）——带一条消息使其落盘。
+        conv.messages.push(user_msg("唯一一问"));
+        conv.era_usage = Some(orz_loop::era::EraUsage {
+            model_calls: 7,
+            prompt_tokens: 900,
+        });
+        conv.pending_era_event = Some(serde_json::json!({"era": 3}));
+        assert!(persist_conversation_sidecar(&dir, &conv).is_ok());
+        let loaded = load_conversation_sidecar(&dir, "sess-era-sc").expect("reload");
+        assert_eq!(
+            loaded.era_usage,
+            Some(orz_loop::era::EraUsage {
+                model_calls: 7,
+                prompt_tokens: 900,
+            })
+        );
+        assert_eq!(loaded.pending_era_event.as_ref().unwrap()["era"], 3);
+        // 旧侧车（无字段）＝ None。
+        let mut legacy = StoredConversation::empty("sess-era-sc", Some(1_700_000_000.0));
+        legacy.messages.push(user_msg("唯一一问"));
+        assert!(persist_conversation_sidecar(&dir, &legacy).is_ok());
+        let reloaded = load_conversation_sidecar(&dir, "sess-era-sc").expect("reload legacy");
+        assert_eq!(reloaded.era_usage, None);
+        assert_eq!(reloaded.pending_era_event, None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn seed_recall_conversation(server: &AcpServer, session_id: &str) {
@@ -11995,7 +12437,7 @@ mod tests {
             "failed recall must not clear the continuation"
         );
         server
-            .handle_queue_append("sess-rtrunc", "失败撤回后仍应保留")
+            .handle_queue_append("sess-rtrunc", "失败撤回后仍应保留", false)
             .unwrap();
         assert!(server.handle_recall("sess-rtrunc", 9).is_err());
         assert_eq!(
@@ -12027,10 +12469,10 @@ mod tests {
             .unwrap();
         seed_recall_conversation(&server, "sess-rdrop");
         server
-            .handle_queue_append("sess-rdrop", "未投递补充一")
+            .handle_queue_append("sess-rdrop", "未投递补充一", false)
             .unwrap();
         server
-            .handle_queue_append("sess-rdrop", "未投递补充二")
+            .handle_queue_append("sess-rdrop", "未投递补充二", false)
             .unwrap();
         let r = server.handle_recall("sess-rdrop", 1).unwrap();
         assert_eq!(r["dropped_supplements"], serde_json::json!(2));
@@ -12096,7 +12538,7 @@ mod tests {
             .unwrap()
             .insert("sess-qrestore".to_string(), RunInFlight::Restore(0));
         let err = server
-            .handle_queue_append("sess-qrestore", "不得落到撤回后的分支")
+            .handle_queue_append("sess-qrestore", "不得落到撤回后的分支", false)
             .unwrap_err();
         assert!(matches!(err, AcpError::InvalidRequest(ref m) if m.contains("restore or recall")));
         assert_eq!(
@@ -12127,7 +12569,7 @@ mod tests {
             .unwrap();
         seed_recall_conversation(&server, "sess-rpersist");
         server
-            .handle_queue_append("sess-rpersist", "落盘失败时不得丢")
+            .handle_queue_append("sess-rpersist", "落盘失败时不得丢", false)
             .unwrap();
         std::fs::remove_dir_all(&base).unwrap();
         std::fs::write(&base, b"not a directory").unwrap();

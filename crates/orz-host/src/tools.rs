@@ -570,7 +570,7 @@ pub fn capability_list(cwd: &Path) -> Result<serde_json::Value, String> {
         (
             "blackboard_read",
             "read",
-            "Read one blackboard partition (plan/notes/findings/exec/actions/session/entities/deps/processes/env) — the loop's fold-proof memory; PULL face declared unconditionally by the loop controller.",
+            "Read one blackboard partition (plan/notes/findings/state/exec/actions/session/entities/deps/processes/env/temporal/rli/journal/guide) — the loop's era-scoped scratch board (0dx: model partitions clear at era switches); PULL face declared unconditionally by the loop controller.",
         ),
         (
             "run_tests",

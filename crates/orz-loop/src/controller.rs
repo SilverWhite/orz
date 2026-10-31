@@ -815,6 +815,19 @@ pub struct AgentLoopController {
     /// 0bg S2（2026-09-22）：LIF 域迁移**连带记录**游标——已落机械记录的
     /// 累计迁移数；消费方 [`Self::take_new_lif_migrations`]（只记不发模型）。
     pub(crate) lif_migration_recorded: Mutex<u64>,
+    /// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：本时代累计用量句柄
+    /// （宿主侧车跨 run 累计；`with_era_usage` 注入。`None`＝裸测试/CLI
+    /// 单 run 控制器——在途折叠只计本 run meter，无跨 run 账面，如实登记）。
+    pub(crate) era_usage: Option<crate::era::SharedEraUsage>,
+    /// 0dx：在途折叠时点的本 run meter 基线——run 尾宿主只把
+    /// `meter_totals - baseline` 计入新时代（折叠前消耗属被关闭时代，已
+    /// 入该时代事件载荷；`era_usage_delta` 单一读出口）。
+    era_usage_fold_baseline: Mutex<(u64, u64)>,
+    /// 0dx：宿主 idle 路径折叠产出的待落账时代事件载荷（裸 `/checkpoint`
+    /// 不拉起 run ⇒ 载荷随侧车待命，下一 run 的 `run_started` 后落账；
+    /// run_turn_inner 取走即清——SUCCESS-ONLY 语义：失败 run 的载荷随
+    /// 会话续接包回退保留在侧车）。
+    pending_era_boundary: Mutex<Option<serde_json::Value>>,
 }
 
 /// P2-14 S1：`board_stamp_pin` 的 RAII 守卫——主车道决策轮工具段持有，
@@ -1072,6 +1085,9 @@ impl AgentLoopController {
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             // 0bg S2：LIF 域迁移连带记录游标（只记不发模型）。
             lif_migration_recorded: Mutex::new(0),
+            era_usage: None,
+            era_usage_fold_baseline: Mutex::new((0, 0)),
+            pending_era_boundary: Mutex::new(None),
             plan_enabled: false,
             plan_gate_enabled: false,
             plan_first_session_done: false,
@@ -1264,6 +1280,133 @@ impl AgentLoopController {
     ) -> Self {
         self.source_weighting = config;
         self
+    }
+
+    /// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：注入本时代累计用量句柄
+    /// （宿主从会话侧车装载、跨 run 累计；在途折叠时本方法持有方读取并
+    /// 由 [`Self::apply_era_fold_in_run`] 清零换元）。
+    pub fn with_era_usage(mut self, era_usage: Option<crate::era::SharedEraUsage>) -> Self {
+        self.era_usage = era_usage;
+        self
+    }
+
+    /// 0dx：主滑块参数读数（宿主 idle 折叠核装配用；chars/2 口径单源）。
+    pub fn context_compact_slider_tokens(&self) -> u64 {
+        self.context_compact.slider_window_tokens
+    }
+
+    /// 0dx：分块参数读数（同上）。
+    pub fn context_compact_block_tokens(&self) -> u64 {
+        self.context_compact.model_face_block_tokens
+    }
+
+    /// 0dx：登记宿主 idle 路径折叠产出的待落账时代事件载荷（裸
+    /// `/checkpoint` 不拉起 run ⇒ 载荷随侧车待命；下一 run 的
+    /// `run_started` 后由 [`Self::journal_pending_era_boundary`] 落账）。
+    pub fn set_pending_era_boundary(&self, payload: serde_json::Value) {
+        *self
+            .pending_era_boundary
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(payload);
+    }
+
+    /// 0dx：落账待命的时代事件载荷（恰在 `run_started` 之后、
+    /// `prompt_submitted` 之前——时代切换先于新输入提交）。取走即清。
+    pub(crate) async fn journal_pending_era_boundary(
+        &self,
+        writer: &mut EventWriter<'_>,
+    ) -> Result<(), crate::controller::AgentLoopError> {
+        // 取走与落账分离：MutexGuard 临时不得跨 await（future Send 纪律）。
+        let pending = self
+            .pending_era_boundary
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(payload) = pending {
+            writer.record(EventType::EraBoundary, payload).await?;
+        }
+        Ok(())
+    }
+
+    /// 0dx：本 run meter 累计（调用数，prompt tokens）——宿主 run 尾把
+    /// 增量计入时代账面（SUCCESS 写回窗口单读）。
+    pub fn run_usage_meter_totals(&self) -> (u64, u64) {
+        self.usage_meter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .era_totals()
+    }
+
+    /// 0dx：run 尾应计入**新时代**账面的 meter 增量＝全 run 累计 − 在途
+    /// 折叠基线（折叠前消耗属被关闭时代；无折叠 ⇒ baseline (0,0) 恒等）。
+    pub fn era_usage_delta(&self) -> (u64, u64) {
+        let (total_calls, total_prompt) = self.run_usage_meter_totals();
+        let (base_calls, base_prompt) = *self
+            .era_usage_fold_baseline
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (
+            total_calls.saturating_sub(base_calls),
+            total_prompt.saturating_sub(base_prompt),
+        )
+    }
+
+    /// 0dx：LIF/RLI 特征快照（活体引擎；idle 路径宿主走侧车快照同型）。
+    pub fn era_feature_snapshot(&self) -> crate::era::EraFeatureSnapshot {
+        let engine = self
+            .lif
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        crate::era::EraFeatureSnapshot::from_temporal_snapshot(&engine.temporal_session_snapshot())
+    }
+
+    /// 0dx：在途折叠（loop 主车道 drain 路径——排队无前缀项触发的时代
+    /// 切换）。装配折叠核输入（活体 LIF 快照＋时代账面＋本 run meter），
+    /// 成功后清零时代账面并记录 meter 基线。返回事件载荷（调用方 record）。
+    pub(crate) fn apply_era_fold_in_run(
+        &self,
+        messages: &mut Vec<Message>,
+        host: &dyn LoopHost,
+        run_id: &str,
+        trigger: crate::era::EraTrigger,
+    ) -> Result<serde_json::Value, String> {
+        let meter_totals = self.run_usage_meter_totals();
+        let era_usage = match &self.era_usage {
+            Some(handle) => {
+                let mut usage = handle
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut closing = *usage;
+                closing.saturating_add(meter_totals.0, meter_totals.1);
+                *usage = crate::era::EraUsage::default();
+                closing
+            }
+            // 裸控制器（无会话账面）：只计本 run 已耗——跨 run 缺账面如实。
+            None => crate::era::EraUsage {
+                model_calls: meter_totals.0,
+                prompt_tokens: meter_totals.1,
+            },
+        };
+        *self
+            .era_usage_fold_baseline
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = meter_totals;
+        let cwd = host.session_cwd();
+        let ledger_path = crate::action_ledger::ledger_file_path(&cwd);
+        let outcome = crate::era::apply_era_fold(crate::era::EraFoldInput {
+            messages,
+            blackboard: &self.blackboard,
+            session_id: self.session_id.as_deref(),
+            cwd: &cwd,
+            run_id: Some(run_id),
+            trigger,
+            features: self.era_feature_snapshot(),
+            era_usage,
+            ledger_path: &ledger_path,
+            slider_tokens: self.context_compact.slider_window_tokens,
+            block_tokens: self.context_compact.model_face_block_tokens,
+        })?;
+        Ok(outcome.payload)
     }
 
     /// FUS-RETRIEVAL-MECH P0-B step 3 (2026-08-14): override the mechanical
@@ -1764,6 +1907,9 @@ impl AgentLoopController {
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             // 0bg S2：LIF 域迁移连带记录游标（只记不发模型）。
             lif_migration_recorded: Mutex::new(0),
+            era_usage: None,
+            era_usage_fold_baseline: Mutex::new((0, 0)),
+            pending_era_boundary: Mutex::new(None),
             plan_enabled: false,
             plan_gate_enabled: false,
             plan_first_session_done: false,
@@ -4137,7 +4283,7 @@ impl AgentLoopController {
         {
             tool_defs.push(ToolDef {
                 name: crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME.to_string(),
- description: "Write a note to the blackboard — the fold-proof durable memory: blackboard content survives context folding and compaction — at the 500K hard truncation (T1) only the current slider window survives, so plan/notes on the blackboard remain recoverable via blackboard_read. `section` is \"plan\" (task plan + key intermediate conclusions), \"notes\" (free-form working notes), \"findings\" (the append-only ledger of established results & conclusions from actual work), or \"state\" (the current-facts layer, `key: value` document: goal/now/next/open/constraints; merged, ≤200 tokens, `updated` system-written). With op=clear, section may also be \"all\" (wipe the three note partitions; state is cleared explicitly with section=state). Single write is capped at 8K chars — split longer content across writes. The live watermark 【x.xM/10M】 rides every blackboard_read response header. Writes are stamped (round, domain) and journaled; cleared/replaced entries stay fully archived in the journal; mechanical partitions (edits/exec/actions/processes/temporal/session) are NOT writable.".to_string(),
+ description: "Write a note to the blackboard — your ERA-SCOPED scratch board (0dx): the model partitions live only for the current conversation era; they are cleared mechanically when the conversation enters a new era (a `/checkpoint` switch or any user input without the `/btw` prefix). Content that must outlive the era belongs in workspace files (INDEX/MAP/docs) — files are the only cross-era channel, and anything you need later should carry its provenance (path/log/JSON). Within the era the board survives context folding and compaction as before (at the 500K hard truncation (T1) only the current slider window survives, so plan/notes remain recoverable via blackboard_read). `section` is \"plan\" (task plan + key intermediate conclusions), \"notes\" (free-form working notes), \"findings\" (the append-only ledger of established results & conclusions from actual work), or \"state\" (the current-facts layer, `key: value` document: goal/now/next/open/constraints; merged, ≤200 tokens, `updated` system-written). With op=clear, section may also be \"all\" (wipe the three note partitions; state is cleared explicitly with section=state). Single write is capped at 8K chars — split longer content across writes. The live watermark 【x.xM/10M】 rides every blackboard_read response header. Writes are stamped (round, domain) and journaled; cleared/replaced entries stay fully archived in the journal; mechanical partitions (edits/exec/actions/processes/temporal/session) are NOT writable.".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -4621,6 +4767,10 @@ impl AgentLoopController {
                 }),
             )
             .await?;
+        // 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：待命的时代事件载荷落账
+        // （宿主 idle 路径折叠——含裸 `/checkpoint` 的跨 run 待命载荷；恰在
+        // `run_started` 之后、`prompt_submitted` 之前，时代切换先于新输入）。
+        self.journal_pending_era_boundary(writer).await?;
         writer
             .record(
                 EventType::PromptSubmitted,
@@ -8964,6 +9114,97 @@ body"
             .collect()
     }
 
+    /// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：loop-top 队列项分流——
+    /// 无前缀用户项在途触发时代切换（`era_boundary` 落账＋marker 入对话＋
+    /// 原文照投）；`/btw` 剥前缀同时代投递（零 era 事件）；`/checkpoint`
+    /// 在途不受理（丢弃＋GateDecision 审计，零投递）；机械项照旧直投。
+    #[tokio::test]
+    async fn era_queue_items_split_at_loop_top() {
+        let dir = test_dir();
+        let host = SupplementHost {
+            journal: JournalRecorder::new(dir.clone()),
+            queue: std::sync::Mutex::new(
+                [
+                    crate::era::SupplementItem::user("换新话题：实现 X"),
+                    crate::era::SupplementItem::user("/btw 补充一点"),
+                    crate::era::SupplementItem::user("/btw"),
+                    crate::era::SupplementItem::user("/checkpoint"),
+                    crate::era::SupplementItem::mechanical("机械直投不换代"),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec!["收到"]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let mut conversation: Vec<Message> = vec![Message {
+            role: Role::User,
+            content: "旧时代任务".to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        }];
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-ERA-Q",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .expect("run");
+
+        let events = read_supplement_test_events(&dir);
+        let era_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::EraBoundary)
+            .collect();
+        assert_eq!(era_events.len(), 1, "恰一条 era_boundary: {events:?}");
+        let payload = &era_events[0].payload;
+        assert_eq!(payload["trigger"], "unprefixed_queued_input");
+        assert_eq!(payload["era"], 1);
+        assert_eq!(payload["usage"]["model_calls"], 0);
+        // 门面审计：空 /btw 与在途 /checkpoint 各一条 GateDecision。
+        let gates: Vec<&serde_json::Value> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::GateDecision)
+            .map(|e| &e.payload)
+            .collect();
+        let decisions: Vec<&str> = gates
+            .iter()
+            .filter_map(|g| g["decision"].as_str())
+            .collect();
+        assert!(decisions.contains(&"drop_empty_btw"), "{decisions:?}");
+        assert!(
+            decisions.contains(&"reject_checkpoint_inflight"),
+            "{decisions:?}"
+        );
+        // 投递面：无前缀原文＋/btw 剥前缀＋机械直投；/checkpoint 不投递。
+        let delivered: Vec<&str> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::SupplementDelivered)
+            .filter_map(|e| e.payload["text"].as_str())
+            .collect();
+        assert_eq!(
+            delivered,
+            vec!["换新话题：实现 X", "补充一点", "机械直投不换代"]
+        );
+        // 对话面：era marker 在列（唯一存根）＋无前缀项成为新时代首条消息。
+        assert!(
+            conversation
+                .iter()
+                .any(|m| m.content.starts_with(crate::model_face::ERA_MARKER_PREFIX)),
+            "era marker missing: {conversation:?}"
+        );
+        assert!(conversation.iter().any(|m| m.content == "换新话题：实现 X"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 主车道 loop-top 投递：预入队两条补充，一轮 run 内恰两条
     /// `supplement_delivered` 事件——位于 prompt_submitted 之后、首个
     /// model_request 面（RequestHeaderChange）之前；FIFO 保序＋
@@ -8975,8 +9216,8 @@ body"
             journal: JournalRecorder::new(dir.clone()),
             queue: std::sync::Mutex::new(
                 [
-                    "补充一：先看 README".to_string(),
-                    "补充二：输出用中文".to_string(),
+                    crate::era::SupplementItem::user("补充一：先看 README"),
+                    crate::era::SupplementItem::user("补充二：输出用中文"),
                 ]
                 .into_iter()
                 .collect(),
@@ -9072,7 +9313,11 @@ body"
         let dir2 = test_dir();
         let host2 = SupplementHost {
             journal: JournalRecorder::new(dir2.clone()),
-            queue: std::sync::Mutex::new(["跨 run 残余".to_string()].into_iter().collect()),
+            queue: std::sync::Mutex::new(
+                [crate::era::SupplementItem::user("跨 run 残余")]
+                    .into_iter()
+                    .collect(),
+            ),
         };
         controller
             .run_turn(&host2, "任务二", "RUN-S2", MANIFEST, 0, None, None, None)
@@ -9118,7 +9363,12 @@ body"
         let texts: Vec<String> = (0..16).map(|i| format!("补充{i}:{pad}")).collect();
         let host = SupplementHost {
             journal: JournalRecorder::new(dir.clone()),
-            queue: std::sync::Mutex::new(texts.iter().cloned().collect()),
+            queue: std::sync::Mutex::new(
+                texts
+                    .iter()
+                    .map(|t| crate::era::SupplementItem::user(t.clone()))
+                    .collect(),
+            ),
         };
         let fake = Arc::new(FakeProvider::from_texts(vec!["收到"]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
@@ -9206,7 +9456,11 @@ body"
         let supplement = "[工作台] 请将本任务的工作计划与关键中间结论写入黑板（blackboard_write section=plan|notes）；黑板不受上下文折叠与机械压缩影响，硬截断（500K 估算）后仍可经 blackboard_read 找回。";
         let host = SupplementHost {
             journal: JournalRecorder::new(dir.clone()),
-            queue: std::sync::Mutex::new([supplement.to_string()].into_iter().collect()),
+            queue: std::sync::Mutex::new(
+                [crate::era::SupplementItem::user(supplement.to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec!["收到"]));
         let controller = AgentLoopController::with_gateway(gateway);
@@ -9238,7 +9492,11 @@ body"
         let dir = test_dir();
         let host = SupplementHost {
             journal: JournalRecorder::new(dir.clone()),
-            queue: std::sync::Mutex::new(["grill 不该吃掉这条".to_string()].into_iter().collect()),
+            queue: std::sync::Mutex::new(
+                [crate::era::SupplementItem::user("grill 不该吃掉这条")]
+                    .into_iter()
+                    .collect(),
+            ),
         };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec!["grill 回答"]));
         let controller = AgentLoopController::with_gateway(gateway);

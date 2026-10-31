@@ -519,7 +519,10 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
         | EventType::FaceFingerprint
         // 0df：任务级计费机械记录——run 终态计量行（无专用 TUI 卡片，同
         // 姿态；模型面零感知，UI 呈现随专门批另议）。
-        | EventType::RunUsageMetered => TuiEvent::Unknown {
+        | EventType::RunUsageMetered
+        // 0dx：时代边界落账——入账不入面（裁决 7），特征/用量不进 TUI；
+        // 用户面反馈行走宿主 user_notice（run 响应），此处同姿态降级。
+        | EventType::EraBoundary => TuiEvent::Unknown {
             event_type: event.event_type.to_string(),
         },
     }

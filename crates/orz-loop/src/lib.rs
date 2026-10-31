@@ -30,6 +30,7 @@ pub mod diagnostics;
 pub mod entities;
 pub mod env;
 pub mod epoch;
+pub mod era;
 pub mod failure_agg;
 pub(crate) mod failure_target;
 pub mod fatigue;

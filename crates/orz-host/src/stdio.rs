@@ -270,13 +270,38 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
                             .get("text")
                             .and_then(|v| v.as_str())
                             .unwrap_or_default();
+                        // 0dx：机械生产者显式声明位（缺省 false＝用户输入——
+                        // 无前缀项在 loop-top 触发时代切换）。
+                        let mechanical = params
+                            .get("mechanical")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
                         if session_id.is_empty() {
                             return Err(invalid_request_with_data(
                                 "queue_append requires session_id",
                             ));
                         }
                         self.server
-                            .handle_queue_append(&session_id, text)
+                            .handle_queue_append(&session_id, text, mechanical)
+                            .map(ext_response_value)
+                            .map_err(acp_error_with_data)
+                    }
+                    // 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：手动时代切换
+                    // （idle-only；无随行输入则切换后不拉起 run——设计 §1.1）。
+                    "orz/checkpoint" => {
+                        let session_id = params
+                            .get("session_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        if session_id.is_empty() {
+                            return Err(invalid_request_with_data(
+                                "checkpoint requires session_id",
+                            ));
+                        }
+                        self.server
+                            .handle_session_checkpoint(&session_id)
+                            .await
                             .map(ext_response_value)
                             .map_err(acp_error_with_data)
                     }
