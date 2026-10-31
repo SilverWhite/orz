@@ -17,13 +17,13 @@
 
 | 步骤 | Windows（PowerShell） | Linux（sh） |
 |---|---|---|
-| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.14-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
+| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.14-6-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
 | 2. 配置 API Key | 存入 Windows 凭据管理器（Generic，目标名 `orz-deepseek/agent`；一次即可）：<br>`cmdkey /generic:orz-deepseek/agent /user:agent /pass:你的DeepSeek_API_Key` | 用环境变量（Windows 凭据管理器通道的显式例外）：<br>`export ORZ_DEEPSEEK_API_KEY=你的DeepSeek_API_Key` |
 | 3. 初始化安全签发（一次性） | `.\orz-acaf-provision.exe "$env:USERPROFILE\.orz-acaf\keystore" "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br><br>ACAF 默认 fail-closed，未配置会拒绝启动 run（进程可用、run 拒绝执行）。 | `./orz-acaf-provision "$HOME/.orz-acaf/keystore" "$HOME/.orz-acaf/signer-manifest.json"` |
 | 4. 设置启动环境 | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
 | 5. 运行 | `.\orz.exe`（交互 TUI）<br>`.\orz.exe -p "你的任务" --real`（无头模式）<br>`.\orz.exe web`（Web 工作台，打印本地带令牌地址） | `./orz`（交互 TUI）<br>`./orz -p "你的任务" --real`（无头模式）<br>`./orz web`（Web 工作台，打印本地带令牌地址） |
 
-发布包说明与完整性校验见 GitHub Release（最新 [v0.9.14](https://github.com/SilverWhite/orz/releases/tag/v0.9.14)，双平台包＋`SHA256SUMS`；历史版本注意：0.9.12 的 tag 带再发行后缀 `-1`——首发行 tag `v0.9.12` 因 immutable release 删除后 tag 名被保留而不可复用，见 [346 档](docs/audits/346_CARRIER_REBUILD_AND_RELEASE_V0912_2026-10-24.md)）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
+发布包说明与完整性校验见 GitHub Release（最新 [v0.9.14-6](https://github.com/SilverWhite/orz/releases/tag/v0.9.14-6)，双平台包＋`SHA256SUMS`；历史版本注意：0.9.12 的 tag 带再发行后缀 `-1`——首发行 tag `v0.9.12` 因 immutable release 删除后 tag 名被保留而不可复用，见 [346 档](docs/audits/346_CARRIER_REBUILD_AND_RELEASE_V0912_2026-10-24.md)）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
 
 ### 常用入口
 
@@ -105,14 +105,11 @@ orz 直接运行在真机上是设计选择。
 
 已知边界：不防已失陷的签发器、同用户恶意进程、内核级失陷与恶意模型服务；票据证明来源与授权，不证明命令明智；命令审查是尽力而为的词法匹配——变量拼接、别名、脚本内命令、`.NET`/解释器直调、编码混淆、Windows 短名／junction／UNC 未存在面仍不保证覆盖；维护 CLI 已有桥注入的 `ORZ_MAINTENANCE_TICKET` 令牌门＋命令面 block，TTY 确认未落（0dl 余项）；`.gsa` shell 读面为读全开放口径。真机默认无沙箱；权限缺省全自动审批（ADR-0010 §14.91 用户令 2026-10-25：日常与跑分姿态完全一致、全部能力缺省开启；`--no-yolo`／`ORZ_YOLO=0` 为唯一的 confirm-first 通路）——这是明确接受的高风险便利姿态，不应把 ACAF 票据描述为提示词注入后的独立意图授权；处理不可信网页、仓库或任务时应显式使用 `--no-yolo`，或把整套程序置于外部沙箱。该默认值按用户裁决保留，自 0.9.13 载体起在役（0.9.12 及更早为双轨过渡缺省或同态）。
 
-## 0.9.14 更新（2026-10-25）
+## 0.9.14-6 更新（2026-11-01）
 
-- **回合原子性**：run 被硬切（断电／强杀／终端挂死）不再丢轮——对话逐工具轮写前落盘，侧车与磁盘同步前进；下次装载对上次未回收的工具调用注入「[上次 run 中断] 结果未知、落盘副作用可能已发生」事实，模型不再照旧现场重做。
-- **终答即达**：交互车道不再要求 `[RUN_END]` 结束标记——无工具调用的文本即终答、立即交付（`ORZ_TERMINAL_DECLARATION=required` 可为 benchmark／无头车道恢复机器可读终态）。
-- **系统控制台**：`orz capabilities`（能力清单）与 `orz inspect session/run/context/events`（只读诊断四面）上线；`grep` 支持 `offset` 真分页（`[page] total/shown/next_cursor`）；`read_file`／`grep` 读面取消 workspace 限制（敏感路径给 `[敏感面]` 提示、审计照记、写面门禁不动）；`read_file outline` 支持 Rust/Python/TS-JS 代码大纲；工具回执新增 `[output] chars/lines/FFFD`＋`took=` 读数与 `[permission] mode=…` 审批模式行。
-- **终端编码**：Windows 启动器统一 UTF-8（PowerShell/Cmd 代码页前置），中文乱码链在根因面修复；解码可疑时回执给「改用写文件＋read_file」提示。
-- **时间基准**：journal／事件流时间戳统一北京时间（+08:00）；RLI 推送面退役（节奏读数改 `took=`，`blackboard_read section=rli` 拉取面保留）。
-- **自查工具常开**：`self_check` 反例自查在全部主车道无条件可用（不再随终态声明开关同源关闭）。
+- **会话内检查点时代机制（`/checkpoint`＋`/btw`）**：会话内换话题不再依赖重启进程——`/checkpoint` 手动重置；不带 `/btw` 前缀的新输入自动开启「时代」（机械层切换后拉起：此前全部原文整段无损折叠为可回读档案，黑板计划/笔记/发现/state 随时代清空，journal 台账跨时代连续）；`/btw` 前缀＝同时代补充，照常排队不打断。忘带前缀的代价＝非预期换代（客户端有「时代已切换」回执提示）。
+- **流式重发去重**：网络重试导致的流式回复「重复卡」在协议面修复——重发前清卡重填，Web 工作台与 TUI 双端单卡收口。
+- 其余为自 0.9.14 以来的累计内部修复与审查处置（361–391 批，完整流水见 [`docs/audits/`](docs/audits/)）。本版为 Windows／Linux musl 双平台同源出件。
 
 ## 开发者入口
 
