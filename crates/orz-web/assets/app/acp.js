@@ -290,6 +290,10 @@ export function sessionQueueAppend(sessionId, text) {
   return extRequest('_orz/queue_append', { session_id: sessionId, text });
 }
 
+export function sessionCheckpoint(sessionId) {
+  return extRequest('_orz/checkpoint', { session_id: sessionId });
+}
+
 export function sessionRecallPreview(sessionId) {
   return extRequest('_orz/recall_preview', { session_id: sessionId });
 }

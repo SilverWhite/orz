@@ -133,6 +133,9 @@ function mockAcpSend(msg, ws) {
             persists_across_pages: false,
           })))(msg, ws);
       break;
+    case '_orz/checkpoint':
+      wsRespond(ws, msg.id, { switched: true });
+      break;
     case '_orz/recall_preview':
       (acpMock.recallPreviewHandler ?? ((m, w) => wsRespond(w, m.id, { messages: [] })))(msg, ws);
       break;
@@ -1342,6 +1345,53 @@ await ui.rewindRecall(1);
 assert.equal(methodCalls('_orz/recall').at(-1)?.params?.session_id, 'feedface-1111-2222-3333-444455556666', '撤回必须命中同一显式会话');
 chatInput.value = '';
 console.log('ok  14.4 只读/归档 rewind 拒绝保留草稿＋显式 session_id（零静默绑定）');
+
+/* 0dy: Web 时代协议不能被本地命令白名单吞；历史浏览只在空输入
+ * 和光标边界生效，用户编辑立即结束历史浏览。 */
+resetView();
+const eraPromptBefore = methodCalls('session/prompt').length;
+chatInput.value = '/btw：继续检查';
+chatInput.dispatch('keydown', { key: 'Enter', shiftKey: false });
+await flush(3);
+assert.equal(methodCalls('session/prompt').length, eraPromptBefore + 1);
+assert.equal(methodCalls('session/prompt').at(-1)?.params?.prompt?.[0]?.text, '/btw：继续检查');
+chatInput.value = '/checkpoint修一下';
+chatInput.dispatch('keydown', { key: 'Enter', shiftKey: false });
+await flush(3);
+assert.equal(methodCalls('session/prompt').at(-1)?.params?.prompt?.[0]?.text, '/checkpoint修一下');
+const checkpointBefore = methodCalls('_orz/checkpoint').length;
+chatInput.value = '/checkpoint：';
+chatInput.dispatch('keydown', { key: 'Enter', shiftKey: false });
+await flush(3);
+assert.equal(methodCalls('_orz/checkpoint').length, checkpointBefore + 1);
+assert.equal(methodCalls('_orz/checkpoint').at(-1)?.params?.session_id, state.sessionId);
+vm.setRunning(true);
+const queuedBefore = methodCalls('_orz/queue_append').length;
+chatInput.value = '/btw 在途补充';
+chatInput.dispatch('keydown', { key: 'Enter', shiftKey: false });
+await flush(3);
+assert.equal(methodCalls('_orz/queue_append').length, queuedBefore + 1);
+assert.equal(methodCalls('_orz/queue_append').at(-1)?.params?.text, '/btw 在途补充');
+chatInput.value = '/checkpoint';
+chatInput.dispatch('keydown', { key: 'Enter', shiftKey: false });
+assert.equal(chatInput.value, '/checkpoint', '运行中裸 checkpoint 被拒时保留输入');
+vm.setRunning(false);
+chatInput.value = '历史样本';
+chatInput.dispatch('keydown', { key: 'Enter', shiftKey: false });
+await flush(3);
+chatInput.selectionStart = 0;
+chatInput.selectionEnd = 0;
+chatInput.dispatch('keydown', { key: 'ArrowUp' });
+assert.equal(chatInput.value, '历史样本');
+chatInput.value = '历史样本\n继续编辑';
+chatInput.selectionEnd = 2;
+chatInput.dispatch('keydown', { key: 'ArrowDown' });
+assert.equal(chatInput.value, '历史样本\n继续编辑', '多行内 Down 应移动光标');
+chatInput.dispatch('input');
+chatInput.selectionEnd = chatInput.value.length;
+chatInput.dispatch('keydown', { key: 'ArrowDown' });
+assert.equal(chatInput.value, '历史样本\n继续编辑', '编辑后 Down 不得替换草稿');
+console.log('ok  0dy 时代命令直通／裸 checkpoint 扩展＋历史方向键边界');
 
 /* 14.5 运行态单一 owner：journal 不写状态栏；status 与 running 同源；
  *      Ctrl+Z 与停止按钮取同一 state.running，取消正确会话。 */

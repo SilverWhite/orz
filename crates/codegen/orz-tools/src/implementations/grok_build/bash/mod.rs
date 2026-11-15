@@ -345,7 +345,7 @@ pub struct BashToolInput {
     // reminders (`system_reminders_enabled` template flag); otherwise it
     // points at the get-output tool when one is served.
     #[schemars(
-        description = "Set to true for long-running commands that should run in the background (e.g., dev servers, long builds, overnight training). Returns a task id immediately while the command keeps running in the background${%- if system_reminders_enabled %}; you are notified on completion, so do not poll or sleep-wait for it${%- elif tools.by_kind.background_task_action %}; check on it later with the ${{ tools.by_kind.background_task_action }} tool${%- endif %}. Background tasks survive across turns until the session ends, you stop them, or the ~30h safety cap."
+        description = "Set to true for long-running commands that should run in the background (e.g., dev servers, long builds, overnight training). Returns a task id immediately while the command keeps running in the background${%- if system_reminders_enabled %}; you are notified on completion, so do not poll or sleep-wait for it${%- elif tools.by_kind.background_task_action %}; check on it later with the ${{ tools.by_kind.background_task_action }} tool${%- endif %}. Background tasks survive across turns until they exit, the session ends, you stop them, or an explicit timeout fires."
     )]
     #[serde(
         default,
@@ -631,15 +631,9 @@ pub(crate) fn format_default_prompt(
 // `BashToolConfig`. `max_timeout_secs` only lowers/raises this *foreground*
 // ceiling; background tasks (`timeout: 0` / omitted in background mode) are
 // always unbounded regardless of this value — the model owns their lifetime via
-// the background-task tooling. Absolute safety clamp for configured maxes:
-// 30h (`ABSOLUTE_MAX_TIMEOUT_MS`).
+// the background-task tooling. A positive background timeout is honored as
+// supplied, independently of this foreground ceiling.
 pub(crate) const DEFAULT_MAX_TIMEOUT_MS: u64 = 300_000; // 5 minutes
-// 0dh S2 (2026-10-18, ADR-0010 §14.87; 用户裁决「10h→30h」)：模型正向
-// `timeout`（后台）的钳制上限与执行侧绝对兜底（`DEFAULT_BG_MAX_RUNTIME`，
-// 30h）同值放宽——执行侧 poll tick 的 `timeout.min(max_runtime)` 是唯一
-// 执法点，本常量只封模型可选 cap 的上限。两者由值钉锁定同步
-// （`absolute_max_timeout_is_30h_and_matches_executor_backstop`）。
-const ABSOLUTE_MAX_TIMEOUT_MS: u64 = 108_000_000; // 30h
 /// Resident default FG block before auto-bg when auto_background_on_timeout
 /// is on. TER T1.2 (2026-09-03) 单一生效源：serde 缺省 / `Default` / 显式
 /// `null` 回退 / schema 描述渲染共用本常量；终端后端兜底常量同步为同值
@@ -1143,11 +1137,9 @@ fn self_matching_pkill_pattern(command: &str) -> Option<SelfMatchingPkill> {
 }
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
-const BACKGROUND_TIMEOUT: Duration = Duration::from_secs(86400); // 24 hours
 
 /// Max time a *non-backgroundable* foreground command may block the turn. Such
-/// a command has only its requested `timeout` (up to `ABSOLUTE_MAX_TIMEOUT_MS`,
-/// 30h), so a long timeout would wedge the turn; we clamp and kill at this cap
+/// a command has only its requested `timeout`, so a long timeout would wedge the turn; we clamp and kill at this cap
 /// instead. Backgroundable
 /// commands use their per-request auto-bg budget (`foreground_block_budget_ms`;
 /// resident default 180s since TER T1.2) instead — the terminal's
@@ -1375,8 +1367,8 @@ pub struct BashTool;
 impl BashTool {
     /// Resolve the effective ceiling (ms) for model-provided timeouts.
     ///
-    /// `BashParams.max_timeout_secs` when set (floored to 1ms and clamped to
-    /// [`ABSOLUTE_MAX_TIMEOUT_MS`]); otherwise [`DEFAULT_MAX_TIMEOUT_MS`].
+    /// `BashParams.max_timeout_secs` when set (floored to 1ms);
+    /// otherwise [`DEFAULT_MAX_TIMEOUT_MS`].
     ///
     /// The `.max(1)` floor matters: a sub-millisecond positive `max_timeout_secs`
     /// (e.g. `0.0004`) rounds to 0ms, but `max_timeout_configured` stays true, so
@@ -1391,8 +1383,7 @@ impl BashTool {
         let configured = params
             .max_timeout_secs
             .filter(|s| *s > 0.0)
-            .map(|s| ((s * 1000.0).round() as u64).max(1))
-            .map(|ms| ms.min(ABSOLUTE_MAX_TIMEOUT_MS));
+            .map(|s| ((s * 1000.0).round() as u64).max(1));
         configured.unwrap_or(DEFAULT_MAX_TIMEOUT_MS)
     }
 
@@ -1423,10 +1414,8 @@ impl BashTool {
     /// Semantics (`max_timeout_ms` is the **foreground-only** ceiling from
     /// `max_timeout_secs`):
     /// - `Some(ms)` with `ms > 0`, foreground → `ms` clamped to `max_timeout_ms`.
-    /// - `Some(ms)` with `ms > 0`, background → `ms` clamped only to
-    ///   [`ABSOLUTE_MAX_TIMEOUT_MS`] (30h). The foreground ceiling never bounds
-    ///   a background command's model-chosen kill-backstop; only the absolute
-    ///   safety limit does.
+    /// - `Some(ms)` with `ms > 0`, background → exactly `ms`; the foreground
+    ///   ceiling never bounds a background command's model-chosen deadline.
     /// - `Some(0)` or `None` in foreground → `config_timeout` capped by max.
     /// - `Some(0)` or `None` in background → always [`Duration::MAX`]
     ///   (unbounded). `max_timeout_secs` never bounds background tasks; the model
@@ -1440,17 +1429,11 @@ impl BashTool {
     ) -> Duration {
         let fg_ceiling = max_timeout_ms.max(1);
         match input_timeout_ms {
-            Some(ms) if ms > 0 => {
-                // Background positive timeouts are foreground-ceiling-exempt:
-                // bound only by the absolute limit so `max_timeout_secs` (a
-                // foreground knob) can't cap a backgrounded command.
-                let ceiling = if is_background {
-                    ABSOLUTE_MAX_TIMEOUT_MS
-                } else {
-                    fg_ceiling
-                };
-                Duration::from_millis(ms.min(ceiling))
-            }
+            Some(ms) if ms > 0 => Duration::from_millis(if is_background {
+                ms
+            } else {
+                ms.min(fg_ceiling)
+            }),
             _ => {
                 if is_background {
                     Duration::MAX
@@ -1568,15 +1551,19 @@ impl BashTool {
     }
 
     /// 0dh S2 (ADR-0010 §14.87)：起任务结果文案 just-in-time——一次说清
-    /// 生命周期边界（跨 turn 存活至会话结束／kill／30h 兜底）与增量读出
+    /// 生命周期边界（跨 turn 存活至自然退出／会话结束／kill／显式超时）与增量读出
     /// 指引；不在常驻面重复（教学面用户令：极常用工具不得长备注常驻注入）。
     fn background_started_summary(
         task_id: &str,
+        timeout_explicit: bool,
         write_control_warn: Option<&crate::types::exec_policy::CommandFinding>,
     ) -> String {
         let mut summary = format!(
-            "Background task {task_id} started. It keeps running across turns while this session lives — until it exits, you stop it, or the ~30h safety cap; each output read returns only what arrived since your last read"
+            "Background task {task_id} started. It keeps running across turns while this session lives — until it exits, you stop it, or its explicit timeout fires; each output read returns only what arrived since your last read"
         );
+        if !timeout_explicit {
+            summary.push_str(" No timeout was set: this task runs until it exits, you stop it, or the session ends. Set timeout explicitly for long-running work when you need a deadline.");
+        }
         if let Some(finding) = write_control_warn {
             summary.push(' ');
             summary.push_str(&crate::types::exec_policy::warn_line(finding));
@@ -1766,10 +1753,10 @@ ${%- if auto_background_on_timeout %}
   - No timeout kill: a foreground command is never killed for hitting its timeout — it is automatically backgrounded and you receive a task id to check output later.
 ${%- else %}
   - Timeout enforcement: when the timeout fires, the wrapper${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately (no graceful-termination grace period).${%- else %} kills the child process group (SIGTERM, escalated to SIGKILL after a ~1s grace period). Descendants that did not detach via `setsid` / `nohup` will also be killed.${%- endif %}
-${%- endif %} In `${%- if params is defined and params.execute is defined and params.execute.is_background %}${{ params.execute.is_background }}${%- else %}background${%- endif %}: true` mode a `${{ params.execute.timeout }}: 0` (or omitted) timeout means the task runs until it exits, you stop it${%- if tools.by_kind.kill_task_action %} via ${{ tools.by_kind.kill_task_action }}${%- endif %}, or the ~30h safety cap fires; you own its lifetime until then.
+${%- endif %} In `${%- if params is defined and params.execute is defined and params.execute.is_background %}${{ params.execute.is_background }}${%- else %}background${%- endif %}: true` mode a `${{ params.execute.timeout }}: 0` (or omitted) timeout means the task runs until it exits, you stop it${%- if tools.by_kind.kill_task_action %} via ${{ tools.by_kind.kill_task_action }}${%- endif %}, or the session ends; a positive timeout is its wall-clock deadline.
   - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.
   - Call-scope lifecycle (0bh ②, 2026-09-22): every descendant process started inside this call is reaped together with the call — the wrapper owns them (${%- if is_windows %}Job Object kill-on-close${%- else %}process-group signal${%- endif %}). Put long-lived work on the managed background path (see the background parameter below — that path is its entry) rather than starting a detached daemon here.
-  - You can use the ${{ params.execute.is_background }} parameter to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background${%- if system_reminders_enabled %}; you are notified on completion, so do not poll or sleep-wait for it${%- elif tools.by_kind.background_task_action %}; check on it later with the ${{ tools.by_kind.background_task_action }} tool${%- endif %}. Background tasks survive across turns until the session ends, you stop them, or the ~30h safety cap.${%- if has_unix_utilities %} You do not need to use '&' at the end of the command when using this parameter.${%- endif %}
+  - You can use the ${{ params.execute.is_background }} parameter to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background${%- if system_reminders_enabled %}; you are notified on completion, so do not poll or sleep-wait for it${%- elif tools.by_kind.background_task_action %}; check on it later with the ${{ tools.by_kind.background_task_action }} tool${%- endif %}. Background tasks survive across turns until they exit, the session ends, you stop them, or an explicit timeout fires.${%- if has_unix_utilities %} You do not need to use '&' at the end of the command when using this parameter.${%- endif %}
 ${%- if shell_uses_semicolon %}
   - '&&' is not supported in this shell; chain sequential commands with ';'.
 ${%- endif %}
@@ -2360,7 +2347,7 @@ impl xai_tool_runtime::Tool for BashTool {
             let timeout = Self::resolve_effective_timeout_for_params(
                 input.timeout,
                 true,
-                BACKGROUND_TIMEOUT,
+                Duration::MAX,
                 &params,
             );
             let request = TerminalRunRequest {
@@ -2424,7 +2411,11 @@ impl xai_tool_runtime::Tool for BashTool {
                 output_file: bg_output_file.to_string_lossy().to_string(),
                 status: "running".to_string(),
                 command: input.command,
-                summary: Self::background_started_summary(&task_id, write_control_warn.as_ref()),
+                summary: Self::background_started_summary(
+                    &task_id,
+                    input.timeout.is_some_and(|ms| ms > 0),
+                    write_control_warn.as_ref(),
+                ),
                 retrieval_hint,
                 pre_formatted: None,
                 pid: bg_pid,
@@ -2543,6 +2534,9 @@ impl xai_tool_runtime::Tool for BashTool {
                         input.command
                     )
                 };
+                if !input.timeout.is_some_and(|ms| ms > 0) {
+                    summary.push_str(" No timeout was set: this task runs until it exits, you stop it, or the session ends. Set timeout explicitly for long-running work when you need a deadline.");
+                }
                 if let Some(finding) = &write_control_warn {
                     summary.push(' ');
                     summary.push_str(&crate::types::exec_policy::warn_line(finding));
@@ -2569,12 +2563,17 @@ impl xai_tool_runtime::Tool for BashTool {
                          ```\n{}\n```\n\n\
                          Full output is being written to: {}\n\n\
                          The command keeps running by default; its final result \
-                         (exit code or timeout) will be reported with a later tool \
-                         result. To interrupt it now, terminate the process \
+                         (exit code or stop reason) will be reported with a later tool \
+                         result.{} To interrupt it now, terminate the process \
                          (e.g. `taskkill /PID {pid_placeholder} /F` on Windows or \
                          `kill -9 {pid_placeholder}` on Unix).",
                         result.combined_output,
                         output_file.to_string_lossy(),
+                        if input.timeout.is_some_and(|ms| ms > 0) {
+                            ""
+                        } else {
+                            " No timeout was set: this task runs until it exits, you stop it, or the session ends. Set timeout explicitly for long-running work when you need a deadline."
+                        },
                         pid_placeholder = result
                             .pid
                             .map(|p| p.to_string())
@@ -3710,6 +3709,7 @@ mod tests {
                     "{report}"
                 );
                 assert!(report.contains("kill -9 1234"), "{report}");
+                assert!(report.contains("No timeout was set"), "{report}");
                 assert_eq!(bg.pid, Some(1234));
                 assert_eq!(bg.total_bytes, Some(4096));
                 assert_eq!(bg.status, "running");
@@ -5115,37 +5115,21 @@ mod tests {
                 BashTool::resolve_effective_timeout_for_params(
                     Some(20 * 60 * 1_000),
                     true, // background
-                    super::super::BACKGROUND_TIMEOUT,
+                    Duration::MAX,
                     &params,
                 ),
                 Duration::from_millis(20 * 60 * 1_000),
             );
-            // Only the absolute 30h limit (`ABSOLUTE_MAX_TIMEOUT_MS`) bounds it.
-            let above_absolute: u64 = 50 * 60 * 60 * 1_000;
+            // A multi-day explicit background deadline passes through unchanged.
+            let above_absolute: u64 = 72 * 60 * 60 * 1_000;
             assert_eq!(
                 BashTool::resolve_effective_timeout_for_params(
                     Some(above_absolute),
                     true,
-                    super::super::BACKGROUND_TIMEOUT,
+                    Duration::MAX,
                     &params,
                 ),
-                Duration::from_millis(super::super::ABSOLUTE_MAX_TIMEOUT_MS),
-            );
-        }
-
-        #[test]
-        fn absolute_max_timeout_is_30h_and_matches_executor_backstop() {
-            // 0dh S2 review fix: value pin + cross-constant consistency. The
-            // model-facing absolute cap must stay in lockstep with the
-            // executor's `DEFAULT_BG_MAX_RUNTIME` backstop (30h): the poll
-            // tick's `timeout.min(max_runtime)` is the single enforcement
-            // point, so the two limits only tell one coherent story while
-            // they are equal.
-            assert_eq!(super::super::ABSOLUTE_MAX_TIMEOUT_MS, 108_000_000);
-            assert_eq!(
-                Duration::from_millis(super::super::ABSOLUTE_MAX_TIMEOUT_MS),
-                crate::computer::local::terminal::DEFAULT_BG_MAX_RUNTIME,
-                "model cap == executor backstop (30h)"
+                Duration::from_millis(above_absolute),
             );
         }
 
@@ -6259,11 +6243,11 @@ mod tests {
         }
 
         /// 0dh S2（298 批，钉⑦）：起任务 summary 的边界句字面钉——会话域
-        /// 跨 turn 存活／kill／~30h 兜底／增量读出指引，just-in-time 一行，
+        /// 跨 turn 存活／显式超时／增量读出指引，just-in-time 一行，
         /// 无常驻注入。
         #[test]
         fn background_started_summary_states_session_domain_boundary() {
-            let summary = BashTool::background_started_summary("task-1", None);
+            let summary = BashTool::background_started_summary("task-1", false, None);
             assert!(
                 summary.starts_with("Background task task-1 started."),
                 "{summary}"
@@ -6273,9 +6257,12 @@ mod tests {
                 "session-domain boundary missing: {summary}"
             );
             assert!(
-                summary.contains("~30h safety cap"),
-                "absolute backstop missing: {summary}"
+                summary.contains("No timeout was set")
+                    && summary.contains("Set timeout explicitly"),
+                "missing one-shot timeout reminder: {summary}"
             );
+            let explicit = BashTool::background_started_summary("task-2", true, None);
+            assert!(!explicit.contains("No timeout was set"), "{explicit}");
             assert!(
                 summary.contains("only what arrived since your last read"),
                 "incremental-read guidance missing: {summary}"
@@ -6298,8 +6285,8 @@ mod tests {
             );
             // The OS-neutral contract (timeout/kill mechanics) is still present.
             // 0dh S2 (ADR-0010 §14.87)：timeout:0 语义改写——runs until exit /
-            // kill / ~30h safety cap（S1 勘定结论三：显式后台非真无界）。
-            assert!(out.contains("the ~30h safety cap fires"));
+            // 未设 timeout 的后台任务随进程/会话寿命运行。
+            assert!(out.contains("or the session ends"));
             assert!(!out.contains("disables the wrapper timeout"));
         }
 
@@ -6367,11 +6354,13 @@ mod tests {
             );
             // 0dh S2：会话域边界句在 auto_bg 开臂照渲染（教学面一句话）。
             assert!(
-                pwsh.contains("Background tasks survive across turns until the session ends"),
+                pwsh.contains(
+                    "Background tasks survive across turns until they exit, the session ends"
+                ),
                 "session-domain boundary line missing, got: {pwsh}"
             );
             assert!(
-                pwsh.contains("the ~30h safety cap fires"),
+                pwsh.contains("or the session ends"),
                 "OS-neutral timeout tail dropped on Windows, got:\n{pwsh}"
             );
 
@@ -6402,7 +6391,7 @@ mod tests {
             );
             assert!(!pwsh_off.contains("SIGTERM"));
             assert!(
-                pwsh_off.contains("the ~30h safety cap fires"),
+                pwsh_off.contains("or the session ends"),
                 "escape-hatch arm keeps the OS-neutral timeout tail:
 {pwsh_off}"
             );

@@ -1739,9 +1739,9 @@ const actions = {
   runAddress: (v) => {
     // slash 命令与对象 URI 的统一入口（AddressBar 语义，R-4）。
     if (v.startsWith('/')) {
-      runSlash(v);
+      routeSlashInput(v);
     } else if (v.startsWith('command://')) {
-      runSlash('/' + v.slice('command://'.length).replace(/^\/*/, ''));
+      routeSlashInput('/' + v.slice('command://'.length).replace(/^\/*/, ''));
     } else if (v.includes('://')) {
       ui.openUri(v);
     } else if (v) {
@@ -1751,6 +1751,31 @@ const actions = {
   },
   sendPrompt: submitPrompt,
 };
+
+// 与 era::strip_word / TUI input.rs 的词界同形：ASCII 标识符后缀不算前缀，
+// 非 ASCII 与约定标点算边界。仅用于 Web 预路由；最终解析仍归宿主。
+function eraPrefixRest(text, word) {
+  if (!text.startsWith(word)) return null;
+  const rest = text.slice(word.length);
+  const first = Array.from(rest)[0];
+  if (first && !(/\s/u.test(first) || first.codePointAt(0) > 127 || '：，。；！？、:,'.includes(first))) return null;
+  return rest.replace(/^[：，。；！？、:,]*/u, '').trimStart();
+}
+
+function routeSlashInput(text) {
+  const btw = eraPrefixRest(text, '/btw');
+  const checkpoint = eraPrefixRest(text, '/checkpoint');
+  if (btw !== null || (checkpoint !== null && checkpoint.length > 0)) {
+    const reason = promptGateReason();
+    if (reason) {
+      flash(reason);
+      return false;
+    }
+    submitPrompt(text);
+    return true;
+  }
+  return runSlash(checkpoint !== null ? '/checkpoint' : text);
+}
 
 function runSlash(cmd) {
   const name = cmd.split(/\s+/)[0];
@@ -1779,6 +1804,20 @@ function runSlash(cmd) {
         return false;
       }
       dialogs.openRewind();
+      break;
+    }
+    case '/checkpoint': {
+      const reason = promptGateReason();
+      if (reason || state.running || !acpSessionId) {
+        flash(reason || (state.running ? '运行中不能手动切换时代；可发送输入在安全边界换代' : '当前没有绑定会话'));
+        return false;
+      }
+      const sessionId = acpSessionId;
+      void acp.sessionCheckpoint(sessionId).then(() => {
+        if (acpSessionId !== sessionId) return;
+        vm.addSystemMessage('检查点已建立：时代已切换', false);
+        renderAll();
+      }).catch((e) => flash(`检查点切换失败：${e.message || e}`));
       break;
     }
     case '/open':
@@ -1828,7 +1867,7 @@ function submitFromInput() {
   const text = chatInput.value.trim();
   if (!text) return;
   if (text.startsWith('/')) {
-    if (runSlash(text)) chatInput.value = '';
+    if (routeSlashInput(text)) chatInput.value = '';
     return;
   }
   // 318 P1-B1：只读门在清空输入之前——拒绝时草稿原样保留。
@@ -1844,19 +1883,21 @@ function submitFromInput() {
 }
 
 sendBtn.addEventListener('click', submitFromInput);
+chatInput.addEventListener('input', () => { historyIndex = null; });
 chatInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     submitFromInput();
-  } else if (e.key === 'ArrowUp' && !chatInput.value && inputHistory.length) {
+  } else if (e.key === 'ArrowUp' && !chatInput.value && inputHistory.length && chatInput.selectionStart === 0) {
     historyIndex = historyIndex == null ? inputHistory.length - 1 : Math.max(0, historyIndex - 1);
     chatInput.value = inputHistory[historyIndex];
     e.preventDefault();
-  } else if (e.key === 'ArrowDown' && historyIndex != null) {
-    historyIndex = Math.min(inputHistory.length - 1, historyIndex + 1);
-    chatInput.value = inputHistory[historyIndex] ?? '';
+  } else if (e.key === 'ArrowDown' && historyIndex != null &&
+             !chatInput.value.slice(chatInput.selectionEnd).includes('\n')) {
+    historyIndex = historyIndex + 1;
+    chatInput.value = historyIndex < inputHistory.length ? inputHistory[historyIndex] : '';
     e.preventDefault();
-    if (historyIndex === inputHistory.length - 1 && !inputHistory[historyIndex]) historyIndex = null;
+    if (historyIndex === inputHistory.length) historyIndex = null;
   }
 });
 

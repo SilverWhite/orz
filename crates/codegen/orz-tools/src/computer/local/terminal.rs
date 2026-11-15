@@ -44,35 +44,15 @@ const COMMAND_CHANNEL_SIZE: usize = 32;
 const COMPLETED_TASK_TTL: Duration = Duration::from_secs(300); // 5 minutes
 /// SIGTERM → SIGKILL grace period. Uses a 1-second grace.
 const SIGTERM_GRACE: Duration = Duration::from_secs(1);
-/// Maximum lifetime for a background task. After this, the actor
-/// will gracefully kill it. 0dh S2 (2026-10-18, ADR-0010 §14.87; 用户裁决
-/// 2026-10-17「10h 不够，放宽至 30h」): 10h → **30h** — supports overnight
-/// training runs inside a live orz session (cross-run survival, finalize-sweep
-/// exempt). This is the SINGLE enforcement point: the poll tick kills at
-/// `process.timeout.min(max_runtime)`, so explicit background tasks with
-/// `timeout: 0`/none (`Duration::MAX`) are bounded by it too. Env override:
-/// `GROK_BG_MAX_RUNTIME_MS` (clamped to ≥ 1h — the absolute backstop cannot be
-/// configured away; invalid/0 falls back to the default).
-/// `pub(crate)`: the bash tool's `ABSOLUTE_MAX_TIMEOUT_MS` pin asserts
-/// lockstep with this backstop (single 30h story across model cap + executor).
-pub(crate) const DEFAULT_BG_MAX_RUNTIME: Duration = Duration::from_secs(108_000);
-/// Floor for `GROK_BG_MAX_RUNTIME_MS`: an absolute backstop below one hour is
-/// a misconfiguration, not a policy.
-const BG_MAX_RUNTIME_FLOOR: Duration = Duration::from_secs(3_600);
+
+fn background_timeout_expired(elapsed: Duration, timeout: Duration) -> bool {
+    timeout != Duration::MAX && elapsed > timeout
+}
 /// 0dh S2 (D6): cap on one background task's un-served incremental buffer.
 /// Overflow drops the OLDEST bytes (counted in `unserved_skipped` and reported
 /// on the next serve); the output file always keeps the full history.
 const UNSERVED_CAP_BYTES: usize = 256 * 1024;
 
-fn bg_max_runtime_from_env() -> Duration {
-    match std::env::var("GROK_BG_MAX_RUNTIME_MS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-    {
-        Some(ms) if ms > 0 => Duration::from_millis(ms).max(BG_MAX_RUNTIME_FLOOR),
-        _ => DEFAULT_BG_MAX_RUNTIME,
-    }
-}
 /// Max time an *auto-backgroundable* foreground command blocks the turn before
 /// it's moved to the background (kept running, never killed), independent of its
 /// requested `timeout`. A short second timer for the auto-background budget.
@@ -122,8 +102,7 @@ pub fn idle_kill_reason(idle_timeout: Duration) -> String {
 }
 
 /// Max bytes a command's output file may reach before the actor kills it — the
-/// size analogue of the background absolute backstop (`DEFAULT_BG_MAX_RUNTIME`),
-/// stopping an unbounded writer
+/// output-size safeguard, stopping an unbounded writer
 /// (`yes`, a runaway log) from filling the disk. Env override:
 /// `GROK_MAX_OUTPUT_FILE_BYTES`.
 const MAX_OUTPUT_FILE_BYTES: u64 = 5 * 1024 * 1024 * 1024; // 5 GiB
@@ -808,11 +787,6 @@ struct LocalTerminalActor {
     /// `Duration::ZERO` = 禁用）。
     idle_kill_timeout: Duration,
 
-    /// 0dh S2 (ADR-0010 §14.87)：后台任务绝对兜底（构造时从
-    /// `GROK_BG_MAX_RUNTIME_MS` 解析，缺省 30h、下限 1h）。poll tick 的
-    /// `timeout.min(self.max_runtime)` 是唯一执法点。
-    max_runtime: Duration,
-
     /// Per-command output-file size cap (on the actor so tests can shrink it).
     /// See [`MAX_OUTPUT_FILE_BYTES`].
     output_file_cap: u64,
@@ -884,7 +858,6 @@ impl LocalTerminalActor {
             completed_task_ttl,
             foreground_block_budget,
             idle_kill_timeout,
-            max_runtime: bg_max_runtime_from_env(),
             output_file_cap,
             _cgroup_guard: cgroup_guard,
             memory_monitor,
@@ -1880,47 +1853,32 @@ impl LocalTerminalActor {
             }
         }
 
-        // 0b. Kill backgrounded tasks that exceeded their absolute deadline.
-        // TER T1.4 (2026-09-04)：去硬杀——自动后台化任务在
-        // `transition_to_background` 处把原解析超时退役为
-        // `max_runtime`（绝对兜底，0dh S2 起 30h），因此这里只对「绝对
-        // 兜底」或「显式后台任务的正向模型超时 kill-backstop」生效，分层
-        // timeout（普通/程序/模型上限）不再是杀活跃命令的点；无活跃场景
-        // 由 T1.5 idle+CPU 兜底接管（连续 300s 无输出增长才 kill）。
-        // 显式后台 `timeout: 0`/未设（`Duration::MAX`）同样被本 min 钳住——
-        // 绝对兜底无例外（0dh S1 勘定结论三）。
+        // 0dz：仅显式后台任务的正向 timeout 是墙钟 kill-backstop。
+        // 自动后台化与未设 timeout 的任务在转换时设为 Duration::MAX，
+        // 因而没有绝对墙钟截止；idle+CPU 与输出大小防护另行生效。
         let bg_expired: Vec<String> = self
             .processes
             .iter()
             .filter(|(_, p)| {
                 p.bg_status.is_backgrounded()
                     && p.exit_status.is_none()
-                    && p.start_time.elapsed() > p.timeout.min(self.max_runtime)
+                    && background_timeout_expired(p.start_time.elapsed(), p.timeout)
             })
             .map(|(id, _)| id.clone())
             .collect();
 
         for task_id in &bg_expired {
             if let Some(process) = self.processes.get_mut(task_id) {
-                // 显式后台任务的正向模型超时（< 兜底上限）报
-                // `signal: timeout`（kill-backstop）；自动后台化任务与
-                // 未设超时的后台任务都只撞绝对兜底，报 `max_runtime`。
-                let tier_timeout = process.timeout < self.max_runtime;
                 tracing::warn!(
                     task_id,
-                    tier_timeout,
-                    "Background task exceeded its absolute runtime limit, killing"
+                    "Background task exceeded its explicit timeout, killing"
                 );
                 // Fire-and-forget SIGTERM — poll loop escalates to SIGKILL
                 // on the next tick if the process doesn't exit.
                 send_sigterm_to_group(process);
                 process.exit_status = Some(ExitStatus {
                     exit_code: None,
-                    signal: Some(if tier_timeout {
-                        "timeout".to_owned()
-                    } else {
-                        "max_runtime".to_owned()
-                    }),
+                    signal: Some("timeout".to_owned()),
                 });
                 process.end_wall_time = Some(std::time::SystemTime::now());
                 process.flush_and_truncate_output_file().await;
@@ -2352,8 +2310,8 @@ impl LocalTerminalActor {
         }
 
         // Check for timeout. TER T1.4 (2026-09-04)：只有前台进程走本分支；
-        // 后台化任务的原解析超时已在转换时退役，由 `0b` 清扫（30h 绝对
-        // 兜底）与 T1.5 idle+CPU 兜底接管，分层 timeout 不再杀活跃命令。
+        // 后台化任务的原解析超时已在转换时退役；显式后台任务仅在正向
+        // timeout 到点时由 `0b` 清扫，idle+CPU 兜底独立生效。
         if !process.bg_status.is_backgrounded()
             && process.is_timed_out()
             && process.exit_status.is_none()
@@ -2396,8 +2354,8 @@ impl LocalTerminalActor {
         // 但无输出的任务（编译/训练/渲染内核）有 CPU 增长，不误杀；CPU
         // 记账不可用平台按「不判 idle」处理。
         // 登记边界（TER 全面审查 S2a/S2b，2026-09-04）：① 子进程关闭继承管道
-        // 但仍存活（daemonize/nohup）后，本采样停止——该形态由 30h 绝对兜底 +
-        // 会话清理负责，不再被 idle-kill 覆盖；② Linux CPU 记账只汇总同进程组
+        // 但仍存活（daemonize/nohup）后，本采样停止——该形态由会话清理负责，
+        // 不再被 idle-kill 覆盖；② Linux CPU 记账只汇总同进程组
         // （/proc pgrp），自成进程组的忙碌后代不计 CPU——该面视为“部分未知”，
         // 宁可少杀不误杀的原则由跨 pgrp 用例与后续全树记账评估承接（Windows
         // Job Object 记账覆盖全后代，无此缺口）。
@@ -2495,11 +2453,10 @@ impl LocalTerminalActor {
         // TER T1.4 (2026-09-04) 去硬杀：后台化截止语义统一——自动后台化
         // （ForegroundTimeout）不再保留原解析超时（分层 timeout 只作前台
         // auto-bg deadline 引用，后台化后即退役）；用户主动后台化
-        // （Explicit / UserSignal）同受绝对兜底封顶。三种后台化路径统一
-        // 收敛到 `max_runtime`（0dh S2 起 30h，`0b` 清扫 signal=max_runtime），
-        // 无活跃场景由 T1.5 idle+CPU 兜底接管；显式后台任务的正向模型
+        // （Explicit / UserSignal）同样不继承前台超时。三种转换路径均无
+        // 绝对墙钟截止；显式后台任务的正向模型
         // 超时 kill-backstop 在 `handle_run_background` 处解析，不走本转换。
-        process.timeout = self.max_runtime;
+        process.timeout = Duration::MAX;
         // 0dh S2 (ADR-0010 §14.87)：前台 spawn 时 spawn sink 已把登记行写成
         // `lifetime=call`——转换时刻把 pid 标记进进程内会话集，finalize sweep
         // 据此豁除（跨 run 存活，用户裁决「不做收割」）。以 attach 时钟为
@@ -4813,8 +4770,8 @@ mod tests {
 
     // TER T1.4 (2026-09-04) 去硬杀：自动后台化后，**原解析超时退役**——
     // 300ms 预算后台化 + 800ms 解析超时的任务必须越过 800ms 继续运行
-    // （分层 timeout 只作 auto-bg deadline 引用，不再杀活跃命令；30h
-    // 绝对兜底与 T1.5 idle+CPU 兜底另行接管）。
+    // （分层 timeout 只作 auto-bg deadline 引用，不再杀活跃命令；
+    // T1.5 idle+CPU 兜底另行接管）。
     #[tokio::test]
     async fn test_auto_backgrounded_task_survives_original_timeout_deadline() {
         let backend = LocalTerminalBackend::new_with_foreground_budget(Duration::from_millis(100));
@@ -4867,8 +4824,7 @@ mod tests {
     }
 
     // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2 审查处理 P2-2)：用户
-    // 主动后台化（Ctrl+G / 显式 is_background）维持硬上限截止（S5-2 时为
-    // 10h；0dh S2 起为 30h `DEFAULT_BG_MAX_RUNTIME`）——800ms 前台原超时的
+    // 主动后台化（Ctrl+G）不继承前台原超时——800ms 前台原超时的
     // 任务在用户后台化后必须越过 800ms 继续运行，不被原前台超时树杀。
     #[tokio::test]
     async fn test_user_backgrounded_task_keeps_max_runtime_deadline() {
@@ -4910,7 +4866,7 @@ mod tests {
         let result = run_handle.await.expect("run task").expect("run returns ok");
         assert_eq!(result.signal.as_deref(), Some("backgrounded"));
 
-        // 越过原解析超时（800ms）再查：任务仍在运行（截止=30h 硬上限）。
+        // 越过原解析超时（800ms）再查：任务仍在运行。
         tokio::time::sleep(Duration::from_millis(900)).await;
         let snap = backend.get_task(tool_call_id).await.expect("task snapshot");
         assert!(
@@ -5796,89 +5752,16 @@ mod tests {
         assert_eq!(SIGTERM_GRACE, Duration::from_secs(1));
     }
 
-    #[tokio::test]
-    async fn test_background_max_runtime_constant() {
-        // 0dh S2 (ADR-0010 §14.87; 用户裁决 2026-10-17「10h→30h」)：绝对兜底
-        // 缺省 30h；env 口子钳位下限 1h、非法/0 回落缺省。
-        assert_eq!(DEFAULT_BG_MAX_RUNTIME, Duration::from_secs(108_000));
-        assert_eq!(BG_MAX_RUNTIME_FLOOR, Duration::from_secs(3_600));
-    }
-
-    // 0dh S2 (D4)：env 口子解析——缺省/非法/0 回落 30h；超下限取值生效；
-    // 低于下限钳到 1h（绝对兜底不可配没）。
     #[test]
-    fn bg_max_runtime_env_default_floor_and_clamp() {
-        // Guards are bound (not `let _ =`) so each lives to the end of the
-        // test and restores the caller's env on scope exit.
-        let _g_unset = EnvGuard::set("GROK_BG_MAX_RUNTIME_MS", None);
-        assert_eq!(
-            bg_max_runtime_from_env(),
-            Duration::from_secs(108_000),
-            "env unset → 30h default"
-        );
-        let _g_2h = EnvGuard::set("GROK_BG_MAX_RUNTIME_MS", Some("7200000"));
-        assert_eq!(
-            bg_max_runtime_from_env(),
-            Duration::from_secs(7_200),
-            "2h override passes the floor"
-        );
-        let _g_1m = EnvGuard::set("GROK_BG_MAX_RUNTIME_MS", Some("60000"));
-        assert_eq!(
-            bg_max_runtime_from_env(),
-            Duration::from_secs(3_600),
-            "sub-floor override clamps to 1h"
-        );
-        let _g_zero = EnvGuard::set("GROK_BG_MAX_RUNTIME_MS", Some("0"));
-        assert_eq!(
-            bg_max_runtime_from_env(),
-            Duration::from_secs(108_000),
-            "zero env → 30h default (backstop cannot be configured away)"
-        );
-        let _g_bad = EnvGuard::set("GROK_BG_MAX_RUNTIME_MS", Some("abc"));
-        assert_eq!(
-            bg_max_runtime_from_env(),
-            Duration::from_secs(108_000),
-            "invalid env → 30h default"
-        );
-    }
-
-    /// Scoped env-var guard for the resolution test. `cargo test` runs tests
-    /// in parallel and env vars are process-global — tolerated here because
-    /// no other test in this binary touches `GROK_BG_MAX_RUNTIME_MS`, and a
-    /// concurrent production read of a transient value is neutralized by the
-    /// reader itself (sub-floor clamps to the 1h `BG_MAX_RUNTIME_FLOOR`,
-    /// invalid/0 falls back to the 30h default; no test lives that long).
-    struct EnvGuard {
-        key: &'static str,
-        previous: Option<std::ffi::OsString>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: Option<&str>) -> Self {
-            let previous = std::env::var_os(key);
-            // SAFETY: test-only env mutation (edition-2024 marks
-            // set_var/remove_var unsafe); cross-test races are reasoned about
-            // in the struct doc above.
-            unsafe {
-                match value {
-                    Some(v) => std::env::set_var(key, v),
-                    None => std::env::remove_var(key),
-                }
-            }
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            // SAFETY: mirror of `set` — test-only restore.
-            unsafe {
-                match self.previous.take() {
-                    Some(v) => std::env::set_var(self.key, v),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
+    fn background_wallclock_has_no_absolute_backstop() {
+        let past_old_cap = Duration::from_secs(31 * 3600);
+        let explicit_72h = Duration::from_secs(72 * 3600);
+        assert!(!background_timeout_expired(past_old_cap, Duration::MAX));
+        assert!(!background_timeout_expired(past_old_cap, explicit_72h));
+        assert!(background_timeout_expired(
+            Duration::from_secs(73 * 3600),
+            explicit_72h
+        ));
     }
 
     // -----------------------------------------------------------------------
