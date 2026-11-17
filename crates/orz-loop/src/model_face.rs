@@ -154,7 +154,7 @@ pub struct ContextBlock {
     pub msg_start: usize,
     /// 块尾消息下标（不含；仅作展示，隐藏区间按轮现算）。
     pub msg_end: usize,
-    /// 块内轮次的估算体量（chars/2 口径）。
+    /// 块内轮次的估算体量（0dw S1 起＝provider tokenizer 量尺）。
     pub estimate_tokens: u64,
     /// 是否已闭合（其后已有更新块）——只有闭合块可被压缩。
     pub closed: bool,
@@ -289,9 +289,9 @@ impl FaceMarkers {
 /// 复制几个小字符串，代价可忽略。
 #[derive(Debug, Clone)]
 pub struct ModelFaceParams {
-    /// 主滑块 x（估算口径 chars/2）。
+    /// 主滑块 x（0dw S1 起＝provider tokenizer 量尺）。
     pub slider_tokens: u64,
-    /// 分块 y（估算口径 chars/2）。
+    /// 分块 y（0dw S1 起＝provider tokenizer 量尺）。
     pub block_tokens: u64,
     /// 外挂台账路径（固定指针文案；`None` = 不渲染指针行）。
     pub ledger_path: Option<PathBuf>,
@@ -301,7 +301,8 @@ pub struct ModelFaceParams {
     pub run_id: String,
     /// D4 机械段（run 基线＋自编辑清单＋编辑指纹；调用方按 epoch 冻结）。
     pub d4_block: Option<String>,
-    /// **静态开销**（系统提示词 ＋ 工具定义的估算，chars/2 同尺；2026-09-16
+    /// **静态开销**（系统提示词 ＋ 工具定义的估算；0dw S1 起 provider
+    /// tokenizer 同尺；2026-09-16
     /// 实现批，审查 R-9）：只进**估算**（阶梯/守卫的量尺＝真正发往模型商的
     /// 请求体积），不进视图装配（系统提示词与工具面在请求装配处独立携带）。
     /// 生产＝上一轮请求的实测值（首轮 0）；测试缝隙可 pin 0 以保持既有刻度语义。
@@ -424,7 +425,7 @@ pub struct SliderReadout {
     /// 已闭合且仍为原文（Live）的分块数——可被语义摘要压缩的量
     /// （与 `compress_blocks_now` 的可压缩判定同源同尺：`closed ∧ Live`）。
     pub compressible_blocks: usize,
-    /// 上述分块的估算体量合计（chars/2 口径）。
+    /// 上述分块的估算体量合计（provider tokenizer 量尺）。
     pub compressible_estimate_tokens: u64,
     /// 主滑块以外全部分块数（含未闭合残段与已压缩/截断——上下文信息）。
     pub total_blocks: usize,
@@ -1190,7 +1191,7 @@ fn try_clone_messages(messages: &[Message]) -> std::io::Result<Vec<Message>> {
     Ok(out)
 }
 
-/// 模型面估算（chars/2；**阶梯量尺**，设计 §3.1）。
+/// 模型面估算（provider tokenizer 量尺〔0dw S1 换装〕；**阶梯量尺**，设计 §3.1）。
 pub fn model_face_estimate(messages: &[Message], params: &ModelFaceParams) -> u64 {
     estimate_model_face_tokens(messages, params)
 }
@@ -1295,10 +1296,11 @@ pub fn estimate_model_face_tokens(messages: &[Message], params: &ModelFaceParams
         .saturating_add(params.static_overhead_tokens)
 }
 
-/// 机械注入串（无 tool_calls 的 user 消息）的估算——与
-/// `estimate_message_tokens` 同尺（chars/2）。
+/// 机械注入串（无 tool_calls 的 user 消息）的估算——0dw S1（2026-11-17）
+/// 起与 `estimate_message_tokens` 同尺（provider tokenizer 单源，`ruler`
+/// 模块；旧 chars/2 口径退役）。
 fn injected_estimate(text: &str) -> u64 {
-    text.chars().count() as u64 / 2
+    crate::ruler::text_tokens(text)
 }
 
 /// 0da S2：无块清零面估算（`build_cleared_face` 的不物化镜像——逐条同口径；
@@ -2328,7 +2330,12 @@ mod tests {
         }
     }
 
-    /// 10 轮 × 约 4K 估算/轮的会话（用于分块与主滑块测试）。
+    /// 10 轮 × 约 ≥4K 估算/轮的会话（用于分块与主滑块测试）。
+    /// 0dw S1 量尺换装（2026-11-17）：载荷用 CJK 字符重复——provider
+    /// tokenizer 下每字符 ≈0.5–1 token（tokenizer.rs §96 同款判据），
+    /// `per_round_chars` 字符 ⇒ ≥per_round_chars/2 token/轮，量尺无关地
+    /// 保持「8_000 字符 ≥ 4K token/轮」的既有预算语义（ASCII 'x' 在 BPE
+    /// 下高度合并，≈0.5K token/8K 字符，不再满足旧 chars/2 直觉）。
     fn conversation(rounds: usize, per_round_chars: usize) -> Vec<Message> {
         let mut out = vec![Message {
             role: Role::User,
@@ -2341,9 +2348,19 @@ mod tests {
         for r in 0..rounds {
             let id = format!("c{r}");
             out.push(decl(&id, "read_file", &format!("src/f{r}.rs")));
-            out.push(tool(&id, &"x".repeat(per_round_chars)));
+            out.push(tool(&id, &"测".repeat(per_round_chars)));
         }
         out
+    }
+
+    /// 0dw S1（2026-11-17）：单轮（声明＋`chars` 字符工具结果）的量尺估算
+    /// ——边界数学测试的滑块/分块预算改按轮推导（量尺无关）：
+    /// 「滑块恰留 k 轮」＝k×轮估算；「块恰 N 轮闭合」＝N×轮估算。
+    fn payload_round_est(chars: usize) -> u64 {
+        let mut one = Vec::new();
+        one.push(decl("cx", "read_file", "src/fx.rs"));
+        one.push(tool("cx", &"测".repeat(chars)));
+        crate::compact::estimate_messages_tokens(&one)
     }
 
     /// 0ap S1 钉①（2026-09-18，设计 §6）：读数表与折叠状态**一致性对账**
@@ -2750,7 +2767,7 @@ mod tests {
         // 本地面零覆盖：`messages` 一条不少（只多出 marker）。
         assert_eq!(with_marker.len(), messages.len() + 1);
         // 主滑块内容逐字保留（最后一轮原文仍在）。
-        assert!(face.iter().any(|m| m.content.contains(&"x".repeat(8_000))));
+        assert!(face.iter().any(|m| m.content.contains(&"测".repeat(8_000))));
     }
 
     /// **0bc S2④ 构造性注入（2026-09-21）**：装配路径分配失败＝`OutOfMemory`
@@ -2782,7 +2799,7 @@ mod tests {
     }
 
     /// M1-S2（2026-10-28）：context_map 紧凑行必须覆盖块号/轮次/token/状态/
-    /// 回放路径，且整体不超过 1K token（chars/2 口径）。
+    /// 回放路径，且整体不超过 1K token（provider tokenizer 硬预算口径）。
     #[test]
     fn context_map_compact_rows_cover_state_and_replay_path() {
         let messages = conversation(10, 8_000);
@@ -3618,9 +3635,12 @@ mod tests {
     #[test]
     fn cleared_face_honors_post_boundary_compression_and_estimate_falls() {
         let messages = cleared_conversation_with_post_boundary_blocks();
+        // 0dw S1：预算按轮推导——旧 chars/2 拓扑＝滑块恰留 2 轮、块恰 3 轮闭合。
+        let pr = payload_round_est(8_000);
+        let (slider, block) = (2 * pr, 3 * pr);
         let params = ModelFaceParams {
-            slider_tokens: 12_000,
-            block_tokens: 12_000,
+            slider_tokens: slider,
+            block_tokens: block,
             ledger_path: None,
             archive_tag: None,
             run_id: "RUN-CZ-D1".to_string(),
@@ -3628,7 +3648,7 @@ mod tests {
             static_overhead_tokens: 0,
         };
         // 后边界闭合块（first_round ≥ 3，0 基——边界＝块边）。
-        let blocks = blocks_outside_slider(&messages, 12_000, 12_000);
+        let blocks = blocks_outside_slider(&messages, slider, block);
         let target = blocks
             .iter()
             .find(|b| b.closed && b.first_round >= 3)
@@ -3690,14 +3710,14 @@ mod tests {
         );
         // 回落断言③：读数可压集合恰清零（清零块被 D1 过滤＋后边界块已压缩；
         // 滑块内残余不成块）。
-        let readout = slider_readout(&marked, 12_000, 12_000);
+        let readout = slider_readout(&marked, slider, block);
         assert_eq!(
             readout.compressible_blocks, 0,
             "清零块不进可压集合＋后边界块已压缩 ⇒ 恰零：{readout:?}"
         );
         // 回落断言④：块表双态（边界前块「已清零」＋后边界块「已压缩」）。
         let table = render_block_table(
-            &blocks_outside_slider(&marked, 12_000, 12_000),
+            &blocks_outside_slider(&marked, slider, block),
             &markers,
             &params,
         );
@@ -3863,16 +3883,20 @@ mod tests {
     #[test]
     fn straddling_block_stays_reclaimable_and_truthfully_labeled() {
         let messages = cleared_conversation_with_straddling_block();
+        // 0dw S1：预算按轮推导——旧 chars/2 拓扑＝滑块恰留 3 轮、块恰 4 轮闭合
+        // （轮 1–4 恰成首块 ⇒ 跨清零边界块＝轮 1–4）。
+        let pr = payload_round_est(6_000);
+        let (slider, block) = (3 * pr, 4 * pr);
         let params = ModelFaceParams {
-            slider_tokens: 12_000,
-            block_tokens: 12_000,
+            slider_tokens: slider,
+            block_tokens: block,
             ledger_path: None,
             archive_tag: None,
             run_id: "RUN-0DA-P2".to_string(),
             d4_block: None,
             static_overhead_tokens: 0,
         };
-        let blocks = blocks_outside_slider(&messages, 12_000, 12_000);
+        let blocks = blocks_outside_slider(&messages, slider, block);
         let straddle = blocks
             .iter()
             .find(|b| b.closed && b.first_round == 0 && b.last_round >= 3)
@@ -3885,7 +3909,7 @@ mod tests {
             "跨边界块（first=清零侧、last=保留侧）不得判整块清零"
         );
         // ②回收：跨边界 Live 块进可压集合（读数恰 1——修复前 0）。
-        let readout = slider_readout(&messages, 12_000, 12_000);
+        let readout = slider_readout(&messages, slider, block);
         assert_eq!(
             readout.compressible_blocks, 1,
             "跨边界块必须可压（修复前首轮判据永久排除）：{readout:?}"

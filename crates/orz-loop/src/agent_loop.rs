@@ -1261,22 +1261,30 @@ fn blackboard_watermark_label(svc: &SharedLoopServices<'_>) -> String {
     )
 }
 
-/// 请求**静态开销**估算（chars/2 同尺）：系统提示词 ＋ 工具定义 JSON。
+/// 请求**静态开销**估算（0dw S1 起 provider tokenizer 同尺）：系统提示词
+/// ＋ 工具定义 JSON。
 ///
 /// 2026-09-16 实现批（审查 R-9）：阶梯与守卫量的是「发往模型商的上下文」，
 /// 只算投影层消息会系统性偏小（系统提示词与工具定义动辄数 K 估算，且工具面
 /// 声明会随会话变化）⇒ 把它们计入读数，阶梯落点才与设计意图对齐。
+/// 0dw S1（2026-11-17，CONTEXT-FACE-SCALE-RULER-ALIGNMENT）：量尺随模型面
+/// 换装 provider tokenizer（`ruler` 模块缓存；系统提示词与工具面声明在
+/// run 内稳定 ⇒ 全程命中缓存，零重复编码）。
 fn estimate_static_overhead(system: &str, tool_defs: &[ToolDef]) -> u64 {
-    let mut chars = system.chars().count() as u64;
+    let mut text = String::with_capacity(system.len());
+    text.push_str(system);
     for def in tool_defs {
         // ToolDef 不是 Serialize ⇒ 按字段逐项量（名 ＋ 描述 ＋ 参数 schema）。
-        chars += def.name.chars().count() as u64;
-        chars += def.description.chars().count() as u64;
-        chars += serde_json::to_string(&def.parameters)
-            .map(|s| s.chars().count() as u64)
-            .unwrap_or(0);
+        text.push('\n');
+        text.push_str(&def.name);
+        text.push('\n');
+        text.push_str(&def.description);
+        text.push('\n');
+        if let Ok(s) = serde_json::to_string(&def.parameters) {
+            text.push_str(&s);
+        }
     }
-    chars / 2
+    crate::ruler::text_tokens(&text)
 }
 
 /// **按块压缩**（滑块上下文 v8，设计 §4 §6；取代 v7 的「摘要替换被压区」drain
@@ -3670,6 +3678,14 @@ pub(crate) async fn run_agent_loop(
         // run 走终态收口（不 abort；链有效、留终态，与 journal 降级链同形）。
         let request_messages = crate::model_face::build_model_face(messages, &face_params)
             .map_err(|e| AgentLoopError::AllocFailure(e.to_string()))?;
+        // 0dw S1（2026-11-17，CONTEXT-FACE-SCALE-RULER-ALIGNMENT 缺陷 2）：
+        // 本次请求的模型面估算（provider tokenizer 量尺，含静态开销）——
+        // 响应到达后在 `model_call_usage` 与 provider 实测 `prompt_tokens`
+        // 逐调用配对（验收 §4.1：journal 单源可复算估算 vs 实测偏差）。
+        // 在 run_round 消耗 request_messages 前捕获；量尺换装后此值与实测
+        // 同尺可比。
+        let request_face_estimate =
+            crate::model_face::estimate_model_face_tokens(messages, &face_params);
         // 0bz S1（2026-09-28，`GAP-CONTEXT-FACE-TRANSIENT-FORK`）：模型面
         // 前缀指纹——逐请求对投影视图做逐消息 sha256 指纹，与上一请求判定
         // 首分歧消息后落 `face_fingerprint` 事件。纯观测面：不改请求内容、
@@ -3957,10 +3973,42 @@ pub(crate) async fn run_agent_loop(
         // 到达即折入 run meter（五项 token 饱和求和＋轮数；任一项缺席置
         // incomplete）。放内存面而非 journal 重放：`model_output` 事件不
         // 携带 prompt 口径。取消检查点之前折——响应已到达、消耗已发生。
-        svc.usage_meter
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .fold_response(&response);
+        let call_seq = {
+            let mut meter = svc
+                .usage_meter
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            meter.fold_response(&response);
+            meter.model_calls()
+        };
+        // 0dw S1（2026-11-17，缺陷 2）：逐调用 usage 落账——每次
+        // ModelResponse 到达恰一条（`call_seq`＝meter 折算序，跨车道严格
+        // 递增）。与 run 级聚合 `run_usage_metered`（0df，终态前恰一条）
+        // 分立：合计面不动，分布面自此在 journal（逐调用估算
+        // `face_estimate_tokens` ↔ provider 实测 `prompt_tokens` 可配对）。
+        // 落在取消检查点之前——消耗已发生，取消轮的 usage 行如实留存
+        // （该轮 `model_output` 可缺席，链条仍有效）。
+        let usage_complete = response.prompt_tokens.is_some()
+            && response.cache_hit_tokens.is_some()
+            && response.cache_miss_tokens.is_some()
+            && response.completion_tokens.is_some()
+            && response.reasoning_tokens.is_some();
+        writer
+            .record(
+                EventType::ModelCallUsage,
+                serde_json::json!({
+                    "agent_role": profile.role.as_str(),
+                    "call_seq": call_seq,
+                    "face_estimate_tokens": request_face_estimate,
+                    "prompt_tokens": response.prompt_tokens,
+                    "cache_hit_tokens": response.cache_hit_tokens,
+                    "cache_miss_tokens": response.cache_miss_tokens,
+                    "completion_tokens": response.completion_tokens,
+                    "reasoning_tokens": response.reasoning_tokens,
+                    "usage_complete": usage_complete,
+                }),
+            )
+            .await?;
 
         // Cooperative cancellation checkpoint (Phase 3 slice #7): a
         // cancelled run may omit this round's `model_output` — the chain
@@ -7172,6 +7220,9 @@ mod tests {
     /// 0bl 审查修复（2026-09-24）：带载荷消息构造——c1 轮（被压区间）工具
     /// 结果 `dropped_chars` 字符、c2 轮（保留尾）工具结果 `tail_chars` 字符，
     /// 其余与 `compact_test_messages` 同构（U0 + 旧 marker + c1/c2 两轮）。
+    /// 0dw S1 量尺换装（2026-11-17）：载荷用 CJK 字符（provider tokenizer
+    /// ≈0.5–1 token/字符）保住「60K 字符 ⇒ 数十 K token」的被压体量语义；
+    /// ASCII 'x'/'y' 在 BPE 下高度合并，量尺骤缩后守卫预算判据失真。
     fn compact_test_messages_with_payloads(
         dropped_chars: usize,
         tail_chars: usize,
@@ -7193,8 +7244,8 @@ mod tests {
             round: None,
         });
         for (id, target, result) in [
-            ("c1", "a.py", "x".repeat(dropped_chars)),
-            ("c2", "b.rs", "y".repeat(tail_chars)),
+            ("c1", "a.py", "测".repeat(dropped_chars)),
+            ("c2", "b.rs", "测".repeat(tail_chars)),
         ] {
             messages.push(Message {
                 role: Role::Assistant,
@@ -7297,9 +7348,11 @@ mod tests {
         let policy = AtomicU64::new(0);
         let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &policy);
         let mut writer = crate::controller::discard_event_writer("test-run");
-        // 被压轮 40K 字符（≈20K token）、保留尾 30K 字符（≈15K token）——
-        // 全量 ≈35K、压缩后 ≈26K（大头是保留尾 + 11K marker 估计）。
-        let mut messages = compact_test_messages_with_payloads(40_000, 30_000);
+        // 0dw S1 量尺换装（2026-11-17）量尺无关化：被压轮 40K 字符、保留尾
+        // 60K 字符（CJK ≈1 token/字符）——压缩后（头＋保留尾＋marker）恒
+        // 超 measured×0.6（0.4×头 ＋ marker > 0 对任意量尺成立），判据不再
+        // 依赖 chars/2 的绝对数字。
+        let mut messages = compact_test_messages_with_payloads(40_000, 60_000);
         let before_messages = messages.clone();
         // 诚实口径：measured ＝ 调用方对当前数组的估算。
         let measured = crate::controller::estimate_messages_tokens(&messages);
@@ -7942,7 +7995,11 @@ mod tests {
     /// 估算 ≈550K ≥ 500K ⇒ 500K 刻度越线并开窗（与旧流程「第 2 个 loop-top
     /// 开窗」同形，便于保持各钉子的轮序）。
     fn s1_actual_context_prompt() -> String {
-        "x".repeat(800_000)
+        // 0dw S1 量尺换装（2026-11-17）：CJK 载荷——provider tokenizer 下
+        // 每字符 ≈1 token ⇒ 450K 字符 ≈450K 估算：同时越过 100K＋250K 两
+        // 软档、低于 700K 默认异常守卫（水位钉的判据区间）。ASCII 'x' 在
+        // BPE 下高度合并（≈1 token/16–32 字符），不再满足旧 chars/2 直觉。
+        "测".repeat(450_000)
     }
 
     /// 首轮工具结果 300K 字符（估算 +150K）——把实际上下文推过 500K 刻度。
@@ -9618,7 +9675,10 @@ mod tests {
     /// 分块表（块号/轮次/token/状态/回放路径），不触发压缩、不改投影。
     #[tokio::test]
     async fn context_manage_map_is_read_only_and_returns_compact_map() {
-        let old_round = "M".repeat(10_000);
+        // 0dw S1 量尺换装（2026-11-17）：CJK 载荷保证 ≈1 token/字符
+        // （slider 1K/block 500 下必成窗外分块）；ASCII 'M' 在 BPE 下高度
+        // 合并（≈1 token/32 字符），10K 字符仅 ≈300 token 全进滑块。
+        let old_round = "测".repeat(10_000);
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
                 .with_prompt_tokens(100),
@@ -9704,7 +9764,9 @@ mod tests {
             .find(|c| c.contains("[context_map v1]"))
             .expect("map tool result must reach the model face");
         assert!(map_text.contains("[context_map v1]"), "{map_text}");
-        assert!(map_text.contains(" 5Ktk L"), "{map_text}");
+        // 0dw S1 量尺换装（2026-11-17）：CJK 载荷 ≈1 token/字符 ⇒ 每块
+        // ≈10Ktk（旧 chars/2 口径 5Ktk）。
+        assert!(map_text.contains(" 10Ktk L"), "{map_text}");
         assert!(map_text.contains("r1-"), "{map_text}");
         assert_eq!(
             pulled.payload["output_sha256"],
@@ -11500,7 +11562,7 @@ mod tests {
             ScriptedResponse::text("终答").with_prompt_tokens(100),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // 初始 prompt 估算 ≈400K（800K 字符）≥ H1 钉 1K；slider 巨大 ⇒ 主滑块
+        // 初始 prompt 估算 ≈450K（450K CJK 字符）≥ H1 钉 1K；slider 巨大 ⇒ 主滑块
         // 外零分块（可压集合空）；T1 抬到不可达（只测 H1 抑制）。
         let controller = AgentLoopController::with_gateway(gateway)
             .with_slider_window_tokens(100_000_000)

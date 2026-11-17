@@ -5989,6 +5989,9 @@ mod tests {
                 // fingerprint rides every main-lane request, immediately
                 // before its model_output.
                 EventType::FaceFingerprint,
+                // 0dw S1 (2026-11-17): per-call usage row rides every
+                // ModelResponse arrival (fingerprint → usage → output).
+                EventType::ModelCallUsage,
                 EventType::ModelOutput,
                 EventType::CapabilityUse,
                 EventType::PermissionRequested,
@@ -5996,6 +5999,7 @@ mod tests {
                 EventType::ToolStarted,
                 EventType::ToolCompleted,
                 EventType::FaceFingerprint,
+                EventType::ModelCallUsage,
                 EventType::ModelOutput,
                 // 0df (2026-10-17, ADR-0010 §14.86): the per-run usage
                 // metering row lands once, immediately before the terminal.

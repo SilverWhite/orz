@@ -331,6 +331,21 @@ pub enum EventType {
     // payload：supplement_seq（run 内从 1 严格递增）/character_count（=
     // text chars，>0）/text（非空）。
     SupplementDelivered,
+
+    // 0dw S1（2026-11-17，CONTEXT-FACE-SCALE-RULER-ALIGNMENT 缺陷 2）：逐调用
+    // usage 落账面——每次 `ModelResponse` 到达（主车道与检索子代理共用同一
+    // run journal，`usage_meter` 折算点同址）恰一条。载荷＝`agent_role` /
+    // `call_seq`（run 内跨车道 1 基严格递增）/ `face_estimate_tokens`（请求
+    // 模型面估算，provider tokenizer 量尺——与 `prompt_tokens` 实测逐调用
+    // 可配对，0dw 验收 §4.1「从 journal 复算估算 vs 实测偏差」）/ 五项
+    // token（整数或 null——流中断等缺席如实 null，不虚构 0）＋
+    // `usage_complete`（五项全在 ⇒ true）。run 级聚合仍是终态前恰一条的
+    // `run_usage_metered`（0df 不动）；本事件是逐调用分布面，取代「只有
+    // 合计、拿不到分布」的不可复算形态。执法＝`model_call_usage` 法官族
+    // （载荷形状＋call_seq 严格递增＋usage_complete 与 null 集合一致）
+    // Rust `verify_model_call_usage` ↔ Python `_verify_v02_model_call_usage`
+    // 同形。
+    ModelCallUsage,
 }
 
 impl EventType {

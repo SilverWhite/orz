@@ -52,6 +52,8 @@ pub use relay::spawn_scout_tool_def;
 pub mod recenter;
 pub mod render_fold;
 mod retrieval;
+/// 0dw S1（2026-11-17）：模型面量尺单源（provider tokenizer ＋ 增量缓存）。
+pub(crate) mod ruler;
 pub mod selfhistory;
 /// 0ds M1-S1：`state` 分区（黑板当前事实薄层）。
 pub mod state;

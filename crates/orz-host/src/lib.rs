@@ -10,6 +10,7 @@
 pub mod acp_server;
 pub mod approval;
 pub mod browser_serp;
+pub mod carrier;
 pub mod carrier_integrity;
 pub mod codex_app;
 pub mod codex_permission;
@@ -2637,8 +2638,15 @@ mod tests {
         let field_desc = props["is_background"]["description"]
             .as_str()
             .unwrap_or_default();
+        // 398 批随批对齐（0dw S1 全量 host 套件复跑发现＝397 前既有漂移，
+        // 干净基线 f6fb9412 stash 对照同形失败）：0dz 后台墙钟策略把描述
+        // 边界句改为「运行至退出/会话结束/你停止/显式超时为止」四臂如实
+        // 形态（"until they exit, the session ends, you stop them, or an
+        // explicit timeout fires"），旧子串 "until the session ends" 被打断。
         assert!(
-            field_desc.contains("survive across turns until the session ends"),
+            field_desc.contains("survive across turns until they exit")
+                && field_desc.contains("the session ends")
+                && field_desc.contains("you stop them"),
             "is_background description must state the session-domain boundary: {field_desc}"
         );
     }

@@ -1633,6 +1633,10 @@ pub const ALL_FAMILIES: &[&str] = &[
     // 0dx (2026-10-31, CONTEXT-CHECKPOINT-ERA): 会话内检查点时代边界落账族
     // （era_boundary 载荷形状＋时代号/边界轮单调；特征与用量入账不入面）。
     "context_checkpoint_era",
+    // 0dw S1 (2026-11-17, CONTEXT-FACE-SCALE-RULER-ALIGNMENT): 逐调用 usage
+    // 落账族——model_call_usage 载荷形状＋call_seq 严格递增＋usage_complete
+    // 与 null 集合机械一致（逐调用估算 vs provider 实测可配对）。
+    "model_call_usage",
 ];
 
 // ---------------------------------------------------------------------------
@@ -2475,6 +2479,8 @@ pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
         "usage_metering" => verify_usage_metering(events),
         // 0dx (2026-10-31): 会话内检查点时代边界族.
         "context_checkpoint_era" => verify_context_checkpoint_era(events),
+        // 0dw S1 (2026-11-17): 逐调用 usage 落账族.
+        "model_call_usage" => verify_model_call_usage(events),
         // 0bz S1 (2026-09-28): model-face prefix fingerprint family.
         "face_fingerprint" => verify_face_fingerprint(events),
         // 0ac S3-b (2026-09-13, F-007 裁决 (a)): immediate-feedback families.
@@ -2661,6 +2667,102 @@ pub fn verify_context_checkpoint_era(events: &[Value]) -> Vec<String> {
             }
             prev_era = era;
             prev_round = round;
+        }
+    }
+    errors
+}
+
+/// 0dw S1（2026-11-17，CONTEXT-FACE-SCALE-RULER-ALIGNMENT 缺陷 2）：逐调用
+/// usage 落账族——`model_call_usage` 事件载荷形状与跨字段一致性。执法三面：
+/// ① 形状（agent_role 非空串；call_seq ≥1 整数；face_estimate_tokens ≥0
+/// 整数；五项 token 整数或 null；usage_complete 布尔）；② `call_seq` 在
+/// journal 序上自 1 起严格递增（ModelResponse 到达序＝journal 写序；降级
+/// 刊只丢尾不破单调）；③ `usage_complete` 与五项 null 集合机械一致——
+/// 全在 ⇒ true、任一缺席 ⇒ false（双向判定，false 但全在或 true 但有缺
+/// 均报）。Python 冻结镜像 `_verify_v02_model_call_usage` 同形；逐调用
+/// `prompt_tokens` ↔ 同 run `run_usage_metered.model_calls` 合计对账由
+/// usage_metering 族承载，本族不重复执法合计。
+pub fn verify_model_call_usage(events: &[Value]) -> Vec<String> {
+    const TOKEN_FIELDS: &[&str] = &[
+        "prompt_tokens",
+        "cache_hit_tokens",
+        "cache_miss_tokens",
+        "completion_tokens",
+        "reasoning_tokens",
+    ];
+    let mut errors = Vec::new();
+    let mut prev_seq: u64 = 0;
+    for (index, event) in events.iter().enumerate() {
+        if event.get("event_type").and_then(Value::as_str) != Some("model_call_usage") {
+            continue;
+        }
+        let payload = &event["payload"];
+        if !payload.is_object() {
+            errors.push(format!(
+                "event {index}: model_call_usage payload must be an object"
+            ));
+            continue;
+        }
+        if str_of(payload.get("agent_role"))
+            .map(str::is_empty)
+            .unwrap_or(true)
+        {
+            errors.push(format!(
+                "event {index}: model_call_usage agent_role must be a non-empty string"
+            ));
+        }
+        let seq = payload.get("call_seq").and_then(Value::as_u64);
+        match seq {
+            Some(s) if s >= 1 => {
+                if s <= prev_seq {
+                    errors.push(format!(
+                        "event {index}: model_call_usage call_seq {s} must be \
+                         strictly increasing (previous {prev_seq})"
+                    ));
+                }
+                prev_seq = s;
+            }
+            _ => errors.push(format!(
+                "event {index}: model_call_usage call_seq must be an integer >= 1"
+            )),
+        }
+        if payload
+            .get("face_estimate_tokens")
+            .and_then(Value::as_u64)
+            .is_none()
+        {
+            errors.push(format!(
+                "event {index}: model_call_usage face_estimate_tokens must be a \
+                 non-negative integer"
+            ));
+        }
+        let mut present = 0usize;
+        for field in TOKEN_FIELDS {
+            match payload.get(*field) {
+                Some(Value::Number(n)) if n.is_u64() => present += 1,
+                // 显式 null 是合法缺席形态（不虚构 0），不计入 present；
+                // 键缺席（schema required 违）与类型错都报。
+                Some(Value::Null) => {}
+                None => errors.push(format!("event {index}: model_call_usage missing {field}")),
+                Some(_) => errors.push(format!(
+                    "event {index}: model_call_usage {field} must be an integer or null"
+                )),
+            }
+        }
+        match payload.get("usage_complete") {
+            Some(Value::Bool(complete)) => {
+                let all_present = present == TOKEN_FIELDS.len();
+                if *complete != all_present {
+                    errors.push(format!(
+                        "event {index}: model_call_usage usage_complete {complete} \
+                         contradicts the null set ({present}/{} fields present)",
+                        TOKEN_FIELDS.len()
+                    ));
+                }
+            }
+            _ => errors.push(format!(
+                "event {index}: model_call_usage usage_complete must be a boolean"
+            )),
         }
     }
     errors
@@ -6831,6 +6933,95 @@ mod tests {
                     ),
                 ],
             ),
+            (
+                // 0dw S1（2026-11-17）：正形——两调用连排（完整五项
+                // usage_complete=true；null 缺席形态 usage_complete=false）
+                // 且 call_seq 严格递增。对拍 corpus 一并承载本族布尔对拍。
+                "model_call_usage_ok",
+                vec![
+                    ev(
+                        "model_call_usage",
+                        json!({
+                            "agent_role": "main",
+                            "call_seq": 1,
+                            "face_estimate_tokens": 98304,
+                            "prompt_tokens": 103219,
+                            "cache_hit_tokens": 369536,
+                            "cache_miss_tokens": 440619,
+                            "completion_tokens": 812,
+                            "reasoning_tokens": 401,
+                            "usage_complete": true,
+                        }),
+                    ),
+                    ev(
+                        "model_call_usage",
+                        json!({
+                            "agent_role": "scout",
+                            "call_seq": 2,
+                            "face_estimate_tokens": 4096,
+                            "prompt_tokens": null,
+                            "cache_hit_tokens": null,
+                            "cache_miss_tokens": null,
+                            "completion_tokens": 64,
+                            "reasoning_tokens": null,
+                            "usage_complete": false,
+                        }),
+                    ),
+                ],
+            ),
+            (
+                // 0dw S1：违例——六案恰触本族：事件 0＝agent_role 空串
+                //   ＋call_seq 0（≥1 破，不进 prev）＋face_estimate 缺键
+                //   ＋reasoning_tokens 类型错（字符串）＋usage_complete
+                //   true 与 null 集合相悖（五违例）；
+                // 事件 1＝正形锚（call_seq 3，推进 prev）；
+                // 事件 2＝call_seq 2（3→2 不递增破）＋cache_hit_tokens
+                //   缺键（两违例）。
+                "model_call_usage_violations",
+                vec![
+                    ev(
+                        "model_call_usage",
+                        json!({
+                            "agent_role": "",
+                            "call_seq": 0,
+                            "face_estimate_tokens": 1024,
+                            "prompt_tokens": 2048,
+                            "cache_hit_tokens": 1024,
+                            "cache_miss_tokens": 1024,
+                            "completion_tokens": 128,
+                            "reasoning_tokens": "many",
+                            "usage_complete": true,
+                        }),
+                    ),
+                    ev(
+                        "model_call_usage",
+                        json!({
+                            "agent_role": "main",
+                            "call_seq": 3,
+                            "face_estimate_tokens": 2048,
+                            "prompt_tokens": 4096,
+                            "cache_hit_tokens": 2048,
+                            "cache_miss_tokens": 2048,
+                            "completion_tokens": 256,
+                            "reasoning_tokens": 128,
+                            "usage_complete": true,
+                        }),
+                    ),
+                    ev(
+                        "model_call_usage",
+                        json!({
+                            "agent_role": "internal_retrieval",
+                            "call_seq": 2,
+                            "face_estimate_tokens": 4096,
+                            "prompt_tokens": 8192,
+                            "cache_miss_tokens": 8192,
+                            "completion_tokens": 512,
+                            "reasoning_tokens": 256,
+                            "usage_complete": false,
+                        }),
+                    ),
+                ],
+            ),
         ]
     }
 
@@ -6883,6 +7074,9 @@ mod tests {
         // 288 处置（2026-10-17）：锚键非字符串损坏形态——「unknown version」
         // 型错误（未锚定 ⇒ 只此一条，计量行不执法）。
         expect("usage_metering_non_string_anchor", "usage_metering");
+        // 0dw S1（2026-11-17）：逐调用 usage 族——正形场景全族绿（默认行），
+        // 违例场景六案恰触本族。
+        expect("model_call_usage_violations", "model_call_usage");
         expect("control_tickets_unknown", "control_tickets");
         expect("control_tickets_kind_conflict", "control_tickets");
         expect("control_tickets_one_shot", "control_tickets");
@@ -7410,6 +7604,7 @@ fams = {
     "face_fingerprint": v._verify_v02_face_fingerprint,
     "usage_metering": v._verify_v02_usage_metering,
     "context_checkpoint_era": v._verify_v02_context_checkpoint_era,
+    "model_call_usage": v._verify_v02_model_call_usage,
 }
 data = json.load(sys.stdin)
 out = {}
@@ -7537,8 +7732,11 @@ json.dump(out, sys.stdout)
         // (锚键非字符串损坏形态——Rust 对齐 Python 冻结镜像后锁进对拍).
         // 262 → 264 (0dx, 2026-10-31): +context_checkpoint_era_ok /
         // _violations (正形两案连排＋era0/越集/不递增/digest空/缺键/缺失六违例).
+        // 264 → 266 (0dw S1, 2026-11-17): +model_call_usage_ok / _violations
+        // (完整五项＋null 缺席正形两案连排＋空 role/call_seq 0/估算缺键/
+        // 类型错/complete 相悖/缺键/不递增六违例).
         assert_eq!(
-            scenario_count, 264,
+            scenario_count, 266,
             "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(

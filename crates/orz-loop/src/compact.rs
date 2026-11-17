@@ -643,22 +643,15 @@ pub fn production_block_tokens() -> u64 {
 /// 90K compacted target, small enough not to squeeze the kept rounds).
 pub const DEFAULT_WHITELIST_CAP: usize = 16 * 1024;
 
-/// A6: estimated tokens of one message — chars/2 (a conservative CJK-aware
-/// guess: CJK ≈ 2 chars/token, English would be ≈ 4 — over-estimating is
-/// the safe direction; the real next-round usage measurement is what the
-/// trigger uses).
+/// A6 → 0dw S1（2026-11-17，CONTEXT-FACE-SCALE-RULER-ALIGNMENT 缺陷 1）：
+/// 单条消息的估算 token。量尺自 chars/2 换装 **provider tokenizer 单源**
+/// （`ruler` 模块：增量缓存 ＋ `DeepSeekTokenizer`）——chars/2 偏差方向随
+/// 内容构成翻转（ASCII 偏高 ≈2×、CJK 偏低 ≈1.3–2×），阶梯触发点随之漂移；
+/// 换装后模型面阶梯/滑块/分块/台账与 provider 实测同尺可比。字段集不变
+/// （content ＋ reasoning ＋ tool_calls 的 name/arguments；role 与
+/// tool_call_id 不入尺）。
 pub(crate) fn estimate_message_tokens(m: &Message) -> u64 {
-    let mut chars = m.content.chars().count() as u64;
-    if let Some(r) = &m.reasoning_content {
-        chars += r.chars().count() as u64;
-    }
-    for tc in &m.tool_calls {
-        chars += tc.name.chars().count() as u64;
-        chars += serde_json::to_string(&tc.arguments)
-            .map(|s| s.chars().count() as u64)
-            .unwrap_or(0);
-    }
-    chars / 2
+    crate::ruler::message_tokens(m)
 }
 
 pub(crate) fn estimate_messages_tokens(messages: &[Message]) -> u64 {
@@ -1104,7 +1097,10 @@ mod tests {
     async fn context_manage_clear_requires_handover_and_lands_boundary_marker() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
-        let fat = "F".repeat(3_000);
+        // 0dw S1 量尺换装（2026-11-17）：CJK 载荷 ≈1 token/字符 ⇒ 3K token
+        // 在 slider=1K/block=1K 下必成闭合块；ASCII 'F' 在 BPE 下高度合并
+        // （≈1 token/32 字符），3K 字符仅 ≈百 token 不再成块。
+        let fat = "测".repeat(3_000);
         let host = TestHost {
             journal,
             tool_result: Some(ToolResult {

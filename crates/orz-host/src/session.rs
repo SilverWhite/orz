@@ -212,6 +212,13 @@ pub async fn bootstrap_session(
         "run_id": run_id,
         "created_at": orz_assurance::clock::now(),
         "schema_version": "0.1.0-draft",
+        // 0dw S1（2026-11-17，CONTEXT-FACE-SCALE-RULER-ALIGNMENT 缺陷 3）：
+        // 载体身份章——journal 侧离线取证锚。版本＝载体（orz-bin）构建单源
+        // （bin 入口注入；未注入如实 `"unknown"`）；哈希＝运行中 exe 的
+        // SHA-256（与载体清单同口径；读失败如实 `"unavailable"`）。
+        // 单源见 `carrier` 模块。
+        "carrier_version": crate::carrier::carrier_version(),
+        "binary_sha256": crate::carrier::binary_sha256(),
     });
     let manifest_sha256 =
         orz_assurance::sha256_hex(&orz_assurance::canonical_json(&manifest).unwrap_or_default());
@@ -297,6 +304,62 @@ mod tests {
         );
         assert!(replay.valid, "journal errors: {:?}", replay.errors);
         assert_eq!(replay.event_count, 1);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0dw S1（2026-11-17，CONTEXT-FACE-SCALE-RULER-ALIGNMENT 缺陷 3）钉：
+    /// `run_preflight` manifest 携带载体版本章＋二进制哈希章（离线取证锚）。
+    /// 单测进程未注入版本 ⇒ 如实哨兵 `"unknown"`；哈希＝本测试 exe 的
+    /// SHA-256 或 `"unavailable"`（读失败不虚构）——两形态都合法，但键
+    /// 必须在场且非空。
+    #[tokio::test]
+    async fn preflight_pins_carrier_identity() {
+        let base = test_dir();
+        let run_id = "RUN-PREFLIGHT-CARRIER";
+
+        let handle = bootstrap_session(run_id, Some(base.clone()), TrustPolicy::Skip)
+            .await
+            .unwrap();
+        handle.journal.flush_async().await.unwrap();
+
+        let replay = orz_assurance::replay_journal(
+            &handle.journal_dir.join("events.jsonl"),
+            Some(run_id),
+            None,
+            false,
+        );
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
+        let events: Vec<serde_json::Value> =
+            std::fs::read_to_string(handle.journal_dir.join("events.jsonl"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).expect("journal line json"))
+                .collect();
+        let preflight = events
+            .iter()
+            .find(|e| e["event_type"] == "run_preflight")
+            .expect("preflight event");
+        let carrier_version = preflight
+            .get("payload")
+            .and_then(|p| p.get("carrier_version"))
+            .and_then(|v| v.as_str())
+            .expect("carrier_version key");
+        assert!(
+            carrier_version == crate::carrier::CARRIER_VERSION_UNSET || !carrier_version.is_empty(),
+            "carrier_version: {carrier_version}"
+        );
+        let binary_sha256 = preflight
+            .get("payload")
+            .and_then(|p| p.get("binary_sha256"))
+            .and_then(|v| v.as_str())
+            .expect("binary_sha256 key");
+        let is_hex64 =
+            binary_sha256.len() == 64 && binary_sha256.chars().all(|c| c.is_ascii_hexdigit());
+        assert!(
+            is_hex64 || binary_sha256 == crate::carrier::BINARY_SHA256_UNAVAILABLE,
+            "binary_sha256: {binary_sha256}"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }

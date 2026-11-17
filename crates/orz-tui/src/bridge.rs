@@ -520,6 +520,9 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
         // 0df：任务级计费机械记录——run 终态计量行（无专用 TUI 卡片，同
         // 姿态；模型面零感知，UI 呈现随专门批另议）。
         | EventType::RunUsageMetered
+        // 0dw S1：逐调用 usage 分布面——纯机械账面（无专用 TUI 卡片，
+        // 与 run_usage_metered 同姿态降级 Unknown）。
+        | EventType::ModelCallUsage
         // 0dx：时代边界落账——入账不入面（裁决 7），特征/用量不进 TUI；
         // 用户面反馈行走宿主 user_notice（run 响应），此处同姿态降级。
         | EventType::EraBoundary => TuiEvent::Unknown {

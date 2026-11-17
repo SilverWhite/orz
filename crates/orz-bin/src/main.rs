@@ -192,6 +192,11 @@ static STARTUP_INTEGRITY: std::sync::OnceLock<orz_host::carrier_integrity::Integ
     std::sync::OnceLock::new();
 
 fn main_inner() {
+    // 0dw S1（2026-11-17，CONTEXT-FACE-SCALE-RULER-ALIGNMENT 缺陷 3）：载体
+    // 版本进程级注入——`run_preflight` 的 `carrier_version` 章取同一 bump
+    // 纪录串（`--build-info`/banner/capability `orz_version` 同源）。必须在
+    // 任何 bootstrap 之前（每个 run 首事件都要盖章）。
+    orz_host::carrier::set_carrier_version(env!("CARGO_PKG_VERSION"));
     // 0bt② (2026-09-26, carries 0bj① m15): `--build-info` — the carrier's own
     // packaging-face version seam. The Rust binary carries no Win32
     // VersionInfo, so `dogfood_launch -DryRun` rendered `carrier=unknown`; the

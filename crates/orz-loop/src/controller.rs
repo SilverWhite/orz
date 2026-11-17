@@ -6091,6 +6091,10 @@ mod tests {
                 // fingerprint rides every main-lane request, immediately
                 // before its model_output.
                 EventType::FaceFingerprint,
+                // 0dw S1 (2026-11-17): per-call usage row rides every
+                // ModelResponse arrival, between the fingerprint and the
+                // model_output of the same round.
+                EventType::ModelCallUsage,
                 EventType::ModelOutput,
                 EventType::CapabilityUse,
                 EventType::PermissionRequested,
@@ -6099,9 +6103,11 @@ mod tests {
                 EventType::ToolCompleted,
                 // 0dm：无声明 → 一次终态提示（不是 gate）。
                 EventType::FaceFingerprint,
+                EventType::ModelCallUsage,
                 EventType::ModelOutput,
                 EventType::GateDecision,
                 EventType::FaceFingerprint,
+                EventType::ModelCallUsage,
                 EventType::ModelOutput,
                 // 0df (2026-10-17, ADR-0010 §14.86): the per-run usage
                 // metering row lands once, immediately before the terminal.
@@ -6534,6 +6540,78 @@ mod tests {
             assert!(family_errors.is_empty(), "{family_errors:?}");
             let _ = std::fs::remove_dir_all(&dir);
         }
+    }
+
+    /// 0dw S1 钉（2026-11-17，CONTEXT-FACE-SCALE-RULER-ALIGNMENT 缺陷 2）：
+    /// 逐调用 usage 分布面——每次 ModelResponse 到达恰一条
+    /// `model_call_usage`；`call_seq` 自 1 严格递增（与 run 级
+    /// `model_calls` 合计对账）；fake 无 usage ⇒ 五项如实 null ＋
+    /// `usage_complete=false`（不虚构 0）；`face_estimate_tokens` 在场
+    /// （估算 ↔ 实测逐调用配对的估算侧）；法官族全事件零违例。
+    #[tokio::test]
+    async fn model_call_usage_lands_per_response_with_pairing_estimate() {
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec![
+            "第一轮答",
+            "第二轮答",
+            "第三轮答",
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-CALL-USAGE".to_string(),
+            1,
+            "任务".to_string(),
+            vec!["步骤一".to_string()],
+        );
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let result = controller
+            .run_turn(
+                &host,
+                "题目",
+                "RUN-CALL-USAGE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await;
+        assert!(result.is_ok(), "{result:?}");
+
+        let text = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+        let events: Vec<serde_json::Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let rows: Vec<&serde_json::Value> = events
+            .iter()
+            .filter(|e| e["event_type"] == "model_call_usage")
+            .collect();
+        assert_eq!(rows.len(), 1, "短聊恰一轮 ⇒ 恰一条逐调用行");
+        let payload = &rows[0]["payload"];
+        assert_eq!(payload["call_seq"], 1);
+        assert_eq!(payload["agent_role"], "main");
+        // 估算侧在场且为非负整数（配对面的估算侧）。
+        assert!(payload["face_estimate_tokens"].is_u64());
+        // fake 无 usage ⇒ 五项 null ＋ usage_complete=false（不虚构 0）。
+        for field in [
+            "prompt_tokens",
+            "cache_hit_tokens",
+            "cache_miss_tokens",
+            "completion_tokens",
+            "reasoning_tokens",
+        ] {
+            assert!(payload[field].is_null(), "{field} must be null on fake");
+        }
+        assert_eq!(payload["usage_complete"], false);
+
+        // 法官族对全事件零违例（形状＋单调＋null 集合一致）。
+        let family_errors = orz_assurance::journal::families::verify_model_call_usage(&events);
+        assert!(family_errors.is_empty(), "{family_errors:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 0df 钉：失败臂（脚本耗尽）同样落**恰一条**计量行且保守置

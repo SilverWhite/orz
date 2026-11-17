@@ -82,6 +82,12 @@ impl RunUsageMeter {
         (self.prompt_tokens, self.completion_tokens)
     }
 
+    /// 0dw S1（2026-11-17）：已折算调用数（run 内跨车道累计）——
+    /// `model_call_usage.call_seq` 的单源（fold 后恰读一次＝本次调用序号）。
+    pub(crate) fn model_calls(&self) -> u64 {
+        self.model_calls
+    }
+
     /// 0dx（2026-10-31，CONTEXT-CHECKPOINT-ERA）：时代账面读数（调用数，
     /// prompt tokens）——run 尾宿主经 controller 单读，增量计入新时代。
     pub(crate) fn era_totals(&self) -> (u64, u64) {

@@ -7233,7 +7233,9 @@ mod tests {
                 // `run_usage_metered` 终态前恰一条入列 ⇒ 10 → 11；在干净基线
                 // （c678c21b，本批改动 stash 对照）上同形失败＝漂移先于本批
                 // （287 批读数未含 orz-host lib），本批仅对齐实现事实。
-                assert_eq!(replay.event_count, 11);
+                // 0dw S1 随批对齐（398 批）：逐调用 `model_call_usage` 每次
+                // ModelResponse 到达恰一条入列 ⇒ 11 → 12（单模型轮）。
+                assert_eq!(replay.event_count, 12);
                 assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -7463,7 +7465,9 @@ mod tests {
                     // 0dh S2 随批对齐（298 批）：0df S2（287 批）的
                     // `run_usage_metered` 终态前恰一条入列 ⇒ 10 → 11
                     // （干净基线 c678c21b 同形失败＝漂移先于本批）。
-                    assert_eq!(replay.event_count, 11, "preflight + turn events");
+                    // 0dw S1 随批对齐（398 批）：逐调用 `model_call_usage`
+                    // 每次到达恰一条入列 ⇒ 11 → 12（单模型轮）。
+                    assert_eq!(replay.event_count, 12, "preflight + turn events");
                     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
                 }
 

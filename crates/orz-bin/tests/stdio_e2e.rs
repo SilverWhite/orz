@@ -165,7 +165,9 @@ fn session_new_and_prompt_over_real_frames() {
     // 0dp S2（349 批）勘误：run_usage_metered 自 0df S2/287 批入列，0dh S2
     // （298 批）已对齐 acp_server 两序列钉 10→11，本钉漏更（预存漂移同
     // 形；stash 对照先于本批）——按实现事实对齐为 11。
-    assert_eq!(replay.event_count, 11);
+    // 0dw S1（398 批）：逐调用 `model_call_usage` 每次 ModelResponse 到达
+    // 恰一条入列 ⇒ 11 → 12（单模型轮）。
+    assert_eq!(replay.event_count, 12);
     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
     let _ = std::fs::remove_dir_all(&dir);
