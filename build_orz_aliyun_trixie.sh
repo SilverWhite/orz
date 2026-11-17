@@ -3,9 +3,12 @@
 # 原 build_orz_aliyun_trixie.sh 随 0du 目录清理灭失；本脚本按 052/346/357
 # 三批档在案口径复原：rust:1.97-slim（trixie）容器内构建、musl static-PIE
 # 三件套（orz／orz-signer／orz-acaf-provision）、apt 走阿里云镜像。
-# 调用契约（ORZ-BUILD-MOUNT-001 + MSYS_NO_PATHCONV=1）：
+# 调用契约（ORZ-BUILD-MOUNT-001 + MSYS_NO_PATHCONV=1；**挂父仓**——
+# orz-assurance include_str! 够 `crates/…/../../../runtime/*.json`＝父仓
+# runtime/，挂子目录则 include_str! 找不到文件（392 首轮实证、400 批复踩
+# 复证；头注原为子目录形态系复原笔误，400 批修正）：
 #   docker run --rm \
-#     -v D:\CLI\orz:/orz/orz \
+#     -v D:\CLI:/orz \
 #     -v D:\tb-eval\orz-linux:/orz/out \
 #     -v D:\tb-eval\orz-linux-target:/orz/target \
 #     -v D:\tb-eval\orz-linux-cargo:/orz/cargo \
