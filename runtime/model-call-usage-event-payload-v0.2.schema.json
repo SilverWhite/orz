@@ -25,7 +25,7 @@
     "call_seq": {
       "type": "integer",
       "minimum": 1,
-      "description": "run 内跨车道 1 基严格递增调用序号（ModelResponse 到达数；与 run_usage_metered 的 model_calls 合计对账：最大 call_seq == model_calls）。"
+      "description": "run 内跨车道 1 基严格递增调用序号（ModelResponse 到达数）。「最大 call_seq ↔ run_usage_metered.model_calls」的合计对账由 journal 单源可复算（0dw S3 读数面核对）——双法官族（model_call_usage／usage_metering）均不执法此交叉合计（0dw S1 整改批措辞修正：原文按已执法口径表述，实际无执法主体）。"
     },
     "face_estimate_tokens": {
       "type": "integer",

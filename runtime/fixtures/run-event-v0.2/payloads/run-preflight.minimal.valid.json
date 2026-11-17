@@ -1,0 +1,7 @@
+{
+  "run_id": "RUN-CONF-0039",
+  "created_at": "2026-11-18T00:00:00Z",
+  "schema_version": "0.1.0-draft",
+  "carrier_version": "0.9.15",
+  "binary_sha256": "3f79bb7b435b05321651daefd374cdc681dc06faa65e374e38337b88ca044dea"
+}

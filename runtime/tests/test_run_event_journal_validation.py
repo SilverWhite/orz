@@ -2613,6 +2613,21 @@ class TrackResolutionTests(unittest.TestCase):
         self.assertEqual(mode, "payload")
         self.assertEqual(path, RUNTIME / "run-preflight-event-payload-v0.1.schema.json")
 
+    def test_v02_track_preflight_resolves_to_v02_schema(self) -> None:
+        """0dw S1 整改批（2026-11-18）：v0.2 轨 run_preflight 自 398 批载体
+        身份章起有自有 payload schema——对 v0.2 轨「回落 v0.1 文件」的解析
+        对本事件就此终结。398 批曾以「registry 侧无此族、扩键安全」落码
+        （审查证伪：v01 有严格 schema 且回落解析必撞 additionalProperties），
+        本钉锁死修复后的解析。"""
+        mode, path = _resolve_payload_schema(
+            {
+                "payload_schema": "run-event-v0.2.schema.json",
+                "event_type": "run_preflight",
+            }
+        )
+        self.assertEqual(mode, "payload")
+        self.assertEqual(path, RUNTIME / "run-preflight-event-payload-v0.2.schema.json")
+
     def test_rust_track_unknown_event_type_raises(self) -> None:
         with self.assertRaises(ValueError):
             _resolve_payload_schema(
@@ -2696,6 +2711,74 @@ class TrackResolutionTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             _resolve_payload_schema({"payload_schema": "nope-v9"})
         self.assertIn("registered producers", str(ctx.exception))
+
+
+class PreflightCarrierIdentityPayloadTests(unittest.TestCase):
+    """0dw S1 整改批（2026-11-18，398 批审查 P1）：载体身份章两键的 payload
+    schema 面——五键正型通过、章前三键历史形态 grandfather（两键不进
+    required）、哨兵诚实形态合法、越键/空版本/虚构哈希拒。"""
+
+    VALID_SHA256 = "3f79bb7b435b05321651daefd374cdc681dc06faa65e374e38337b88ca044dea"
+
+    @staticmethod
+    def _preflight_event(payload: dict) -> dict:
+        return {
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "run_preflight",
+            "payload": payload,
+        }
+
+    @staticmethod
+    def _payload_errors(event: dict) -> list[str]:
+        from assurance.run_event_journal_validation import _payload_errors
+
+        return _payload_errors(event, 0)
+
+    def _base_payload(self) -> dict:
+        return {
+            "run_id": "RUN-PREFLIGHT-CARRIER",
+            "created_at": "2026-11-18T00:00:00Z",
+            "schema_version": "0.1.0-draft",
+        }
+
+    def test_stamped_payload_validates(self) -> None:
+        payload = self._base_payload() | {
+            "carrier_version": "0.9.15",
+            "binary_sha256": self.VALID_SHA256,
+        }
+        self.assertEqual(self._payload_errors(self._preflight_event(payload)), [])
+
+    def test_unstamped_historical_payload_grandfathered(self) -> None:
+        """章前 v0.2 journal（三键形态，含全部既有 fixtures）仍合法。"""
+        self.assertEqual(
+            self._payload_errors(self._preflight_event(self._base_payload())), []
+        )
+
+    def test_sentinel_forms_validate(self) -> None:
+        """哨兵诚实形态（未注入 "unknown"／读失败 "unavailable"）合法。"""
+        payload = self._base_payload() | {
+            "carrier_version": "unknown",
+            "binary_sha256": "unavailable",
+        }
+        self.assertEqual(self._payload_errors(self._preflight_event(payload)), [])
+
+    def test_extra_key_rejected(self) -> None:
+        payload = self._base_payload() | {"stray_key": True}
+        errors = self._payload_errors(self._preflight_event(payload))
+        self.assertTrue(any("Additional properties" in e for e in errors), errors)
+
+    def test_empty_carrier_version_rejected(self) -> None:
+        payload = self._base_payload() | {"carrier_version": ""}
+        errors = self._payload_errors(self._preflight_event(payload))
+        self.assertTrue(any("should be non-empty" in e for e in errors), errors)
+
+    def test_fabricated_hash_rejected(self) -> None:
+        """非 64 位十六进制且非哨兵的值＝虚构哈希形态，拒。"""
+        payload = self._base_payload() | {"binary_sha256": "deadbeef"}
+        errors = self._payload_errors(self._preflight_event(payload))
+        self.assertTrue(
+            any("binary_sha256" in e or "does not match" in e for e in errors), errors
+        )
 
 
 class CanonicalFormTests(unittest.TestCase):

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/run-preflight-event-payload-v0.2.schema.json",
+  "title": "run_preflight event payload (Rust track, v0.2)",
+  "description": "0dw S1 整改批（2026-11-18，398 批审查 P1）：v0.2 轨 run_preflight 的自有 payload schema——替代「v0.2 无自有 schema 回落 v0.1 文件」的解析（Phase B 裁决语义对本事件就此终结）。398 批载体身份章（carrier_version ＋ binary_sha256）曾以「registry/judge 两侧均无此族」为扩键安全论据落码，审查证伪：registry v01 侧有严格 schema（additionalProperties:false），回落解析使新五键载荷必然违例——本文件即该冲突的闭合。**两键不进 required**：章前历史 v0.2 journal（三键形态，含 runtime/fixtures 全部既有期刊）合法存在（grandfather，与回落语义的历史兼容面一致）；新 journal 恒携带两键（bootstrap_session 生产侧单写）。哨兵诚实形态入 schema：binary_sha256 只认 64 位小写十六进制（载体清单同口径 sha256_hex）或读失败哨兵 \"unavailable\"（不虚构哈希）；carrier_version 只认非空串（未注入哨兵 \"unknown\" 同合法）。执法＝Python 参考法官 _payload_errors（registry 解析）↔ Rust conformance::validate_journal_file（同一 registry/schema 文件），双侧无族级法官（payload 形状面即全部约束）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "created_at",
+    "schema_version"
+  ],
+  "properties": {
+    "run_id": { "type": "string", "pattern": "^(RUN|RST)-[A-Za-z0-9._-]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "schema_version": { "const": "0.1.0-draft" },
+    "carrier_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "载体（orz-bin）构建版本——CARGO_PKG_VERSION bump 纪录串（--build-info/banner/capability orz_version 同源）；进程未注入（宿主外直用/单测）如实 \"unknown\"。"
+    },
+    "binary_sha256": {
+      "type": "string",
+      "pattern": "^([0-9a-f]{64}|unavailable)$",
+      "description": "运行中 exe 文件 SHA-256（载体清单同口径；小写十六进制）。读失败（权限/平台）如实哨兵 \"unavailable\"——不虚构哈希。"
+    }
+  }
+}

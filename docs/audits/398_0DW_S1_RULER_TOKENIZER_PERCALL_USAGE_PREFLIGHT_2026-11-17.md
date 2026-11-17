@@ -6,6 +6,7 @@
 
 - 新模块 `orz-host/src/carrier.rs`：`carrier_version()`（进程级 `OnceLock` 单写——orz-bin `main_inner` 顶部注入 `env!("CARGO_PKG_VERSION")`，与 `--build-info`／banner／capability `orz_version` 同一 bump 纪录串；未注入如实 `"unknown"`）＋ `binary_sha256()`（运行中 exe 文件 SHA-256，与载体清单同口径；进程内缓存；读失败如实 `"unavailable"` 不虚构）。
 - `session.rs bootstrap_session`：`run_preflight`（每 run 首事件）manifest 载荷自三键扩五键（＋`carrier_version`＋`binary_sha256`）。envelope schema 对 preflight 载荷无形状约束（registry/judge 两侧均无此族），扩键安全；立项档 §1.3 的「跨版本行为归因不可为」自此闭合——journal 单源即可判定任一 run 的载体版本与二进制。
+- **勘误注记（2026-11-18，399 审查处置批）**：上行「registry/judge 两侧均无此族，扩键安全」**论据证伪**——registry v01 侧有严格 schema（`run-preflight-event-payload-v0.1.schema.json`，`additionalProperties:false` 仅三键），Python 参考法官与 Rust conformance 对 v0.2 轨 preflight 均按「无自有 schema 回落 v0.1 文件」解析（Phase B 裁决语义），五键载荷必报 additionalProperties 违例；本批测试网（replay 链验证＋族级对拍）恰都不兜这一格故全绿未暴露。潜伏期＝S2 载体进体后首次真机全卷校验。399 批已立自有 v0.2 schema（两章键 optional＝历史 grandfather）＋registry v02 条目闭合，详见 [399 批档](399_0DW_S1_REVIEW_REMEDIATION_2026-11-18.md) §1。
 - 钉测试：`preflight_pins_carrier_identity`（session.rs）＋ carrier 模块两钉（哨兵值诚实形态）。
 
 ## ② `model_call_usage` 逐调用 usage 事件全链
