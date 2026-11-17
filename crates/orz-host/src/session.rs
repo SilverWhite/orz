@@ -205,9 +205,14 @@ pub async fn bootstrap_session(
     // track — the preflight (first event) pins the whole chain's envelope
     // schema (homogeneous-chain requirement, ADR-0010 §11.6.2). The
     // manifest's OWN `schema_version` stays "0.1.0-draft": it is a PAYLOAD
-    // field constrained by the v0.1 preflight payload schema (which the v0.2
-    // track reuses for the 31 unchanged events) — only the ENVELOPE
-    // `schema_version` flips to 0.2.0-draft (Python canonical_cli parity).
+    // field (const in both the v0.1 schema and the v0.2 preflight schema) —
+    // only the ENVELOPE `schema_version` flips to 0.2.0-draft (Python
+    // canonical_cli parity).
+    // 0dw S1 整改批（2026-11-18）：v0.2 轨 preflight 载荷自此有自有 payload
+    // schema（`run-preflight-event-payload-v0.2.schema.json`，registry v02
+    // 条目）——398 批曾按「registry 侧无此族、扩键安全」落章，审查证伪
+    // （v01 侧 schema `additionalProperties:false`，v0.2 回落解析使新键必
+    // 违例）；新 schema 对两章键 optional（章前历史 journal grandfather）。
     let manifest = serde_json::json!({
         "run_id": run_id,
         "created_at": orz_assurance::clock::now(),
@@ -216,7 +221,7 @@ pub async fn bootstrap_session(
         // 载体身份章——journal 侧离线取证锚。版本＝载体（orz-bin）构建单源
         // （bin 入口注入；未注入如实 `"unknown"`）；哈希＝运行中 exe 的
         // SHA-256（与载体清单同口径；读失败如实 `"unavailable"`）。
-        // 单源见 `carrier` 模块。
+        // 单源见 `carrier` 模块；payload schema 见 v0.2 preflight 文件。
         "carrier_version": crate::carrier::carrier_version(),
         "binary_sha256": crate::carrier::binary_sha256(),
     });

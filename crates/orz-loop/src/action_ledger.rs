@@ -215,9 +215,10 @@ pub const REPLAY_TOOL_RESULT_PREFIX: &str = "[回放块（可再生）]";
 /// 按块回放档案的路径特征（判定一次工具调用是否为「回放读」）。
 const BLOCK_ARCHIVE_PATH_MARKERS: [&str; 2] = ["compaction/blocks", "compaction\\blocks"];
 
-/// 「超大结果」门槛（估计口径 chars/2）：**超过**此值才是指针化候选。
-/// 依据：实测多数读/计划轮 1–3K、终端执行轮 5–7K（08-19 桥预算同源读数）
-/// ⇒ 8K 以下不指针化，避免把正常工作现场磨成指针。
+/// 「超大结果」门槛（估算口径：0dw S1 起＝provider tokenizer 单源）：
+/// **超过**此值才是指针化候选。依据：实测多数读/计划轮 1–3K、终端执行轮
+/// 5–7K（08-19 桥预算同源读数）⇒ 8K 以下不指针化，避免把正常工作现场
+/// 磨成指针。
 pub const OVERSIZED_TOOL_RESULT_CAP_TOKENS: u64 = 8_000;
 
 /// 指针化统计（用户 2026-09-15 裁定；落账与告知均用这两个读数）。
@@ -225,7 +226,8 @@ pub const OVERSIZED_TOOL_RESULT_CAP_TOKENS: u64 = 8_000;
 pub struct PointerizeStats {
     /// 被换成指针的工具结果条数。
     pub replaced: u32,
-    /// 释放的估算 token（估计口径 chars/2）。
+    /// 释放的估算 token（0dw S1 整改批起 freed 记账与候选估算同尺＝
+    /// provider tokenizer；398 批前为 chars/2）。
     pub freed_tokens: u64,
 }
 
@@ -288,7 +290,7 @@ pub fn pointerize_oversized_tool_results(
         };
         let body = format!(
             "# ORZ 窗口内超大工具结果原文（指针化前落盘）\n\n\
-             - run: {run_id}\n- call_id: {}\n- 估算: ≈{before}tk token（chars/2）\n\
+             - run: {run_id}\n- call_id: {}\n- 估算: ≈{before}tk token（provider tokenizer 量尺）\n\
              - 生成时间: {}\n\n\
              > 该结果正文已从模型上下文移出（换成「头部 ＋ 回读指针」）；本文件是\n\
              > **移出当时的逐字原文**，按 read_file offset/limit 分页回读。\n\n{original}\n",
@@ -311,7 +313,11 @@ pub fn pointerize_oversized_tool_results(
             run_id,
             messages[idx].tool_call_id.as_deref(),
         );
-        let after = replacement.chars().count() as u64 / 2;
+        // 0dw S1 整改批（2026-11-18，398 批审查 P2）：freed 记账换 provider
+        // tokenizer 单源——`before`（候选选择）已是 ruler 尺，`after` 残留
+        // chars/2 即「双尺相减」（CJK 高估 freed 提前退出循环、ASCII 低估
+        // 过度指针化，方向随内容构成翻转）。同尺随 `ruler::text_tokens`。
+        let after = crate::ruler::text_tokens(&replacement);
         messages[idx].content = replacement;
         stats.replaced += 1;
         let freed = before.saturating_sub(after);
@@ -445,7 +451,10 @@ pub fn pointerize_replay_tool_results(
         let call = messages[idx].tool_call_id.clone().unwrap_or_default();
         let path = replay_calls.get(&call).cloned().unwrap_or_default();
         let replacement = replay_pointer_line(&path, archive_root, &call);
-        let after = replacement.chars().count() as u64 / 2;
+        // 0dw S1 整改批（2026-11-18）：freed 记账与 `before` 同尺（provider
+        // tokenizer，`ruler::text_tokens`）——见 pointerize_oversized_tool_results
+        // 同名注记；残留 chars/2 即双尺相减。
+        let after = crate::ruler::text_tokens(&replacement);
         messages[idx].content = replacement;
         stats.replaced += 1;
         stats.freed_tokens = stats
@@ -880,10 +889,11 @@ pub fn collapsed_cut(messages: &[Message], keep_recent_rounds: usize) -> Option<
 
 /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.2): 折叠
 /// 推进的保留起点——桥预算版（取代外挂文件设计 §2.2「最近 1 轮」）。
-/// 从最新完整轮往回累加整轮估计（`estimate_messages_tokens`，chars/2
-/// 口径），直至再纳入更早一轮会超出桥预算；**最新一轮恒保留**（单独超预算
-/// 时由视图内容截断 §3.3 处理），预算剩余时按时间从新到旧容纳更早完整轮。
-/// `fold_tail_rounds` 语义退役（桥恒含 ≥1 轮结构，无需轮数下限）。
+/// 从最新完整轮往回累加整轮估计（`estimate_messages_tokens`；0dw S1 起＝
+/// provider tokenizer 单源），直至再纳入更早一轮会超出桥预算；**最新一轮
+/// 恒保留**（单独超预算时由视图内容截断 §3.3 处理），预算剩余时按时间从
+/// 新到旧容纳更早完整轮。`fold_tail_rounds` 语义退役（桥恒含 ≥1 轮结构，
+/// 无需轮数下限）。
 ///
 /// 完整性纪律不变：被折叠区（cut 之前）必须全为完整轮——第一个不完整轮
 /// 及其后全部保留原文（绝不折叠，同 `collapsed_cut` 的 completeness
@@ -1637,6 +1647,52 @@ mod tests {
         );
         assert_eq!(again.replaced, 0);
         assert_eq!(again.freed_tokens, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0dw S1 整改批（2026-11-18，398 批审查 P2）：freed 记账与候选估算
+    /// **同尺**——`freed == before − after` 两端都走 provider tokenizer。
+    /// 398 批换尺只换了外环（`before`/候选选择），`after` 残留 chars/2 ⇒
+    /// CJK 载荷下双尺相减（高估 freed、循环提前退出）。CJK 大载荷下
+    /// chars/2 尺的 after 与 ruler 尺的 after 差异显著，本钉在混尺修复前
+    /// 必失败（回归锁）。
+    #[test]
+    fn freed_accounting_is_same_ruler_as_candidate_estimate() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        // CJK 载荷：ruler 尺 ≈1 token/字符，chars/2 尺 ≈0.5 token/字符。
+        let body = "测".repeat(30_000);
+        messages.extend(round("c1", "read_file", "big.py", &body));
+        let target = 1_000;
+        let dir = std::env::temp_dir().join(format!(
+            "orz-pointerize-mixed-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let archive_dir = dir.join(".gsa").join("compaction").join("pointerized");
+        let stats = pointerize_oversized_tool_results(
+            &mut messages,
+            target,
+            OVERSIZED_TOOL_RESULT_CAP_TOKENS,
+            archive_dir.as_path(),
+            "probe",
+            Some(std::path::Path::new(".gsa/runs/RUN-X/events.jsonl")),
+            "RUN-X",
+        );
+        assert_eq!(stats.replaced, 1, "CJK 30K 字符必超 8K 门槛");
+        let pointer = messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("c1"))
+            .map(|m| m.content.clone())
+            .expect("指针化后的工具结果");
+        let ruler_before = crate::ruler::text_tokens(&body);
+        let ruler_after = crate::ruler::text_tokens(&pointer);
+        assert_eq!(
+            stats.freed_tokens,
+            ruler_before.saturating_sub(ruler_after),
+            "freed 必须＝同尺差（before/after 都是 provider tokenizer 尺）"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

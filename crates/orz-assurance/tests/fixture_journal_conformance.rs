@@ -356,3 +356,61 @@ fn family_stage_s2c_tamper_detected_end_to_end() {
         report.errors
     );
 }
+
+// ── 0dw S1 整改批（2026-11-18，398 批审查 P1）──────────────────────────
+//
+// 载体身份章两键（carrier_version ＋ binary_sha256）的 payload schema 面。
+// 398 批以「registry/judge 两侧均无此族、扩键安全」落码——审查证伪（registry
+// v01 侧有严格 schema 且回落解析必撞 additionalProperties）；整改立 v0.2
+// 自有 schema（两键 optional＝章前历史 grandfather）。本组两钉锁死修复：
+// 五键重封正型全链绿；越第六键恰在 payload 阶段拒。
+
+#[test]
+fn preflight_carrier_stamp_sealed_journal_passes_conformance() {
+    let root = repo_root();
+    let (_dir, path) = resealed_journal("v0.2", "plain-run.jsonl", |events| {
+        let payload = events[0]["payload"]
+            .as_object_mut()
+            .expect("preflight payload");
+        payload.insert("carrier_version".to_string(), json!("0.9.15"));
+        payload.insert(
+            "binary_sha256".to_string(),
+            json!("3f79bb7b435b05321651daefd374cdc681dc06faa65e374e38337b88ca044dea"),
+        );
+    });
+    let report = validate_journal_file(&path, &root);
+    assert!(
+        report.valid,
+        "5-key stamped preflight must pass the v0.2 payload schema: {:?}",
+        report.errors
+    );
+}
+
+#[test]
+fn preflight_extra_key_rejected_at_payload_stage() {
+    let root = repo_root();
+    let (_dir, path) = resealed_journal("v0.2", "plain-run.jsonl", |events| {
+        let payload = events[0]["payload"]
+            .as_object_mut()
+            .expect("preflight payload");
+        payload.insert("stray_key".to_string(), json!(true));
+    });
+    let report = validate_journal_file(&path, &root);
+    assert!(!report.valid);
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|e| e.contains("payload schema violation")),
+        "payload-stage violation expected, got: {:?}",
+        report.errors
+    );
+    // 重封后链/信封干净 ⇒ 唯一违例类＝payload schema（恰触本事件的越键）。
+    assert!(
+        report.errors.iter().all(|e| {
+            !e.contains("envelope schema violation") && !e.contains("digest mismatch")
+        }),
+        "re-sealed journal must only fail in the payload stage, got: {:?}",
+        report.errors
+    );
+}

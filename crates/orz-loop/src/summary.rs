@@ -627,14 +627,10 @@ pub fn build_model_summary_marker(
 /// v7 语义轨 marker 版本号（机械快照 v0.3 ／ 语义摘要 v0.3-语义）。
 pub const MODEL_SUMMARY_MARKER_VERSION: &str = "v0.3-语义";
 
-/// 语义轨 marker／存档的固定开销估算（token，chars/2 估算口径）：框架行 ＋
-/// 四项定位指针 ＋ 分工声明。缩减判定用（摘要块不小于被压区 ⇒ 不替换）。
-pub const MODEL_SUMMARY_MARKER_OVERHEAD_TOKENS: u64 = 1_200;
-
-/// 语义轨替换文本的估算体量（token）＝ 摘要正文字数/2 ＋ 固定开销。
-pub fn model_summary_marker_estimate(summary: &str) -> u64 {
-    summary.chars().count() as u64 / 2 + MODEL_SUMMARY_MARKER_OVERHEAD_TOKENS
-}
+// 0dw S1 整改批（2026-11-18）删除 `MODEL_SUMMARY_MARKER_OVERHEAD_TOKENS` ＋
+// `model_summary_marker_estimate`（语义轨替换文本估算，chars/2 口径）——
+// 全仓零调用死代码；语义轨缩减判定实际走 `SUMMARY_MARKER_ESTIMATE_TOKENS`
+// 固定常数（量尺无关），不留第二把未接线的 chars/2 尺（398 批审查 P3c）。
 
 /// 语义轨压缩存档（审计副本）：模型产出的语义摘要 ＋ 四项原文定位指针 ＋
 /// 结构化轨的分工声明。**不复制被压区逐字原文**——原文在 run journal 与

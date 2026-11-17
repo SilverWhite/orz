@@ -79,22 +79,75 @@ pub(crate) fn text_tokens(text: &str) -> u64 {
     tokens
 }
 
+/// tool_call arguments（serde_json::Value）的**就地规范哈希**——命中路径
+/// 不序列化、零分配（398 批初版在命中路径 `serde_json::to_string`，对含
+/// tool_calls 的消息每次估算都要分配拼串；整改批改为结构化直读）。
+/// 判别式字节前缀区分类型；字符串/数组/对象带长度前缀（防拼接歧义）；
+/// 对象键按迭代序（同一 Value 的迭代序恒定 ⇒ 键确定）。
+fn hash_json(h: &mut DefaultHasher, v: &serde_json::Value) {
+    use serde_json::Value as V;
+    match v {
+        V::Null => h.write_u8(0x00),
+        V::Bool(b) => {
+            h.write_u8(0x01);
+            h.write_u8(u8::from(*b));
+        }
+        V::Number(n) => {
+            h.write_u8(0x02);
+            if let Some(i) = n.as_i64() {
+                h.write_u8(0x00);
+                h.write_i64(i);
+            } else if let Some(u) = n.as_u64() {
+                h.write_u8(0x01);
+                h.write_u64(u);
+            } else {
+                h.write_u8(0x02);
+                h.write_u64(n.as_f64().unwrap_or_default().to_bits());
+            }
+        }
+        V::String(s) => {
+            h.write_u8(0x03);
+            h.write_u64(s.len() as u64);
+            h.write(s.as_bytes());
+        }
+        V::Array(items) => {
+            h.write_u8(0x04);
+            h.write_u64(items.len() as u64);
+            for item in items {
+                hash_json(h, item);
+            }
+        }
+        V::Object(map) => {
+            h.write_u8(0x05);
+            h.write_u64(map.len() as u64);
+            for (k, val) in map {
+                h.write_u64(k.len() as u64);
+                h.write(k.as_bytes());
+                hash_json(h, val);
+            }
+        }
+    }
+}
+
 /// 单条消息的 token 数——字段集与旧 chars/2 估算完全一致（content ＋
 /// reasoning_content ＋ tool_calls 的 name/序列化 arguments；role 与
-/// tool_call_id 不入尺，与历史口径零漂移）。哈希直读字段（命中路径零
-/// 分配）；未命中才拼接文本走 tokenizer。
+/// tool_call_id 不入尺，与历史口径零漂移）。哈希直读字段，命中路径零
+/// 分配（0dw S1 整改批：content/reasoning 之间补 `0xff` 字段边界字节、
+/// arguments 就地规范哈希——SipHash 是流式哈希，无边界拼接会跨字段歧义
+/// （`("ab", Some("c"))` 与 `("abc", None)` 恒同键 ⇒ 第二条消息拿到第一
+/// 条的缓存值）；未命中才拼接文本走 tokenizer）。
 pub(crate) fn message_tokens(m: &Message) -> u64 {
     let mut hasher = DefaultHasher::new();
     hasher.write(m.content.as_bytes());
     if let Some(r) = &m.reasoning_content {
+        hasher.write_u8(0xff); // 字段边界（防拼接歧义；SipHash 流式 write(a)+write(b) == write(ab)）
         hasher.write(r.as_bytes());
     }
     for tc in &m.tool_calls {
         hasher.write_u8(0xff); // 字段边界（防拼接歧义）
         hasher.write(tc.name.as_bytes());
         hasher.write_u8(0xff);
-        let args = serde_json::to_string(&tc.arguments).unwrap_or_default();
-        hasher.write(args.as_bytes());
+        hash_json(&mut hasher, &tc.arguments);
     }
     let key = hasher.finish();
     if let Some(tokens) = cached(key) {
@@ -171,6 +224,27 @@ mod tests {
             with_tools > message_tokens(&msg("call it")),
             "tool fields add tokens"
         );
+    }
+
+    /// 0dw S1 整改批（2026-11-18，398 批审查 P3a）：content/reasoning 字段
+    /// 边界——SipHash 流式拼接使 `("ab", Some("c"))` 与 `("abc", None)`
+    /// 恒同键（398 批初版无边界字节 ⇒ 第二条消息拿到第一条的缓存值，且
+    /// 两者 miss 路径文本不同、token 数不同）。边界字节修复后各消息独立
+    /// 计：先缓存拼接歧义形态，无 reasoning 形态必须等于自身文本的冷计
+    /// 数（混尺键下它会拿到拼接形态的缓存值而失配——回归锁）。
+    #[test]
+    fn content_reasoning_boundary_prevents_key_aliasing() {
+        let mut aliased = msg("a测b");
+        aliased.reasoning_content = Some("b".to_string());
+        let plain = msg("a测b");
+        let aliased_tokens = message_tokens(&aliased);
+        let plain_tokens = message_tokens(&plain);
+        assert_eq!(
+            plain_tokens,
+            text_tokens("a测b"),
+            "无 reasoning 消息不得拿到拼接形态的缓存值（键混尺即失配）"
+        );
+        assert!(aliased_tokens > 0);
     }
 
     /// Perf 关读数（0dw S1；`#[ignore]` 探针，`cargo test -p orz-loop --lib

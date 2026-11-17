@@ -2679,9 +2679,11 @@ pub fn verify_context_checkpoint_era(events: &[Value]) -> Vec<String> {
 /// journal 序上自 1 起严格递增（ModelResponse 到达序＝journal 写序；降级
 /// 刊只丢尾不破单调）；③ `usage_complete` 与五项 null 集合机械一致——
 /// 全在 ⇒ true、任一缺席 ⇒ false（双向判定，false 但全在或 true 但有缺
-/// 均报）。Python 冻结镜像 `_verify_v02_model_call_usage` 同形；逐调用
-/// `prompt_tokens` ↔ 同 run `run_usage_metered.model_calls` 合计对账由
-/// usage_metering 族承载，本族不重复执法合计。
+/// 均报）。Python 冻结镜像 `_verify_v02_model_call_usage` 同形；本族不执
+/// 法合计面——「最大 call_seq ↔ 同 run `run_usage_metered.model_calls`」
+/// 的合计对账由 journal 单源可复算（0dw S3 读数面核对），双族均不执法
+/// （0dw S1 整改批措辞修正：原注记称合计对账由 usage_metering 族承载，
+/// 实际该族无此执法）。
 pub fn verify_model_call_usage(events: &[Value]) -> Vec<String> {
     const TOKEN_FIELDS: &[&str] = &[
         "prompt_tokens",
