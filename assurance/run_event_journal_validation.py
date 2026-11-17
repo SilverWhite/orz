@@ -4774,6 +4774,92 @@ def _verify_v02_usage_metering(events: list[dict[str, Any]]) -> list[str]:
             )
     return errors
 
+
+def _verify_v02_model_call_usage(events: list[dict[str, Any]]) -> list[str]:
+    """0dw S1 逐调用 usage 落账族 (2026-11-17, CONTEXT-FACE-SCALE-RULER-
+    ALIGNMENT 缺陷 2) — Rust twin `families.rs::verify_model_call_usage`.
+
+    - Payload shape: agent_role 非空字符串；call_seq >= 1 整数；
+      face_estimate_tokens >= 0 整数；五项 token 整数或显式 null
+      （键缺席与类型错都报，null 是合法缺席形态）；usage_complete 布尔.
+    - 单调：call_seq 在 journal 序上自 1 起严格递增（ModelResponse 到达序
+      ＝journal 写序；降级刊只丢尾不破单调）.
+    - 跨字段：usage_complete 与五项 null 集合机械一致（全在 ⇔ true）.
+    """
+    errors: list[str] = []
+    prev_seq = 0
+    for index, event in enumerate(events):
+        if event.get("event_type") != "model_call_usage":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            errors.append(f"event {index}: model_call_usage payload must be an object")
+            continue
+        agent_role = payload.get("agent_role")
+        if not isinstance(agent_role, str) or not agent_role:
+            errors.append(
+                f"event {index}: model_call_usage agent_role must be a "
+                "non-empty string"
+            )
+        call_seq = payload.get("call_seq")
+        call_seq_ok = (
+            isinstance(call_seq, int)
+            and not isinstance(call_seq, bool)
+            and call_seq >= 1
+        )
+        if call_seq_ok:
+            if call_seq <= prev_seq:
+                errors.append(
+                    f"event {index}: model_call_usage call_seq {call_seq} must "
+                    f"be strictly increasing (previous {prev_seq})"
+                )
+            prev_seq = call_seq
+        else:
+            errors.append(
+                f"event {index}: model_call_usage call_seq must be an integer >= 1"
+            )
+        face_estimate = payload.get("face_estimate_tokens")
+        if not (
+            isinstance(face_estimate, int)
+            and not isinstance(face_estimate, bool)
+            and face_estimate >= 0
+        ):
+            errors.append(
+                f"event {index}: model_call_usage face_estimate_tokens must be "
+                "a non-negative integer"
+            )
+        present = 0
+        for field in _USAGE_METER_TOKEN_FIELDS:
+            value = payload.get(field)
+            if value is None and field in payload:
+                continue  # explicit null — legal absent form
+            if (
+                isinstance(value, int)
+                and not isinstance(value, bool)
+                and value >= 0
+            ):
+                present += 1
+            elif field not in payload:
+                errors.append(f"event {index}: model_call_usage missing {field}")
+            else:
+                errors.append(
+                    f"event {index}: model_call_usage {field} must be an "
+                    "integer or null"
+                )
+        usage_complete = payload.get("usage_complete")
+        if not isinstance(usage_complete, bool):
+            errors.append(
+                f"event {index}: model_call_usage usage_complete must be a boolean"
+            )
+        elif usage_complete != (present == len(_USAGE_METER_TOKEN_FIELDS)):
+            errors.append(
+                f"event {index}: model_call_usage usage_complete "
+                f"{usage_complete} contradicts the null set "
+                f"({present}/{len(_USAGE_METER_TOKEN_FIELDS)} fields present)"
+            )
+    return errors
+
+
 def _py_int(value: Any) -> int | None:
     """Mirror of the Rust judge's `families::py_int` — Python `isinstance`
     over JSON values: ints and bools count (bool is an int in Python), floats,
@@ -5101,6 +5187,9 @@ def validate_journal_text(text: str) -> list[str]:
         # 0dx (2026-10-31): era boundary accounting — Rust twin in
         # `families.rs::verify_context_checkpoint_era` (same-day roster).
         errors.extend(_verify_v02_context_checkpoint_era(events))
+        # 0dw S1 (2026-11-17): per-call usage distribution — Rust twin in
+        # `families.rs::verify_model_call_usage` (same-day roster).
+        errors.extend(_verify_v02_model_call_usage(events))
     return errors
 
 

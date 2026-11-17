@@ -102,6 +102,7 @@
         "run_usage_metered",
         "era_boundary",
         "supplement_delivered",
+        "model_call_usage",
         "tool_heartbeat"
       ]
     },

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/model-call-usage-event-payload-v0.2.schema.json",
+  "title": "model_call_usage event payload (Rust track, v0.2)",
+  "description": "0dw S1 逐调用 usage 落账面（2026-11-17，CONTEXT-FACE-SCALE-RULER-ALIGNMENT 缺陷 2）：每次 `ModelResponse` 到达（`usage_meter` 折算点同址，主车道与检索子代理共用同一 run journal）恰一条。立项档 §1.2：run 级 `run_usage_metered`（0df）只有合计、拿不到分布 ⇒「某一轮模型面估算 vs provider 实测」在账面上不可复算。本事件补逐调用分布面：`face_estimate_tokens`（请求模型面估算，provider tokenizer 量尺——0dw 缺陷 1 同批换尺）与 `prompt_tokens`（provider 实测）逐调用可配对（验收 §4.1：从 journal 复算每次调用的估算 vs 实测偏差，无需旁路工具）。五项 token 缺席（流中断臂等）如实 `null` 不虚构 0；`usage_complete` ＝ 五项全在。`call_seq` ＝ run 内跨车道 1 基严格递增（与 `usage_meter.model_calls` 同源）。金额不入机械记录（沿 0df 口径）；run 级聚合执法不动（`usage_metering` 法官族）。执法＝`model_call_usage` 法官族（载荷形状＋call_seq 严格递增＋usage_complete 与 null 集合一致）Rust `families.rs::verify_model_call_usage` ↔ Python `_verify_v02_model_call_usage` 同形。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "agent_role",
+    "call_seq",
+    "face_estimate_tokens",
+    "prompt_tokens",
+    "cache_hit_tokens",
+    "cache_miss_tokens",
+    "completion_tokens",
+    "reasoning_tokens",
+    "usage_complete"
+  ],
+  "properties": {
+    "agent_role": {
+      "type": "string",
+      "minLength": 1,
+      "description": "产生该次调用的车道角色（main / internal_retrieval / external_retrieval / scout；与 face_fingerprint 的 agent_role 同词汇）。"
+    },
+    "call_seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "run 内跨车道 1 基严格递增调用序号（ModelResponse 到达数；与 run_usage_metered 的 model_calls 合计对账：最大 call_seq == model_calls）。"
+    },
+    "face_estimate_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "该次请求的模型面估算 token（provider tokenizer 量尺，含静态开销；0dw 缺陷 1 换尺后的估算侧配对值）。"
+    },
+    "prompt_tokens": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "provider 实测 prompt token（缺席 ⇒ null，不虚构 0）。"
+    },
+    "cache_hit_tokens": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "provider 前缀缓存命中 token（缺席 ⇒ null）。"
+    },
+    "cache_miss_tokens": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "未命中缓存 token（缺席 ⇒ null）。"
+    },
+    "completion_tokens": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "completion token（缺席 ⇒ null）。"
+    },
+    "reasoning_tokens": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "reasoning token（观测值；completion 的子集口径；缺席 ⇒ null）。"
+    },
+    "usage_complete": {
+      "type": "boolean",
+      "description": "五项 token 全部在场 ⇒ true；任一缺席 ⇒ false。与五个 null 集合机械一致（全在 ↔ true）。"
+    }
+  }
+}

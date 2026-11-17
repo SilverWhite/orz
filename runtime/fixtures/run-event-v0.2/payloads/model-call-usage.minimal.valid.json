@@ -1,0 +1,11 @@
+{
+  "agent_role": "main",
+  "call_seq": 1,
+  "face_estimate_tokens": 98304,
+  "prompt_tokens": 103219,
+  "cache_hit_tokens": 369536,
+  "cache_miss_tokens": 440619,
+  "completion_tokens": 812,
+  "reasoning_tokens": 401,
+  "usage_complete": true
+}

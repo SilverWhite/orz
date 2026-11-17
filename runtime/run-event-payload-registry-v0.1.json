@@ -330,6 +330,10 @@
         "schema": "runtime/supplement-delivered-event-payload-v0.2.schema.json",
         "slug": "supplement-delivered"
       },
+      "model_call_usage": {
+        "schema": "runtime/model-call-usage-event-payload-v0.2.schema.json",
+        "slug": "model-call-usage"
+      },
       "tool_heartbeat": {
         "schema": "runtime/tool-heartbeat-event-payload-v0.2.schema.json",
         "slug": "tool-heartbeat"

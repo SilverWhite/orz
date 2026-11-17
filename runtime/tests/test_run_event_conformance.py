@@ -365,7 +365,9 @@ class RunEventV02ContractTests(unittest.TestCase):
         失败，而不是靠人工记得改钉值。
         354a T4b 在途工具墙钟心跳（2026-10-25，0dr / SYSTEM_CONSOLE_DESIGN
         §4.5①）：+tool_heartbeat。69 → 70（无法官族同 prompt_submitted
-        姿态）。"""
+        姿态）。
+        0dw S1 逐调用 usage 落账（2026-11-17，CONTEXT-FACE-SCALE-RULER-
+        ALIGNMENT 缺陷 2）：+model_call_usage（70 → 71）。"""
         schema = load_json(RUN_EVENT_SCHEMA_V02)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {
