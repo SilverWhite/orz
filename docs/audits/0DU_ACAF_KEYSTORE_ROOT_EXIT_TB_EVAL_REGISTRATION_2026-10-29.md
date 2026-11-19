@@ -22,6 +22,7 @@
 - **资产面不止凭据**（随删清单，按记录）：
   - 可复原（有 pin/权威/哈希）：载体位三件与载体清单（重建批例行，批档存全部哈希）、harbor 浅克隆（`scbench/harbor`，pin `31ceea3a`）、`0cr_official/manifest.json` 机器副本（权威＝196 批档 §3 表）、SCB 论文迁入件可按 272 批记录重迁。
   - **永久丢失（本地不入仓件）**：SCB 论文源件迁入副本（`scbench/scb-paper-2603.24755`，46 件；读数与结论已入 272 批档）、`s1_emulator` 证据根（0Y，691 MB／59 日志／16 引导；判据 1–7 结论已入 0Y 批档）、TB 驱动脚本、`0am_s3`／`probe-0ac-s1` 读数仓、jobs 取证、buildlogs、dogfood 隔离工作区、`orz-cache/cargo-target` 缓存。读数均已入档，无账面缺口。
+  - **2026-11-19 补登（401 批，本清单漏登两项）**：0y 支线 `D:\tb-eval\np1_m0`（86 分区全量备份 7.9 GB＋官方 OTA 链，在本清理范围内随删）与 `C:\np1_m0_ex`（260618 官方工厂镜像＋预打补丁 boot；不在 tb-eval，删除时点未考）——2026-11-19 复工盘点实证不在原位，盘点实测与 M0 影响定性见 [401 批档](401_NP1_M0_ASSET_LOSS_REGISTRATION_2026-11-19.md)。
 - **scripts 内其余 tb-eval 硬编码**（使用时即断，属同族面、随 0du 分票处理）：`dogfood_launch.ps1`／`orz_acp_launch.ps1` 内 `protoc = D:\tb-eval\.tools\protoc-25.3\bin\protoc.exe`、`freeze_rli_corpus.ps1` 缺省冻结输出根、`gate_google_observe.ps1` 全套（.env／orz-linux／venv harbor／jobs-gate／gsa-volumes）、`__wtest.ps1`。
 
 ## §4 0du 迁移范围（排期；实施批待用户令）
