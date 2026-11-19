@@ -3043,6 +3043,13 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_root / f"{slug}.minimal.valid.json": schema
         for slug, schema in run_event_v02_payload_schema_by_slug.items()
     }
+    # 0dv S2 (2026-11-19, 403): idle-wake boundary positive lock — the
+    # result_delivered boundary enum gained a fourth value `idle_wake`
+    # (in-place additive, historical journals replay clean).
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root
+        / "result-delivered.idle-wake.valid.json"
+    ] = run_event_v02_payload_schema_by_slug["result-delivered"]
     # ACAF Slice 2 fail-closed (2026-08-13): extra positive fixtures for the
     # new reject codes (schema enum extension). These are pre-signing
     # refusals — `ticket_id` is null (no ticket was ever issued, D-14/D-15).
@@ -3491,6 +3498,9 @@ def check_repository() -> dict[str, Any]:
         "local-browser-read.jsonl",
         "real-doc-retrieval.jsonl",
         "cross-prompt-restore.jsonl",
+        # 0dv S2 (2026-11-19, 403): idle-wake boundary full-chain journal —
+        # wake-open result_delivered{boundary: idle_wake} delivery pair.
+        "idle-wake-delivery.jsonl",
     }
     run_event_journal_v02_names = {
         path.name for path in run_event_journal_v02_root.glob("*.jsonl")

@@ -1,0 +1,11 @@
+{
+  "result_source": "background_task",
+  "source_id": "TASK-0041",
+  "boundary": "idle_wake",
+  "delivery_mode": "direct",
+  "delivery_class": "I1_immediate_material",
+  "suppressed": false,
+  "latency_ms": 0,
+  "dedupe_key": "background_task:TASK-0041",
+  "delivered_at": "2026-11-19T00:00:00Z"
+}

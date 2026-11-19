@@ -24,8 +24,8 @@
       "description": "来源身份：任务 id / 子代理结果 id / call_id。"
     },
     "boundary": {
-      "enum": ["B1_tool_result", "B2_turn_end", "B3_mid_generation"],
-      "description": "投递边界（设计 §2.1）。B4 pending 工具等待无合法注入点，不构成边界。"
+      "enum": ["B1_tool_result", "B2_turn_end", "B3_mid_generation", "idle_wake"],
+      "description": "投递边界（设计 §2.1）。B4 pending 工具等待无合法注入点，不构成边界。idle_wake＝0dv 后台完成闲置唤醒（2026-11-19，402/403 批）：会话 idle 时后台任务完成事实经唤醒 run 开局投递，就地加位——历史 journal 回放安全。"
     },
     "delivery_mode": {
       "enum": ["direct", "sentence_resume", "digest"],

@@ -293,6 +293,41 @@ class RunEventV02ContractTests(unittest.TestCase):
             messages = [error.message for error in validator.iter_errors(missing_log)]
             self.assertIn("'prefilter_log' is a required property", messages)
 
+    def test_v02_result_delivered_idle_wake_boundary_contract(self) -> None:
+        """0dv S2 (2026-11-19, BG-DONE-IDLE-WAKE design §4): the
+        ``result_delivered.boundary`` closed enum gained a fourth value
+        ``idle_wake`` (in-place additive — historical journals replay
+        clean). The hand-written positive fixture must validate, and an
+        out-of-set boundary must stay rejected (strict schema, 399
+        precedent)."""
+        schema_path = RUNTIME / "result-delivered-event-payload-v0.2.schema.json"
+        schema = load_json(schema_path)
+        validator = Draft202012Validator(schema, format_checker=FormatChecker())
+
+        fixture = load_json(
+            PAYLOAD_DIR_V02 / "result-delivered.idle-wake.valid.json"
+        )
+        with self.subTest(arm="positive fixture validates"):
+            self.assertEqual(
+                [error.message for error in validator.iter_errors(fixture)], []
+            )
+        self.assertEqual(fixture["boundary"], "idle_wake")
+
+        unknown = json.loads(json.dumps(fixture))
+        unknown["boundary"] = "B4_pending_tool"
+        with self.subTest(arm="out-of-set boundary rejected"):
+            messages = [error.message for error in validator.iter_errors(unknown)]
+            self.assertTrue(
+                messages, "closed enum must reject an unknown boundary value"
+            )
+
+        replayed = json.loads(json.dumps(fixture))
+        replayed["boundary"] = "B1_tool_result"
+        with self.subTest(arm="historical boundary still accepted"):
+            self.assertEqual(
+                [error.message for error in validator.iter_errors(replayed)], []
+            )
+
     def test_v02_envelope_samples_validate(self) -> None:
         for instance_path, schema_path in ENVELOPE_POSITIVE_CONTRACTS_V02.items():
             with self.subTest(instance=instance_path.name):
