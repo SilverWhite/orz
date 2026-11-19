@@ -586,6 +586,10 @@ fn main_inner() {
     // `build_cli_host` are the same story. Echo only (no policy decision
     // here): the bridge remains the single source of truth.
     eprintln!("{}", permission_mode_banner());
+    // 0dv S2（403 批）：即时投递开关面非缺省告知（缺省零输出）。
+    if let Some(line) = delivery_switch_banner() {
+        eprintln!("{line}");
+    }
 
     if args.iter().any(|a| a == "--plan") {
         run_plan(&prompt, wallclock, stall_timeout);
@@ -822,6 +826,52 @@ fn permission_mode_banner() -> String {
         };
         render_posture_line(auto_approve, source)
     }
+}
+
+/// 0dv S2（403 批，BG-DONE-IDLE-WAKE 设计 §2.4/§5.5）：即时投递开关面
+/// 启动告知——仅非缺省姿态打一行（缺省＝主开关 on＋唤醒 on，零输出
+/// 不加噪）。M1 env 已合并退役（403）不再门控，设值在此一行如实告知。
+/// 返回 `None`＝缺省姿态零输出。
+fn delivery_switch_banner() -> Option<String> {
+    let main_env = std::env::var_os(orz_loop::immediate_delivery::SWITCH_ENV).is_some();
+    let wake_env = std::env::var_os(orz_loop::immediate_delivery::IDLE_WAKE_ENV).is_some();
+    let m1_set = orz_loop::immediate_delivery::m1_env_set();
+    if !main_env && !wake_env && !m1_set {
+        return None;
+    }
+    Some(render_delivery_switch_line(
+        orz_loop::immediate_delivery::switch_enabled(),
+        if main_env {
+            "ORZ_IMMEDIATE_RESULT_DELIVERY"
+        } else {
+            "default"
+        },
+        orz_loop::immediate_delivery::idle_wake_enabled(),
+        if wake_env { "ORZ_IDLE_WAKE" } else { "default" },
+        m1_set,
+    ))
+}
+
+/// 0dv S2 姿态行纯渲染——与 `render_posture_line` 同纪律：纯函数供
+/// 字面钉测试，不读 env/静态。
+fn render_delivery_switch_line(
+    mode: bool,
+    mode_source: &str,
+    wake: bool,
+    wake_source: &str,
+    m1_set: bool,
+) -> String {
+    let mut line = format!(
+        "[immediate-delivery] mode={mode} (source={mode_source}) idle_wake={wake} (source={wake_source})",
+        mode = if mode { "on" } else { "off" },
+        mode_source = mode_source,
+        wake = if wake { "on" } else { "off" },
+        wake_source = wake_source,
+    );
+    if m1_set {
+        line.push_str(" m1_env_set=true (retired 403: merged into the main switch, the value no longer gates)");
+    }
+    line
 }
 
 /// ACP stdio server entry: serve `session/new` + `session/prompt` over the
@@ -1520,6 +1570,10 @@ fn run_web(rest: &[String]) {
     // `-p` 面同一行权限姿态——Web 是 Windows 日常主入口，`--no-yolo`
     // 生效与否必须一处可见（复用同一解析，零新契约）。
     eprintln!("{}", permission_mode_banner());
+    // 0dv S2（403 批）：即时投递开关面非缺省告知（缺省零输出）。
+    if let Some(line) = delivery_switch_banner() {
+        eprintln!("{line}");
+    }
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {

@@ -2043,7 +2043,7 @@ impl LoopHost for OrzHost {
             orz_tools::reminders::task_completion::resolve_task_output_tool_name(&bridge).await;
         let read_tool_name =
             orz_tools::reminders::task_completion::resolve_read_tool_name(&bridge).await;
-        tasks
+        let facts: Vec<orz_loop::host::CompletedTaskFact> = tasks
             .into_iter()
             .map(|t| orz_loop::host::CompletedTaskFact {
                 report: orz_tools::reminders::task_completion::format_bash_completion(
@@ -2054,7 +2054,17 @@ impl LoopHost for OrzHost {
                 task_id: t.task_id,
                 exit_code: t.exit_code,
             })
-            .collect()
+            .collect();
+        // 0dv S2（403 批）：消费后即席持久化 `ReportedTaskCompletions`——
+        // 本 drain 是 run 外窗口里唯一会 mark_reported 的通道（B1/B2 间隙
+        // 与 idle 唤醒 run 开局共用），工具执行驱动的自动存档不覆盖此点；
+        // 不落盘则宿主观察者 peek（读持久化账）会把已投任务当未投，
+        // 造成空唤醒/重复投递。持久化失败不影响本次投递（账本内存态已
+        // 一致，下次工具执行自然补档）。
+        if !facts.is_empty() {
+            self.registry.toolset().persist_state().await;
+        }
+        facts
     }
 
     async fn finalize_process_trees(&self) {

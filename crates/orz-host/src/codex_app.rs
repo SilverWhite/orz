@@ -851,6 +851,11 @@ pub async fn run_codex_server(
     transport: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
 ) -> Result<(), CodexError> {
     let server = parts.server.clone();
+    let acp = parts.server.acp.clone();
+    // 0dv S2（403 批，BG-DONE-IDLE-WAKE 设计 §2.1）：idle 唤醒观察者随
+    // codex 服务起挂（LocalSet spawn_local——与出站/翻译任务同形态；
+    // 开关关＝空转零行为）。
+    tokio::task::spawn_local(acp.idle_wake_watcher());
     let (read, write) = tokio::io::split(transport);
     let mut reader = BufReader::new(read);
     // Outbound writer task.

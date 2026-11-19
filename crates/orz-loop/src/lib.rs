@@ -37,7 +37,7 @@ pub mod fatigue;
 pub mod gateway;
 pub mod host;
 mod host_exec;
-mod immediate_delivery;
+pub mod immediate_delivery; // 0dv 403：宿主观察者/唤醒面（IDLE_WAKE_TRIGGER/PROMPT、开关）跨 crate 消费
 pub(crate) mod mechanical_audit;
 pub mod model_face;
 pub mod model_stop;

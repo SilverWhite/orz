@@ -111,7 +111,14 @@ impl ResourcesPersistence {
     ///
     /// Returns `true` if state was loaded, `false` if no file or parse error.
     pub fn load(&self, resources: &mut Resources) -> bool {
-        let json = match std::fs::read_to_string(&self.state_path) {
+        Self::load_read_only(self.state_path.clone(), resources)
+    }
+
+    /// 0dv S2（403 批）：只读加载——不开后台写任务（[`Self::new`] 会
+    /// spawn writer task，观察面高频调用不可接受）。与 [`Self::load`]
+    /// 同一文件与解析形态。
+    pub fn load_read_only(state_path: PathBuf, resources: &mut Resources) -> bool {
+        let json = match std::fs::read_to_string(&state_path) {
             Ok(s) => s,
             Err(_) => return false,
         };
@@ -121,7 +128,7 @@ impl ResourcesPersistence {
             Err(e) => {
                 tracing::warn!(
                     "Failed to parse resources state from {:?}: {}",
-                    self.state_path,
+                    state_path,
                     e
                 );
                 return false;
@@ -131,10 +138,7 @@ impl ResourcesPersistence {
         let data = match Self::value_to_nested_map(top) {
             Some(m) => m,
             None => {
-                tracing::warn!(
-                    "Resources state file {:?} has unexpected shape",
-                    self.state_path
-                );
+                tracing::warn!("Resources state file {:?} has unexpected shape", state_path);
                 return false;
             }
         };

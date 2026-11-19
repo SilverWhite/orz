@@ -4861,17 +4861,11 @@ impl AcpServer {
         // 0dx S2①：触发解析（输入的句法属性，外生、零模型参与——设计 §1.1）。
         // `/btw <rest>`＝同时代补充（剥前缀照常跑）；`/checkpoint [rest]`＝
         // 手动时代切换；无前缀＋会话非空＝自动换代（否则＝首输入，同代）。
-        let (effective_prompt, era_trigger) = match orz_loop::era::parse_input_intent(prompt) {
-            orz_loop::era::InputIntent::SameEra(rest) => (rest, None),
-            orz_loop::era::InputIntent::Checkpoint(rest) => (
-                rest.unwrap_or_default(),
-                Some(orz_loop::era::EraTrigger::CheckpointCommand),
-            ),
-            orz_loop::era::InputIntent::Plain | orz_loop::era::InputIntent::EmptySameEra => (
-                prompt.to_string(),
-                (!conversation.is_empty()).then_some(orz_loop::era::EraTrigger::UnprefixedInput),
-            ),
-        };
+        // 0dv S2（403 批）：裁决抽单源 `era::resolve_era_trigger`——idle
+        // 唤醒机械 prompt（`[idle_wake]` 前缀）跳过换代判定，唤醒 run 落
+        // 当前时代内（era 不切换、黑板不清；设计稿 §2.5）。
+        let (effective_prompt, era_trigger) =
+            orz_loop::era::resolve_era_trigger(prompt, conversation.is_empty());
         // P0-1（0dq，2026-10-25）：回合级写前落盘 sink——loop 在「声明入列
         // /工具结果入列」边界回调，这里沿 take-out 现场重建续接包落侧车。
         // 会话级字段（recall_log／负担档位／刻度水位）取 take-out 值：检查
@@ -6908,6 +6902,182 @@ impl Default for AcpServer {
     }
 }
 
+// ════════════ 0dv S2（403 批，BG-DONE-IDLE-WAKE）会话域 idle 唤醒观察者 ════════════
+//
+// 设计权威：docs/IDLE_WAKE_BACKGROUND_COMPLETION_DESIGN_2026-11-19.md §2.1/§2.2。
+// run 外唤醒路径的主体——单 ticker 轮询全部在表会话，peek **不消费**
+// （terminal backend 任务表过滤＋持久化已投账过滤＋观察者已见账），
+// idle 且去抖窗满 ⇒ 经 `handle_session_prompt` 创建机械唤醒 run
+// （`[idle_wake]` 前缀；消费点＝唤醒 run 开局的 drain，peek-then-drain
+// 竞态守卫——窗内用户 prompt 到达 ⇒ busy 拒绝，facts 留账由该 run 的
+// B1 收走，零丢失零重复）。开关关 ⇒ 零唤醒零行为（设计稿 §2.4）。
+
+/// 观察者 tick 间隔（实现常量；设计 §2.7 不入契约面）。
+const IDLE_WAKE_TICK_MS: u64 = 2_000;
+
+impl AcpServer {
+    /// 观察者主体（返回 future；stdio 多线程走 `tokio::spawn`、codex
+    /// LocalSet 走 `spawn_local`——本 future 不绑定特定 spawn 形态）。
+    pub fn idle_wake_watcher(
+        self: &Arc<Self>,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let server = Arc::clone(self);
+        async move {
+            // 去抖窗（会话 → 窗开时刻）与观察者已见任务账（会话 → task ids）。
+            // 任务本地状态：不进 `StoredSession`（观察者自身状态，随进程灭；
+            // 会话离表即清）。
+            let mut windows: HashMap<String, tokio::time::Instant> = HashMap::new();
+            let mut seen: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(IDLE_WAKE_TICK_MS)).await;
+                // 开关面（主开关 ∧ `ORZ_IDLE_WAKE` 子开关，均缺省开）。
+                if !orz_loop::immediate_delivery::idle_wake_enabled() {
+                    windows.clear();
+                    continue;
+                }
+                let debounce_ms = orz_loop::immediate_delivery::idle_wake_debounce_ms();
+                // 会话快照（不持锁跨 await）。
+                let snapshot: Vec<(
+                    String,
+                    Arc<orz_tools::computer::local::LocalTerminalBackend>,
+                    PathBuf,
+                    bool,
+                )> = {
+                    let sessions = server
+                        .sessions
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    sessions
+                        .iter()
+                        .map(|(id, s)| {
+                            (
+                                id.clone(),
+                                s.terminal_backend.clone(),
+                                s.base_dir.clone(),
+                                s.closing,
+                            )
+                        })
+                        .collect()
+                };
+                if snapshot.is_empty() {
+                    windows.clear();
+                    seen.clear();
+                    continue;
+                }
+                let live: std::collections::HashSet<&str> =
+                    snapshot.iter().map(|(id, ..)| id.as_str()).collect();
+                windows.retain(|k, _| live.contains(k.as_str()));
+                seen.retain(|k, _| live.contains(k.as_str()));
+                for (sid, backend, base_dir, closing) in snapshot {
+                    if closing {
+                        windows.remove(&sid);
+                        seen.remove(&sid);
+                        continue;
+                    }
+                    // run 在途 ⇒ 清窗跳过（完成事实归该 run 的 B1/B2）。
+                    let run_active = server
+                        .runs
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .contains_key(&sid);
+                    if run_active {
+                        windows.remove(&sid);
+                        continue;
+                    }
+                    let session_seen = seen.entry(sid.clone()).or_default();
+                    let peeked =
+                        idle_wake_peek(backend.as_ref(), &sid, &base_dir, session_seen).await;
+                    if peeked.is_empty() {
+                        windows.remove(&sid);
+                        continue;
+                    }
+                    let now = tokio::time::Instant::now();
+                    match windows.get(&sid) {
+                        Some(start)
+                            if now.duration_since(*start)
+                                >= std::time::Duration::from_millis(debounce_ms) =>
+                        {
+                            windows.remove(&sid);
+                            for t in &peeked {
+                                session_seen.insert(t.task_id.clone());
+                            }
+                            // 唤醒 run 创建（busy 拒绝＝窗内用户 prompt 到达的
+                            // 竞态臂：facts 未消费，由胜出 run 的 B1 收走）。
+                            let srv = Arc::clone(&server);
+                            let prompt = orz_loop::immediate_delivery::IDLE_WAKE_PROMPT.to_string();
+                            let sid2 = sid.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = srv.handle_session_prompt(&sid2, &prompt).await {
+                                    tracing::debug!(
+                                        session_id = %sid2,
+                                        error = %e,
+                                        "idle wake run rejected (facts stay in ledger for the winning run's B1)"
+                                    );
+                                }
+                            });
+                        }
+                        Some(_) => {}
+                        None => {
+                            windows.insert(sid.clone(), now);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 观察者 peek（非消费）：terminal backend 任务表过滤（completed、非
+/// Monitor、owner 同会话或无主兼容——与 drain 的 `task_owned_by_session`
+/// 同语义）＋持久化已投账过滤（`cwd/.gsa/resources_state.json` 的
+/// `ReportedTaskCompletions`；消费侧 drain 后即席持久化保持新鲜）＋
+/// 观察者已见账（本观察者已为之开过窗的任务不再重复唤醒）。
+async fn idle_wake_peek(
+    backend: &dyn orz_tools::computer::types::TerminalBackend,
+    session_id: &str,
+    base_dir: &Path,
+    seen: &std::collections::HashSet<String>,
+) -> Vec<orz_tools::computer::types::TaskSnapshot> {
+    use orz_tools::computer::types::TaskKind;
+    let tasks = backend.list_tasks().await;
+    if tasks.is_empty() {
+        return Vec::new();
+    }
+    let reported = load_reported_task_ids(base_dir);
+    tasks
+        .into_iter()
+        .filter(|t| t.completed && t.kind != TaskKind::Monitor)
+        .filter(|t| match t.owner_session_id.as_deref() {
+            Some(owner) => owner == session_id,
+            None => true,
+        })
+        .filter(|t| !reported.contains(t.task_id.as_str()))
+        .filter(|t| !seen.contains(&t.task_id))
+        .collect()
+}
+
+/// 已投任务 id 集（只读加载，不开后台写任务——见
+/// `ResourcesPersistence::load_read_only`）。
+fn load_reported_task_ids(base_dir: &Path) -> std::collections::HashSet<String> {
+    use orz_tools::reminders::task_completion::ReportedTaskCompletions;
+    use orz_tools::types::resources::{Resources, State};
+    let path = base_dir.join(".gsa").join("resources_state.json");
+    let mut resources = Resources::new();
+    resources.register_state::<ReportedTaskCompletions>();
+    if !orz_tools::persistence::ResourcesPersistence::load_read_only(path, &mut resources) {
+        return std::collections::HashSet::new();
+    }
+    resources
+        .get::<State<ReportedTaskCompletions>>()
+        .map(|s| {
+            s.reported_snapshot()
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 // ── Phase 1: Minimal LoopHost implementation ─────────────────────────
 
 use async_trait::async_trait;
@@ -7055,6 +7225,153 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    // ── 0dv S2（403 批，BG-DONE-IDLE-WAKE）：观察者 peek／已投账读取钉 ──
+
+    use orz_tools::computer::types::{
+        BackgroundHandle, KillOutcome, TaskKind, TaskSnapshot,
+        TerminalBackend as PeekTerminalBackend, TerminalRunRequest, TerminalRunResult,
+    };
+
+    #[derive(Debug)]
+    struct PeekMockTerminal {
+        tasks: Vec<TaskSnapshot>,
+    }
+
+    #[async_trait]
+    impl PeekTerminalBackend for PeekMockTerminal {
+        async fn run(
+            &self,
+            _: TerminalRunRequest,
+        ) -> Result<TerminalRunResult, orz_tools::computer::types::ComputerError> {
+            unimplemented!()
+        }
+        async fn run_background(
+            &self,
+            _: TerminalRunRequest,
+        ) -> Result<BackgroundHandle, orz_tools::computer::types::ComputerError> {
+            unimplemented!()
+        }
+        async fn kill_task(&self, _: &str) -> KillOutcome {
+            KillOutcome::NotFound
+        }
+        async fn get_task(&self, _: &str) -> Option<TaskSnapshot> {
+            None
+        }
+        async fn wait_for_completion(
+            &self,
+            _: &str,
+            _: Option<std::time::Duration>,
+        ) -> Option<TaskSnapshot> {
+            None
+        }
+        async fn list_tasks(&self) -> Vec<TaskSnapshot> {
+            self.tasks.clone()
+        }
+    }
+
+    fn peek_task(id: &str, owner: Option<&str>, completed: bool, kind: TaskKind) -> TaskSnapshot {
+        TaskSnapshot {
+            task_id: id.into(),
+            command: "echo test".into(),
+            display_command: None,
+            cwd: String::new(),
+            start_time: std::time::SystemTime::now(),
+            end_time: completed.then(std::time::SystemTime::now),
+            output: String::new(),
+            output_file: std::path::PathBuf::new(),
+            truncated: false,
+            exit_code: Some(0),
+            signal: None,
+            completed,
+            kind,
+            block_waited: false,
+            explicitly_killed: false,
+            owner_session_id: owner.map(|s| s.to_string()),
+            description: None,
+            is_backgrounded: true,
+            new_output_bytes: None,
+            total_output_bytes: None,
+        }
+    }
+
+    /// peek 过滤链钉：completed ∧ 非 Monitor ∧ owner 同会话/无主兼容 ∧
+    /// 未投（持久化账）∧ 观察者未见。消费面（drain）不受 peek 影响。
+    #[tokio::test]
+    async fn idle_wake_peek_filters_to_pending_owned_completions() {
+        let dir = test_dir();
+        // 持久化已投账："done-task" 已投。
+        {
+            let gsa = dir.join(".gsa");
+            std::fs::create_dir_all(&gsa).unwrap();
+            let mut res = orz_tools::types::resources::Resources::new();
+            res.register_state::<orz_tools::reminders::task_completion::ReportedTaskCompletions>();
+            use orz_tools::types::resources::State;
+            res.get_or_default::<State<orz_tools::reminders::task_completion::ReportedTaskCompletions>>()
+                .mark_reported("done-task");
+            let persistence =
+                orz_tools::persistence::ResourcesPersistence::new(gsa.join("resources_state.json"));
+            persistence.save(&res);
+            persistence.flush().await;
+        }
+        let backend = PeekMockTerminal {
+            tasks: vec![
+                peek_task("fresh", Some("sess-1"), true, TaskKind::Bash),
+                peek_task("other-owner", Some("sess-9"), true, TaskKind::Bash),
+                peek_task("done-task", Some("sess-1"), true, TaskKind::Bash),
+                peek_task("running", Some("sess-1"), false, TaskKind::Bash),
+                peek_task("monitor", Some("sess-1"), true, TaskKind::Monitor),
+                peek_task("unowned", None, true, TaskKind::Bash),
+            ],
+        };
+        let seen: std::collections::HashSet<String> =
+            ["watcher-seen"].iter().map(|s| s.to_string()).collect();
+        // 观察者已见账同样过滤：补一个已见任务。
+        let mut tasks_with_seen = backend.tasks.clone();
+        tasks_with_seen.push(peek_task(
+            "watcher-seen",
+            Some("sess-1"),
+            true,
+            TaskKind::Bash,
+        ));
+        let backend_with_seen = PeekMockTerminal {
+            tasks: tasks_with_seen,
+        };
+        let peeked = idle_wake_peek(&backend_with_seen, "sess-1", &dir, &seen).await;
+        let mut ids: Vec<String> = peeked.iter().map(|t| t.task_id.clone()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec!["fresh".to_string(), "unowned".to_string()],
+            "peek 必须只留待投的本人任务（无主兼容臂放行）"
+        );
+    }
+
+    /// 已投账读取钉：round-trip（save→load_read_only）一致；无文件 ⇒ 空集。
+    #[tokio::test]
+    async fn load_reported_task_ids_round_trips_persisted_ledger() {
+        let dir = test_dir();
+        let ids = load_reported_task_ids(&dir);
+        assert!(ids.is_empty(), "无账文件 ⇒ 空集");
+        let gsa = dir.join(".gsa");
+        std::fs::create_dir_all(&gsa).unwrap();
+        let mut res = orz_tools::types::resources::Resources::new();
+        res.register_state::<orz_tools::reminders::task_completion::ReportedTaskCompletions>();
+        use orz_tools::types::resources::State;
+        {
+            let state = res.get_or_default::<State<orz_tools::reminders::task_completion::ReportedTaskCompletions>>();
+            state.mark_reported("t-alpha");
+            state.mark_reported("t-beta");
+            assert!(!state.mark_reported("t-alpha"), "同 id 二次 mark 必须拒绝");
+        }
+        let persistence =
+            orz_tools::persistence::ResourcesPersistence::new(gsa.join("resources_state.json"));
+        persistence.save(&res);
+        persistence.flush().await;
+        let ids = load_reported_task_ids(&dir);
+        assert!(ids.contains("t-alpha") && ids.contains("t-beta"));
+        assert_eq!(ids.len(), 2);
     }
 
     /// `ORZ_TERMINAL_DECLARATION` 测试卫生（permission `YoloEnvGuard` 同式，

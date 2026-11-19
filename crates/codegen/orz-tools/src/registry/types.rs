@@ -3062,8 +3062,10 @@ mod tests {
             "reminders on: description should promise notification: {desc}"
         );
         assert!(
-            desc.contains("Background tasks survive across turns until the session ends"),
-            "reminders on: description should state the session-domain boundary: {desc}"
+            desc.contains(
+                "Background tasks survive across turns until they exit, the session ends, you stop them, or an explicit timeout fires",
+            ),
+            "reminders on: description should state the session-domain boundary (0dz 397 wording): {desc}"
         );
         assert!(
             field_desc.contains("you are notified on completion"),
@@ -3085,9 +3087,11 @@ mod tests {
             desc.contains("check on it later with the get_task_output tool"),
             "reminders off: description should point at get_task_output: {desc}"
         );
-        // 0dh S2 (ADR-0010 §14.87)：字段描述带会话域边界句。
+        // 0dh S2 (ADR-0010 §14.87)：字段描述带会话域边界句（0dz 397 措辞）。
         assert!(
-            field_desc.contains("survive across turns until the session ends"),
+            field_desc.contains(
+                "survive across turns until they exit, the session ends, you stop them, or an explicit timeout fires",
+            ),
             "is_background description should state the session-domain boundary: {field_desc}"
         );
         assert!(

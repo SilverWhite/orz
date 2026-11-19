@@ -709,6 +709,46 @@ impl ToolBridge {
     ) -> Self {
         Self { registry, terminal }
     }
+
+    /// 0dv S2（403 批，BG-DONE-IDLE-WAKE 设计 §2.1/§2.2）：非消费列观察
+    /// ——与 [`Self::drain_between_turn_bash_completions`] 同过滤（completed、
+    /// 非 Monitor、本会话所有、未预留、未 reported），**不写**
+    /// `ReportedTaskCompletions`。宿主 idle 唤醒观察者据此判定「有待投递
+    /// 完成事实」；消费仍只发生在唤醒 run 开局的 drain（peek-then-drain
+    /// 竞态守卫：观察与消费分离，窗内用户 prompt 到达 ⇒ facts 留账 B1
+    /// 收走，零丢失零重复）。
+    pub async fn peek_between_turn_bash_completions(
+        &self,
+        reserved_ids: &[String],
+    ) -> Vec<TaskSnapshot> {
+        let tasks = match self.list_tasks().await {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+        let completed: Vec<TaskSnapshot> = tasks
+            .into_iter()
+            .filter(|t| t.completed && t.kind != TaskKind::Monitor)
+            .collect();
+        if completed.is_empty() {
+            return Vec::new();
+        }
+
+        use crate::reminders::task_completion::{ReportedTaskCompletions, task_owned_by_session};
+
+        let res = self.registry.resources.lock().await;
+        let my_owner = res.get::<OwnerSessionId>().map(|o| o.0.clone());
+        let is_reported = |id: &str| {
+            res.get::<State<ReportedTaskCompletions>>()
+                .map(|state| state.is_reported(id))
+                .unwrap_or(false)
+        };
+        completed
+            .into_iter()
+            .filter(|t| task_owned_by_session(t, my_owner.as_deref()))
+            .filter(|t| !reserved_ids.contains(&t.task_id))
+            .filter(|t| !is_reported(&t.task_id))
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -933,5 +973,79 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["reserved".to_string()]
         );
+    }
+
+    // ── peek_between_turn_bash_completions (0dv S2, idle-wake watcher) ──
+
+    /// 0dv S2 钉：peek 与 drain 同过滤，但**不写账**——连排两次 peek 同
+    /// 结果；peek 后 drain 仍收得到（消费只属 drain）。
+    #[tokio::test]
+    async fn peek_between_turn_completions_is_non_consuming() {
+        let toolset = FinalizedToolset::empty_for_test();
+        {
+            let mut res = toolset.resources.lock().await;
+            res.insert(OwnerSessionId("sess-1".into()));
+            res.register_state::<ReportedTaskCompletions>();
+        }
+        let backend: Arc<dyn TerminalBackend> = Arc::new(MockTerminal {
+            tasks: vec![
+                completed_task("peek-a", Some("sess-1")),
+                completed_task("peek-b", Some("sess-1")),
+            ],
+        });
+        let bridge = ToolBridge {
+            registry: Arc::new(toolset),
+            terminal: Some(backend),
+        };
+
+        let first = bridge.peek_between_turn_bash_completions(&[]).await;
+        let second = bridge.peek_between_turn_bash_completions(&[]).await;
+        let ids = |v: &[TaskSnapshot]| -> Vec<String> {
+            let mut ids: Vec<String> = v.iter().map(|t| t.task_id.clone()).collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(ids(&first), vec!["peek-a", "peek-b"]);
+        assert_eq!(ids(&first), ids(&second), "peek 不得消费账本");
+
+        // peek 之后 drain 恰好收走同一批（peek 不预留、不标记）。
+        let drained = bridge.drain_between_turn_bash_completions(&[]).await;
+        assert_eq!(ids(&drained), vec!["peek-a", "peek-b"]);
+        // drain（消费）之后 peek 恒空——账本口径同源。
+        assert!(
+            bridge
+                .peek_between_turn_bash_completions(&[])
+                .await
+                .is_empty()
+        );
+    }
+
+    /// 0dv S2 钉：peek 同样尊重预留位与已 reported 账（与 drain 同过滤）。
+    #[tokio::test]
+    async fn peek_between_turn_completions_respects_reserved_and_reported() {
+        let toolset = FinalizedToolset::empty_for_test();
+        {
+            let mut res = toolset.resources.lock().await;
+            res.register_state::<ReportedTaskCompletions>();
+            res.get_or_default::<State<ReportedTaskCompletions>>()
+                .mark_reported("already-reported");
+        }
+        let backend: Arc<dyn TerminalBackend> = Arc::new(MockTerminal {
+            tasks: vec![
+                completed_task("already-reported", None),
+                completed_task("reserved-one", None),
+                completed_task("fresh", None),
+            ],
+        });
+        let bridge = ToolBridge {
+            registry: Arc::new(toolset),
+            terminal: Some(backend),
+        };
+
+        let peeked = bridge
+            .peek_between_turn_bash_completions(&["reserved-one".to_string()])
+            .await;
+        let ids: Vec<&str> = peeked.iter().map(|t| t.task_id.as_str()).collect();
+        assert_eq!(ids, vec!["fresh"], "已 reported 与预留位都必须被 peek 过滤");
     }
 }

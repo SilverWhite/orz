@@ -6,7 +6,8 @@
 //! `result-delivered-event-payload-v0.2.schema.json` + registry + 法官 fixtures），
 //! 本模块是 S3①-b 的**产品码写入侧**：只做三件机械事——
 //!
-//! 1. 开关（`ORZ_IMMEDIATE_RESULT_DELIVERY`，默认关；§10.3 全部带开关）；
+//! 1. 开关（`ORZ_IMMEDIATE_RESULT_DELIVERY`；0dv 403 起缺省开，关臂
+//!    保留；§10.3 全部带开关）；
 //! 2. 从**本地分段检索**的模型可见渲染里解析到达事实（引擎 / 已等 ms /
 //!    逐项逐段）——渲染是工具侧稳定机器格式
 //!    （`web_search/local_segmented.rs::render_content`：
@@ -29,7 +30,7 @@
 
 use serde_json::{Value, json};
 
-/// 开关（默认关；§10.3：全部带开关，关时零事件、零行为变化）。
+/// 开关（0dv 403 起缺省开；§10.3 全部带开关的关臂保留＝`0` 整体关闭）。
 pub const SWITCH_ENV: &str = "ORZ_IMMEDIATE_RESULT_DELIVERY";
 /// 单引擎截止（ms；§9.4 不共用钟）。与工具侧同名 env 同源，默认 10s。
 pub const DEADLINE_ENV: &str = "ORZ_RETRIEVAL_DEADLINE_MS";
@@ -48,16 +49,19 @@ pub const STAGE_PROGRESS: &str = "progress";
 const RENDER_HEADER: &str = "[local_segmented]";
 const SEGMENT_PREFIX: &str = "[§";
 
-/// 开关判读：真实值 `1/true/on/yes`（大小写不敏感）为开；其余（含未设置）
-/// 为关。
+/// 开关判读：真实值 `1/true/on/yes`（大小写不敏感）为开；**缺省开**
+/// （0dv S2 裁决 1，2026-11-19——0ac §10.3「默认关」缺省姿态随 402 设计稿
+/// 修订：不翻则 idle 唤醒了也无投递通道；`0/false/off/no/未设` 关臂仍
+/// 可整体关闭）。历史：0ac S3①-b 起缺省关两年，0dv 402/403 批翻案。
 pub fn switch_enabled() -> bool {
     match std::env::var(SWITCH_ENV) {
         Ok(v) => switch_truthy(&v),
-        Err(_) => false,
+        Err(_) => true,
     }
 }
 
-/// 开关取值判读（纯函数；未设置 = 关，由调用方给 `Err` 分支落 false）。
+/// 开关取值判读（纯函数；仅真实值开，其余一律关——含空串/垃圾值，
+/// 缺省开由调用方给 `Err` 分支落 true）。
 pub fn switch_truthy(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
@@ -302,7 +306,9 @@ pub fn stable_code_from_error(text: &str) -> Option<&'static str> {
 //      按原路径收尾（绝不挂死、绝不重复注入）。
 // ══════════════════════════════════════════════════════════════════════
 
-/// M1（收尾注入）独立开关——A/B 面：M2 落码即生效，M1 需显式开。
+/// M1（收尾注入）开关 env——**0dv 403 批合并退役**：`m1_enabled()` 已
+/// 坍缩为主开关单键，本 env 不再门控（兼容读取：设值时启动面一行告知，
+/// 见 `m1_env_set`）。常量保留供 orz-bin 告知行与历史 env 识别。
 pub const M1_SWITCH_ENV: &str = "ORZ_IMMEDIATE_RESULT_DELIVERY_M1";
 /// 投递兜底 TTL（ms；§2.2 降级投递）。
 pub const TTL_ENV: &str = "ORZ_IMMEDIATE_DELIVERY_TTL_MS";
@@ -321,6 +327,9 @@ pub const DEFAULT_PROGRESS_TICK_MS: u64 = 10_000;
 /// 投递边界（schema `boundary` 闭枚举；B4 不是边界）。
 pub const BOUNDARY_B1: &str = "B1_tool_result";
 pub const BOUNDARY_B2: &str = "B2_turn_end";
+/// 0dv S2（403 批，2026-11-19）：idle 唤醒边界（schema 枚举第四位，
+/// 就地加位——历史 journal 回放安全）。唤醒 run 开局投递专用。
+pub const BOUNDARY_IDLE_WAKE: &str = "idle_wake";
 /// 投递方式（schema `delivery_mode` 闭枚举；`sentence_resume` 只随 B3）。
 pub const MODE_DIRECT: &str = "direct";
 pub const MODE_DIGEST: &str = "digest";
@@ -330,12 +339,77 @@ pub const CLASS_I3: &str = "I3_deferred_digest";
 /// 来源类型（schema `result_source` 闭枚举第一位）。
 pub const SOURCE_BACKGROUND_TASK: &str = "background_task";
 
-/// M1 开关判读：M2 主开关 **且** M1 子开关为真实值（默认关；A/B 面）。
+// ── 0dv S2（403 批，BG-DONE-IDLE-WAKE 设计 §2.2/§2.4）：idle 唤醒开关面 ──
+
+/// 唤醒 run 的 prompt 机械源标记（era 机械源判定与 loop 开局投递判定
+/// 同用此前缀；用户手打同名前缀会被当机械 run 处理——设计上可接受，
+/// 机械前缀非用户词汇表成员）。
+pub const IDLE_WAKE_TRIGGER: &str = "[idle_wake]";
+/// 唤醒 run 开局 prompt 全文（触发器＋说明行；事实本体由 run 开局
+/// drain 后注入，prompt 只作机械触发，见 agent_loop 开局投递块）。
+pub const IDLE_WAKE_PROMPT: &str = "[idle_wake] 后台任务完成机械唤醒。";
+/// 唤醒子开关（设计裁决：`ORZ_IDLE_WAKE` 缺省 on、从属主开关）。
+pub const IDLE_WAKE_ENV: &str = "ORZ_IDLE_WAKE";
+/// 唤醒去抖合并窗 ms（设计 §2.2：窗内后续完成事实并入一条投递；
+/// 窗内用户 prompt 到达 ⇒ 取消唤醒、facts 留账 B1 收走）。
+pub const IDLE_WAKE_DEBOUNCE_ENV: &str = "ORZ_IDLE_WAKE_DEBOUNCE_MS";
+pub const DEFAULT_IDLE_WAKE_DEBOUNCE_MS: u64 = 5_000;
+/// 去抖窗下限（防 0/负窗退化为无限连发）。
+pub const MIN_IDLE_WAKE_DEBOUNCE_MS: u64 = 1_000;
+
+/// 唤醒开关判读：主开关 **且** 唤醒子开关为真实值（子开关缺省开）。
+pub fn idle_wake_enabled() -> bool {
+    switch_enabled()
+        && match std::env::var(IDLE_WAKE_ENV) {
+            Ok(v) => switch_truthy(&v),
+            Err(_) => true,
+        }
+}
+
+/// 唤醒去抖窗 ms（env 覆盖；非法/低于下限 = 缺省 5s）。
+pub fn idle_wake_debounce_ms() -> u64 {
+    std::env::var(IDLE_WAKE_DEBOUNCE_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v >= MIN_IDLE_WAKE_DEBOUNCE_MS)
+        .unwrap_or(DEFAULT_IDLE_WAKE_DEBOUNCE_MS)
+}
+
+/// 唤醒 run 开局投递的机械核（0dv 403）：drain 事实 → 队列（round 0
+/// admit）→ 边界内交付列表。journal 落账与消息注入由 loop 开局块执行
+/// （`delivered_fact_payload`＋`BOUNDARY_IDLE_WAKE`＋`render_idle_wake_
+/// message`）；抽纯函数供单测钉测（`(task_id, report)` 解耦 host 类型）。
+pub fn wake_open_deliveries(
+    facts: Vec<(String, String)>,
+    queue: &mut DeliveryQueue,
+    now_ms: u64,
+) -> Vec<Delivery> {
+    for (task_id, report) in facts {
+        queue.admit(PendingFact::background_task(&task_id, report, now_ms, 0));
+    }
+    queue.due(0, now_ms)
+}
+
+/// 唤醒 run 开局投递消息（机械事实＋一句引导语，设计裁决 3；
+/// 多任务合并一条——`render_delivery_message` 同构拼接）。
+pub fn render_idle_wake_message(deliveries: &[Delivery]) -> String {
+    format!(
+        "[结果投递] 后台任务已完成，结果如下：\n\n{}",
+        render_delivery_message(deliveries)
+    )
+}
+
+/// M1 判读（**0dv 403 批退役**）：双门坍缩为主开关单键——本函数与
+/// [`switch_enabled`] 等价，仅为既有调用面保留名号。设过 M1 env 的部署
+/// 由启动面（orz-bin）一行告知，不再产生行为差。
 pub fn m1_enabled() -> bool {
     switch_enabled()
-        && std::env::var(M1_SWITCH_ENV)
-            .map(|v| switch_truthy(&v))
-            .unwrap_or(false)
+}
+
+/// M1 兼容告知面（0dv 403）：env 设过即 true——启动面据此打印一行
+/// 「设值不再门控」告知，不改变任何行为。
+pub fn m1_env_set() -> bool {
+    std::env::var(M1_SWITCH_ENV).is_ok()
 }
 
 /// 兜底 TTL（env 覆盖，非法/缺省 = 120 s）。
@@ -591,8 +665,8 @@ mod tests {
     }
 
     #[test]
-    fn switch_truthy_contract_and_default_off() {
-        // §10.3 纪律：开关默认关（env 未设置 ⇒ 关；仅真实值开）。
+    fn switch_truthy_contract_and_default_on() {
+        // 0dv 403 纪律：开关缺省开（env 未设置 ⇒ 开；仅真实值开、其余关）。
         assert!(!switch_truthy("0"));
         assert!(!switch_truthy(""));
         assert!(!switch_truthy("off"));
@@ -600,8 +674,96 @@ mod tests {
         assert!(switch_truthy("TRUE"));
         assert!(switch_truthy(" 1 "));
         if std::env::var_os(SWITCH_ENV).is_none() {
-            assert!(!switch_enabled(), "未设置开关时必须默认关");
+            assert!(switch_enabled(), "未设置开关时必须默认开（0dv 403 翻案）");
         }
+    }
+
+    /// 0dv 403：M1 双门坍缩——`m1_enabled` 与主开关恒等（M1 env 设值不再
+    /// 门控，仅启动面告知）。
+    #[test]
+    fn m1_gate_collapsed_onto_main_switch() {
+        assert_eq!(m1_enabled(), switch_enabled());
+        assert_eq!(m1_env_set(), std::env::var_os(M1_SWITCH_ENV).is_some());
+    }
+
+    /// 0dv 403：唤醒开关面——子开关关 ⇒ 唤醒必关（对主开关任意姿态成立，
+    /// 避免并行测试互踩主开关 env）；去抖窗 env 覆盖与下限钳制。
+    #[test]
+    fn idle_wake_switch_and_debounce_contract() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // 子开关关臂（从属关系：无论主开关姿态，子开关关 ⇒ 唤醒关）。
+        unsafe { std::env::set_var(IDLE_WAKE_ENV, "0") };
+        assert!(!idle_wake_enabled());
+        unsafe { std::env::set_var(IDLE_WAKE_ENV, "off") };
+        assert!(!idle_wake_enabled());
+        unsafe { std::env::remove_var(IDLE_WAKE_ENV) };
+        // 去抖窗：非法/低于下限 = 缺省 5s；合法值直通。
+        unsafe { std::env::set_var(IDLE_WAKE_DEBOUNCE_ENV, "12000") };
+        assert_eq!(idle_wake_debounce_ms(), 12_000);
+        unsafe { std::env::set_var(IDLE_WAKE_DEBOUNCE_ENV, "500") };
+        assert_eq!(
+            idle_wake_debounce_ms(),
+            DEFAULT_IDLE_WAKE_DEBOUNCE_MS,
+            "低于下限钳回缺省"
+        );
+        unsafe { std::env::set_var(IDLE_WAKE_DEBOUNCE_ENV, "garbage") };
+        assert_eq!(idle_wake_debounce_ms(), DEFAULT_IDLE_WAKE_DEBOUNCE_MS);
+        unsafe { std::env::remove_var(IDLE_WAKE_DEBOUNCE_ENV) };
+        assert_eq!(idle_wake_debounce_ms(), DEFAULT_IDLE_WAKE_DEBOUNCE_MS);
+    }
+
+    /// 0dv 403：唤醒开局机械核——facts → 队列 → direct 交付列表；
+    /// 空 facts 恒空列表（竞态极小窗：唤醒 run 开局账本已被清）。
+    #[test]
+    fn wake_open_deliveries_maps_facts_to_direct_deliveries() {
+        let mut q = DeliveryQueue::from_env();
+        let empty = wake_open_deliveries(Vec::new(), &mut q, 1_000);
+        assert!(empty.is_empty());
+        let deliveries = wake_open_deliveries(
+            vec![
+                ("task-a".into(), "report a".into()),
+                ("task-b".into(), "report b".into()),
+            ],
+            &mut q,
+            1_000,
+        );
+        assert_eq!(deliveries.len(), 2);
+        assert_eq!(deliveries[0].fact.source_id, "task-a");
+        assert_eq!(deliveries[0].mode, MODE_DIRECT);
+        assert_eq!(deliveries[0].fact.class, CLASS_I1);
+        assert_eq!(deliveries[0].latency_ms, 0, "开局投递延迟为零");
+        let keys: Vec<&str> = deliveries
+            .iter()
+            .map(|d| d.fact.dedupe_key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["background_task:task-a", "background_task:task-b"]
+        );
+    }
+
+    /// 0dv 403：唤醒开局投递消息形态（机械事实＋引导语＋合并拼接）。
+    #[test]
+    fn idle_wake_message_leads_with_mechanical_fact_and_guide() {
+        let mut q = DeliveryQueue::new(DEFAULT_TTL_MS, DEFAULT_MAX_ROUNDS);
+        assert!(q.admit(PendingFact::background_task("t1", "report a".into(), 0, 0)));
+        assert!(q.admit(PendingFact::background_task("t2", "report b".into(), 0, 0)));
+        let deliveries = q.due(0, 10);
+        assert_eq!(deliveries.len(), 2);
+        let text = render_idle_wake_message(&deliveries);
+        assert!(text.starts_with("[结果投递] 后台任务已完成，结果如下："));
+        assert!(text.contains("report a"));
+        assert!(text.contains("report b"));
+        assert!(
+            text.contains("report a\n\nreport b"),
+            "多任务合并一条按序拼接"
+        );
+        // payload 边界位：idle_wake 扩位经由同一 delivered_fact_payload。
+        let p = delivered_fact_payload(&deliveries[0], BOUNDARY_IDLE_WAKE);
+        assert_eq!(p["boundary"], "idle_wake");
+        assert_eq!(p["suppressed"], false);
+        assert!(p.get("suppressed_reason").is_none());
     }
 
     /// M2 队列纪律：同一事实身份（来源+id）只投一次——重复入队被拒。
@@ -735,12 +897,17 @@ mod tests {
         assert_ne!(p["dedupe_key"], p2["dedupe_key"]);
     }
 
-    /// M1 子开关从属于主开关（A/B 面：主开关关 ⇒ M1 恒定关）。
+    /// M1 子开关从属钉（0dv 403 改判重写）：双门坍缩为单键后，原
+    /// 「主开关关 ⇒ M1 恒关」前提消失——`m1_enabled` 与主开关恒等，
+    /// 见 `m1_gate_collapsed_onto_main_switch`；原钉名保留改判，
+    /// M1 env 设值不再门控，仅启动面告知。
     #[test]
     fn m1_switch_is_subordinate_to_master_switch() {
-        if std::env::var_os(SWITCH_ENV).is_none() && std::env::var_os(M1_SWITCH_ENV).is_none() {
-            assert!(!m1_enabled(), "主开关未开时 M1 必须关");
-        }
+        assert_eq!(
+            m1_enabled(),
+            switch_enabled(),
+            "403 合并退役：M1 门与主开关恒等"
+        );
     }
 
     // ── 0ag 契约面机械对账（2026-09-15；立项时初名 0af，与邻线资源门文案项撞号后按先占改名 0ag）───────────────────────

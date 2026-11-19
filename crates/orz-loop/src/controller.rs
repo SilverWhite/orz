@@ -4864,7 +4864,11 @@ impl AgentLoopController {
         };
         // 318 审查 P1-C5（2026-10-19）：prompt 是真实用户输入——登记精确
         // 文本，写回过滤对“恰好长得像机械块”的用户原文豁免（不静默丢弃）。
-        self.note_user_authored_input(prompt);
+        // 0dv 403：idle 唤醒机械 prompt（宿主观察者发起）不是用户输入，
+        // 不登记——机械前缀进写回豁免表会让过滤面失真。
+        if !prompt.starts_with(crate::immediate_delivery::IDLE_WAKE_TRIGGER) {
+            self.note_user_authored_input(prompt);
+        }
         // D2-2（2026-08-14）**随 v8 实现批退役**（2026-09-16，审查 R-3）：
         // 恢复会话「首请求前机械截断本地面」的语义与 v8 的两面设计冲突——
         // 本地面＝单对话全量（不因任何模型面动作丢失），而首请求的体积约束

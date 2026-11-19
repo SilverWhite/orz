@@ -7024,6 +7024,42 @@ mod tests {
                     ),
                 ],
             ),
+            // 0dv S2（403 批，2026-11-19）：idle 唤醒边界 ok 案——boundary
+            // 第四位 `idle_wake`（就地加位）经 accounting 族判官全绿；两任务
+            // 合并投递＝两事件两 dedupe_key，互不判重。
+            (
+                "result_delivered_idle_wake_ok",
+                vec![
+                    ev(
+                        "result_delivered",
+                        json!({
+                            "result_source": "background_task",
+                            "source_id": "TASK-0041",
+                            "boundary": "idle_wake",
+                            "delivery_mode": "direct",
+                            "delivery_class": "I1_immediate_material",
+                            "suppressed": false,
+                            "latency_ms": 0,
+                            "dedupe_key": "background_task:TASK-0041",
+                            "delivered_at": "2026-11-19T00:00:00Z",
+                        }),
+                    ),
+                    ev(
+                        "result_delivered",
+                        json!({
+                            "result_source": "background_task",
+                            "source_id": "TASK-0042",
+                            "boundary": "idle_wake",
+                            "delivery_mode": "direct",
+                            "delivery_class": "I1_immediate_material",
+                            "suppressed": false,
+                            "latency_ms": 0,
+                            "dedupe_key": "background_task:TASK-0042",
+                            "delivered_at": "2026-11-19T00:00:01Z",
+                        }),
+                    ),
+                ],
+            ),
         ]
     }
 
@@ -7737,8 +7773,10 @@ json.dump(out, sys.stdout)
         // 264 → 266 (0dw S1, 2026-11-17): +model_call_usage_ok / _violations
         // (完整五项＋null 缺席正形两案连排＋空 role/call_seq 0/估算缺键/
         // 类型错/complete 相悖/缺键/不递增六违例).
+        // 266 → 267 (0dv S2, 2026-11-19): +result_delivered_idle_wake_ok
+        // (boundary 第四位 idle_wake 正形——就地加位，accounting 族全绿).
         assert_eq!(
-            scenario_count, 266,
+            scenario_count, 267,
             "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(

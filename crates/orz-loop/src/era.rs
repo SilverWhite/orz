@@ -116,6 +116,34 @@ pub fn parse_input_intent(prompt: &str) -> InputIntent {
     InputIntent::Plain
 }
 
+/// 宿主 prompt 入口的换代裁决（0dv 403 抽取单源：acp_server 与 TUI/
+/// 测试同用；此前裁决内联在 `handle_session_prompt`，era 机械源跳过
+/// 无法独立钉测）。纯函数——prompt 句法 ＋ 会话是否为空（首输入）。
+///
+/// - 机械源 prompt（idle 唤醒，`[idle_wake]` 前缀）⇒ 永不换代（设计稿
+///   §2.5：唤醒 run 落当前时代内，era 不切换、黑板不清）；
+/// - `/btw <rest>` ⇒ 同时代（剥前缀）；`/checkpoint` ⇒ 手动切换；
+/// - 无前缀 ⇒ 会话非空才换代（首输入与首会话同代）。
+pub fn resolve_era_trigger(
+    prompt: &str,
+    conversation_is_empty: bool,
+) -> (String, Option<EraTrigger>) {
+    if prompt.starts_with(crate::immediate_delivery::IDLE_WAKE_TRIGGER) {
+        return (prompt.to_string(), None);
+    }
+    match parse_input_intent(prompt) {
+        InputIntent::SameEra(rest) => (rest, None),
+        InputIntent::Checkpoint(rest) => (
+            rest.unwrap_or_default(),
+            Some(EraTrigger::CheckpointCommand),
+        ),
+        InputIntent::Plain | InputIntent::EmptySameEra => (
+            prompt.to_string(),
+            (!conversation_is_empty).then_some(EraTrigger::UnprefixedInput),
+        ),
+    }
+}
+
 /// 时代切换的触发来源（journal 事件 `trigger` 字段）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EraTrigger {
@@ -609,6 +637,34 @@ pub type SharedEraState = Arc<Mutex<EraRunState>>;
 
 #[cfg(test)]
 mod tests {
+
+    /// 0dv 403：宿主换代裁决单源——机械源 prompt 永不换代；既有四臂
+    /// 语义逐位保持（/btw 剥前缀同时代、/checkpoint 手动、无前缀非空
+    /// 换代、首输入不换代）。
+    #[test]
+    fn resolve_era_trigger_idle_wake_prompt_never_switches_era() {
+        use crate::immediate_delivery::IDLE_WAKE_PROMPT;
+        let (effective, trigger) = resolve_era_trigger(IDLE_WAKE_PROMPT, false);
+        assert_eq!(effective, IDLE_WAKE_PROMPT);
+        assert!(trigger.is_none(), "机械唤醒 prompt 不得换代");
+
+        let (e, t) = resolve_era_trigger("/btw 补充一句", false);
+        assert_eq!(e, "补充一句");
+        assert!(t.is_none());
+
+        let (e, t) = resolve_era_trigger("/checkpoint 修一下", true);
+        assert_eq!(e, "修一下");
+        assert_eq!(t, Some(EraTrigger::CheckpointCommand));
+
+        let (e, t) = resolve_era_trigger("新话题", false);
+        assert_eq!(e, "新话题");
+        assert_eq!(t, Some(EraTrigger::UnprefixedInput));
+
+        let (e, t) = resolve_era_trigger("开场", true);
+        assert_eq!(e, "开场");
+        assert!(t.is_none(), "空会话首输入不换代");
+    }
+
     use super::*;
     use crate::blackboard::SharedBlackboard;
     use crate::gateway::model::{Message, Role};

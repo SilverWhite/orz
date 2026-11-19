@@ -383,6 +383,10 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
 /// applied to every session created over this connection; `false` =
 /// fail-closed（无检索工具）。
 pub async fn run_stdio_server(server: Arc<AcpServer>, retrieval_enabled: bool) -> acp::Result<()> {
+    // 0dv S2（403 批，BG-DONE-IDLE-WAKE 设计 §2.1）：会话域 idle 唤醒
+    // 观察者随 stdio 服务起挂（LocalSet 内 spawn_local——与连接任务同
+    // 运行时；开关关＝观察者空转零行为，`ORZ_IDLE_WAKE=0` 可整体关闭）。
+    tokio::task::spawn_local(server.idle_wake_watcher());
     let handler = StdioAgentHandler::with_retrieval_enabled(
         server.clone(),
         crate::session::TrustPolicy::Enforce,

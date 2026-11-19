@@ -43,6 +43,12 @@ const V02_JOURNALS: &[&str] = &[
     "local-browser-read.jsonl",
     "real-doc-retrieval.jsonl",
     "cross-prompt-restore.jsonl",
+    // 0dv S2（403 批，2026-11-19）：idle 唤醒边界（result_delivered
+    // boundary 第四位 `idle_wake` 就地加位）正型全链——run_preflight →
+    // tool_availability_check → run_started（机械源 prompt）→ 唤醒开局
+    // 投递两事件 → model_output → counterexample_gate → model_output →
+    // run_finished；链/信封/载荷 schema/族判官全绿。
+    "idle-wake-delivery.jsonl",
 ];
 
 fn fixture_path(track: &str, name: &str) -> PathBuf {

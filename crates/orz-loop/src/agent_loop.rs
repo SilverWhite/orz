@@ -2518,6 +2518,49 @@ pub(crate) async fn run_agent_loop(
     // 零事件、零行为变化。
     let mut delivery_queue = crate::immediate_delivery::DeliveryQueue::from_env();
     let mut m1_used = false;
+    // 0dv S2（403 批，BG-DONE-IDLE-WAKE 设计 §2.2/§2.3）：idle 唤醒 run
+    // 的开局投递——宿主观察者全程只 peek 不消费；唤醒 run 创建提交后，
+    // 本 run 在首个模型轮之前经既有 drain **消费**账本（消费点＝run 内，
+    // peek-then-drain 竞态守卫），边界记 `idle_wake`，多任务合并一条
+    // `[结果投递]` 开局消息。触发判定＝prompt 机械源标记前缀（与宿主
+    // era 机械源跳过同用一常量）；主开关关时整块跳过（零事件零行为）。
+    // drain 空（竞态极小窗）⇒ 零投递零事件，run 照常进行。
+    if profile.role == AgentRole::Main
+        && prompt.starts_with(crate::immediate_delivery::IDLE_WAKE_TRIGGER)
+        && crate::immediate_delivery::switch_enabled()
+    {
+        let facts = host.drain_completed_tasks().await;
+        if !facts.is_empty() {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let deliveries = crate::immediate_delivery::wake_open_deliveries(
+                facts.into_iter().map(|f| (f.task_id, f.report)).collect(),
+                &mut delivery_queue,
+                now_ms,
+            );
+            for d in &deliveries {
+                writer
+                    .record(
+                        EventType::ResultDelivered,
+                        crate::immediate_delivery::delivered_fact_payload(
+                            d,
+                            crate::immediate_delivery::BOUNDARY_IDLE_WAKE,
+                        ),
+                    )
+                    .await?;
+            }
+            messages.push(Message {
+                role: Role::User,
+                content: crate::immediate_delivery::render_idle_wake_message(&deliveries),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+        }
+    }
     // 0ac S3①-b ⑥（2026-09-15，同稿 §7 风险 6）：检索子代理提前收口——
     // 确定性不可达（`capability_unreachable`）立即收口；连续确定失联
     // （network_no_response，成功即清零；`empty_result` 是通道判活的
@@ -4580,16 +4623,17 @@ pub(crate) async fn run_agent_loop(
             // 时，保留该轮 assistant 文本（含 reasoning_content）、注入
             // 一次机械事实消息后 `continue` 续跑——把这一轮切成一段；
             // 每 run 至多一次，用尽即按原路径收尾（绝不挂死、绝不重复
-            // 注入）。子开关从属主开关（A/B 面）；boundary 取闭枚举
-            // B2_turn_end（轮末边界的最近语义位）。
+            // 注入）。boundary 取闭枚举 B2_turn_end（轮末边界的最近语义
+            // 位；0dv 403 起 M1 双门坍缩，gate＝主开关单键）。
             // 0AC-A1 修复（2026-09-15 深审）：B2 drain——终答候选处补收
             // 完成事实（交接件 §4-⑤-B 的缺失半边）。B1 间隙 drain+due
             // 背靠背 ⇒ 队列到终答处恒空，终答（无工具轮）期间完成的后台
             // 任务本 run 零投递（admit 唯一调用点在 B1 块内的接线级断点）。
-            // gate 用 `m1_enabled()`（蕴含主开关）而非仅主开关——M1 关时
-            // 不 drain，避免只进不投；已注入过（m1_used）同样不 drain
-            // （再入队只会落 close_drop 留痕后丢弃）。
-            if !m1_used && crate::immediate_delivery::m1_enabled() {
+            // gate 用 `switch_enabled()`（0dv 403 起 M1 双门坍缩为主开关
+            // 单键，语义与原「蕴含主开关」一致）——开关关时不 drain，避免
+            // 只进不投；已注入过（m1_used）同样不 drain（再入队只会落
+            // close_drop 留痕后丢弃）。
+            if !m1_used && crate::immediate_delivery::switch_enabled() {
                 let facts = host.drain_completed_tasks().await;
                 if !facts.is_empty() {
                     let now_ms = std::time::SystemTime::now()
@@ -4608,7 +4652,8 @@ pub(crate) async fn run_agent_loop(
                     }
                 }
             }
-            if !m1_used && crate::immediate_delivery::m1_enabled() && !delivery_queue.is_empty() {
+            if !m1_used && crate::immediate_delivery::switch_enabled() && !delivery_queue.is_empty()
+            {
                 if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
                     messages.push(Message {
                         role: Role::Assistant,

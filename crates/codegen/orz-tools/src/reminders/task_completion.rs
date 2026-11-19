@@ -97,6 +97,17 @@ impl ReportedTaskCompletions {
         }
         self.reported.insert(id.to_owned())
     }
+    /// 0dv S2（403 批）：非消费读——观察面（宿主 idle 唤醒 peek）判定
+    /// 「已完成且未 reported」用；不写账。与 `drain_between_turn_bash_
+    /// completions` 的消费口径同源（同一 `mark_reported` 账本）。
+    pub fn is_reported(&self, id: &str) -> bool {
+        self.reported.contains(id)
+    }
+    /// 0dv S2（403 批）：已投任务 id 快照（宿主观察者一次性读持久化
+    /// 账本用；与 `is_reported` 同源同语义）。
+    pub fn reported_snapshot(&self) -> Vec<&str> {
+        self.reported.iter().map(String::as_str).collect()
+    }
 }
 crate::register_resource!(
     "grok_build",
