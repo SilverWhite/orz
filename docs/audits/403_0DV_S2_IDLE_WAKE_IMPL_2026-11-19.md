@@ -20,6 +20,7 @@
 - **peek 位置**：观察者不走 `bridge::peek_between_turn_bash_completions`，走「terminal backend 任务表过滤＋持久化已投账＋观察者已见账」三重过滤——per-run toolset 拓扑下（`build_toolset` 每 prompt 重建），bridge 内存账本与宿主观察者不同源；**持久化账**（drain 消费后即席 persist 保鲜）才是跨 run 真账。bridge peek API 保留作库面 API＋钉测；设计稿 §2.1 的 peek 位置随实现修订，「peek 恒不消费」语义不变。观察者已见账兜住持久化滞后的空唤醒面。
 - **宿主 watcher 全链 e2e 未落自动测试**（busy 竞态臂／窗满创建臂）：机械核、过滤链、换代裁决、开关面各有单测钉；端到端九条判据归 S4 真机窗（设计稿 §6）。
 - **跑法勘记**：`RUST_MIN_STACK=32M` 后缀形态在本机工具链**未生效**（测试进程仍默认栈 → `STATUS_STACK_OVERFLOW` 立即崩，399 档记载按此勘正）；字节形态 `RUST_MIN_STACK=33554432` 生效。
+- **观察者形态（404 批审查补记为显式偏差）**：设计稿 §2.1「会话域观察者（acp_server 会话运行时内独立 tokio 任务、与 `StoredSession` 同生命周期）」落码为**进程级单 ticker**（`idle_wake_watcher` 单任务轮询全部在表会话，windows/seen 按会话键控，closing/离表即清）——可观察行为等价（每会话仍按各自窗/账独立判定），资源面更省（无 per-session 任务扇出）；403 批档 §1 以「单 ticker 观察者」名义记及但未列为 §2 修订，随 404 处置批补记。
 
 ## §3 测试卫生与既有漂移顺带
 
