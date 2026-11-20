@@ -7937,6 +7937,14 @@ mod tests {
         let generated_deferred =
             "[上轮检索未派发] 上一轮有 2 次检索未派发（cause: deferred_by_cap）：\"甲\"、\"乙\"。";
         let generated_result = "[结果投递] Background task \"task-1\" completed (exit code: 0).";
+        // 0dv S2 审查处置（404 批）：唤醒机械 prompt 与唤醒开局投递消息
+        // 与 B1/B2 投递同族待遇——机械注入块不写回侧车（403 漏登记）。
+        let generated_idle_wake_prompt = crate::immediate_delivery::IDLE_WAKE_PROMPT;
+        let generated_idle_wake_delivery = format!(
+            "{}{}",
+            crate::immediate_delivery::IDLE_WAKE_DELIVERY_HEADER,
+            "Background task \"task-7\" completed (exit code: 0)."
+        );
         let generated_status = "[任务状态 v0.1]\n目标: 甲\n[/任务状态]";
         // 真正注入块被过滤。
         for block in [
@@ -7944,6 +7952,8 @@ mod tests {
             generated_deferred,
             generated_result,
             generated_status,
+            generated_idle_wake_prompt,
+            &generated_idle_wake_delivery,
         ] {
             assert!(
                 !persist_conversation_message(1, &user(block), &[]),
@@ -7956,6 +7966,7 @@ mod tests {
             "[上轮检索未派发] 用户引用讨论。",
             "[结果投递] 这句话是我写的。",
             "[任务状态] 用户引用状态块讨论。",
+            "[idle_wake] 用户引用这个前缀讨论唤醒机制。",
         ] {
             assert!(
                 persist_conversation_message(1, &user(text), &[]),
@@ -7968,6 +7979,13 @@ mod tests {
             1,
             &user(generated_workbench),
             &authored
+        ));
+        // 0dv 404：用户真打了与机械 prompt 精确同文 ⇒ 豁免表优先，保留。
+        let authored_wake = vec![generated_idle_wake_prompt.to_string()];
+        assert!(persist_conversation_message(
+            1,
+            &user(generated_idle_wake_prompt),
+            &authored_wake
         ));
         // index 0 / Tool 消息 / restore-retained marker 恒保留。
         assert!(persist_conversation_message(

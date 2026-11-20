@@ -1956,10 +1956,19 @@ impl FinalizedToolset {
             remap_json_keys(tool_args, &reverse_params)
         }
     }
-    /// Persist resources state to disk.
-    pub async fn persist_state(&self) {
-        let res = self.resources.lock().await;
-        self.resources_persistence.save(&res);
+    /// 0dv S2 审查处置（404 批）：持久化资源状态并**等待写盘确认**。
+    /// 原形态为 fire-and-forget `save`——消费入内存账后文件仍可能滞后
+    /// （writer 是异步后台任务）；宿主 idle 唤醒观察者 peek 与下一 run
+    /// 的 toolset build 都读该文件，writer 停滞超过去抖窗时会重复投递
+    /// （审查 P3-2）。`save_and_flush` 会并合此前挂起的 save 快照并以
+    /// io::Result 回执写盘结果（writer 掉 ack 映射 BrokenPipe）。写盘
+    /// 失败仅告警不 panic：内存账已一致，后续工具执行存档自然补档，
+    /// 投递本身不受影响。
+    pub async fn persist_state_and_flush(&self) {
+        let snapshot = self.resources.lock().await.serialize();
+        if let Err(error) = self.resources_persistence.save_and_flush(snapshot).await {
+            tracing::warn!(?error, "Failed to flush resources state after drain");
+        }
     }
     /// Register a tool at runtime (e.g., MCP tools).
     ///
@@ -2309,6 +2318,50 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    // ── 0dv S2 审查处置（404 批，2026-11-20）：persist_state_and_flush
+    // 写盘确认 round-trip——drain 消费入内存账后本方法返回时文件必须
+    // 已落盘（宿主观察者 peek 与下一 run toolset build 读的就是它）。
+
+    /// Construct a minimal toolset wired to a REAL persistence file (same
+    /// field set as `empty_for_test`, persistence swapped).
+    fn toolset_with_real_persistence(path: std::path::PathBuf) -> FinalizedToolset {
+        let mut toolset = FinalizedToolset::empty_for_test();
+        toolset.resources_persistence = Arc::new(ResourcesPersistence::new(path));
+        toolset
+    }
+
+    #[tokio::test]
+    async fn persist_state_and_flush_round_trips_to_disk_on_return() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("resources_state.json");
+        let toolset = toolset_with_real_persistence(path.clone());
+        toolset
+            .resources
+            .lock()
+            .await
+            .register_state::<crate::reminders::task_completion::ReportedTaskCompletions>();
+        use crate::types::resources::State;
+        {
+            let mut res = toolset.resources.lock().await;
+            let state = res
+                .get_or_default::<State<crate::reminders::task_completion::ReportedTaskCompletions>>();
+            state.mark_reported("t-flush");
+        }
+        // 写盘确认：返回即文件在盘。
+        toolset.persist_state_and_flush().await;
+        let mut reloaded = crate::types::resources::Resources::new();
+        reloaded.register_state::<crate::reminders::task_completion::ReportedTaskCompletions>();
+        assert!(
+            crate::persistence::ResourcesPersistence::load_read_only(path.clone(), &mut reloaded),
+            "persist_state_and_flush 返回后账文件必须在盘可读"
+        );
+        let reported = reloaded
+            .get::<State<crate::reminders::task_completion::ReportedTaskCompletions>>()
+            .map(|s| s.is_reported("t-flush"))
+            .unwrap_or(false);
+        assert!(reported, "落盘账必须含刚标记的任务 id");
+    }
 
     // ── 0cs TOOL-NOT-FOUND-DID-YOU-MEAN (2026-10-04 user-ratified form) ──
 

@@ -390,11 +390,17 @@ pub fn wake_open_deliveries(
     queue.due(0, now_ms)
 }
 
-/// 唤醒 run 开局投递消息（机械事实＋一句引导语，设计裁决 3；
-/// 多任务合并一条——`render_delivery_message` 同构拼接）。
+/// 唤醒 run 开局投递消息头（机械事实＋一句引导语，设计裁决 3；多任务
+/// 合并一条——`render_delivery_message` 同构拼接）。头常量单独导出供
+/// 写回过滤生成形态判据同用（404 处置：唤醒投递消息与 B1/B2 投递消息
+/// 同族待遇——机械注入块不写回会话侧车，见
+/// `prompt::is_generated_injected_block`）。
+pub const IDLE_WAKE_DELIVERY_HEADER: &str = "[结果投递] 后台任务已完成，结果如下：\n\n";
+
 pub fn render_idle_wake_message(deliveries: &[Delivery]) -> String {
     format!(
-        "[结果投递] 后台任务已完成，结果如下：\n\n{}",
+        "{}{}",
+        IDLE_WAKE_DELIVERY_HEADER,
         render_delivery_message(deliveries)
     )
 }

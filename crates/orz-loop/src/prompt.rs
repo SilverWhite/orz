@@ -301,6 +301,13 @@ pub const INJECTED_BLOCK_PREFIXES: &[&str] = &[
     DEFERRED_RETRIEVAL_INJECTED_PREFIX,
     // 318 P1-C2：0ac S3①-b 后台任务完成事实投递（B1/B2 边界）。
     RESULT_DELIVERY_INJECTED_PREFIX,
+    // 0dv S2 审查处置（404 批，2026-11-20）：idle 唤醒机械 prompt 前缀
+    // （唤醒投递消息头 `[结果投递] 后台任务已完成…` 由上一条
+    // RESULT_DELIVERY_INJECTED_PREFIX 同族覆盖，不重复登记）。403 批
+    // 漏登 ⇒ 机械 prompt 按「准用户消息」写回会话侧车（审查 P3-3）；
+    // 登记后 /rewind 隐藏、恢复过滤、写回过滤三面同治（生成形态判定
+    // 见 [`is_generated_injected_block`] 尾部两臂）。
+    crate::immediate_delivery::IDLE_WAKE_TRIGGER,
     // 318 P1-C2：console 双模式询问轮与一次重填反馈。
     CONSOLE_INQUIRY_PREFIX,
     LEGACY_CONSOLE_INQUIRY_PREFIX,
@@ -419,8 +426,20 @@ pub fn is_generated_injected_block(content: &str) -> bool {
     if content.starts_with(RESULT_DELIVERY_INJECTED_PREFIX) {
         // `render_delivery_message` 当前唯一来源＝后台任务完成事实
         // （`format_bash_completion`：`Background task "…" completed (…)`）。
+        // B1/B2 直接拼接；唤醒开局投递（0dv）带同族头
+        // `[结果投递] 后台任务已完成，结果如下：`——头后仍必接事实
+        // 生成形态（404 处置：与 B1/B2 同族待遇，机械注入块不写回侧车）。
+        if content.starts_with(crate::immediate_delivery::IDLE_WAKE_DELIVERY_HEADER) {
+            return content.contains("\" completed (");
+        }
         return content.starts_with("[结果投递] Background task \"")
             && content.contains("\" completed (");
+    }
+    if content.starts_with(crate::immediate_delivery::IDLE_WAKE_TRIGGER) {
+        // 唤醒机械 prompt 是编译期常量——只有精确同文才算机械块
+        // （用户引用前缀讨论不命中；若用户真打了同文，
+        // `note_user_authored_input` 精确同文豁免优先于本判定）。
+        return content == crate::immediate_delivery::IDLE_WAKE_PROMPT;
     }
     if content.starts_with(CONSOLE_INQUIRY_PREFIX) {
         return content.starts_with(
@@ -1116,6 +1135,19 @@ mod tests {
                 "[结果投递] Background task \"task-1\" completed (exit code: 0).\nCommand: dir | Duration: 1.0s\n".to_string(),
             ),
             (
+                // 0dv S2 审查处置（404 批）：唤醒机械 prompt 与唤醒开局
+                // 投递消息同族登记（写回/撤回/恢复三面过滤）；投递消息
+                // ＝头常量＋事实文本（render_delivery_message 拼接形态）。
+                "idle-wake-prompt",
+                crate::immediate_delivery::IDLE_WAKE_PROMPT.to_string(),
+            ),
+            (
+                "idle-wake-delivery",
+                crate::immediate_delivery::IDLE_WAKE_DELIVERY_HEADER.to_string()
+                    + "Background task \"task-9\" completed (exit code: 0).\nbody\n\n"
+                    + "Background task \"task-8\" completed (terminated by signal 1).\nbody2",
+            ),
+            (
                 "console-inquiry",
                 format!(
                     "{} {}",
@@ -1183,6 +1215,10 @@ mod tests {
             "[任务状态] 用户引用状态块讨论：为什么这里要重复渲染？",
             "[上轮检索未派发] 用户引用这句话来提问。",
             "[结果投递] 这句话是我写的，不是后台任务结果。",
+            // 0dv 404：唤醒机械 prompt 只有精确同文才算机械块——引用
+            // 前缀讨论、或者头后没有事实生成形态的消息都不得命中。
+            "[idle_wake] 用户引用这个前缀讨论唤醒机制。",
+            "[结果投递] 后台任务已完成，结果如下：\n\n用户随手引用，没有事实形态。",
             "[本轮编辑] 我想讨论这个前缀的含义。",
             "[CONSOLE_INQUIRY v0.1] 用户照抄前缀说明自己的问题。",
             "[CONTEXT_SCALE 192K] 用户引用提醒块的刻度讨论。",

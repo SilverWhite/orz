@@ -6906,14 +6906,170 @@ impl Default for AcpServer {
 //
 // 设计权威：docs/IDLE_WAKE_BACKGROUND_COMPLETION_DESIGN_2026-11-19.md §2.1/§2.2。
 // run 外唤醒路径的主体——单 ticker 轮询全部在表会话，peek **不消费**
-// （terminal backend 任务表过滤＋持久化已投账过滤＋观察者已见账），
+// （terminal backend 任务表过滤＋持久化已投账过滤＋观察者已见/在途账），
 // idle 且去抖窗满 ⇒ 经 `handle_session_prompt` 创建机械唤醒 run
 // （`[idle_wake]` 前缀；消费点＝唤醒 run 开局的 drain，peek-then-drain
-// 竞态守卫——窗内用户 prompt 到达 ⇒ busy 拒绝，facts 留账由该 run 的
-// B1 收走，零丢失零重复）。开关关 ⇒ 零唤醒零行为（设计稿 §2.4）。
+// 竞态守卫——零丢失零重复）。开关关 ⇒ 零唤醒零行为（设计稿 §2.4）。
+//
+// 404 处置（审查 P3-1/P2，2026-11-20）：创建回执确认制——窗满开火只登记
+// **pending**（在途账），`seen`（已唤醒账）由创建回执落账：
+// - `Created`/`BusyRejected`（窗内用户 prompt 竞态臂）⇒ facts 必被收走
+//   （前者由唤醒 run 开局 drain、后者由胜出 run 的 B1）⇒ seen 标记，
+//   不再重复唤醒；
+// - `Failed`（bootstrap/模型等创建臂自身失败）⇒ 仅回滚 pending，seen
+//   不动 ⇒ 观察者可再次为这些任务开窗（零丢失不降级），冷却
+//   `IDLE_WAKE_FAILURE_RETRY_MS` 防持续失败时的重试空转。
+// 状态机拆纯函数（`idle_wake_window_step`／`wake_creation_outcome`／
+// `resolve_wake_creation`）供钉测；watcher 全链 e2e 仍留 S4 真机窗。
 
 /// 观察者 tick 间隔（实现常量；设计 §2.7 不入契约面）。
 const IDLE_WAKE_TICK_MS: u64 = 2_000;
+/// 创建失败重试冷却（ms）：`Failed` 臂后该会话冷却期内不再开窗——防
+/// bootstrap/模型持续失败时按去抖窗节奏 5s 级空转重试；busy 臂不冷却
+/// （胜出 run 会收走 facts，无需重试）。
+const IDLE_WAKE_FAILURE_RETRY_MS: u64 = 60_000;
+
+/// 观察者任务本地账本（windows/seen/pending/cooldown——随进程灭；会话
+/// 离表即清）。`Mutex` 供 watcher 循环与 detached 创建任务两侧短临界区
+/// 共享（均不持锁跨 await）。
+#[derive(Default)]
+struct IdleWakeBooks {
+    /// 会话 → 去抖窗开时刻（进程内单调 ms，见 [`idle_wake_now_ms`]）。
+    windows: HashMap<String, u64>,
+    /// 会话 → 已唤醒（创建回执 Created/Busy 已落）任务集。
+    seen: HashMap<String, std::collections::HashSet<String>>,
+    /// 会话 → 唤醒创建在途任务集（peek 过滤防在途期重复开窗）。
+    pending: HashMap<String, std::collections::HashSet<String>>,
+    /// 会话 → 创建失败冷却截止时刻（ms）。
+    cooldown_until: HashMap<String, u64>,
+}
+
+impl IdleWakeBooks {
+    fn retain_live(&mut self, live: &std::collections::HashSet<&str>) {
+        self.windows.retain(|k, _| live.contains(k.as_str()));
+        self.seen.retain(|k, _| live.contains(k.as_str()));
+        self.pending.retain(|k, _| live.contains(k.as_str()));
+        self.cooldown_until.retain(|k, _| live.contains(k.as_str()));
+    }
+
+    fn remove_session(&mut self, sid: &str) {
+        self.windows.remove(sid);
+        self.seen.remove(sid);
+        self.pending.remove(sid);
+        self.cooldown_until.remove(sid);
+    }
+
+    fn clear_all(&mut self) {
+        self.windows.clear();
+        self.seen.clear();
+        self.pending.clear();
+        self.cooldown_until.clear();
+    }
+}
+
+/// 进程内单调毫秒钟（去抖窗/冷却计时源——锚点取进程首次调用时刻，
+/// 对 SystemTime 跳变不敏感；纯函数钉测直接传合成 now_ms，不经此）。
+fn idle_wake_now_ms() -> u64 {
+    use std::sync::OnceLock;
+    static ANCHOR: OnceLock<std::time::Instant> = OnceLock::new();
+    ANCHOR
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
+}
+
+/// 唤醒 run 创建回执分类（纯函数供钉测）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WakeCreationOutcome {
+    /// 创建成功——唤醒 run 开局 drain 会消费 facts。
+    Created,
+    /// busy 拒绝＝窗内用户 prompt 竞态臂——胜出 run 的 B1 收走 facts。
+    BusyRejected,
+    /// 其余失败（bootstrap/模型/会话态等）——facts 留账待重试。
+    Failed,
+}
+
+fn wake_creation_outcome(err: Option<&AcpError>) -> WakeCreationOutcome {
+    match err {
+        None => WakeCreationOutcome::Created,
+        Some(AcpError::SessionLifecycle(crate::session_ops::SessionError::Busy { .. })) => {
+            WakeCreationOutcome::BusyRejected
+        }
+        Some(_) => WakeCreationOutcome::Failed,
+    }
+}
+
+/// 去抖窗状态机单步（纯函数供钉测）：空 peek 清窗；冷却期内不开窗；
+/// 非空 peek 开窗/续窗/窗满开火。`Some(ids)`＝窗满开火（ids 已登记
+/// pending，调用方随即创建唤醒 run 并以回执落账）。
+fn idle_wake_window_step(
+    books: &mut IdleWakeBooks,
+    sid: &str,
+    peeked_ids: &[String],
+    debounce_ms: u64,
+    now_ms: u64,
+) -> Option<Vec<String>> {
+    if peeked_ids.is_empty() {
+        books.windows.remove(sid);
+        return None;
+    }
+    if books
+        .cooldown_until
+        .get(sid)
+        .is_some_and(|until| *until > now_ms)
+    {
+        return None;
+    }
+    match books.windows.get(sid).copied() {
+        Some(start) if now_ms.saturating_sub(start) >= debounce_ms => {
+            books.windows.remove(sid);
+            let entry = books.pending.entry(sid.to_string()).or_default();
+            for t in peeked_ids {
+                entry.insert(t.clone());
+            }
+            Some(peeked_ids.to_vec())
+        }
+        Some(_) => None,
+        None => {
+            books.windows.insert(sid.to_string(), now_ms);
+            None
+        }
+    }
+}
+
+/// 创建回执落账（纯函数供钉测）：Created/BusyRejected ⇒ pending 回滚＋
+/// seen 标记；Failed ⇒ pending 回滚＋冷却置位，seen 不动（观察者可再次
+/// 为这些任务开窗）。
+fn resolve_wake_creation(
+    books: &mut IdleWakeBooks,
+    sid: &str,
+    ids: &[String],
+    outcome: WakeCreationOutcome,
+    now_ms: u64,
+) {
+    if let Some(set) = books.pending.get_mut(sid) {
+        for t in ids {
+            set.remove(t);
+        }
+        if set.is_empty() {
+            books.pending.remove(sid);
+        }
+    }
+    match outcome {
+        WakeCreationOutcome::Created | WakeCreationOutcome::BusyRejected => {
+            let entry = books.seen.entry(sid.to_string()).or_default();
+            for t in ids {
+                entry.insert(t.clone());
+            }
+        }
+        WakeCreationOutcome::Failed => {
+            books.cooldown_until.insert(
+                sid.to_string(),
+                now_ms.saturating_add(IDLE_WAKE_FAILURE_RETRY_MS),
+            );
+        }
+    }
+}
 
 impl AcpServer {
     /// 观察者主体（返回 future；stdio 多线程走 `tokio::spawn`、codex
@@ -6923,16 +7079,15 @@ impl AcpServer {
     ) -> impl std::future::Future<Output = ()> + Send + 'static {
         let server = Arc::clone(self);
         async move {
-            // 去抖窗（会话 → 窗开时刻）与观察者已见任务账（会话 → task ids）。
-            // 任务本地状态：不进 `StoredSession`（观察者自身状态，随进程灭；
-            // 会话离表即清）。
-            let mut windows: HashMap<String, tokio::time::Instant> = HashMap::new();
-            let mut seen: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+            let books = Arc::new(std::sync::Mutex::new(IdleWakeBooks::default()));
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(IDLE_WAKE_TICK_MS)).await;
                 // 开关面（主开关 ∧ `ORZ_IDLE_WAKE` 子开关，均缺省开）。
                 if !orz_loop::immediate_delivery::idle_wake_enabled() {
-                    windows.clear();
+                    books
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clear_all();
                     continue;
                 }
                 let debounce_ms = orz_loop::immediate_delivery::idle_wake_debounce_ms();
@@ -6960,67 +7115,112 @@ impl AcpServer {
                         .collect()
                 };
                 if snapshot.is_empty() {
-                    windows.clear();
-                    seen.clear();
+                    books
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clear_all();
                     continue;
                 }
                 let live: std::collections::HashSet<&str> =
                     snapshot.iter().map(|(id, ..)| id.as_str()).collect();
-                windows.retain(|k, _| live.contains(k.as_str()));
-                seen.retain(|k, _| live.contains(k.as_str()));
+                {
+                    books
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .retain_live(&live);
+                }
                 for (sid, backend, base_dir, closing) in snapshot {
                     if closing {
-                        windows.remove(&sid);
-                        seen.remove(&sid);
+                        books
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .remove_session(&sid);
                         continue;
                     }
-                    // run 在途 ⇒ 清窗跳过（完成事实归该 run 的 B1/B2）。
+                    // run 在途 ⇒ 清窗跳过（完成事实归该 run 的 B1/B2）；
+                    // pending 不动——在途创建任务的回执会自行落账。
                     let run_active = server
                         .runs
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .contains_key(&sid);
                     if run_active {
-                        windows.remove(&sid);
+                        books
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .windows
+                            .remove(&sid);
                         continue;
                     }
-                    let session_seen = seen.entry(sid.clone()).or_default();
-                    let peeked =
-                        idle_wake_peek(backend.as_ref(), &sid, &base_dir, session_seen).await;
-                    if peeked.is_empty() {
-                        windows.remove(&sid);
+                    let (session_seen, session_pending) = {
+                        let b = books
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        (
+                            b.seen.get(&sid).cloned().unwrap_or_default(),
+                            b.pending.get(&sid).cloned().unwrap_or_default(),
+                        )
+                    };
+                    let peeked = idle_wake_peek(
+                        backend.as_ref(),
+                        &sid,
+                        &base_dir,
+                        &session_seen,
+                        &session_pending,
+                    )
+                    .await;
+                    let peeked_ids: Vec<String> =
+                        peeked.iter().map(|t| t.task_id.clone()).collect();
+                    let fire = {
+                        let mut b = books
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        idle_wake_window_step(
+                            &mut b,
+                            &sid,
+                            &peeked_ids,
+                            debounce_ms,
+                            idle_wake_now_ms(),
+                        )
+                    };
+                    let Some(fire_ids) = fire else {
                         continue;
-                    }
-                    let now = tokio::time::Instant::now();
-                    match windows.get(&sid) {
-                        Some(start)
-                            if now.duration_since(*start)
-                                >= std::time::Duration::from_millis(debounce_ms) =>
-                        {
-                            windows.remove(&sid);
-                            for t in &peeked {
-                                session_seen.insert(t.task_id.clone());
+                    };
+                    // 唤醒 run 创建（detached）：窗满开火只登记 pending，
+                    // seen 由创建回执落账（busy＝窗内用户 prompt 竞态臂，
+                    // facts 由胜出 run 的 B1 收走；失败臂回滚 pending 并
+                    // 冷却，观察者可再次为这些任务开窗）。
+                    let srv = Arc::clone(&server);
+                    let books2 = Arc::clone(&books);
+                    let prompt = orz_loop::immediate_delivery::IDLE_WAKE_PROMPT.to_string();
+                    let sid2 = sid.clone();
+                    tokio::spawn(async move {
+                        let outcome = match srv.handle_session_prompt(&sid2, &prompt).await {
+                            Ok(_) => WakeCreationOutcome::Created,
+                            Err(e) => {
+                                let classified = wake_creation_outcome(Some(&e));
+                                tracing::debug!(
+                                    session_id = %sid2,
+                                    error = %e,
+                                    ?classified,
+                                    "idle wake run creation did not proceed (facts stay in ledger)"
+                                );
+                                classified
                             }
-                            // 唤醒 run 创建（busy 拒绝＝窗内用户 prompt 到达的
-                            // 竞态臂：facts 未消费，由胜出 run 的 B1 收走）。
-                            let srv = Arc::clone(&server);
-                            let prompt = orz_loop::immediate_delivery::IDLE_WAKE_PROMPT.to_string();
-                            let sid2 = sid.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = srv.handle_session_prompt(&sid2, &prompt).await {
-                                    tracing::debug!(
-                                        session_id = %sid2,
-                                        error = %e,
-                                        "idle wake run rejected (facts stay in ledger for the winning run's B1)"
-                                    );
-                                }
-                            });
+                        };
+                        {
+                            let mut b = books2
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            resolve_wake_creation(
+                                &mut b,
+                                &sid2,
+                                &fire_ids,
+                                outcome,
+                                idle_wake_now_ms(),
+                            );
                         }
-                        Some(_) => {}
-                        None => {
-                            windows.insert(sid.clone(), now);
-                        }
-                    }
+                    });
                 }
             }
         }
@@ -7030,13 +7230,15 @@ impl AcpServer {
 /// 观察者 peek（非消费）：terminal backend 任务表过滤（completed、非
 /// Monitor、owner 同会话或无主兼容——与 drain 的 `task_owned_by_session`
 /// 同语义）＋持久化已投账过滤（`cwd/.gsa/resources_state.json` 的
-/// `ReportedTaskCompletions`；消费侧 drain 后即席持久化保持新鲜）＋
-/// 观察者已见账（本观察者已为之开过窗的任务不再重复唤醒）。
+/// `ReportedTaskCompletions`；消费侧 drain 后写盘确认保持新鲜）＋
+/// 观察者已见/在途账过滤（seen＝创建回执已落；pending＝创建在途，
+/// 两账都挡重复开窗）。
 async fn idle_wake_peek(
     backend: &dyn orz_tools::computer::types::TerminalBackend,
     session_id: &str,
     base_dir: &Path,
     seen: &std::collections::HashSet<String>,
+    pending: &std::collections::HashSet<String>,
 ) -> Vec<orz_tools::computer::types::TaskSnapshot> {
     use orz_tools::computer::types::TaskKind;
     let tasks = backend.list_tasks().await;
@@ -7053,6 +7255,7 @@ async fn idle_wake_peek(
         })
         .filter(|t| !reported.contains(t.task_id.as_str()))
         .filter(|t| !seen.contains(&t.task_id))
+        .filter(|t| !pending.contains(&t.task_id))
         .collect()
 }
 
@@ -7338,13 +7541,170 @@ mod tests {
         let backend_with_seen = PeekMockTerminal {
             tasks: tasks_with_seen,
         };
-        let peeked = idle_wake_peek(&backend_with_seen, "sess-1", &dir, &seen).await;
+        let peeked = idle_wake_peek(
+            &backend_with_seen,
+            "sess-1",
+            &dir,
+            &seen,
+            &std::collections::HashSet::new(),
+        )
+        .await;
         let mut ids: Vec<String> = peeked.iter().map(|t| t.task_id.clone()).collect();
         ids.sort();
         assert_eq!(
             ids,
             vec!["fresh".to_string(), "unowned".to_string()],
             "peek 必须只留待投的本人任务（无主兼容臂放行）"
+        );
+        // 404 处置（审查 P3-1）：pending（创建在途）账同样挡 peek——
+        // 窗满开火后、创建回执未落的窗口期不得重复开窗。
+        let pending: std::collections::HashSet<String> =
+            ["fresh"].iter().map(|s| s.to_string()).collect();
+        let peeked_pending =
+            idle_wake_peek(&backend_with_seen, "sess-1", &dir, &seen, &pending).await;
+        let mut pending_ids: Vec<String> =
+            peeked_pending.iter().map(|t| t.task_id.clone()).collect();
+        pending_ids.sort();
+        assert_eq!(
+            pending_ids,
+            vec!["unowned".to_string()],
+            "pending 在途任务必须被 peek 过滤"
+        );
+    }
+
+    // ── 0dv S2 审查处置（404 批）：观察者状态机纯函数钉 ──
+
+    /// 去抖窗状态机：空 peek 清窗；非空开窗→续窗→窗满开火（pending 登记
+    /// ＋窗移除）；冷却期内不开窗。
+    #[test]
+    fn idle_wake_window_step_state_machine() {
+        let mut books = IdleWakeBooks::default();
+        let ids = || vec!["t-1".to_string(), "t-2".to_string()];
+        // 空 peek：无窗不动账，返回 None。
+        assert!(idle_wake_window_step(&mut books, "s1", &[], 5_000, 1_000).is_none());
+        assert!(books.windows.is_empty());
+        // 非空 peek：开窗（窗开时刻＝now），不火。
+        assert!(idle_wake_window_step(&mut books, "s1", &ids(), 5_000, 1_000).is_none());
+        assert_eq!(books.windows.get("s1"), Some(&1_000));
+        // 窗内（< debounce）：续窗不火。
+        assert!(idle_wake_window_step(&mut books, "s1", &ids(), 5_000, 5_999).is_none());
+        assert_eq!(books.windows.get("s1"), Some(&1_000));
+        // 窗满（≥ debounce）：开火——返回 ids、清窗、登记 pending。
+        let fired =
+            idle_wake_window_step(&mut books, "s1", &ids(), 5_000, 6_000).expect("窗满必须开火");
+        assert_eq!(fired, ids());
+        assert!(!books.windows.contains_key("s1"));
+        assert_eq!(
+            books.pending.get("s1").map(|s| s.len()),
+            Some(2),
+            "开火必须登记 pending（在途账）"
+        );
+        // 冷却臂：Failed 回执置冷却后，窗满条件满足也不开窗。
+        books.cooldown_until.insert("s2".to_string(), 10_000);
+        assert!(idle_wake_window_step(&mut books, "s2", &ids(), 5_000, 9_999).is_none());
+        assert!(
+            idle_wake_window_step(&mut books, "s2", &ids(), 5_000, 10_000).is_none(),
+            "冷却截止时刻须严格大于 now 才挡（==10_000 已过期）"
+        );
+        assert_eq!(books.windows.get("s2"), Some(&10_000), "冷却过期后重新开窗");
+    }
+
+    /// 创建回执落账：Created/Busy ⇒ seen 标记＋pending 清空；Failed ⇒
+    /// pending 清空＋冷却置位、seen 不动（观察者可再次为这些任务开窗）。
+    #[test]
+    fn resolve_wake_creation_resolves_by_outcome() {
+        let mut books = IdleWakeBooks::default();
+        let ids = vec!["t-1".to_string(), "t-2".to_string()];
+        books
+            .pending
+            .entry("s1".to_string())
+            .or_default()
+            .extend(ids.iter().cloned());
+        // Created：seen 标记＋pending 清空。
+        resolve_wake_creation(&mut books, "s1", &ids, WakeCreationOutcome::Created, 1_000);
+        assert!(!books.pending.contains_key("s1"));
+        assert_eq!(books.seen.get("s1").map(|s| s.len()), Some(2));
+        assert!(!books.cooldown_until.contains_key("s1"));
+        // BusyRejected：同 Created（facts 由胜出 run 的 B1 收走）。
+        books.pending.remove("s1");
+        resolve_wake_creation(
+            &mut books,
+            "s1",
+            &ids,
+            WakeCreationOutcome::BusyRejected,
+            2_000,
+        );
+        assert_eq!(books.seen.get("s1").map(|s| s.len()), Some(2));
+        assert!(!books.cooldown_until.contains_key("s1"));
+        // Failed：pending 清空、seen 不动、冷却置位——随后续窗步可重开窗。
+        books.seen.remove("s1");
+        books
+            .pending
+            .entry("s1".to_string())
+            .or_default()
+            .extend(ids.iter().cloned());
+        resolve_wake_creation(&mut books, "s1", &ids, WakeCreationOutcome::Failed, 3_000);
+        assert!(!books.pending.contains_key("s1"));
+        assert!(!books.seen.contains_key("s1"), "Failed 不得标 seen");
+        assert!(
+            books.cooldown_until.get("s1").copied() == Some(3_000 + IDLE_WAKE_FAILURE_RETRY_MS)
+        );
+        // 组合：冷却过期后窗步重新开窗（同一批任务可被再次唤醒）。
+        assert!(
+            idle_wake_window_step(
+                &mut books,
+                "s1",
+                &ids,
+                5_000,
+                3_000 + IDLE_WAKE_FAILURE_RETRY_MS
+            )
+            .is_none()
+        );
+        let refired = idle_wake_window_step(
+            &mut books,
+            "s1",
+            &ids,
+            5_000,
+            3_000 + IDLE_WAKE_FAILURE_RETRY_MS + 5_000,
+        )
+        .expect("冷却过期＋窗满必须重新开火");
+        assert_eq!(refired, ids);
+    }
+
+    /// 创建回执分类：busy 拒绝＝SessionLifecycle Busy 臂；其余 Err（含
+    /// InvalidState/NotFound/bootstrap 类 Session 臂）＝Failed；Ok＝Created。
+    #[test]
+    fn wake_creation_outcome_classifies_busy_vs_other() {
+        use crate::session_ops::SessionError;
+        assert_eq!(
+            wake_creation_outcome(None),
+            WakeCreationOutcome::Created,
+            "创建成功＝Created"
+        );
+        let busy = AcpError::SessionLifecycle(SessionError::Busy {
+            session_id: "s1".to_string(),
+            evidence: "run or restore already in flight".to_string(),
+            waited_ms: 0,
+        });
+        assert_eq!(
+            wake_creation_outcome(Some(&busy)),
+            WakeCreationOutcome::BusyRejected,
+            "窗内用户 prompt 竞态臂＝BusyRejected（facts 由胜出 run 收走）"
+        );
+        let invalid_state = AcpError::SessionLifecycle(SessionError::InvalidState {
+            session_id: "s1".to_string(),
+            state: crate::session_ops::SessionState::Closing,
+            verb: "prompt",
+        });
+        assert_eq!(
+            wake_creation_outcome(Some(&invalid_state)),
+            WakeCreationOutcome::Failed,
+            "closing 等非 busy 失败＝Failed（可重试臂）"
+        );
+        let not_found = AcpError::SessionNotFound("s1".to_string());
+        assert_eq!(
+            wake_creation_outcome(Some(&not_found)),
+            WakeCreationOutcome::Failed
         );
     }
 

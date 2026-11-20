@@ -2060,9 +2060,12 @@ impl LoopHost for OrzHost {
         // 与 idle 唤醒 run 开局共用），工具执行驱动的自动存档不覆盖此点；
         // 不落盘则宿主观察者 peek（读持久化账）会把已投任务当未投，
         // 造成空唤醒/重复投递。持久化失败不影响本次投递（账本内存态已
-        // 一致，下次工具执行自然补档）。
+        // 一致，下次工具执行自然补档）。404 处置（审查 P3-2）：改
+        // **写盘确认**形态——fire-and-forget `save` 在 writer 停滞超过
+        // 去抖窗时会留下重复投递窗（下一 run 的 toolset build 读旧账），
+        // 返回前等写盘 ack 闭合该窗。
         if !facts.is_empty() {
-            self.registry.toolset().persist_state().await;
+            self.registry.toolset().persist_state_and_flush().await;
         }
         facts
     }
