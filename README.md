@@ -17,13 +17,13 @@
 
 | 步骤 | Windows（PowerShell） | Linux（sh） |
 |---|---|---|
-| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.14-6-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
+| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.17-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
 | 2. 配置 API Key | 存入 Windows 凭据管理器（Generic，目标名 `orz-deepseek/agent`；一次即可）：<br>`cmdkey /generic:orz-deepseek/agent /user:agent /pass:你的DeepSeek_API_Key` | 用环境变量（Windows 凭据管理器通道的显式例外）：<br>`export ORZ_DEEPSEEK_API_KEY=你的DeepSeek_API_Key` |
 | 3. 初始化安全签发（一次性） | `.\orz-acaf-provision.exe "$env:USERPROFILE\.orz-acaf\keystore" "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br><br>ACAF 默认 fail-closed，未配置会拒绝启动 run（进程可用、run 拒绝执行）。 | `./orz-acaf-provision "$HOME/.orz-acaf/keystore" "$HOME/.orz-acaf/signer-manifest.json"` |
 | 4. 设置启动环境 | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
 | 5. 运行 | `.\orz.exe`（交互 TUI）<br>`.\orz.exe -p "你的任务" --real`（无头模式）<br>`.\orz.exe web`（Web 工作台，打印本地带令牌地址） | `./orz`（交互 TUI）<br>`./orz -p "你的任务" --real`（无头模式）<br>`./orz web`（Web 工作台，打印本地带令牌地址） |
 
-发布包说明与完整性校验见 GitHub Release（最新 [v0.9.14-6-1](https://github.com/SilverWhite/orz/releases/tag/v0.9.14-6-1)（包内容为载体版本 0.9.14-6；tag 带 346 同款再发行后缀 `-1`），双平台包＋`SHA256SUMS`；历史版本注意：0.9.12 与 0.9.14-6 的 tag 均带再发行后缀 `-1`——首发行 tag `v0.9.12` 因 immutable release 删除后 tag 名被保留而不可复用，见 [346 档](docs/audits/346_CARRIER_REBUILD_AND_RELEASE_V0912_2026-10-24.md)）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
+发布包说明与完整性校验见 GitHub Release（最新 [v0.9.17](https://github.com/SilverWhite/orz/releases/tag/v0.9.17)，双平台包＋`SHA256SUMS`；历史版本注意：0.9.12 与 0.9.14-6 的 tag 均带再发行后缀 `-1`——首发行 tag `v0.9.12` 因 immutable release 删除后 tag 名被保留而不可复用，见 [346 档](docs/audits/346_CARRIER_REBUILD_AND_RELEASE_V0912_2026-10-24.md)）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
 
 ### 常用入口
 
@@ -107,11 +107,13 @@ orz 直接运行在真机上是设计选择。
 
 已知边界：不防已失陷的签发器、同用户恶意进程、内核级失陷与恶意模型服务；票据证明来源与授权，不证明命令明智；命令审查是尽力而为的词法匹配——变量拼接、别名、脚本内命令、`.NET`/解释器直调、编码混淆、Windows 短名／junction／UNC 未存在面仍不保证覆盖；维护 CLI 已有桥注入的 `ORZ_MAINTENANCE_TICKET` 令牌门＋命令面 block，TTY 确认未落（0dl 余项）；`.gsa` shell 读面为读全开放口径。真机默认无沙箱；权限缺省全自动审批（ADR-0010 §14.91 用户令 2026-10-25：日常与跑分姿态完全一致、全部能力缺省开启；`--no-yolo`／`ORZ_YOLO=0` 为唯一的 confirm-first 通路）——这是明确接受的高风险便利姿态，不应把 ACAF 票据描述为提示词注入后的独立意图授权；处理不可信网页、仓库或任务时应显式使用 `--no-yolo`，或把整套程序置于外部沙箱。该默认值按用户裁决保留，自 0.9.13 载体起在役（0.9.12 及更早为双轨过渡缺省或同态）。
 
-## 0.9.14-6 更新（2026-11-01）
+## 0.9.17 更新（2026-11-21）
 
-- **会话内检查点时代机制（`/checkpoint`＋`/btw`）**：会话内换话题不再依赖重启进程——`/checkpoint` 手动重置；不带 `/btw` 前缀的新输入自动开启「时代」（机械层切换后拉起：此前全部原文整段无损折叠为可回读档案，黑板计划/笔记/发现/state 随时代清空，journal 台账跨时代连续）；`/btw` 前缀＝同时代补充，照常排队不打断。忘带前缀的代价＝非预期换代（客户端有「时代已切换」回执提示）。
-- **流式重发去重**：网络重试导致的流式回复「重复卡」在协议面修复——重发前清卡重填，Web 工作台与 TUI 双端单卡收口。
-- 其余为自 0.9.14 以来的累计内部修复与审查处置（361–391 批，完整流水见 [`docs/audits/`](docs/audits/)）。本版为 Windows／Linux musl 双平台同源出件。
+- **后台完成闲置唤醒（0dv，缺省开）**：后台进程完成后，会话闲置时自动拉起一次唤醒 run，开局以 `[结果投递]` 机械事实＋一句引导语把完成结果交给模型（多任务合并一条；在途 run 不打断，去抖窗内用户新输入到达则取消唤醒、结果由该 run 照常收走——零丢失零重复）。`ORZ_IDLE_WAKE=0` 整体关闭；`ORZ_IDLE_WAKE_DEBOUNCE_MS` 去抖窗缺省 5s（下限 1s）。唤醒不换代、照走用量计量与 journal 全链。
+- **即时结果投递缺省开＋M1 退役**：run 内后台完成事实的边界投递（工具间隙 B1／终答 B2）缺省激活（`ORZ_IMMEDIATE_RESULT_DELIVERY=0` 可整体关闭）；旧 `ORZ_IMMEDIATE_RESULT_DELIVERY_M1` 子开关合并退役——设值不再门控，启动面一行告知。
+- **模型面量尺与用量对账（0dw）**：上下文量尺换 provider tokenizer 单源（内容哈希有界缓存，逐轮开销回毫秒级）；`model_call_usage` 逐调用落账，journal 可单源复算逐调用估算 vs 实测；run 启动 preflight 携载体身份章（`carrier_version`＋`binary_sha256`，与载体清单同口径）。
+- **后台任务机械兜底退役（0dz）**：后台进程寿命不再有 30h 机械上限（随进程／会话终止，教学文案如实）。
+- 其余为自 0.9.14-6 以来的累计内部修复与审查处置（393–405 批，完整流水见 [`docs/audits/`](docs/audits/)；0.9.15／0.9.16 为中间重建载体未单独发行）。本版为 Windows／Linux musl 双平台同源出件。
 
 ## 开发者入口
 

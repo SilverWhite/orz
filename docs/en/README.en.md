@@ -3,7 +3,7 @@
 # orz — English README (expanded edition)
 
 > LLM-assisted translation; the Chinese originals are authoritative. Corrections welcome.
-> Source: [`/README.md`](../../README.md) (Chinese, authoritative), v0.9.14-6 face, 2026-11-01.
+> Source: [`/README.md`](../../README.md) (Chinese, authoritative), v0.9.17 face, 2026-11-21.
 > **Expanded edition** (user adjudication 2026-10-02): the two editions mirror each other in
 > content; this one is expanded in *role*, not in coverage — it doubles as the English-language
 > umbrella stand-in for the project's design authorities
@@ -29,13 +29,13 @@ Configure Windows and Linux as follows:
 
 | Step | Windows (PowerShell) | Linux (sh) |
 |---|---|---|
-| 1. Unpack | Put `orz.exe`, `orz-signer.exe`, `orz-acaf-provision.exe` into one directory (e.g. `C:\orz`). | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.14-6-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
+| 1. Unpack | Put `orz.exe`, `orz-signer.exe`, `orz-acaf-provision.exe` into one directory (e.g. `C:\orz`). | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.9.17-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
 | 2. Configure the API key | Store it in Windows Credential Manager (Generic, target name `orz-deepseek/agent`; once only):<br>`cmdkey /generic:orz-deepseek/agent /user:agent /pass:YOUR_DEEPSEEK_API_KEY` | Use an environment variable (the explicit exception to the Windows Credential Manager channel):<br>`export ORZ_DEEPSEEK_API_KEY=YOUR_DEEPSEEK_API_KEY` |
 | 3. Initialize security signing (one-time) | `.\orz-acaf-provision.exe "$env:USERPROFILE\.orz-acaf\keystore" "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br><br>ACAF is fail-closed by default: unconfigured, it refuses to run (the process starts; runs are refused). | `./orz-acaf-provision "$HOME/.orz-acaf/keystore" "$HOME/.orz-acaf/signer-manifest.json"` |
 | 4. Set startup environment | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
 | 5. Run | `.\orz.exe` (interactive TUI)<br>`.\orz.exe -p "your task" --real` (headless)<br>`.\orz.exe web` (Web workbench; prints the local token-bearing URL) | `./orz` (interactive TUI)<br>`./orz -p "your task" --real` (headless)<br>`./orz web` (Web workbench; prints the local token-bearing URL) |
 
-Release notes and integrity verification live on GitHub Releases (latest [v0.9.14-6-1](https://github.com/SilverWhite/orz/releases/tag/v0.9.14-6-1) (package contents are carrier version 0.9.14-6; the tag carries the 346-style re-release suffix `-1`), dual-platform packages + `SHA256SUMS`; historical note: the 0.9.12 and 0.9.14-6 tags carry re-release suffixes `-1` — the first tag `v0.9.12` became unreusable after its immutable release was deleted, see the [346 audit](../../docs/audits/346_CARRIER_REBUILD_AND_RELEASE_V0912_2026-10-24.md) (Chinese)); the 0.1.0–0.5.1 trial packages are under [`releases/`](../../releases/).
+Release notes and integrity verification live on GitHub Releases (latest [v0.9.17](https://github.com/SilverWhite/orz/releases/tag/v0.9.17), dual-platform packages + `SHA256SUMS`; historical note: the 0.9.12 and 0.9.14-6 tags carry re-release suffixes `-1` — the first tag `v0.9.12` became unreusable after its immutable release was deleted, see the [346 audit](../../docs/audits/346_CARRIER_REBUILD_AND_RELEASE_V0912_2026-10-24.md) (Chinese)); the 0.1.0–0.5.1 trial packages are under [`releases/`](../../releases/).
 
 ### Common entry points
 
@@ -116,11 +116,13 @@ There is no sandbox between the model and the host by default, and deliberately 
 
 Known boundaries: no defense against a compromised signer, same-user malicious processes, kernel-level compromise, or a malicious model service; a ticket proves provenance, not that a command is wise; command review is best-effort lexical matching — variable expansion, aliases, in-script commands, `.NET`/interpreter calls, encoded payloads, and Windows 8.3 short names / junctions / UNC uncreated faces are still not guaranteed; the maintenance CLI now has the bridge-injected `ORZ_MAINTENANCE_TICKET` gate plus the command-surface block, while a TTY confirmation is not implemented (`0dl` remaining); the `.gsa` shell read surface follows the read-open policy. The real machine runs without a sandbox; permissions default to blanket auto-approval (ADR-0010 §14.91 user order, 2026-10-25: daily use and benchmarking share one identical posture with every capability on by default; `--no-yolo` / `ORZ_YOLO=0` is the only path to confirm-first) — in service since the 0.9.13 carrier (0.9.12 and earlier kept the transitional dual posture or the same state).
 
-## 0.9.14-6 update (2026-11-01)
+## 0.9.17 update (2026-11-21)
 
-- **In-session checkpoint eras (`/checkpoint` + `/btw`)**: switching topics inside a session no longer requires restarting the process — `/checkpoint` resets manually; any new input **without** the `/btw` prefix automatically opens a new "era" (the mechanical layer switches first, then launches: everything before is folded verbatim into a readable archive, blackboard plan/notes/findings/state are cleared per era, and the journal/ledger stay continuous across eras); the `/btw` prefix = same-era supplement, queued as before without interrupting. Forgetting the prefix costs an unintended era switch (the client prints an "era switched" notice).
-- **Streaming resend dedup**: the "duplicate card" caused by network retries during streaming replies is fixed at the protocol level — the card is cleared and refilled before resend; both the web workbench and the TUI converge to a single card.
-- The rest is the accumulated internal fixes and review remediations since 0.9.14 (batches 361–391; full trail in [`docs/audits/`](../audits/), Chinese). This release ships Windows and Linux (musl) from one source tree.
+- **Background-completion idle wake (0dv, on by default)**: after a background process finishes, when the session is idle a wake run is launched automatically; it opens with a `[结果投递]` mechanical fact plus one guide line that hands the completed results to the model (multiple tasks merge into one message; an in-flight run is never interrupted, and a user prompt arriving inside the debounce window cancels the wake — the winning run collects the results as usual, with zero loss and zero duplication). Set `ORZ_IDLE_WAKE=0` to disable entirely; `ORZ_IDLE_WAKE_DEBOUNCE_MS` defaults to 5s (floor 1s). Wake runs never switch eras and go through the usual usage metering and journal chain.
+- **Immediate result delivery on by default, M1 retired**: boundary delivery of background-completion facts inside a run (tool-gap B1 / final-answer B2) is now on by default (`ORZ_IMMEDIATE_RESULT_DELIVERY=0` disables); the old `ORZ_IMMEDIATE_RESULT_DELIVERY_M1` sub-switch is merged away — setting it no longer gates anything, and the startup banner says so in one line.
+- **Model-face ruler and usage reconciliation (0dw)**: the context ruler now uses a provider-tokenizer single source (content-hash bounded cache; per-round cost back to milliseconds); `model_call_usage` is recorded per call so the journal can recompute per-call estimated vs actual usage; run preflight carries a carrier identity block (`carrier_version` + `binary_sha256`, matching the carrier manifest).
+- **Background hard cap retired (0dz)**: background processes no longer carry a 30h mechanical lifetime cap (they end with the process/session; teaching copy now says so).
+- The rest is the accumulated internal fixes and review remediations since 0.9.14-6 (batches 393–405; full trail in [`docs/audits/`](../audits/), Chinese; 0.9.15/0.9.16 were intermediate rebuild carriers, not separately released). This release ships Windows and Linux (musl) from one source tree.
 
 ## Developer entry points
 
